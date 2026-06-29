@@ -17,15 +17,15 @@ use crate::connection::{destination::Destination as ConnDestination, options};
 use crate::ping;
 
 // Types from v6 that are schema-identical in v5 are re-used directly.
-// Connection, BufferOptions, and MaxSurbUpstreamOptions are defined below
-// because v5 includes a `bridge` field that v6 does not have.
+// Connection, BufferOptions, and MaxSurbUpstreamOptions are defined below because
+// v5 uses separate `buffer` and `max_surb_upstream` sections instead of `surb_balancing`.
 pub(super) use super::v6::{
     BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, PingOptions, WireGuard, to_flags,
 };
 use super::v6::{MAX_HOPS, validate_hops};
 
-// v5 defines its own Connection so that BufferOptions and MaxSurbUpstreamOptions
-// can carry the `bridge` field that existed in v5 configs but is absent from v6.
+// v5 defines its own Connection to carry the separate `buffer` and `max_surb_upstream`
+// sections which v6 replaced with the unified `surb_balancing` section.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct Connection {
     #[serde(default, with = "humantime_serde::option")]
@@ -39,8 +39,6 @@ pub(super) struct Connection {
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
 }
 
-// v5 buffer config includes `bridge`; it is accepted but dropped when converting
-// to runtime options because the v6 BufferSizes type has no bridge slot.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct BufferOptions {
     bridge: Option<ByteSize>,
@@ -48,7 +46,6 @@ pub(super) struct BufferOptions {
     main: Option<ByteSize>,
 }
 
-// v5 max_surb_upstream config includes `bridge`; same drop-on-conversion rule.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct MaxSurbUpstreamOptions {
     #[serde(default, with = "human_bandwidth::serde")]
@@ -87,25 +84,35 @@ impl Connection {
     }
 }
 
-impl From<BufferOptions> for options::BufferSizes {
-    fn from(buf: BufferOptions) -> Self {
-        let def = options::BufferSizes::default();
-        // bridge is v5-only and is not forwarded to runtime options
-        options::BufferSizes {
-            ping: buf.ping.unwrap_or(def.ping),
-            main: buf.main.unwrap_or(def.main),
-        }
-    }
-}
-
-impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
-    fn from(surbs: MaxSurbUpstreamOptions) -> Self {
-        let def = options::MaxSurbUpstream::default();
-        // bridge is v5-only and is not forwarded to runtime options
-        options::MaxSurbUpstream {
-            ping: surbs.ping.unwrap_or(def.ping),
-            main: surbs.main.unwrap_or(def.main),
-        }
+fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstreamOptions>) -> options::SurbBalancing {
+    let def = options::SurbBalancing::default();
+    let buf = buf.unwrap_or(BufferOptions {
+        bridge: None,
+        ping: None,
+        main: None,
+    });
+    let surbs = surbs.unwrap_or(MaxSurbUpstreamOptions {
+        bridge: None,
+        ping: None,
+        main: None,
+    });
+    options::SurbBalancing {
+        ping: options::SessionSurbOptions::new(
+            true,
+            buf.ping.unwrap_or(def.ping.buffer),
+            surbs.ping.unwrap_or(def.ping.max_surb_upstream),
+        ),
+        main: options::SessionSurbOptions::new(
+            true,
+            buf.main.unwrap_or(def.main.buffer),
+            surbs.main.unwrap_or(def.main.max_surb_upstream),
+        ),
+        bridge: options::SessionSurbOptions::new(
+            false,
+            buf.bridge.unwrap_or(def.bridge.buffer),
+            surbs.bridge.unwrap_or(def.bridge.max_surb_upstream),
+        ),
+        health_check: def.health_check,
     }
 }
 
@@ -150,14 +157,10 @@ impl From<Option<Connection>> for options::Options {
             })
             .unwrap_or(def_opts);
 
-        let buffer_sizes = connection
-            .and_then(|c| c.buffer.clone())
-            .map(|b| b.into())
-            .unwrap_or_default();
-        let max_surb_upstream = connection
-            .and_then(|c| c.max_surb_upstream.clone())
-            .map(|b| b.into())
-            .unwrap_or_default();
+        let surb_balancing = build_surb_balancing(
+            connection.and_then(|c| c.buffer.clone()),
+            connection.and_then(|c| c.max_surb_upstream.clone()),
+        );
         let http_timeout = connection
             .and_then(|c| c.http_timeout)
             .unwrap_or(Connection::default_http_timeout());
@@ -181,8 +184,7 @@ impl From<Option<Connection>> for options::Options {
         options::Options {
             sessions,
             ping_options: ping_opts,
-            buffer_sizes,
-            max_surb_upstream,
+            surb_balancing,
             timeouts,
             health_check_intervals,
             lan_lockdown: false,
@@ -222,11 +224,9 @@ pub(super) enum DestinationPath {
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong_keys = Vec::new();
     for (key, value) in table.iter() {
-        // version plain key
         if key == "version" {
             continue;
         }
-        // wireguard nested struct
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
                 for (k, v) in wg.iter() {
@@ -249,8 +249,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
-
-        // blokli nested struct
         if key == "blokli" {
             if let Some(blokli) = value.as_table() {
                 for (k, _v) in blokli.iter() {
@@ -262,12 +260,10 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
-
-        // connection nested struct
         if key == "connection" {
             if let Some(connection) = value.as_table() {
                 for (k, v) in connection.iter() {
-                    if k == "http_timeout" {
+                    if k == "http_timeout" || k == "announced_peer_minimum_score" || k == "lan_lockdown" {
                         continue;
                     }
                     if k == "bridge" || k == "wg" {
@@ -292,24 +288,26 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
-                    if k == "buffer" {
-                        if let Some(buffer) = v.as_table() {
-                            for (k, _v) in buffer.iter() {
-                                if k == "bridge" || k == "ping" || k == "main" {
+                    if k == "surb_balancing" {
+                        if let Some(sb) = v.as_table() {
+                            for (session_key, session_val) in sb.iter() {
+                                let is_valid_session =
+                                    matches!(session_key.as_str(), "bridge" | "ping" | "main" | "health_check");
+                                if !is_valid_session {
+                                    wrong_keys.push(format!("connection.surb_balancing.{session_key}"));
                                     continue;
                                 }
-                                wrong_keys.push(format!("connection.buffer.{k}"));
-                            }
-                        }
-                        continue;
-                    }
-                    if k == "max_surb_upstream" {
-                        if let Some(surbs) = v.as_table() {
-                            for (k, _v) in surbs.iter() {
-                                if k == "bridge" || k == "ping" || k == "main" {
-                                    continue;
+                                if let Some(session) = session_val.as_table() {
+                                    for (k2, _v) in session.iter() {
+                                        let is_valid_field = matches!(
+                                            k2.as_str(),
+                                            "enabled" | "buffer" | "max_surb_upstream" | "always_max_out_surbs"
+                                        );
+                                        if !is_valid_field {
+                                            wrong_keys.push(format!("connection.surb_balancing.{session_key}.{k2}"));
+                                        }
+                                    }
                                 }
-                                wrong_keys.push(format!("connection.max_surb_upstream.{k}"));
                             }
                         }
                         continue;
@@ -330,15 +328,11 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
-                    if k == "announced_peer_minimum_score" {
-                        continue;
-                    }
                     wrong_keys.push(format!("connection.{k}"));
                 }
             }
             continue;
         }
-        // destinations hashmap of simple structs
         if key == "destinations" {
             if let Some(destinations) = value.as_table() {
                 for (id, v) in destinations.iter() {
@@ -356,7 +350,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
-
         wrong_keys.push(key.clone());
     }
     wrong_keys
@@ -529,15 +522,29 @@ timeout = "7s"
 ttl = 6
 seq_count = 1
 
-[connection.max_surb_upstream]
-bridge = "512 Kb/s"
-ping = "1 Mb/s"
-main = "16 Mb/s"
+[connection.surb_balancing.bridge]
+enabled = false
+buffer = "32 kB"
+max_surb_upstream = "512 Kb/s"
+always_max_out_surbs = false
 
-[connection.buffer]
-bridge = "32 kB"
-ping = "32 kB"
-main = "2 MB"
+[connection.surb_balancing.ping]
+enabled = true
+buffer = "1 MB"
+max_surb_upstream = "512 Kb/s"
+always_max_out_surbs = true
+
+[connection.surb_balancing.main]
+enabled = true
+buffer = "10 MB"
+max_surb_upstream = "16 Mb/s"
+always_max_out_surbs = true
+
+[connection.surb_balancing.health_check]
+enabled = false
+buffer = "16 kB"
+max_surb_upstream = "128 Kb/s"
+always_max_out_surbs = false
 
 [wireguard]
 listen_port = 51820

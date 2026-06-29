@@ -34,8 +34,8 @@ pub struct WorkerParams {
     identity_pass: Option<String>,
     config_mode: ConfigFileMode,
     allow_insecure: bool,
+    allow_experimental: bool,
     blokli_url: Option<Url>,
-    force_static_routing: bool,
     state_home: PathBuf,
     cached_blokli_ips: Vec<Ipv4Addr>,
 }
@@ -52,8 +52,8 @@ impl WorkerParams {
         identity_pass: Option<String>,
         config_mode: ConfigFileMode,
         allow_insecure: bool,
+        allow_experimental: bool,
         blokli_url: Option<Url>,
-        force_static_routing: bool,
         state_home: PathBuf,
     ) -> Self {
         Self {
@@ -61,8 +61,8 @@ impl WorkerParams {
             identity_pass,
             config_mode,
             allow_insecure,
+            allow_experimental,
             blokli_url,
-            force_static_routing,
             state_home,
             cached_blokli_ips: Vec::new(),
         }
@@ -158,8 +158,8 @@ impl WorkerParams {
         self.allow_insecure
     }
 
-    pub fn force_static_routing(&self) -> bool {
-        self.force_static_routing
+    pub fn allow_experimental(&self) -> bool {
+        self.allow_experimental
     }
 
     pub fn blokli_url(&self) -> Option<Url> {

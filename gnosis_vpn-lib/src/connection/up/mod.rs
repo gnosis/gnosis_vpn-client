@@ -6,14 +6,14 @@ use std::net;
 use std::time::{Duration, SystemTime};
 
 use crate::connection::destination::Destination;
-use crate::core::runner::SurbConfigError;
+use crate::connection::options::SurbConfigError;
 use crate::gvpn_client::Registration;
 use crate::hopr::HoprError;
 use crate::hopr::types::SessionClientMetadata;
 use crate::wireguard::WireGuard;
 use crate::{gvpn_client, log_output, remote_data, wireguard};
 
-pub mod runner;
+pub(crate) mod runner;
 
 #[derive(Debug)]
 pub enum Event {
@@ -22,16 +22,22 @@ pub enum Event {
 }
 
 #[derive(Clone, Debug)]
+pub enum SessionKind {
+    Ping,
+    Main,
+}
+
+#[derive(Clone, Debug)]
 pub enum Progress {
     ResolveBlokliIps,
     GenerateWg(Vec<net::Ipv4Addr>),
     OpenBridge(WireGuard),
+    BridgeOpened(SessionClientMetadata),
     RegisterWg,
-    CloseBridge(Registration),
-    OpenPing,
+    OpenPing(Registration),
+    BridgeClosed,
     PeerIps,
     KillswitchLockdown,
-    DynamicWgTunnel(SessionClientMetadata),
     StaticWgTunnel(SessionClientMetadata),
     Ping,
     AdjustToMain(Duration),
@@ -46,7 +52,7 @@ pub enum Setback {
 }
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("Hopr error: {0}")]
     Hopr(#[from] HoprError),
     #[error("Gvpn client error: {0}")]
@@ -75,7 +81,10 @@ pub struct Up {
     pub phase: (SystemTime, Phase),
     pub wireguard: Option<WireGuard>,
     pub registration: Option<Registration>,
-    pub session: Option<SessionClientMetadata>,
+    /// Temporary bridge session used during key registration; cleared once the background close completes.
+    pub bridge_session: Option<SessionClientMetadata>,
+    /// The ping session while connecting, promoted to Main once connected.
+    pub ping_session: Option<(SessionKind, SessionClientMetadata)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -85,12 +94,10 @@ pub enum Phase {
     GeneratingWg,
     OpeningBridge,
     RegisterWg,
-    ClosingBridge,
     OpeningPing,
-    FallbackGatherPeerIps,
+    GatherPeerIps,
     KillswitchLockdown,
-    EstablishDynamicWgTunnel,
-    FallbackToStaticWgTunnel,
+    EstablishWgTunnel,
     VerifyPing,
     AdjustToMain,
     ConnectionEstablished,
@@ -109,7 +116,8 @@ impl Up {
             phase: (SystemTime::now(), Phase::Init),
             wireguard: None,
             registration: None,
-            session: None,
+            bridge_session: None,
+            ping_session: None,
         }
     }
 
@@ -122,21 +130,22 @@ impl Up {
                 self.phase = (now, Phase::OpeningBridge);
                 self.wireguard = Some(wg);
             }
+            Progress::BridgeOpened(meta) => {
+                self.bridge_session = Some(meta);
+            }
             Progress::RegisterWg => self.phase = (now, Phase::RegisterWg),
-            Progress::CloseBridge(reg) => {
-                self.phase = (now, Phase::ClosingBridge);
+            Progress::OpenPing(reg) => {
+                self.phase = (now, Phase::OpeningPing);
                 self.registration = Some(reg);
             }
-            Progress::OpenPing => self.phase = (now, Phase::OpeningPing),
-            Progress::DynamicWgTunnel(session) => {
-                self.phase = (now, Phase::EstablishDynamicWgTunnel);
-                self.session = Some(session);
+            Progress::BridgeClosed => {
+                self.bridge_session = None;
             }
-            Progress::PeerIps => self.phase = (now, Phase::FallbackGatherPeerIps),
+            Progress::PeerIps => self.phase = (now, Phase::GatherPeerIps),
             Progress::KillswitchLockdown => self.phase = (now, Phase::KillswitchLockdown),
             Progress::StaticWgTunnel(session) => {
-                self.phase = (now, Phase::FallbackToStaticWgTunnel);
-                self.session = Some(session);
+                self.phase = (now, Phase::EstablishWgTunnel);
+                self.ping_session = Some((SessionKind::Ping, session));
             }
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
             Progress::AdjustToMain(_round_trip_time) => self.phase = (now, Phase::AdjustToMain),
@@ -145,6 +154,9 @@ impl Up {
 
     pub fn connected(&mut self) {
         self.phase = (SystemTime::now(), Phase::ConnectionEstablished);
+        if let Some((SessionKind::Ping, meta)) = self.ping_session.take() {
+            self.ping_session = Some((SessionKind::Main, meta));
+        }
     }
 }
 
@@ -168,12 +180,10 @@ impl Display for Phase {
             Phase::GeneratingWg => "Generating WireGuard keypairs",
             Phase::OpeningBridge => "Opening bridge connection",
             Phase::RegisterWg => "Registering WireGuard public key",
-            Phase::ClosingBridge => "Closing bridge connection",
             Phase::OpeningPing => "Opening main connection",
-            Phase::EstablishDynamicWgTunnel => "Establishing dynamically routed WireGuard tunnel",
-            Phase::FallbackGatherPeerIps => "Retrieving peer IPs for static tunnel",
+            Phase::GatherPeerIps => "Retrieving peer IPs",
             Phase::KillswitchLockdown => "Activating killswitch",
-            Phase::FallbackToStaticWgTunnel => "Establishing statically routed WireGuard tunnel",
+            Phase::EstablishWgTunnel => "Establishing WireGuard tunnel",
             Phase::VerifyPing => "Verifying established connection",
             Phase::AdjustToMain => "Upgrading for general traffic",
             Phase::ConnectionEstablished => "Connection established",
@@ -197,10 +207,10 @@ impl Display for Progress {
             Progress::ResolveBlokliIps => write!(f, "Resolving Blokli IPs"),
             Progress::GenerateWg(_) => write!(f, "Generating WireGuard keypairs"),
             Progress::OpenBridge(_) => write!(f, "Opening bridge connection"),
+            Progress::BridgeOpened(_) => write!(f, "Bridge session opened"),
             Progress::RegisterWg => write!(f, "Registering WireGuard public key"),
-            Progress::CloseBridge(_) => write!(f, "Closing bridge connection"),
-            Progress::OpenPing => write!(f, "Opening main connection"),
-            Progress::DynamicWgTunnel(_) => write!(f, "Establishing dynamic WireGuard tunnel"),
+            Progress::OpenPing(_) => write!(f, "Opening main connection"),
+            Progress::BridgeClosed => write!(f, "Bridge session closed"),
             Progress::PeerIps => write!(f, "Retrieving peer IPs"),
             Progress::KillswitchLockdown => write!(f, "Activating killswitch"),
             Progress::StaticWgTunnel(_) => write!(f, "Establishing static WireGuard tunnel"),

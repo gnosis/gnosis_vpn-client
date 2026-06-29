@@ -2,7 +2,7 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "schedule:earlyMondays"],
   "pinDigests": true,
-  "prCreation": "not-pending",
+  "prCreation": "immediate",
   "semanticCommits": "enabled",
   "rangeStrategy": "bump",
   "minimumReleaseAge": "14 days",
@@ -16,8 +16,8 @@
     },
     {
       "matchManagers": ["nix"],
-      "matchUpdateTypes": ["minor", "patch"],
-      "groupName": "nix flake updates"
+      "groupName": "nix flake updates",
+      "pinDigests": false
     }
   ]
 }

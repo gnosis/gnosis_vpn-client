@@ -2,15 +2,12 @@
 //! These function expect to be spawn and will deliver their result or progress via channels.
 
 use backon::{ExponentialBuilder, Retryable};
-use bytesize::ByteSize;
 use edgli::blokli::{IncentiveOperations, make_incentive_operations};
 use edgli::hopr_lib::api::node::HoprState;
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use edgli::hopr_lib::builder::Keypair;
 use edgli::hopr_lib::exports::network::types::types::IpProtocol;
-use edgli::hopr_lib::exports::transport::SurbBalancerConfig;
 use edgli::{BlockchainConnectorConfig, EdgliInitState};
-use human_bandwidth::re::bandwidth::Bandwidth;
 use rand::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
@@ -19,6 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use url::Url;
 
+use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,11 +29,11 @@ use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config};
 use crate::route_health::{self, HealthCheckOutcome};
 use crate::worker_params::{self, WorkerParams};
-use crate::{balance, connection, event, ping, remote_data};
+use crate::{balance, connection, event, peer, ping, remote_data};
 
 /// Results indicate events that arise from concurrent runners.
 /// These runners are usually spawned and want to report data or progress back to the core application loop.
-pub enum Results {
+pub(crate) enum Results {
     NodeBalance {
         res: Result<balance::PreSafe, Error>,
     },
@@ -77,8 +75,8 @@ pub enum Results {
     NodeWxhoprWithdraw {
         res: Result<(), Error>,
     },
-    ConnectedPeers {
-        res: Result<Vec<Address>, Error>,
+    AnnouncedPeers {
+        res: Result<HashMap<Address, peer::Peer>, Error>,
     },
     HoprConstruction(EdgliInitState),
     HoprRunning,
@@ -111,7 +109,7 @@ pub enum Results {
 }
 
 #[derive(Debug, Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error(transparent)]
     WorkerParams(#[from] worker_params::Error),
     #[error("chain error: {0}")]
@@ -130,20 +128,12 @@ pub enum Error {
     IncentiveOperationsCreation(String),
 }
 
-#[derive(Debug, Error)]
-pub enum SurbConfigError {
-    #[error("Response buffer byte size too small")]
-    ResponseBufferTooSmall,
-    #[error("Max SURB upstream bandwidth cannot be zero")]
-    MaxSurbUpstreamCannotBeZero,
-}
-
 #[derive(Debug, Deserialize)]
 struct UnauthorizedError {
     error: String,
 }
 
-pub async fn minimum_balance_recommendation(
+pub(crate) async fn minimum_balance_recommendation(
     incentive_operations: Arc<dyn IncentiveOperations>,
     cfg: edgli::strategy::IncentiveConfiguration,
     results_sender: mpsc::Sender<Results>,
@@ -152,7 +142,7 @@ pub async fn minimum_balance_recommendation(
     let _ = results_sender.send(Results::MinimumBalanceRecommendation { res }).await;
 }
 
-pub async fn ideal_balance_recommendation(
+pub(crate) async fn ideal_balance_recommendation(
     hopr: Arc<Hopr>,
     cfg: edgli::strategy::IncentiveConfiguration,
     results_sender: mpsc::Sender<Results>,
@@ -164,7 +154,7 @@ pub async fn ideal_balance_recommendation(
     let _ = results_sender.send(Results::IdealBalanceRecommendation { res }).await;
 }
 
-pub async fn capacity_allocations(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn capacity_allocations(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
     let res = hopr
         .capacity_allocations()
         .await
@@ -172,28 +162,34 @@ pub async fn capacity_allocations(hopr: Arc<Hopr>, results_sender: mpsc::Sender<
     let _ = results_sender.send(Results::CapacityAllocations { res }).await;
 }
 
-pub async fn balances(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn balances(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("starting balances runner");
     let res = hopr.balances().await.map_err(Error::from);
     let _ = results_sender.send(Results::Balances { res }).await;
 }
 
-pub async fn node_balance(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn node_balance(
+    incentive_operations: Arc<dyn IncentiveOperations>,
+    results_sender: mpsc::Sender<Results>,
+) {
     let res = run_node_balance(incentive_operations).await;
     let _ = results_sender.send(Results::NodeBalance { res }).await;
 }
 
-pub async fn query_safe(incentive_operations: Arc<dyn IncentiveOperations>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn query_safe(
+    incentive_operations: Arc<dyn IncentiveOperations>,
+    results_sender: mpsc::Sender<Results>,
+) {
     let res = run_query_safe(incentive_operations).await;
     let _ = results_sender.send(Results::QuerySafe { res }).await;
 }
 
-pub async fn funding_tool(worker_params: WorkerParams, code: String, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn funding_tool(worker_params: WorkerParams, code: String, results_sender: mpsc::Sender<Results>) {
     let res = run_funding_tool(worker_params, code).await;
     let _ = results_sender.send(Results::FundingTool { res }).await;
 }
 
-pub async fn safe_deployment(
+pub(crate) async fn safe_deployment(
     incentive_operations: Arc<dyn IncentiveOperations>,
     presafe: balance::PreSafe,
     results_sender: mpsc::Sender<Results>,
@@ -202,7 +198,7 @@ pub async fn safe_deployment(
     let _ = results_sender.send(Results::DeploySafe { res }).await;
 }
 
-pub async fn persist_safe(state_home: PathBuf, safe_module: SafeModule, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn persist_safe(state_home: PathBuf, safe_module: SafeModule, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("persisting safe module");
     let res = hopr_config::store_safe(state_home, &safe_module).await;
     let _ = results_sender
@@ -213,7 +209,7 @@ pub async fn persist_safe(state_home: PathBuf, safe_module: SafeModule, results_
         .await;
 }
 
-pub async fn hopr(
+pub(crate) async fn hopr(
     worker_params: WorkerParams,
     blokli_config: BlokliConfig,
     safe_module: &SafeModule,
@@ -228,7 +224,7 @@ pub async fn hopr(
         .await;
 }
 
-pub async fn node_wxhopr_withdraw(
+pub(crate) async fn node_wxhopr_withdraw(
     incentive_operations: Arc<dyn IncentiveOperations>,
     safe_address: Address,
     results_sender: mpsc::Sender<Results>,
@@ -237,25 +233,29 @@ pub async fn node_wxhopr_withdraw(
     let _ = results_sender.send(Results::NodeWxhoprWithdraw { res }).await;
 }
 
-pub async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
     while hopr.status() != HoprState::Running {
         time::sleep(Duration::from_secs(1)).await;
     }
     let _ = results_sender.send(Results::HoprRunning).await;
 }
 
-pub async fn connected_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
-    tracing::debug!("starting connected peers runner");
-    let res = hopr.connected_peers().await.map_err(Error::from);
-    let _ = results_sender.send(Results::ConnectedPeers { res }).await;
+pub(crate) async fn announced_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    tracing::debug!("starting announced peers runner");
+    let res = hopr.announced_peers().await.map_err(Error::from);
+    let _ = results_sender.send(Results::AnnouncedPeers { res }).await;
 }
 
-pub async fn monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn monitor_session(
+    hopr: Arc<Hopr>,
+    session: &SessionClientMetadata,
+    results_sender: mpsc::Sender<Results>,
+) {
     run_monitor_session(hopr, session).await;
     let _ = results_sender.send(Results::SessionMonitorFailed).await;
 }
 
-pub async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>) {
+pub(crate) async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>) {
     let ping_opts = ping::Options {
         seq_count: 1,
         ..Default::default()
@@ -289,7 +289,7 @@ pub async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>)
     }
 }
 
-pub async fn create_incentive_operations(
+pub(crate) async fn create_incentive_operations(
     worker_params: &WorkerParams,
     blokli_config: BlockchainConnectorConfig,
     results_sender: mpsc::Sender<Results>,
@@ -377,6 +377,7 @@ async fn run_minimum_balance_recommendation(
     tracing::debug!("starting minimum balance recommendation runner");
     (|| {
         let ops = incentive_operations.clone();
+        let cfg = cfg.clone();
         async move {
             let rec = edgli::strategy::minimum_balance_recommendation(&*ops, &cfg)
                 .await
@@ -593,9 +594,9 @@ impl Display for Results {
                 Ok(()) => write!(f, "NodeWxhoprWithdraw: Success"),
                 Err(err) => write!(f, "NodeWxhoprWithdraw: Error({})", err),
             },
-            Results::ConnectedPeers { res } => match res {
-                Ok(peers) => write!(f, "ConnectedPeers: {:?}", peers),
-                Err(err) => write!(f, "ConnectedPeers: Error({})", err),
+            Results::AnnouncedPeers { res } => match res {
+                Ok(peers) => write!(f, "AnnouncedPeers: {} peers", peers.len()),
+                Err(err) => write!(f, "AnnouncedPeers: Error({})", err),
             },
             Results::IncentiveOperations { res } => match res {
                 Ok(_) => write!(f, "IncentiveOperations: Created Successfully"),
@@ -637,24 +638,4 @@ impl Display for Results {
             Results::NerdStatsTicketStats { .. } => write!(f, "NerdStatsTicketStats"),
         }
     }
-}
-
-pub fn to_surb_balancer_config(
-    response_buffer: ByteSize,
-    max_surb_upstream: Bandwidth,
-) -> Result<SurbBalancerConfig, SurbConfigError> {
-    // Buffer worth at least 2 reply packets
-    if response_buffer.as_u64() < 2 * edgli::hopr_lib::exports::transport::SESSION_MTU as u64 {
-        return Err(SurbConfigError::ResponseBufferTooSmall);
-    }
-    if max_surb_upstream.is_zero() {
-        return Err(SurbConfigError::MaxSurbUpstreamCannotBeZero);
-    }
-    let config = SurbBalancerConfig {
-        target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::exports::transport::SESSION_MTU as u64,
-        max_surbs_per_sec: (max_surb_upstream.as_bps() as usize / (8 * edgli::hopr_lib::exports::transport::SURB_SIZE))
-            as u64,
-        ..Default::default()
-    };
-    Ok(config)
 }

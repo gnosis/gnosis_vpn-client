@@ -16,11 +16,11 @@ use crate::connection::destination::{Address, Destination};
 use crate::log_output;
 use crate::route_health::{RouteHealth, RouteHealthState};
 use crate::serde_utils;
-use crate::ticket_stats::TicketStats;
+pub use crate::ticket_stats::TicketStats;
 use crate::update::UpdateStatus;
 
 mod balance_response;
-pub use balance_response::{BalanceResponse, ChannelBalance, ChannelOut};
+pub use balance_response::{BalanceResponse, ChannelBalance, ChannelOut, Info};
 
 /// These commands are sent by the ctl app and forwarded to the core loop for answering
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -90,6 +90,9 @@ pub enum WorkerCommand {
     Balance,
     FundingTool(String),
     Telemetry,
+    /// Reconnect the current HOPR session without clearing the target or disabling the killswitch.
+    /// Used by the root process when a WAN interface change is detected.
+    ForceReconnect,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -101,6 +104,9 @@ pub enum Response {
     Balance(Result<BalanceResponse, String>),
     FundingTool(FundingToolResponse),
     Telemetry(Option<String>),
+    /// Acknowledgment for [`WorkerCommand::ForceReconnect`]. Never sent in response to a ctl
+    /// command — the root process uses id=0 fire-and-forget and discards this response.
+    ForceReconnectAcknowledged,
     Pong,
     Info(InfoResponse),
     StartClient(StartClientResponse),
@@ -129,6 +135,7 @@ pub struct StatusResponse {
     pub destinations: Vec<DestinationState>,
     pub target_destination: Option<String>,
     pub connecting: Option<ConnectingInfo>,
+    pub reconnecting: Option<ReconnectingInfo>,
     pub connected: Option<ConnectedInfo>,
     pub disconnecting: Vec<DisconnectingInfo>,
 }
@@ -136,6 +143,15 @@ pub struct StatusResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnectingInfo {
     pub destination_id: String,
+    #[serde(with = "serde_utils::system_time")]
+    pub since: SystemTime,
+    pub phase: connection::up::Phase,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReconnectingInfo {
+    pub destination_id: String,
+    /// When the WAN change that triggered the reconnect was detected.
     #[serde(with = "serde_utils::system_time")]
     pub since: SystemTime,
     pub phase: connection::up::Phase,
@@ -187,6 +203,7 @@ pub enum RunMode {
     Warmup {
         hopr_init_status: Option<HoprInitStatus>,
         hopr_status: Option<HoprStatus>,
+        last_error: Option<String>,
     },
     /// Normal operation where connections can be made
     Running {
@@ -304,6 +321,14 @@ pub enum NerdStatsResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ActiveSession {
+    Bridge { bound_host: SocketAddr, id: String },
+    Ping { bound_host: SocketAddr, id: String },
+    Main { bound_host: SocketAddr, id: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnStats {
     #[serde(with = "serde_utils::address")]
     pub node_address: Address,
@@ -311,24 +336,34 @@ pub struct ConnStats {
     pub wg_pubkey: Option<String>,
     pub wg_server_pubkey: Option<String>,
     pub wg_ip: Option<String>,
-    pub session_bound_host: Option<SocketAddr>,
-    pub session_id: Option<String>,
+    pub bridge_session: Option<ActiveSession>,
+    pub main_session: Option<ActiveSession>,
 }
 
 impl ConnStats {
     pub fn from_conn(conn: &connection::up::Up, node_address: Address) -> Self {
+        use connection::up::SessionKind;
+        let bridge_session = conn.bridge_session.as_ref().and_then(|meta| {
+            let id = meta.active_clients.first()?.to_string();
+            let bound_host = meta.bound_host;
+            Some(ActiveSession::Bridge { bound_host, id })
+        });
+        let main_session = conn.ping_session.as_ref().and_then(|(kind, meta)| {
+            let id = meta.active_clients.first()?.to_string();
+            let bound_host = meta.bound_host;
+            Some(match kind {
+                SessionKind::Ping => ActiveSession::Ping { bound_host, id },
+                SessionKind::Main => ActiveSession::Main { bound_host, id },
+            })
+        });
         ConnStats {
             node_address,
             destination: conn.destination.clone(),
             wg_pubkey: conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone()),
             wg_server_pubkey: conn.registration.as_ref().map(|reg| reg.server_public_key()),
             wg_ip: conn.registration.as_ref().map(|reg| reg.address().to_string()),
-            session_bound_host: conn.session.as_ref().map(|s| s.bound_host),
-            session_id: conn
-                .session
-                .as_ref()
-                .and_then(|s| s.active_clients.first())
-                .map(|id| id.to_string()),
+            bridge_session,
+            main_session,
         }
     }
 }
@@ -355,10 +390,15 @@ impl RunMode {
         RunMode::DeployingSafe { node_address }
     }
 
-    pub fn warmup(edgli_init_state: Option<EdgliInitState>, hopr_state: Option<HoprState>) -> Self {
+    pub fn warmup(
+        edgli_init_state: Option<EdgliInitState>,
+        hopr_state: Option<HoprState>,
+        last_error: Option<String>,
+    ) -> Self {
         RunMode::Warmup {
             hopr_init_status: edgli_init_state.map(|s| s.into()),
             hopr_status: hopr_state.map(|s| s.into()),
+            last_error,
         }
     }
 
@@ -490,20 +530,15 @@ impl Display for RunMode {
                 node_wxhopr,
                 funding_tool,
                 error,
-                balance_recommendation,
+                balance_recommendation: _,
             } => {
+                let wxhopr_sci = balance::wxhopr_scientific(*node_wxhopr)
+                    .map(|s| format!(" ({s})"))
+                    .unwrap_or_default();
                 let mut msg = format!(
-                    "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {}",
-                    node_address.to_checksum(),
-                    balance::human_wxhopr(*node_wxhopr)
+                    "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}{wxhopr_sci}",
+                    node_address.to_checksum()
                 );
-                if let Some(rec) = balance_recommendation {
-                    msg = format!(
-                        "{msg}, recommended: wxHOPR >= {}, xDAI >= {}",
-                        balance::human_wxhopr(rec.wxhopr),
-                        rec.xdai
-                    );
-                }
                 msg = match (funding_tool, error) {
                     (Some(tool), Some(error)) => {
                         format!("{msg}, funding tool: {tool}, error: {error})")
@@ -520,10 +555,14 @@ impl Display for RunMode {
             RunMode::Warmup {
                 hopr_init_status,
                 hopr_status,
-            } => match (hopr_init_status, hopr_status) {
-                (None, None) => write!(f, "Warmup"),
-                (_, Some(hopr_status)) => write!(f, "Warmup ({hopr_status})"),
-                (Some(hopr_init_status), _) => write!(f, "Warmup ({hopr_init_status})"),
+                last_error,
+            } => match (hopr_init_status, hopr_status, last_error) {
+                (None, None, None) => write!(f, "Warmup"),
+                (None, None, Some(err)) => write!(f, "Warmup (last error: {err})"),
+                (_, Some(status), None) => write!(f, "Warmup ({status})"),
+                (_, Some(status), Some(err)) => write!(f, "Warmup ({status}, last error: {err})"),
+                (Some(status), _, None) => write!(f, "Warmup ({status})"),
+                (Some(status), _, Some(err)) => write!(f, "Warmup ({status}, last error: {err})"),
             },
             RunMode::Running {
                 hopr_status,
@@ -559,6 +598,18 @@ impl Display for ConnectingInfo {
         write!(
             f,
             "Connecting to {} (since {}, phase {})",
+            self.destination_id,
+            log_output::elapsed(&self.since),
+            self.phase
+        )
+    }
+}
+
+impl Display for ReconnectingInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Reconnecting to {} (since {}, phase {})",
             self.destination_id,
             log_output::elapsed(&self.since),
             self.phase
@@ -781,6 +832,47 @@ mod tests {
         })
         .unwrap();
         assert_eq!(with_error, r#"{"Init":{"last_error":"connection refused"}}"#);
+    }
+
+    #[test]
+    fn runmode_warmup_serializes_to_expected_json_shape() {
+        let no_error = serde_json::to_string(&RunMode::Warmup {
+            hopr_init_status: None,
+            hopr_status: None,
+            last_error: None,
+        })
+        .unwrap();
+        assert_eq!(
+            no_error,
+            r#"{"Warmup":{"hopr_init_status":null,"hopr_status":null,"last_error":null}}"#
+        );
+
+        let with_error = serde_json::to_string(&RunMode::Warmup {
+            hopr_init_status: None,
+            hopr_status: None,
+            last_error: Some("safe 0xabc does not exist".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            with_error,
+            r#"{"Warmup":{"hopr_init_status":null,"hopr_status":null,"last_error":"safe 0xabc does not exist"}}"#
+        );
+    }
+
+    #[test]
+    fn runmode_warmup_deserializes_from_json_fixture() {
+        let no_error: RunMode =
+            serde_json::from_str(r#"{"Warmup":{"hopr_init_status":null,"hopr_status":null,"last_error":null}}"#)
+                .unwrap();
+        assert!(matches!(no_error, RunMode::Warmup { last_error: None, .. }));
+
+        let with_error: RunMode = serde_json::from_str(
+            r#"{"Warmup":{"hopr_init_status":null,"hopr_status":null,"last_error":"safe 0xabc does not exist"}}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(with_error, RunMode::Warmup { last_error: Some(ref e), .. } if e == "safe 0xabc does not exist")
+        );
     }
 
     #[test]

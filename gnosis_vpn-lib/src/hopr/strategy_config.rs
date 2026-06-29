@@ -1,11 +1,13 @@
+use std::collections::HashSet;
+
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 
-/// Sizing and topology parameters for the channel lifecycle strategy reactor.
+/// Operator-tunable parameters for the channel lifecycle strategy reactor.
 ///
-/// Maps 1-to-1 to [`edgli::strategy::IncentiveConfiguration`]; carried in the gnosis_vpn
-/// config layer so operators can tune channel funding from the TOML config file.
-///
-/// All fields default to the same values as [`edgli::strategy::IncentiveConfiguration`].
+/// Exposes the subset of [`edgli::strategy::IncentiveConfiguration`] that operators
+/// can tune via the TOML config file. Fields not listed here fall back to upstream
+/// defaults (see [`edgli::strategy::IncentiveConfiguration::default`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StrategyConfig {
     /// Expected number of mixnet messages per channel before exhaustion.
@@ -18,6 +20,9 @@ pub struct StrategyConfig {
 
     /// Target number of open outgoing channels.
     pub target_open_channels: usize,
+
+    /// When `Some`, channels are opened exclusively to these peers; `None` uses quality-score selection.
+    pub channel_allowlist: Option<HashSet<Address>>,
 }
 
 impl Default for StrategyConfig {
@@ -27,6 +32,7 @@ impl Default for StrategyConfig {
             desired_message_count: def.desired_message_count,
             min_open_channels: def.min_open_channels,
             target_open_channels: def.target_open_channels,
+            channel_allowlist: def.channel_allowlist,
         }
     }
 }
@@ -37,6 +43,7 @@ impl From<StrategyConfig> for edgli::strategy::IncentiveConfiguration {
             desired_message_count: c.desired_message_count,
             min_open_channels: c.min_open_channels,
             target_open_channels: c.target_open_channels,
+            channel_allowlist: c.channel_allowlist,
         }
     }
 }

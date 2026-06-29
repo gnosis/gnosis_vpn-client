@@ -10,11 +10,18 @@ use std::net::Ipv4Addr;
 use std::str::FromStr;
 
 use super::Error;
-use super::route_ops::RouteOps;
+use super::route_ops::{RouteOps, WanRoute};
+
+/// Returns true if `prefix/len` covers `dest` (i.e. they share the same leading `len` bits).
+fn covers(prefix: Ipv4Addr, len: u8, dest: Ipv4Addr) -> bool {
+    if len == 0 {
+        return true;
+    }
+    let mask = !0u32 << (32 - len);
+    (u32::from(prefix) & mask) == (u32::from(dest) & mask)
+}
 
 /// Production [`RouteOps`] for Linux backed by an `rtnetlink::Handle`.
-///
-/// Reuses the same netlink connection as [`RealNetlinkOps`](super::netlink_ops::RealNetlinkOps).
 #[derive(Clone)]
 pub struct NetlinkRouteOps {
     handle: rtnetlink::Handle,
@@ -26,7 +33,6 @@ impl NetlinkRouteOps {
     }
 
     /// Parse a destination string like "10.0.0.0/8" or "1.2.3.4" into (addr, prefix_len).
-    #[allow(dead_code)]
     fn parse_dest(dest: &str) -> Result<(Ipv4Addr, u8), Error> {
         if let Some((addr_str, prefix_str)) = dest.split_once('/') {
             let addr = Ipv4Addr::from_str(addr_str)
@@ -44,7 +50,6 @@ impl NetlinkRouteOps {
     }
 
     /// Resolve a device name to its interface index.
-    #[allow(dead_code)]
     async fn resolve_ifindex(&self, device: &str) -> Result<u32, Error> {
         let links: Vec<_> = self
             .handle
@@ -61,12 +66,27 @@ impl NetlinkRouteOps {
             .map(|l| l.header.index)
             .ok_or_else(|| Error::General(format!("interface '{device}' not found")))
     }
+
+    async fn resolve_ifname(&self, index: u32) -> Result<String, Error> {
+        let links: Vec<_> = self.handle.link().get().execute().try_collect().await?;
+        links
+            .iter()
+            .find(|l| l.header.index == index)
+            .and_then(|l| {
+                l.attributes.iter().find_map(|a| match a {
+                    LinkAttribute::IfName(n) => Some(n.clone()),
+                    _ => None,
+                })
+            })
+            .ok_or_else(|| Error::General(format!("interface name not found for index {index}")))
+    }
 }
 
 #[async_trait]
 impl RouteOps for NetlinkRouteOps {
-    async fn get_default_interface(&self) -> Result<(String, Option<String>), Error> {
-        // List all IPv4 routes and find the default (0.0.0.0/0)
+    async fn get_wan_route_for(&self, dest: Ipv4Addr, exclude_iface: &str) -> Result<Option<WanRoute>, Error> {
+        let exclude_idx = self.resolve_ifindex(exclude_iface).await.ok();
+
         let routes: Vec<_> = self
             .handle
             .route()
@@ -75,24 +95,48 @@ impl RouteOps for NetlinkRouteOps {
             .try_collect()
             .await?;
 
-        // Find the default route (prefix_len == 0)
-        let default_route = routes
+        // Among all main-table routes covering `dest` and not via the VPN tunnel,
+        // pick the most specific (highest prefix length).
+        let best = routes
             .iter()
-            .filter(|r| r.header.destination_prefix_length == 0)
-            .min_by_key(|r| {
-                // Prefer routes with lower metric
-                r.attributes
+            .filter(|r| r.header.table == 254)
+            .filter(|r| {
+                let oif = r.attributes.iter().find_map(|a| match a {
+                    RouteAttribute::Oif(idx) => Some(*idx),
+                    _ => None,
+                });
+                exclude_idx.is_none() || oif != exclude_idx
+            })
+            .filter(|r| {
+                let prefix_len = r.header.destination_prefix_length;
+                let prefix_addr = r
+                    .attributes
                     .iter()
                     .find_map(|a| match a {
-                        RouteAttribute::Priority(p) => Some(*p),
+                        RouteAttribute::Destination(RouteAddress::Inet(ip)) => Some(*ip),
                         _ => None,
                     })
-                    .unwrap_or(0)
+                    .unwrap_or(Ipv4Addr::UNSPECIFIED);
+                covers(prefix_addr, prefix_len, dest)
             })
-            .ok_or(Error::NoInterface)?;
+            .filter(|r| r.attributes.iter().any(|a| matches!(a, RouteAttribute::Oif(_))))
+            .max_by_key(|r| {
+                let metric = r
+                    .attributes
+                    .iter()
+                    .find_map(|a| match a {
+                        RouteAttribute::Priority(m) => Some(*m),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+                (r.header.destination_prefix_length, std::cmp::Reverse(metric))
+            });
 
-        // Extract interface index
-        let if_index = default_route
+        let Some(route) = best else {
+            return Ok(None);
+        };
+
+        let oif = route
             .attributes
             .iter()
             .find_map(|a| match a {
@@ -101,27 +145,91 @@ impl RouteOps for NetlinkRouteOps {
             })
             .ok_or(Error::NoInterface)?;
 
-        // Extract gateway
-        let gateway = default_route.attributes.iter().find_map(|a| match a {
+        let device = self.resolve_ifname(oif).await?;
+
+        let gateway = route.attributes.iter().find_map(|a| match a {
             RouteAttribute::Gateway(RouteAddress::Inet(ip)) => Some(ip.to_string()),
             _ => None,
         });
 
-        // Resolve ifindex to name
-        let links: Vec<_> = self.handle.link().get().execute().try_collect().await?;
+        let src_ip = route.attributes.iter().find_map(|a| match a {
+            RouteAttribute::PrefSource(RouteAddress::Inet(ip)) => Some(*ip),
+            _ => None,
+        });
 
-        let if_name = links
+        Ok(Some(WanRoute {
+            device,
+            gateway,
+            src_ip,
+        }))
+    }
+
+    async fn get_route_via_device(&self, dest: Ipv4Addr, device: &str) -> Result<Option<WanRoute>, Error> {
+        // If the interface is gone entirely, treat that as no route.
+        let device_idx = match self.resolve_ifindex(device).await {
+            Ok(idx) => idx,
+            Err(_) => return Ok(None),
+        };
+
+        let routes: Vec<_> = self
+            .handle
+            .route()
+            .get(rtnetlink::RouteMessageBuilder::<Ipv4Addr>::default().build())
+            .execute()
+            .try_collect()
+            .await?;
+
+        let best = routes
             .iter()
-            .find(|l| l.header.index == if_index)
-            .and_then(|l| {
-                l.attributes.iter().find_map(|a| match a {
-                    LinkAttribute::IfName(n) => Some(n.clone()),
-                    _ => None,
-                })
+            .filter(|r| r.header.table == 254)
+            .filter(|r| {
+                r.attributes
+                    .iter()
+                    .any(|a| matches!(a, RouteAttribute::Oif(idx) if *idx == device_idx))
             })
-            .ok_or_else(|| Error::General(format!("interface name not found for index {if_index}")))?;
+            .filter(|r| {
+                let prefix_len = r.header.destination_prefix_length;
+                let prefix_addr = r
+                    .attributes
+                    .iter()
+                    .find_map(|a| match a {
+                        RouteAttribute::Destination(RouteAddress::Inet(ip)) => Some(*ip),
+                        _ => None,
+                    })
+                    .unwrap_or(Ipv4Addr::UNSPECIFIED);
+                covers(prefix_addr, prefix_len, dest)
+            })
+            .max_by_key(|r| {
+                let metric = r
+                    .attributes
+                    .iter()
+                    .find_map(|a| match a {
+                        RouteAttribute::Priority(m) => Some(*m),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+                (r.header.destination_prefix_length, std::cmp::Reverse(metric))
+            });
 
-        Ok((if_name, gateway))
+        let Some(route) = best else {
+            return Ok(None);
+        };
+
+        let gateway = route.attributes.iter().find_map(|a| match a {
+            RouteAttribute::Gateway(RouteAddress::Inet(ip)) => Some(ip.to_string()),
+            _ => None,
+        });
+
+        let src_ip = route.attributes.iter().find_map(|a| match a {
+            RouteAttribute::PrefSource(RouteAddress::Inet(ip)) => Some(*ip),
+            _ => None,
+        });
+
+        Ok(Some(WanRoute {
+            device: device.to_owned(),
+            gateway,
+            src_ip,
+        }))
     }
 
     async fn route_add(&self, dest: &str, gateway: Option<&str>, device: &str) -> Result<(), Error> {

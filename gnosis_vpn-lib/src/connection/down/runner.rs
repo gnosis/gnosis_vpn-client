@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use crate::connection;
 use crate::connection::options::Options;
+use crate::connection::options::{SurbParams, surb_config_for};
 use crate::core::runner::Results;
 use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
@@ -16,18 +17,18 @@ use crate::hopr::{Hopr, HoprError};
 
 use super::{Error, Event};
 
-pub struct Runner {
+pub(crate) struct Runner {
     down: connection::down::Down,
     hopr: Arc<Hopr>,
     options: Options,
 }
 
 impl Runner {
-    pub fn new(down: connection::down::Down, hopr: Arc<Hopr>, options: Options) -> Self {
+    pub(crate) fn new(down: connection::down::Down, hopr: Arc<Hopr>, options: Options) -> Self {
         Self { down, hopr, options }
     }
 
-    pub async fn start(&self, results_sender: mpsc::Sender<Results>) {
+    pub(crate) async fn start(&self, results_sender: mpsc::Sender<Results>) {
         let res = self.run(results_sender.clone()).await;
         let _ = results_sender
             .send(Results::DisconnectionResult {
@@ -47,7 +48,8 @@ impl Runner {
                 evt: Event::OpenBridge,
             })
             .await;
-        let bridge_session = open_bridge_session(&self.hopr, &self.down, &self.options).await?;
+        let bridge_surb = surb_config_for(&self.options.surb_balancing.bridge)?;
+        let bridge_session = open_bridge_session(&self.hopr, &self.down, &self.options, bridge_surb).await?;
 
         // 2. unregister wg public key
         let _ = results_sender
@@ -83,15 +85,14 @@ async fn open_bridge_session(
     hopr: &Hopr,
     down: &connection::down::Down,
     options: &Options,
+    surb: SurbParams,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = HoprSessionClientConfig {
         capabilities: options.sessions.bridge.capabilities,
         forward_path: down.destination.routing,
         return_path: down.destination.routing,
-        // only send 1 SURB alongside our HTTP requests
-        // health responses always fit into one packet
-        always_max_out_surbs: false,
-        surb_management: None,
+        always_max_out_surbs: surb.always_max_out_surbs,
+        surb_management: surb.management,
         ..Default::default()
     };
     hopr.open_session(
@@ -137,7 +138,6 @@ impl Display for Runner {
 impl Display for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Event::DisconnectWg => write!(f, "DisconnectWg"),
             Event::OpenBridge => write!(f, "OpenBridge"),
             Event::UnregisterWg => write!(f, "UnregisterWg"),
             Event::CloseBridge => write!(f, "CloseBridge"),

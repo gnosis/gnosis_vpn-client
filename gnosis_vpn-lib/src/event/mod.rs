@@ -64,22 +64,17 @@ pub enum WorkerToRoot {
 
 /// Runner requesting root command and usually waiting for response
 #[derive(Debug)]
-pub enum RunnerToRoot {
+pub(crate) enum RunnerToRoot {
     KillswitchLockdown {
         peer_ips: Vec<Ipv4Addr>,
         interface: String,
         resp: oneshot::Sender<Result<(), String>>,
-    },
-    DynamicWgRouting {
-        wg_data: WireGuardData,
-        resp: oneshot::Sender<Result<String, String>>,
     },
     StaticWgRouting {
         wg_data: WireGuardData,
         peer_ips: Vec<Ipv4Addr>,
         resp: oneshot::Sender<Result<String, String>>,
     },
-    TearDownWg,
     Ping {
         options: ping::Options,
         resp: oneshot::Sender<Result<Duration, String>>,
@@ -105,23 +100,27 @@ impl AsRef<RootToWorker> for RootToWorker {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RequestToRoot {
     KillswitchLockdown {
+        request_id: u64,
         peer_ips: Vec<Ipv4Addr>,
         interface: String,
     },
-    DynamicWgRouting {
-        wg_data: WireGuardData,
-    },
     StaticWgRouting {
+        request_id: u64,
         wg_data: WireGuardData,
         peer_ips: Vec<Ipv4Addr>,
     },
     TearDownWg,
     Ping {
+        request_id: u64,
         options: ping::Options,
     },
     /// Fire-and-forget: ask root to hold resolved IPs so they survive a worker restart.
     CacheBlokliIps {
         ips: Vec<Ipv4Addr>,
+    },
+    /// Fire-and-forget: refresh the peer-IP allowlist used by the killswitch and routing bypass.
+    UpdatePeerIps {
+        peer_ips: Vec<Ipv4Addr>,
     },
 }
 
@@ -130,17 +129,16 @@ pub enum RequestToRoot {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ResponseFromRoot {
     KillswitchLockdown {
+        request_id: u64,
         res: Result<(), String>,
     },
     /// On success, the String is the resolved WireGuard interface name.
-    DynamicWgRouting {
-        res: Result<String, String>,
-    },
-    /// On success, the String is the resolved WireGuard interface name.
     StaticWgRouting {
+        request_id: u64,
         res: Result<String, String>,
     },
     Ping {
+        request_id: u64,
         res: Result<Duration, String>,
     },
 }

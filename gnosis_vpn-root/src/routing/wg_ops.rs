@@ -5,7 +5,6 @@
 //! (wg-quick).
 //!
 //! Production code uses [`RealWgOps`].
-//! Tests use stateful mocks (see `mocks` module).
 
 use async_trait::async_trait;
 use std::path::PathBuf;

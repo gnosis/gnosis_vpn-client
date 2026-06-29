@@ -1,15 +1,15 @@
-pub mod api;
-pub mod errors;
-pub mod types;
+pub(crate) mod api;
+pub(crate) mod errors;
+pub(crate) mod types;
 pub use edgli::EdgliInitState;
 pub use edgli::hopr_lib;
 pub use edgli::hopr_lib::api::node::HoprState;
 pub use {api::Hopr, errors::HoprError};
 
-pub mod blokli_config;
-pub mod config;
-pub mod identity;
-pub mod strategy_config;
+pub(crate) mod blokli_config;
+pub(crate) mod config;
+pub(crate) mod identity;
+pub(crate) mod strategy_config;
 pub use strategy_config::StrategyConfig;
 
 pub const ENV_VAR_CONFIG: &str = "GNOSISVPN_HOPR_CONFIG_PATH";

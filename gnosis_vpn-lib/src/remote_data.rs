@@ -43,6 +43,17 @@ pub fn backoff_expo_short_delay() -> ExponentialBuilder {
         .with_jitter()
 }
 
+/// Like [`backoff_expo_short_delay`] but limited to 1 retry (2 total attempts).
+///
+/// hopr-lib already retries new_session 3× internally (~15 s total for 1-hop) before surfacing
+/// an error, so by the time we get a failure it is likely structural. One extra attempt covers
+/// brief transients; more would delay the worker restart that is designed to fix deeper issues.
+/// With only one retry the backoff growth pattern is irrelevant — both calls use the ~1 s
+/// first-step delay.
+pub fn backoff_expo_short_delay_bridge() -> ExponentialBuilder {
+    backoff_expo_short_delay().with_max_times(1)
+}
+
 /// Resolves the IPv4 addresses for the host and port specified in the provided URL.
 pub async fn resolve_ips(url: &url::Url) -> Result<Vec<Ipv4Addr>, Error> {
     let host = url.host_str().ok_or(Error::NoHost)?;

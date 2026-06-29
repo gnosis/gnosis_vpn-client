@@ -52,7 +52,8 @@ path    = { hops = 1 }
 
 # session_pseudonym_ttl - how long to keep a closed session's pseudonym cached for reuse
 # on reconnect. Exit nodes retain session SURBs for ~30s, so reconnecting within this
-# window avoids a cold-start SURB exchange. Defaults to 30s.
+# window avoids a cold-start SURB exchange. Currently defaults to 1s (effectively
+# disabled) until hopr-lib supports PIX; set to "30s" once that lands.
 # session_pseudonym_ttl = "30s"
 
 # determine specific connection parameters for ephemeral bridge connection
@@ -83,14 +84,33 @@ path    = { hops = 1 }
 # consecutive tunnel ping failures before triggering reconnect
 # tunnel_ping_max_failures = 3
 
-# adjust session internal options
-# [connection.max_surb_upstream]
-# ping = "512 Kb/s"
-# main = "16 Mb/s"
+# adjust SURB balancing per session type
+# each section enables balancing for that session; omit to use the defaults below
+# bridge and health_check default to disabled; ping and main default to enabled
 #
-# [connection.buffer]
-# ping = "1 MB"
-# main = "5 MB"
+# [connection.surb_balancing.bridge]
+# enabled = false
+# buffer = "16 KB"
+# max_surb_upstream = "128 Kb/s"
+# always_max_out_surbs = false  # defaults to `enabled` - send only 1 SURB per request even if 2 would fit
+#
+# [connection.surb_balancing.ping]
+# enabled = true
+# buffer = "1 MB"
+# max_surb_upstream = "512 Kb/s"
+# always_max_out_surbs = true  # defaults to `enabled` - send 2 SURBs per request if 2 would fit
+#
+# [connection.surb_balancing.main]
+# enabled = true
+# buffer = "10 MB"
+# max_surb_upstream = "16 Mb/s"
+# always_max_out_surbs = true  # defaults to `enabled` - send 2 SURBs per request if 2 would fit
+#
+# [connection.surb_balancing.health_check]
+# enabled = false
+# buffer = "16 KB"
+# max_surb_upstream = "128 Kb/s"
+# always_max_out_surbs = false  # defaults to `enabled` - send only 1 SURB per request even if 2 would fit
 
 ###
 ## wireguard section - specific VPN-related settings
@@ -124,3 +144,8 @@ path    = { hops = 1 }
 # min_open_channels = 5
 # target number of open outgoing channels
 # target_open_channels = 8
+# channel allowlist: when enabled, restricts channel opening to the listed peers only.
+# When disabled (default), peers are selected by quality score.
+# [strategy.channel_allowlist]
+# enabled = false
+# peers = ["0x...", "0x..."]

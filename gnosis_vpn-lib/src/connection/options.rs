@@ -1,7 +1,8 @@
 use bytesize::ByteSize;
-use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionTarget};
+use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionTarget, SurbBalancerConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use std::time::Duration;
 
@@ -12,8 +13,7 @@ pub struct Options {
     pub timeouts: Timeouts,
     pub sessions: Sessions,
     pub ping_options: ping::Options,
-    pub buffer_sizes: BufferSizes,
-    pub max_surb_upstream: MaxSurbUpstream,
+    pub surb_balancing: SurbBalancing,
     pub health_check_intervals: HealthCheckIntervals,
     pub lan_lockdown: bool,
     /// How long to keep a closed session's pseudonym cached for potential reuse on reconnect.
@@ -56,20 +56,36 @@ pub struct SessionParameters {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct BufferSizes {
-    pub ping: ByteSize,
-    pub main: ByteSize,
+pub struct SessionSurbOptions {
+    pub enabled: bool,
+    pub buffer: ByteSize,
+    pub max_surb_upstream: Bandwidth,
+    /// When the balancer is inactive, send only 1 SURB per HTTP request even if 2 would fit.
+    pub always_max_out_surbs: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct MaxSurbUpstream {
-    pub ping: Bandwidth,
-    pub main: Bandwidth,
+pub struct SurbBalancing {
+    pub ping: SessionSurbOptions,
+    pub main: SessionSurbOptions,
+    pub bridge: SessionSurbOptions,
+    pub health_check: SessionSurbOptions,
 }
 
 impl SessionParameters {
     pub fn new(target: SessionTarget, capabilities: SessionCapabilities) -> Self {
         Self { target, capabilities }
+    }
+}
+
+impl SessionSurbOptions {
+    pub fn new(enabled: bool, buffer: ByteSize, max_surb_upstream: Bandwidth) -> Self {
+        Self {
+            enabled,
+            buffer,
+            max_surb_upstream,
+            always_max_out_surbs: enabled,
+        }
     }
 }
 
@@ -85,23 +101,64 @@ impl Default for HealthCheckIntervals {
     }
 }
 
-impl Default for MaxSurbUpstream {
+impl Default for SurbBalancing {
     fn default() -> Self {
         Self {
-            ping: Bandwidth::from_kbps(512),
-            main: Bandwidth::from_mbps(16),
+            ping: SessionSurbOptions::new(true, ByteSize::mb(1), Bandwidth::from_kbps(512)),
+            // maximum allowed buffer size is 10 MB
+            main: SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(16)),
+            bridge: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
+            health_check: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
         }
     }
 }
 
-impl Default for BufferSizes {
-    fn default() -> Self {
-        Self {
-            ping: ByteSize::mb(1),
-            // maximum allowed buffer size is 10 MB
-            // lowered to 5 MB as a compromise: the ping session currently inherits this value
-            // due to a bug workaround (see TODO in connection/up/runner.rs)
-            main: ByteSize::mb(5),
-        }
+#[derive(Debug, Error)]
+pub(crate) enum SurbConfigError {
+    #[error("Response buffer byte size too small")]
+    ResponseBufferTooSmall,
+    #[error("Max SURB upstream bandwidth cannot be zero")]
+    MaxSurbUpstreamCannotBeZero,
+    #[error("Max SURB upstream bandwidth is too large to represent as a u64 SURB/s rate")]
+    MaxSurbsPerSecOverflow,
+}
+
+#[derive(Debug)]
+pub(crate) struct SurbParams {
+    pub(crate) management: Option<SurbBalancerConfig>,
+    pub(crate) always_max_out_surbs: bool,
+}
+
+pub(crate) fn surb_config_for(opts: &SessionSurbOptions) -> Result<SurbParams, SurbConfigError> {
+    let management = if opts.enabled {
+        to_surb_balancer_config(opts.buffer, opts.max_surb_upstream).map(Some)?
+    } else {
+        None
+    };
+    Ok(SurbParams {
+        management,
+        always_max_out_surbs: opts.always_max_out_surbs,
+    })
+}
+
+pub(crate) fn to_surb_balancer_config(
+    response_buffer: ByteSize,
+    max_surb_upstream: Bandwidth,
+) -> Result<SurbBalancerConfig, SurbConfigError> {
+    if response_buffer.as_u64() < 2 * edgli::hopr_lib::exports::transport::SESSION_MTU as u64 {
+        return Err(SurbConfigError::ResponseBufferTooSmall);
     }
+    if max_surb_upstream.is_zero() {
+        return Err(SurbConfigError::MaxSurbUpstreamCannotBeZero);
+    }
+    let max_surbs_per_sec_u128 =
+        max_surb_upstream.as_bps() / (8 * edgli::hopr_lib::exports::transport::SURB_SIZE as u128);
+    let max_surbs_per_sec =
+        u64::try_from(max_surbs_per_sec_u128).map_err(|_| SurbConfigError::MaxSurbsPerSecOverflow)?;
+    let config = SurbBalancerConfig {
+        target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::exports::transport::SESSION_MTU as u64,
+        max_surbs_per_sec,
+        ..Default::default()
+    };
+    Ok(config)
 }

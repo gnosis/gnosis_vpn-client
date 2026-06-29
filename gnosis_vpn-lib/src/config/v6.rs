@@ -37,8 +37,7 @@ pub(super) struct Connection {
     pub(super) bridge: Option<ConnectionProtocol>,
     pub(super) wg: Option<ConnectionProtocol>,
     pub(super) ping: Option<PingOptions>,
-    pub(super) buffer: Option<BufferOptions>,
-    pub(super) max_surb_upstream: Option<MaxSurbUpstreamOptions>,
+    pub(super) surb_balancing: Option<SurbBalancingConfig>,
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
     pub(super) lan_lockdown: Option<bool>,
     #[serde(default, with = "humantime_serde::option")]
@@ -89,17 +88,20 @@ pub(super) struct HealthCheckIntervalOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct BufferOptions {
-    ping: Option<ByteSize>,
-    main: Option<ByteSize>,
+pub(super) struct SessionSurbConfig {
+    enabled: Option<bool>,
+    buffer: Option<ByteSize>,
+    #[serde(default, with = "human_bandwidth::serde")]
+    max_surb_upstream: Option<Bandwidth>,
+    always_max_out_surbs: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct MaxSurbUpstreamOptions {
-    #[serde(default, with = "human_bandwidth::serde")]
-    ping: Option<Bandwidth>,
-    #[serde(default, with = "human_bandwidth::serde")]
-    main: Option<Bandwidth>,
+pub(super) struct SurbBalancingConfig {
+    ping: Option<SessionSurbConfig>,
+    main: Option<SessionSurbConfig>,
+    bridge: Option<SessionSurbConfig>,
+    health_check: Option<SessionSurbConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -189,9 +191,7 @@ pub(super) fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
 // ── Shared From impls ─────────────────────────────────────────────────────────
 
 impl Connection {
-    /** The default capabilities for non SURB balances bridge sessions, should never include
-     * retransmissions. Those would require additional SURBS.
-     **/
+    // Bridge capabilities must never include retransmissions — those require additional SURBs.
     pub fn default_bridge_capabilities() -> Vec<Capability> {
         vec![Capability::Segmentation, Capability::NoRateControl]
     }
@@ -219,22 +219,17 @@ impl Connection {
     }
 }
 
-impl From<BufferOptions> for options::BufferSizes {
-    fn from(buffer: BufferOptions) -> Self {
-        let def = options::BufferSizes::default();
-        options::BufferSizes {
-            ping: buffer.ping.unwrap_or(def.ping),
-            main: buffer.main.unwrap_or(def.main),
-        }
-    }
-}
-
-impl From<MaxSurbUpstreamOptions> for options::MaxSurbUpstream {
-    fn from(surbs: MaxSurbUpstreamOptions) -> Self {
-        let def = options::MaxSurbUpstream::default();
-        options::MaxSurbUpstream {
-            ping: surbs.ping.unwrap_or(def.ping),
-            main: surbs.main.unwrap_or(def.main),
+fn apply_session_surb(cfg: Option<SessionSurbConfig>, def: options::SessionSurbOptions) -> options::SessionSurbOptions {
+    match cfg {
+        None => def,
+        Some(c) => {
+            let enabled = c.enabled.unwrap_or(def.enabled);
+            options::SessionSurbOptions {
+                enabled,
+                buffer: c.buffer.unwrap_or(def.buffer),
+                max_surb_upstream: c.max_surb_upstream.unwrap_or(def.max_surb_upstream),
+                always_max_out_surbs: c.always_max_out_surbs.unwrap_or(enabled),
+            }
         }
     }
 }
@@ -280,14 +275,14 @@ impl From<Option<Connection>> for options::Options {
             })
             .unwrap_or(def_opts);
 
-        let buffer_sizes = connection
-            .and_then(|c| c.buffer.clone())
-            .map(|b| b.into())
-            .unwrap_or_default();
-        let max_surb_upstream = connection
-            .and_then(|c| c.max_surb_upstream.clone())
-            .map(|b| b.into())
-            .unwrap_or_default();
+        let surb_cfg = connection.and_then(|c| c.surb_balancing.clone());
+        let def = options::SurbBalancing::default();
+        let surb_balancing = options::SurbBalancing {
+            ping: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.ping.clone()), def.ping),
+            main: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.main.clone()), def.main),
+            bridge: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.bridge.clone()), def.bridge),
+            health_check: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.health_check.clone()), def.health_check),
+        };
         let http_timeout = connection
             .and_then(|c| c.http_timeout)
             .unwrap_or(Connection::default_http_timeout());
@@ -316,8 +311,7 @@ impl From<Option<Connection>> for options::Options {
         options::Options {
             sessions,
             ping_options: ping_opts,
-            buffer_sizes,
-            max_surb_upstream,
+            surb_balancing,
             timeouts,
             health_check_intervals,
             lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
@@ -437,24 +431,25 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
-                    if k == "buffer" {
-                        if let Some(buffer) = v.as_table() {
-                            for (k2, _) in buffer.iter() {
-                                if k2 == "bridge" || k2 == "ping" || k2 == "main" {
+                    if k == "surb_balancing" {
+                        if let Some(surb) = v.as_table() {
+                            for (k2, v2) in surb.iter() {
+                                if k2 == "ping" || k2 == "main" || k2 == "bridge" || k2 == "health_check" {
+                                    if let Some(session) = v2.as_table() {
+                                        for (k3, _) in session.iter() {
+                                            if k3 == "enabled"
+                                                || k3 == "buffer"
+                                                || k3 == "max_surb_upstream"
+                                                || k3 == "always_max_out_surbs"
+                                            {
+                                                continue;
+                                            }
+                                            wrong.push(format!("connection.surb_balancing.{k2}.{k3}"));
+                                        }
+                                    }
                                     continue;
                                 }
-                                wrong.push(format!("connection.buffer.{k2}"));
-                            }
-                        }
-                        continue;
-                    }
-                    if k == "max_surb_upstream" {
-                        if let Some(surbs) = v.as_table() {
-                            for (k2, _) in surbs.iter() {
-                                if k2 == "bridge" || k2 == "ping" || k2 == "main" {
-                                    continue;
-                                }
-                                wrong.push(format!("connection.max_surb_upstream.{k2}"));
+                                wrong.push(format!("connection.surb_balancing.{k2}"));
                             }
                         }
                         continue;
@@ -499,8 +494,19 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         }
         if key == "strategy" {
             if let Some(strategy) = value.as_table() {
-                for (k, _) in strategy.iter() {
+                for (k, v) in strategy.iter() {
                     if k == "desired_message_count" || k == "min_open_channels" || k == "target_open_channels" {
+                        continue;
+                    }
+                    if k == "channel_allowlist" {
+                        if let Some(allowlist) = v.as_table() {
+                            for (k2, _) in allowlist.iter() {
+                                if k2 == "enabled" || k2 == "peers" {
+                                    continue;
+                                }
+                                wrong.push(format!("strategy.channel_allowlist.{k2}"));
+                            }
+                        }
                         continue;
                     }
                     wrong.push(format!("strategy.{k}"));
@@ -513,11 +519,20 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     wrong
 }
 
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct ChannelAllowlistConfig {
+    pub(super) enabled: bool,
+    #[serde_as(as = "Vec<DisplayFromStr>")]
+    pub(super) peers: Vec<Address>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct Strategy {
     pub(super) desired_message_count: Option<u64>,
     pub(super) min_open_channels: Option<usize>,
     pub(super) target_open_channels: Option<usize>,
+    pub(super) channel_allowlist: Option<ChannelAllowlistConfig>,
 }
 
 impl From<Option<Strategy>> for StrategyConfig {
@@ -536,6 +551,10 @@ impl From<Option<Strategy>> for StrategyConfig {
                 .as_ref()
                 .and_then(|s| s.target_open_channels)
                 .unwrap_or(def.target_open_channels),
+            channel_allowlist: v
+                .as_ref()
+                .and_then(|s| s.channel_allowlist.as_ref())
+                .and_then(|c| c.enabled.then(|| c.peers.iter().cloned().collect())),
         }
     }
 }
@@ -575,7 +594,10 @@ impl TryFrom<Config> for config::Config {
     type Error = config::Error;
 
     fn try_from(value: Config) -> Result<Self, Self::Error> {
-        let connection = value.connection.into();
+        let connection: options::Options = value.connection.into();
+        if connection.surb_balancing.ping.enabled != connection.surb_balancing.main.enabled {
+            return Err(config::Error::SurbBalancingMismatch);
+        }
         let destinations = convert_destinations(value.destinations)?;
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
@@ -614,8 +636,10 @@ pub fn convert_destinations(
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, convert_destinations};
+    use super::{ChannelAllowlistConfig, Config, Strategy, convert_destinations};
+    use crate::hopr::strategy_config::StrategyConfig;
     use edgli::hopr_lib::HopRouting;
+    use edgli::hopr_lib::api::types::primitive::prelude::Address;
 
     fn parse(toml: &str) -> Config {
         toml::from_str(toml).expect("valid TOML")
@@ -692,5 +716,37 @@ path = { hops = 4 }
 "#####,
         );
         assert!(result.is_err(), "v6 must reject hops > MAX_HOPS");
+    }
+
+    #[test]
+    fn strategy_channel_allowlist_enabled_produces_some() {
+        let addr: Address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739".parse().unwrap();
+        let strategy = Some(Strategy {
+            desired_message_count: None,
+            min_open_channels: None,
+            target_open_channels: None,
+            channel_allowlist: Some(ChannelAllowlistConfig {
+                enabled: true,
+                peers: vec![addr.clone()],
+            }),
+        });
+        let cfg: StrategyConfig = strategy.into();
+        assert_eq!(cfg.channel_allowlist, Some(std::collections::HashSet::from([addr])));
+    }
+
+    #[test]
+    fn strategy_channel_allowlist_disabled_produces_none() {
+        let addr: Address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739".parse().unwrap();
+        let strategy = Some(Strategy {
+            desired_message_count: None,
+            min_open_channels: None,
+            target_open_channels: None,
+            channel_allowlist: Some(ChannelAllowlistConfig {
+                enabled: false,
+                peers: vec![addr],
+            }),
+        });
+        let cfg: StrategyConfig = strategy.into();
+        assert!(cfg.channel_allowlist.is_none());
     }
 }

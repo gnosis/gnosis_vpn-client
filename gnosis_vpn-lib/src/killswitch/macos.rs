@@ -58,6 +58,15 @@ impl Firewall {
         Ok(())
     }
 
+    /// Re-assert an already applied policy (e.g. after a network change).
+    /// Unlike `apply_policy` this does not flush PF states: killing established
+    /// flows is only needed on first apply, and network events can fire often.
+    pub fn reapply_policy(&mut self, interface: &str, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
+        self.enable()?;
+        self.add_anchor()?;
+        self.set_rules(interface, allowed_ips, lan_lockdown)
+    }
+
     /// Remove the killswitch anchor, restoring normal networking.
     pub fn reset_policy(&mut self) -> Result<(), Error> {
         // Run all three even on partial failure; return first error encountered.

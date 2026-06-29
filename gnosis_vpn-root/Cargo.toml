@@ -24,10 +24,7 @@ url.workspace            = true
 
 # Target-specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
-cidr              = { workspace = true }
 futures           = { workspace = true }
-mnl               = { workspace = true }
-nftnl             = { workspace = true }
 rtnetlink         = { workspace = true }
 tikv-jemallocator = { workspace = true }
 

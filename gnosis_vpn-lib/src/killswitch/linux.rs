@@ -85,6 +85,13 @@ impl Firewall {
         send_batch(&batch)
     }
 
+    /// Re-assert an already applied policy (e.g. after a network change).
+    /// On Linux applying is an atomic table replace with no side effects on
+    /// existing connections, so this is identical to `apply_policy`.
+    pub fn reapply_policy(&mut self, interface: &str, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
+        self.apply_policy(interface, allowed_ips, lan_lockdown)
+    }
+
     /// Remove the killswitch table, restoring normal networking.
     pub fn reset_policy(&mut self) -> Result<(), Error> {
         let table = Table::new(TABLE_NAME, ProtoFamily::Inet);
@@ -314,6 +321,12 @@ impl<'a> PolicyBatch<'a> {
             }
         }
         for &net in &LAN_NETS {
+            let mut rule = Rule::new(&self.in_chain);
+            check_net(&mut rule, End::Src, net);
+            rule.add_expr(&Verdict::Accept);
+            self.batch.add(&rule, MsgType::Add);
+        }
+        for &net in &LAN_MULTICAST_NETS {
             let mut rule = Rule::new(&self.in_chain);
             check_net(&mut rule, End::Src, net);
             rule.add_expr(&Verdict::Accept);
