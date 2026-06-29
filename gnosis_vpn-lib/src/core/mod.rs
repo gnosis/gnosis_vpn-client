@@ -334,7 +334,7 @@ impl Core {
 
             WorkerToCore::WorkerCommand { cmd, resp } => {
                 // Status is polled frequently; keep it at trace to avoid log spam.
-                if matches!(cmd, WorkerCommand::Status) {
+                if matches!(&cmd, WorkerCommand::Status) {
                     tracing::trace!(%cmd, "incoming command");
                 } else {
                     tracing::debug!(%cmd, "incoming command");
