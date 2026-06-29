@@ -259,7 +259,7 @@ impl Core {
     }
 
     /// receive an event from the worker main thread
-    #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
+    #[tracing::instrument(skip(self, results_sender), level = "debug")]
     async fn on_event(&mut self, event: WorkerToCore, results_sender: &mpsc::Sender<Results>) -> bool {
         match event {
             WorkerToCore::Shutdown => {
@@ -333,7 +333,12 @@ impl Core {
             }
 
             WorkerToCore::WorkerCommand { cmd, resp } => {
-                tracing::debug!(%cmd, "incoming command");
+                // Status is polled frequently; keep it at trace to avoid log spam.
+                if matches!(&cmd, WorkerCommand::Status) {
+                    tracing::trace!(%cmd, "incoming command");
+                } else {
+                    tracing::debug!(%cmd, "incoming command");
+                }
                 match cmd {
                     WorkerCommand::NerdStats => {
                         tracing::debug!("incoming nerd stats request");
