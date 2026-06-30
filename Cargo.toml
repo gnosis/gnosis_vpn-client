@@ -16,7 +16,7 @@ async-trait = "0.1.89"
 backon = { version = "1.6.0" }
 bytesize = "2.3.0"
 cfg-if = "1.0.4"
-chrono = { version = "0.4.38", default-features = false, features = [
+chrono = { version = "0.4.45", default-features = false, features = [
   "clock",
   "serde",
   "std",
