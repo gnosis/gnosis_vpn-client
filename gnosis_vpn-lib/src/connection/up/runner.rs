@@ -260,7 +260,7 @@ async fn close_bridge_session(hopr: &Hopr, session_client_metadata: &SessionClie
     match res {
         Ok(_) => Ok(()),
         Err(HoprError::SessionNotFound) => {
-            tracing::warn!("attempted to close bridge session but it was not found, possibly already closed");
+            tracing::warn!(bound_host = ?session_client_metadata.bound_host, "attempted to close bridge session but it was not found, possibly already closed");
             Ok(())
         }
         Err(e) => Err(e),
@@ -436,7 +436,7 @@ fn spawn_background_bridge_cleanup(
             match gvpn_client::unregister(&client, &input).await {
                 Ok(()) => tracing::debug!("unregistered old wg public key"),
                 Err(gvpn_client::Error::RegistrationNotFound) => {
-                    tracing::warn!("old wg key not found during unregister, possibly already removed");
+                    tracing::warn!(wg_public_key = %input.public_key(), "old wg key not found during unregister, possibly already removed");
                 }
                 Err(err) => {
                     tracing::warn!(%err, "failed to unregister old wg public key");
