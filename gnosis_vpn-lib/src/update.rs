@@ -335,10 +335,45 @@ enum DownloadError {
     SizeMismatch { expected: u64, actual: u64 },
     #[error("refusing to download artifact over insecure scheme: {0}")]
     InsecureUrl(String),
+    #[error("manifest download URL has no safe artifact filename: {0}")]
+    InvalidFilename(String),
 }
 
 #[cfg(not(target_os = "linux"))]
 const FREE_SPACE_HEADROOM: u64 = 500 * 1024 * 1024; // plan: size + 500 MB headroom
+
+/// Derive a safe on-disk artifact filename from a download URL.
+///
+/// Manifest PGP verification is currently disabled, so the download URL is not
+/// a fully trusted input. We take the URL's last path segment but require it to
+/// be a single, *normal* basename: a value like `..`, `.`, or one carrying a
+/// path separator could make `download_dir.join(name)` escape the download
+/// directory and let the root daemon remove/overwrite arbitrary files when it
+/// later operates on the target. Returns `None` for any URL without such a
+/// segment so callers can treat it as a hard failure instead of guessing a
+/// fallback name.
+///
+/// (Gated to the targets that actually download — non-Linux — plus `test`, so
+/// it is compiled and exercised by the Linux test suite without tripping a
+/// dead-code lint on the Linux release build.)
+#[cfg(any(not(target_os = "linux"), test))]
+fn safe_artifact_filename(url: &url::Url) -> Option<String> {
+    use std::path::{Component, Path};
+
+    let segment = url
+        .path_segments()
+        .and_then(|mut s| s.next_back())
+        .filter(|s| !s.is_empty())?;
+
+    // `path_segments` yields percent-encoded ASCII, so the segment cannot itself
+    // contain a literal `/`; the component check still guards `..`/`.` and any
+    // separator a non-Unix `Path` would recognise.
+    let mut components = Path::new(segment).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(name)), None) => name.to_str().map(str::to_string),
+        _ => None,
+    }
+}
 
 #[cfg(not(target_os = "linux"))]
 async fn download_artifact(
@@ -361,13 +396,10 @@ async fn download_artifact(
         let _ = tokio::fs::set_permissions(&input.download_dir, std::fs::Permissions::from_mode(0o700)).await;
     }
 
-    let filename = release
-        .download_url
-        .path_segments()
-        .and_then(|mut s| s.next_back())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("artifact.bin")
-        .to_string();
+    // Refuse to act on a download URL whose last path segment is not a safe
+    // basename: a malformed URL is a hard failure rather than a guessed name.
+    let filename = safe_artifact_filename(&release.download_url)
+        .ok_or_else(|| DownloadError::InvalidFilename(release.download_url.to_string()))?;
     let target = input.download_dir.join(&filename);
 
     if let Ok(meta) = tokio::fs::symlink_metadata(&target).await {
@@ -728,6 +760,41 @@ mod tests {
                 assert_eq!(bytes_total, 100);
             }
             other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn safe_artifact_filename_accepts_normal_basenames() {
+        let cases = [
+            ("https://download.gnosisvpn.io/artifact.pkg", "artifact.pkg"),
+            (
+                "https://download.gnosisvpn.io/a/b/gnosis_vpn-1.2.3.dmg",
+                "gnosis_vpn-1.2.3.dmg",
+            ),
+        ];
+        for (url, expected) in cases {
+            let got = safe_artifact_filename(&Url::parse(url).unwrap());
+            assert_eq!(got.as_deref(), Some(expected), "url={url}");
+        }
+    }
+
+    #[test]
+    fn safe_artifact_filename_rejects_malformed_or_escaping_urls() {
+        // Either no usable last segment, or a segment that would escape the
+        // download dir. Dot-segments must never yield a name regardless of
+        // whether the URL parser normalises them away or our component check
+        // catches a literal `..`/`.`.
+        let bad = [
+            "https://download.gnosisvpn.io/",       // trailing slash → empty segment
+            "https://download.gnosisvpn.io",        // no path at all
+            "https://download.gnosisvpn.io/a/..",   // parent-dir traversal
+            "https://download.gnosisvpn.io/..",     // parent-dir traversal
+            "https://download.gnosisvpn.io/a/.",    // current-dir segment
+            "https://download.gnosisvpn.io/%2e%2e", // percent-encoded `..`
+            "data:text/plain,hi",                   // cannot-be-a-base URL, no path segments
+        ];
+        for url in bad {
+            assert_eq!(safe_artifact_filename(&Url::parse(url).unwrap()), None, "url={url}");
         }
     }
 }
