@@ -308,9 +308,9 @@ impl Hopr {
         })
     }
 
-    #[tracing::instrument(skip(self), level = "debug", ret)]
+    #[tracing::instrument(skip(self), level = "debug")]
     pub fn status(&self) -> edgli::hopr_lib::api::node::HoprState {
-        tracing::debug!("query hopr status");
+        tracing::trace!("query hopr status");
         self.edgli.status()
     }
 

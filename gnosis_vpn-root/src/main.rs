@@ -419,7 +419,7 @@ async fn keep_alive_timer(
                             // no-op while suspended: the VPN tunnel is active,
                             // we must not restart the idle countdown
                             if !suspended {
-                                tracing::debug!(?dur, "restart keep alive timer");
+                                tracing::trace!(?dur, "restart keep alive timer");
                                 active = true;
                                 keepalive.as_mut().reset(time::Instant::now() + dur);
                             }
