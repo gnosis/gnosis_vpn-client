@@ -1272,7 +1272,7 @@ impl Core {
         } = self.phase.clone()
         {
             if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
-                tracing::warn!("insufficient funds to start safe deployment - waiting for funding");
+                tracing::warn!(balance = %presafe, "insufficient funds to start safe deployment - waiting for funding");
             } else {
                 self.phase = Phase::DeployingSafe {
                     node_balance: Querying::Success(presafe.clone()),

@@ -214,7 +214,7 @@ async fn socket_listener(
             tracing::info!("probing for running instance");
             match socket::root::process_cmd(socket_path, &LibCommand::Ping).await {
                 Ok(_) => {
-                    tracing::error!("system service is already running - cannot start another instance");
+                    tracing::error!(socket_path = %socket_path.display(), "system service is already running - cannot start another instance");
                     return Err(exitcode::TEMPFAIL);
                 }
                 Err(e) => {
@@ -291,7 +291,7 @@ pub async fn config_watcher(
     let parent = match config_path.parent() {
         Some(parent) => parent,
         None => {
-            tracing::error!("config path has no parent directory");
+            tracing::error!(config_path = %config_path.display(), "config path has no parent directory");
             return Err(exitcode::IOERR);
         }
     };
@@ -470,7 +470,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let config_path = match args.config_path.canonicalize() {
         Ok(path) => path,
         Err(e) => {
-            tracing::error!(error = %e, "error canonicalizing config path");
+            tracing::error!(config_path = %args.config_path.display(), error = %e, "error during canonicalization");
             return Err(exitcode::IOERR);
         }
     };
@@ -669,7 +669,7 @@ async fn main() {
         Ok(_) => (),
         Err(exitcode::OK) => (),
         Err(code) => {
-            tracing::warn!("abnormal exit");
+            tracing::warn!(exit_code = code, "abnormal exit");
             process::exit(code);
         }
     }
@@ -1109,7 +1109,7 @@ impl DaemonState {
         match self.shutdown_ongoing {
             Shutdown::None => {
                 if status.success() {
-                    tracing::warn!("worker process exited cleanly without shutdown signal - restarting");
+                    tracing::warn!(exit_code = ?status.code(), "worker process exited cleanly without shutdown signal - restarting");
                     self.setup_worker().await?;
                     let _ = self
                         .keep_alive_instruction_sender
