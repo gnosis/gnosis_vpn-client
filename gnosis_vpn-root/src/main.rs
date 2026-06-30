@@ -470,7 +470,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let config_path = match args.config_path.canonicalize() {
         Ok(path) => path,
         Err(e) => {
-            tracing::error!(error = %e, "error canonicalizing config path");
+            tracing::error!(config_path = %args.config_path.display(), error = %e, "error during canonicalization");
             return Err(exitcode::IOERR);
         }
     };
