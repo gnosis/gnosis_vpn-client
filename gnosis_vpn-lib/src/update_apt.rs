@@ -5,10 +5,14 @@
 //! already configures `/etc/apt/sources.list.d/gnosisvpn.sources`, so we
 //! delegate the upgrade to apt.
 //!
-//! Emits the same [`UpdateStatus`] schema as the macOS engine. Apt does its
-//! own check/download/verify, so we collapse those stages into a single
-//! `Installing` event and finish with `Completed { new_version }` or
-//! `Failed { stage: Install, .. }`.
+//! Emits the same [`UpdateStatus`] schema as the macOS engine, but collapses
+//! the progress events: apt does its own download/verify internally, so we
+//! only send `Checking` then `Installing` (never `Downloading`/`Verifying`).
+//! It finishes with `Completed { new_version }` on success, or
+//! `Failed { stage, .. }` where `stage` marks where it failed:
+//! [`UpdateStage::Check`] (VPN-connected gating and apt-source channel config),
+//! [`UpdateStage::Download`] (`apt-get update`), or [`UpdateStage::Install`]
+//! (`apt-get install --only-upgrade` and the `dpkg-query` version readback).
 
 use std::path::{Path, PathBuf};
 

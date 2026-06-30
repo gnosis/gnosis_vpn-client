@@ -656,7 +656,10 @@ async fn check_update_in_task(
         return Response::CheckUpdate(command::CheckUpdateResponse::NoReleaseForChannel(channel));
     };
     match ensure_installable(&release, &current, false) {
-        Ok(_) => Response::CheckUpdate(command::CheckUpdateResponse::Available { current, release }),
+        Ok(_) => Response::CheckUpdate(command::CheckUpdateResponse::Available {
+            current,
+            release: Box::new(release),
+        }),
         Err(GateError::AlreadyInstalled { .. }) | Err(GateError::Downgrade { .. }) => {
             Response::CheckUpdate(command::CheckUpdateResponse::UpToDate { current })
         }

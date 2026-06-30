@@ -68,7 +68,7 @@ pub enum GateError {
 /// for the `semver` crate.
 pub fn compare_components(a: &str, b: &str) -> Ordering {
     fn parts(s: &str) -> Vec<u64> {
-        s.split(|c: char| c == '.' || c == '-' || c == '+')
+        s.split(['.', '-', '+'])
             .map(|p| p.parse::<u64>().unwrap_or(0))
             .collect()
     }
@@ -151,7 +151,7 @@ impl std::fmt::Display for UpdateStage {
 pub enum UpdateStatus {
     Idle,
     Checking,
-    Available(ChannelRelease),
+    Available(Box<ChannelRelease>),
     Downloading { bytes_done: u64, bytes_total: u64 },
     Verifying,
     Installing,
@@ -245,7 +245,7 @@ pub struct EngineInput {
 pub fn install_engine(input: EngineInput) -> mpsc::Receiver<UpdateStatus> {
     #[cfg(target_os = "linux")]
     {
-        return crate::update_apt::install_engine(input.channel, input.socket_path, input.skip_vpn_check);
+        crate::update_apt::install_engine(input.channel, input.socket_path, input.skip_vpn_check)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -286,7 +286,7 @@ async fn drive_engine(input: &EngineInput, tx: &mpsc::Sender<UpdateStatus>) -> R
     ensure_installable(&release, &input.current_app_version, input.allow_downgrade)
         .map_err(|e| (UpdateStage::Check, e.to_string()))?;
 
-    let _ = tx.send(UpdateStatus::Available(release.clone())).await;
+    let _ = tx.send(UpdateStatus::Available(Box::new(release.clone()))).await;
 
     let artifact_path = download_artifact(input, &release, tx)
         .await
