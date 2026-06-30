@@ -121,8 +121,13 @@ pub enum Response {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum CheckUpdateResponse {
-    UpToDate { current: String },
-    Available { current: String, release: Box<ChannelRelease> },
+    UpToDate {
+        current: String,
+    },
+    Available {
+        current: String,
+        release: Box<ChannelRelease>,
+    },
     NoReleaseForChannel(Channel),
     VpnNotConnected,
     IntegrityError(String),

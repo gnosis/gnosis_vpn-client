@@ -49,20 +49,21 @@ ctl/GUI                      daemon (gnosis_vpn-root)            external
                                         (launchd/systemd or apt postinst)
 ```
 
-Note: `check-update` fetches the manifest on every platform, but `install-update`
-only consults the manifest on macOS — on Linux the install is driven entirely by
-apt, so the manifest and the apt repo must be published together.
+Note: `check-update` fetches the manifest on every platform, but
+`install-update` only consults the manifest on macOS — on Linux the install is
+driven entirely by apt, so the manifest and the apt repo must be published
+together.
 
 ## IPC contract
 
 Defined in
 [`gnosis_vpn-lib/src/command/mod.rs`](../gnosis_vpn-lib/src/command/mod.rs).
 
-| Command                                           | Response shape                                            | Streaming? |
-| ------------------------------------------------- | --------------------------------------------------------- | ---------- |
-| `CheckUpdate { channel, force }`                  | `Response::CheckUpdate(CheckUpdateResponse)`              | no         |
+| Command                                           | Response shape                                                                        | Streaming? |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------- | ---------- |
+| `CheckUpdate { channel, force }`                  | `Response::CheckUpdate(CheckUpdateResponse)`                                          | no         |
 | `StartUpdate { channel, allow_downgrade, force }` | `Response::UpdateStatus(UpdateStatus)` ×N, or `Response::StartUpdateRejected(String)` | **yes**    |
-| `GetCurrentVersion`                               | `Response::Version(String)`                               | no         |
+| `GetCurrentVersion`                               | `Response::Version(String)`                                                           | no         |
 
 `CheckUpdateResponse` distinguishes its failure modes over IPC rather than
 flattening to a string: `VpnNotConnected` and `IntegrityError(String)` are
@@ -132,7 +133,8 @@ client-side helper.
 8. **Root-owned temp dir** (macOS only), `0700`
    (`/Library/Application Support/GnosisVPN/updates/`). Symlinks at the download
    path are rejected before write. On Linux apt manages its own download/cache.
-9. **Free disk space check** before download (macOS only): `size_bytes + 500 MB`.
+9. **Free disk space check** before download (macOS only):
+   `size_bytes + 500 MB`.
 10. **Audit log** (macOS only) at `/var/log/gnosisvpn/updates.log` — one line
     per terminal `UpdateStatus`. On Linux the apt engine relies on apt's own
     logging.
