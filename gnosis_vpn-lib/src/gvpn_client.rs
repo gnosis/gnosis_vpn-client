@@ -48,6 +48,10 @@ impl Input {
             timeout,
         }
     }
+
+    pub fn public_key(&self) -> &str {
+        &self.public_key
+    }
 }
 
 impl Registration {

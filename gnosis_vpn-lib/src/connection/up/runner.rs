@@ -431,12 +431,12 @@ fn spawn_background_bridge_cleanup(
 ) {
     tokio::spawn(async move {
         if let Some(old_key) = prev_public_key {
-            let input = gvpn_client::Input::new(old_key.clone(), bridge_session.bound_host, options.timeouts.http);
+            let input = gvpn_client::Input::new(old_key, bridge_session.bound_host, options.timeouts.http);
             let client = reqwest::Client::new();
             match gvpn_client::unregister(&client, &input).await {
                 Ok(()) => tracing::debug!("unregistered old wg public key"),
                 Err(gvpn_client::Error::RegistrationNotFound) => {
-                    tracing::warn!(wg_public_key = %old_key, "old wg key not found during unregister, possibly already removed");
+                    tracing::warn!(wg_public_key = %input.public_key(), "old wg key not found during unregister, possibly already removed");
                 }
                 Err(err) => {
                     tracing::warn!(%err, "failed to unregister old wg public key");
