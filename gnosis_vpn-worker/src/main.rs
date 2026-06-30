@@ -225,7 +225,7 @@ async fn main_inner() {
         Ok(_) => (),
         Err(exitcode::OK) => (),
         Err(code) => {
-            tracing::warn!("abnormal exit");
+            tracing::warn!(exit_code = code, "abnormal exit");
             process::exit(code);
         }
     }

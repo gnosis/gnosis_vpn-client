@@ -296,7 +296,7 @@ impl Actor {
                 .firewall
                 .apply_policy(&policy.interface, &combined, policy.lan_lockdown)
             {
-                tracing::warn!(error = %e, "failed to refresh killswitch after peer allowlist update");
+                tracing::warn!(error = %e, interface = %policy.interface, "failed to refresh killswitch after peer allowlist update");
             } else {
                 tracing::debug!(count = combined.len(), "killswitch peer allowlist refreshed");
             }

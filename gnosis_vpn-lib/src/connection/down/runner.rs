@@ -61,7 +61,7 @@ impl Runner {
         match unregister(&self.options, &bridge_session, self.down.wg_public_key.clone()).await {
             Ok(_) => (),
             Err(gvpn_client::Error::RegistrationNotFound) => {
-                tracing::warn!("trying to unregister already removed registration");
+                tracing::warn!(wg_public_key = %self.down.wg_public_key, "trying to unregister already removed registration");
             }
             Err(error) => {
                 tracing::error!(%error, "unregistering from gvpn server failed");
@@ -122,7 +122,7 @@ async fn close_bridge_session(hopr: &Hopr, session_client_metadata: &SessionClie
     match res {
         Ok(_) => Ok(()),
         Err(HoprError::SessionNotFound) => {
-            tracing::warn!("attempted to close bridge session but it was not found, possibly already closed");
+            tracing::warn!(bound_host = ?session_client_metadata.bound_host, "attempted to close bridge session but it was not found, possibly already closed");
             Ok(())
         }
         Err(e) => Err(e),
