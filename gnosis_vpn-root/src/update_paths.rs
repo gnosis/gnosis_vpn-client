@@ -17,7 +17,7 @@ fn base_dir() -> PathBuf {
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn base_dir() -> PathBuf {
-    PathBuf::from("/tmp/gnosisvpn")
+    PathBuf::from("/var/lib/gnosisvpn")
 }
 
 pub fn download_dir() -> PathBuf {
@@ -28,12 +28,6 @@ pub fn attempt_state_path() -> PathBuf {
     base_dir().join("last_update_attempt.json")
 }
 
-#[cfg(target_os = "macos")]
-pub fn audit_log_path() -> PathBuf {
-    PathBuf::from("/var/log/gnosisvpn/updates.log")
-}
-
-#[cfg(not(target_os = "macos"))]
 pub fn audit_log_path() -> PathBuf {
     PathBuf::from("/var/log/gnosisvpn/updates.log")
 }

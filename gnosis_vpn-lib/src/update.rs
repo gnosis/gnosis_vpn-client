@@ -298,12 +298,26 @@ async fn drive_engine(input: &EngineInput, tx: &mpsc::Sender<UpdateStatus>) -> R
         .map_err(|e| (UpdateStage::Verify, e))?;
 
     let _ = tx.send(UpdateStatus::Installing).await;
-    crate::update::install_platform::install(&artifact_path)
-        .await
-        .map_err(|e| (UpdateStage::Install, e))?;
 
-    let _ = tx.send(UpdateStatus::RestartingService).await;
-    Ok(release.version.clone())
+    // `install_platform` only exists on macOS (Linux updates go through
+    // `update_apt` and never reach this engine). On any other non-Linux target
+    // there is no installer to invoke, so fail the Install stage cleanly rather
+    // than failing to compile against a missing module.
+    #[cfg(target_os = "macos")]
+    {
+        crate::update::install_platform::install(&artifact_path)
+            .await
+            .map_err(|e| (UpdateStage::Install, e))?;
+        let _ = tx.send(UpdateStatus::RestartingService).await;
+        Ok(release.version.clone())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err((
+            UpdateStage::Install,
+            "self-update is not supported on this platform".to_string(),
+        ))
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
