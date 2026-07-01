@@ -47,7 +47,7 @@ objc2-foundation.workspace = true
 pfctl.workspace            = true
 
 [dev-dependencies]
-tempfile = "3.23.0"
+tempfile.workspace = true
 
 [lib]
 doctest = false
