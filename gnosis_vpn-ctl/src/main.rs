@@ -1,13 +1,17 @@
 use exitcode::{self, ExitCode};
+use futures_util::StreamExt;
+use indicatif::{ProgressBar, ProgressStyle};
 
 use std::fmt;
+use std::io::{self, IsTerminal, Write as _};
+use std::path::Path;
 use std::process;
-use std::time::Duration;
 
 use gnosis_vpn_lib::balance;
-use gnosis_vpn_lib::check_update;
+use gnosis_vpn_lib::check_update::Channel;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::socket;
+use gnosis_vpn_lib::update::{UpdateStage, UpdateStatus};
 
 mod cli;
 
@@ -29,8 +33,18 @@ async fn main() {
         process::exit(exitcode::OK);
     }
 
-    if let cli::Command::CheckUpdate { force } = args.command {
-        let exit = run_check_update(format, &args.socket_path, force).await;
+    if let cli::Command::CheckUpdate { force, channel } = args.command {
+        let exit = run_check_update(format, &args.socket_path, channel.into(), force).await;
+        process::exit(exit);
+    }
+    if let cli::Command::InstallUpdate {
+        channel,
+        yes,
+        allow_downgrade,
+        force,
+    } = args.command
+    {
+        let exit = run_install_update(format, &args.socket_path, channel.into(), yes, allow_downgrade, force).await;
         process::exit(exit);
     }
 
@@ -53,61 +67,178 @@ async fn main() {
     process::exit(exit);
 }
 
-async fn run_check_update(format: OutputFormat, socket_path: &std::path::Path, force: bool) -> ExitCode {
-    let client = match reqwest::Client::builder().timeout(Duration::from_secs(30)).build() {
-        Ok(c) => c,
-        Err(e) => return emit_check_update_error(format, CheckUpdateErrorKind::Internal, &e.to_string()),
+async fn run_check_update(format: OutputFormat, socket_path: &Path, channel: Channel, force: bool) -> ExitCode {
+    let resp = match socket::root::process_cmd(socket_path, &Command::CheckUpdate { channel, force }).await {
+        Ok(r) => r,
+        Err(e) => return emit_check_update_error(format, CheckUpdateErrorKind::Unavailable, &e.to_string()),
     };
-    let gate = (!force).then_some(socket_path);
-    match check_update::download(&client, gate).await {
-        Ok(manifest) => {
-            match format {
-                OutputFormat::Json => match serde_json::to_string_pretty(&manifest) {
-                    Ok(s) => println!("{s}"),
-                    Err(e) => {
-                        return emit_check_update_error(
-                            OutputFormat::Json,
-                            CheckUpdateErrorKind::Internal,
-                            &e.to_string(),
-                        );
-                    }
-                },
-                OutputFormat::Yaml => match serde_saphyr::to_string(&manifest) {
-                    Ok(s) => print!("{s}"),
-                    Err(e) => {
-                        return emit_check_update_error(
-                            OutputFormat::Yaml,
-                            CheckUpdateErrorKind::Internal,
-                            &e.to_string(),
-                        );
-                    }
-                },
-                OutputFormat::Plain => {
-                    if let Some(stable) = &manifest.channels.stable {
-                        println!(
-                            "Stable: {}, published at {}, download at: {}",
-                            stable.version, stable.published_at, stable.download_url
-                        );
-                    }
-                    if let Some(snapshot) = &manifest.channels.snapshot {
-                        println!(
-                            "Latest Snapshot: {}, published at {}, download at: {}",
-                            snapshot.version, snapshot.published_at, snapshot.download_url
-                        );
-                    }
+    let Response::CheckUpdate(result) = resp else {
+        return emit_check_update_error(
+            format,
+            CheckUpdateErrorKind::Internal,
+            &format!("unexpected response: {resp:?}"),
+        );
+    };
+    match format {
+        OutputFormat::Json => match serde_json::to_string_pretty(&result) {
+            Ok(s) => println!("{s}"),
+            Err(e) => return emit_check_update_error(format, CheckUpdateErrorKind::Internal, &e.to_string()),
+        },
+        OutputFormat::Yaml => match serde_saphyr::to_string(&result) {
+            Ok(s) => print!("{s}"),
+            Err(e) => return emit_check_update_error(format, CheckUpdateErrorKind::Internal, &e.to_string()),
+        },
+        OutputFormat::Plain => match &result {
+            command::CheckUpdateResponse::UpToDate { current } => {
+                println!("Up to date (current {current}).");
+            }
+            command::CheckUpdateResponse::Available { current, release } => {
+                println!(
+                    "Update available on {channel}: {} (current {current}, published {})\n  download: {}",
+                    release.version, release.published_at, release.download_url
+                );
+            }
+            command::CheckUpdateResponse::NoReleaseForChannel(ch) => {
+                eprintln!("No release on channel {ch}");
+            }
+            command::CheckUpdateResponse::VpnNotConnected => {
+                return emit_check_update_error(
+                    OutputFormat::Plain,
+                    CheckUpdateErrorKind::VpnNotConnected,
+                    "checking for updates without an active VPN connection is insecure",
+                );
+            }
+            command::CheckUpdateResponse::IntegrityError(msg) => {
+                return emit_check_update_error(OutputFormat::Plain, CheckUpdateErrorKind::IntegrityError, msg);
+            }
+            command::CheckUpdateResponse::Error(msg) => {
+                return emit_check_update_error(OutputFormat::Plain, CheckUpdateErrorKind::Internal, msg);
+            }
+        },
+    }
+    match result {
+        command::CheckUpdateResponse::UpToDate { .. } | command::CheckUpdateResponse::Available { .. } => exitcode::OK,
+        command::CheckUpdateResponse::NoReleaseForChannel(_) => exitcode::UNAVAILABLE,
+        command::CheckUpdateResponse::VpnNotConnected => CheckUpdateErrorKind::VpnNotConnected.exit_code(),
+        command::CheckUpdateResponse::IntegrityError(_) => CheckUpdateErrorKind::IntegrityError.exit_code(),
+        command::CheckUpdateResponse::Error(_) => exitcode::SOFTWARE,
+    }
+}
+
+async fn run_install_update(
+    format: OutputFormat,
+    socket_path: &Path,
+    channel: Channel,
+    yes: bool,
+    allow_downgrade: bool,
+    force: bool,
+) -> ExitCode {
+    if !yes && matches!(format, OutputFormat::Plain) && io::stdin().is_terminal() {
+        eprint!(
+            "Install update on channel {channel}{}? [y/N] ",
+            if allow_downgrade { " (with downgrade)" } else { "" }
+        );
+        let _ = io::stderr().flush();
+        let mut buf = String::new();
+        if io::stdin().read_line(&mut buf).is_err() {
+            return exitcode::IOERR;
+        }
+        if !matches!(buf.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            eprintln!("Aborted.");
+            return exitcode::OK;
+        }
+    }
+
+    let mut stream = match gnosis_vpn_lib::update::install_stream(socket_path, channel, allow_downgrade, force).await {
+        Ok(s) => Box::pin(s),
+        Err(e) => return emit_check_update_error(format, CheckUpdateErrorKind::Unavailable, &e.to_string()),
+    };
+
+    let render = matches!(format, OutputFormat::Plain) && io::stderr().is_terminal();
+    let mut bar: Option<ProgressBar> = None;
+    let mut last_status: Option<UpdateStatus> = None;
+
+    while let Some(item) = stream.next().await {
+        let status = match item {
+            Ok(s) => s,
+            Err(e) => {
+                if let Some(b) = bar.take() {
+                    b.abandon();
                 }
+                return emit_check_update_error(format, CheckUpdateErrorKind::Internal, &e.to_string());
+            }
+        };
+        match format {
+            OutputFormat::Json => {
+                if let Ok(line) = serde_json::to_string(&status) {
+                    println!("{line}");
+                }
+            }
+            OutputFormat::Yaml => {
+                if let Ok(doc) = serde_saphyr::to_string(&status) {
+                    print!("---\n{doc}");
+                }
+            }
+            OutputFormat::Plain => {
+                if render {
+                    render_status(&status, &mut bar);
+                } else {
+                    eprintln!("{status}");
+                }
+            }
+        }
+        last_status = Some(status);
+    }
+
+    if let Some(b) = bar.take() {
+        b.finish_and_clear();
+    }
+
+    match last_status {
+        Some(UpdateStatus::Completed { new_version }) => {
+            if matches!(format, OutputFormat::Plain) {
+                eprintln!("Update complete: {new_version}. Service restart will be handled by launchd/systemd.");
             }
             exitcode::OK
         }
-        Err(check_update::Error::VpnNotConnected) => emit_check_update_error(
-            format,
-            CheckUpdateErrorKind::VpnNotConnected,
-            "pass -f/--force to bypass the VPN connection check",
-        ),
-        Err(e @ check_update::Error::Integrity(_)) => {
-            emit_check_update_error(format, CheckUpdateErrorKind::IntegrityError, &e.to_string())
+        Some(UpdateStatus::Failed { stage, error }) => {
+            let kind = match stage {
+                UpdateStage::Check => CheckUpdateErrorKind::Unavailable,
+                UpdateStage::Download => CheckUpdateErrorKind::Unavailable,
+                UpdateStage::Verify => CheckUpdateErrorKind::IntegrityError,
+                UpdateStage::Install => CheckUpdateErrorKind::Internal,
+            };
+            emit_check_update_error(format, kind, &error)
         }
-        Err(e) => emit_check_update_error(format, CheckUpdateErrorKind::Unavailable, &e.to_string()),
+        _ => exitcode::IOERR,
+    }
+}
+
+fn render_status(status: &UpdateStatus, bar: &mut Option<ProgressBar>) {
+    match status {
+        UpdateStatus::Downloading {
+            bytes_done,
+            bytes_total,
+        } => {
+            let pb = bar.get_or_insert_with(|| {
+                let pb = ProgressBar::new(*bytes_total);
+                pb.set_style(
+                    ProgressStyle::with_template(
+                        "{spinner} downloading [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})",
+                    )
+                    .expect("progress style"),
+                );
+                pb
+            });
+            pb.set_length(*bytes_total);
+            pb.set_position(*bytes_done);
+        }
+        other => {
+            if let Some(b) = bar.take() {
+                b.finish_and_clear();
+            }
+            eprintln!("{other}");
+        }
     }
 }
 
@@ -353,6 +484,39 @@ fn pretty_print(resp: &Response) {
         Response::WorkerOffline => {
             eprintln!("Worker client is currently offline - use command `start-client` to start it");
         }
+        Response::CheckUpdate(command::CheckUpdateResponse::UpToDate { current }) => {
+            println!("Up to date (current {current}).");
+        }
+        Response::CheckUpdate(command::CheckUpdateResponse::Available { current, release }) => {
+            println!(
+                "Update available: {} (current {}, published {})\n  download: {}",
+                release.version, current, release.published_at, release.download_url
+            );
+        }
+        Response::CheckUpdate(command::CheckUpdateResponse::NoReleaseForChannel(ch)) => {
+            eprintln!("No release on channel {ch}");
+        }
+        Response::CheckUpdate(command::CheckUpdateResponse::VpnNotConnected) => {
+            eprintln!(
+                "{}: checking for updates without an active VPN connection is insecure",
+                CheckUpdateErrorKind::VpnNotConnected
+            );
+        }
+        Response::CheckUpdate(command::CheckUpdateResponse::IntegrityError(msg)) => {
+            eprintln!("{}: {msg}", CheckUpdateErrorKind::IntegrityError);
+        }
+        Response::CheckUpdate(command::CheckUpdateResponse::Error(msg)) => {
+            eprintln!("Update check error: {msg}");
+        }
+        Response::StartUpdateRejected(msg) => {
+            eprintln!("Update rejected: {msg}");
+        }
+        Response::UpdateStatus(status) => {
+            println!("{status}");
+        }
+        Response::Version(v) => {
+            println!("{v}");
+        }
         // Internal response sent by the root process to itself when a WAN interface change
         // triggers a HOPR session reconnect. Never issued in response to a ctl command.
         Response::ForceReconnectAcknowledged => {}
@@ -447,6 +611,19 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::StopClient(command::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
         Response::Destinations(..) => exitcode::OK,
         Response::WorkerOffline => exitcode::UNAVAILABLE,
+        Response::CheckUpdate(command::CheckUpdateResponse::UpToDate { .. })
+        | Response::CheckUpdate(command::CheckUpdateResponse::Available { .. }) => exitcode::OK,
+        Response::CheckUpdate(command::CheckUpdateResponse::NoReleaseForChannel(_)) => exitcode::UNAVAILABLE,
+        Response::CheckUpdate(command::CheckUpdateResponse::VpnNotConnected) => {
+            CheckUpdateErrorKind::VpnNotConnected.exit_code()
+        }
+        Response::CheckUpdate(command::CheckUpdateResponse::IntegrityError(_)) => {
+            CheckUpdateErrorKind::IntegrityError.exit_code()
+        }
+        Response::CheckUpdate(command::CheckUpdateResponse::Error(_)) => exitcode::SOFTWARE,
+        Response::StartUpdateRejected(_) => exitcode::UNAVAILABLE,
+        Response::UpdateStatus(_) => exitcode::OK,
+        Response::Version(_) => exitcode::OK,
         // Internal response — see pretty_print for explanation
         Response::ForceReconnectAcknowledged => exitcode::PROTOCOL,
     }

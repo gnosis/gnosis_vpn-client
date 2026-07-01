@@ -1,7 +1,23 @@
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use gnosis_vpn_lib::check_update::Channel;
 use gnosis_vpn_lib::command::Command as LibCommand;
 use gnosis_vpn_lib::socket;
 use std::path::PathBuf;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum ChannelArg {
+    Stable,
+    Snapshot,
+}
+
+impl From<ChannelArg> for Channel {
+    fn from(c: ChannelArg) -> Self {
+        match c {
+            ChannelArg::Stable => Channel::Stable,
+            ChannelArg::Snapshot => Channel::Snapshot,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum OutputFormat {
@@ -98,6 +114,34 @@ pub enum Command {
         /// Perform the connection even if VPN is currently inactive (insecure)
         #[arg(short = 'f', long)]
         force: bool,
+        /// Release channel
+        #[arg(short = 'c', long, value_enum, default_value_t = ChannelArg::Stable)]
+        channel: ChannelArg,
+    },
+
+    /// Download and install the latest release on the chosen channel.
+    ///
+    /// Refuses to run unless the VPN is connected; pass --force to bypass
+    /// (insecure: the manifest fetch and artifact download will go out
+    /// without traversing the VPN tunnel).
+    ///
+    /// Streams `UpdateStatus` events from the daemon. The actual install runs
+    /// detached so the daemon (and your VPN session) can be restarted by
+    /// launchd/systemd once the new binary is in place.
+    #[command()]
+    InstallUpdate {
+        /// Release channel
+        #[arg(short = 'c', long, value_enum, default_value_t = ChannelArg::Stable)]
+        channel: ChannelArg,
+        /// Skip the interactive confirmation prompt.
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Permit installing a release older than the currently running one.
+        #[arg(long)]
+        allow_downgrade: bool,
+        /// Bypass the VPN-connected gate (insecure).
+        #[arg(short = 'f', long)]
+        force: bool,
     },
 
     /// Print shell completion script for the given shell to stdout
@@ -125,6 +169,7 @@ impl From<Command> for LibCommand {
             Command::StopClient {} => LibCommand::StopClient,
             Command::Destinations {} => LibCommand::Destinations,
             Command::CheckUpdate { .. } => unreachable!("CheckUpdate is handled before socket dispatch"),
+            Command::InstallUpdate { .. } => unreachable!("InstallUpdate is handled before socket dispatch"),
             Command::Completions { .. } => unreachable!("Completions is handled before socket dispatch"),
         }
     }
