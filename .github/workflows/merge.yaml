@@ -55,7 +55,6 @@ jobs:
       - build-binaries
     permissions:
       contents: read
-      id-token: write
     steps:
       - name: Generate GitHub App token
         id: bot-token
