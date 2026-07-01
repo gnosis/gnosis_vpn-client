@@ -18,6 +18,16 @@
       "matchManagers": ["nix"],
       "groupName": "nix flake updates",
       "pinDigests": false
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["patch"],
+      "groupName": "rust crates (patch)"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor"],
+      "groupName": "rust crates (minor)"
     }
   ]
 }
