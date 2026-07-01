@@ -29,16 +29,10 @@ jobs:
         env:
           PRIVATE_CARGO_REGISTRY_PROXY_URL: ${{ secrets.PRIVATE_CARGO_REGISTRY_PROXY_URL }}
         run: "cat >> .cargo/config.toml<< EOF        \n[source.hopr-cargo-registry-cache]\nregistry = \"sparse+${PRIVATE_CARGO_REGISTRY_PROXY_URL}\"\n    #magic___^_^___line\n[source.crates-io]\nreplace-with = \"hopr-cargo-registry-cache\"\nEOF\n    #magic___^_^___line\n"
-      - name: Install Nix
-        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31
+      - name: Setup Nix
+        uses: hoprnet/hopr-workflows/actions/setup-nix@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
         with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Use Nix Cache
-        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
-        with:
-          name: gnosis-vpn-client
-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-        env:
-          USER: runner
+          cachix_cache_name: gnosis-vpn-client
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Cache dependencies
         run: nix develop -c cargo fetch
