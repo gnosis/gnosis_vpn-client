@@ -41,6 +41,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       version_type: commit
       architecture: ${{ matrix.architecture }}
