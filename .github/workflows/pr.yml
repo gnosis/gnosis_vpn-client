@@ -37,10 +37,10 @@ jobs:
             build_debug_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin-dev
             required_label: "binary:aarch64-darwin"
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@eedb4b7701714299852ca5243f1544b817653f33 # build-binaries-v3
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
     permissions:
       contents: read
       id-token: write
-    with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       version_type: commit
       architecture: ${{ matrix.architecture }}
