@@ -60,6 +60,7 @@ jobs:
       apple_certificate_password: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_PASSWORD }}
   checks:
     name: Checks
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
     runs-on: depot-ubuntu-22.04-4
     steps:
       - name: Run checks
