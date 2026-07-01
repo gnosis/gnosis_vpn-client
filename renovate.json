@@ -28,7 +28,6 @@
       "matchManagers": ["cargo"],
       "matchUpdateTypes": ["minor"],
       "groupName": "rust crates (minor)"
-    },
-
+    }
   ]
 }
