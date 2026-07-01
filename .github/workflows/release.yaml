@@ -35,6 +35,7 @@ jobs:
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@eedb4b7701714299852ca5243f1544b817653f33 # build-binaries-v3
     permissions:
       contents: read
+      id-token: write
     with:
       source_branch: ${{ github.ref_name }}
       version_type: release
@@ -44,7 +45,6 @@ jobs:
       binary: gnosis_vpn-client
       runner: ${{ matrix.runner }}
       timeout_minutes: 240
-      gcp_service_account: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       gpg_private_key: ${{ secrets.GNOSISVPN_GPG_PRIVATE_KEY }}
