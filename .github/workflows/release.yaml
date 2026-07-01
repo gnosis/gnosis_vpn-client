@@ -32,9 +32,10 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15 # Depot Apple Silicon M2, 8 CPUs, 24 GB RAM, 400 GB SSD
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@6aaef0e7e6763f060bd1cefa2406c5f89497e733 # build-binaries-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@eedb4b7701714299852ca5243f1544b817653f33 # build-binaries-v3
     permissions:
       contents: read
+      id-token: write
     with:
       source_branch: ${{ github.ref_name }}
       version_type: release
@@ -45,7 +46,6 @@ jobs:
       runner: ${{ matrix.runner }}
       timeout_minutes: 240
     secrets:
-      gcp_service_account: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       gpg_private_key: ${{ secrets.GNOSISVPN_GPG_PRIVATE_KEY }}
       gpg_private_key_password: ${{ secrets.GNOSISVPN_GPG_PRIVATE_KEY_PASSWORD }}
@@ -60,7 +60,7 @@ jobs:
       contents: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@2cae201c4f92e86cf40480704bdc5c2d53bce772 # release-version-v3
+        uses: hoprnet/hopr-workflows/actions/release-version@eedb4b7701714299852ca5243f1544b817653f33 # release-version-v5
         with:
           source_branch: ${{ github.ref_name }}
           file: Cargo.toml
@@ -73,4 +73,5 @@ jobs:
           zulip_topic: Releases
           gcp_service_account: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
           gcp_artifact_package: gnosis_vpn-client
-          github_token: ${{ secrets.GNOSIS_VPN_BOT_TOKEN }}
+          github_app_private_key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
+          github_app_client_id: ${{ secrets.GH_APP_GNOSISVPN_CLIENT_ID }}

@@ -28,9 +28,10 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15 # Depot Apple Silicon M2, 8 CPUs, 24 GB RAM, 400 GB SSD
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@6aaef0e7e6763f060bd1cefa2406c5f89497e733 # build-binaries-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@eedb4b7701714299852ca5243f1544b817653f33 # build-binaries-v3
     permissions:
       contents: read
+      id-token: write
     with:
       source_branch: ${{ github.event.pull_request.base.ref }}
       version_type: pr
@@ -41,21 +42,11 @@ jobs:
       runner: ${{ matrix.runner }}
       timeout_minutes: 240
     secrets:
-      gcp_service_account: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       gpg_private_key: ${{ secrets.GNOSISVPN_GPG_PRIVATE_KEY }}
       gpg_private_key_password: ${{ secrets.GNOSISVPN_GPG_PRIVATE_KEY_PASSWORD }}
       apple_certificate: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_P12_BASE64 }}
       apple_certificate_password: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_PASSWORD }}
-  cache-deps:
-    name: Cache deps
-    if: github.event.pull_request.merged == true
-    permissions:
-      contents: read
-    uses: ./.github/workflows/cache-deps.yaml
-    with:
-      branch: ${{ github.event.pull_request.base.ref }}
-    secrets: inherit
   snapshot-build:
     name: Snapshot build
     if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'snapshot-build')
@@ -65,9 +56,16 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Generate GitHub App token
+        id: bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.GH_APP_GNOSISVPN_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
+          owner: gnosis
       - name: Trigger snapshot build
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:
-          token: ${{ secrets.GNOSIS_VPN_BOT_TOKEN }}
+          token: ${{ steps.bot-token.outputs.token }}
           repository: gnosis/gnosis_vpn
           event-type: snapshot_build
