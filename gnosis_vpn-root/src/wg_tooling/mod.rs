@@ -13,15 +13,15 @@ use std::path::PathBuf;
 use gnosis_vpn_lib::shell_command_ext;
 use gnosis_vpn_lib::{dirs, event, wireguard};
 
-cfg_if::cfg_if! {
-    if #[cfg(target_os = "linux")] {
-        mod linux;
-        pub use linux::{down, up};
-    } else if #[cfg(target_os = "macos")] {
-        mod macos;
-        pub use macos::{down, up};
-    }
-}
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::{down, up};
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::{down, up};
 
 /// Verify the external tools needed for WireGuard bring-up are installed.
 ///
@@ -39,17 +39,20 @@ pub async fn check(dns_enabled: bool) -> Result<(), Error> {
         .spawn_no_capture()
         .await?;
 
-    cfg_if::cfg_if! {
-        if #[cfg(target_os = "linux")] {
-            if dns_enabled {
-                check_command("resolvconf").await?;
-            }
-        } else if #[cfg(target_os = "macos")] {
-            let _ = dns_enabled;
-            check_command("wireguard-go").await?;
-        }
+    check_platform_tools(dns_enabled).await
+}
+
+#[cfg(target_os = "linux")]
+async fn check_platform_tools(dns_enabled: bool) -> Result<(), Error> {
+    if dns_enabled {
+        check_command("resolvconf").await?;
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+async fn check_platform_tools(_dns_enabled: bool) -> Result<(), Error> {
+    check_command("wireguard-go").await
 }
 
 async fn check_command(command: &str) -> Result<(), Error> {
