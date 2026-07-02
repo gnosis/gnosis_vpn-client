@@ -48,17 +48,19 @@ pub struct Hopr {
 impl Hopr {
     #[instrument(skip_all, level = "debug", err)]
     pub async fn new(
-        cfg: edgli::hopr_lib::config::HoprLibConfig,
+        mut cfg: edgli::hopr_lib::config::HoprLibConfig,
         keys: edgli::hopr_lib::HoprKeys,
         blokli_url: Option<url::Url>,
         blokli_config: BlockchainConnectorConfig,
         init_visitor: impl Fn(EdgliInitState) + Send + 'static,
     ) -> Result<Self, HoprError> {
         tracing::debug!("running hopr edge node");
+        cfg.protocol.path_planner = edgli::latency_path_planner_config(0.1);
         let edge_node = Edgli::new(
             cfg,
             keys,
             blokli_url.map(|u| u.to_string()),
+            None, // blokli_dns_override
             Some(blokli_config),
             init_visitor,
         )
@@ -319,9 +321,13 @@ impl Hopr {
         &self,
         sizing: edgli::strategy::IncentiveConfiguration,
     ) -> Result<AbortHandle, HoprError> {
-        let cfg = edgli::strategy::default_strategy_cfg(&self.edgli, &sizing)
+        let mut cfg = edgli::strategy::default_strategy_cfg(&self.edgli, &sizing)
             .await
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
+        for kind in &mut cfg.strategies {
+            let edgli::strategy::EdgeStrategyKind::ChannelLifecycle(lc) = kind;
+            lc.selector = edgli::strategy::SelectorProfile::LowLatency;
+        }
         self.edgli
             .run_reactor_from_cfg(cfg)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))
