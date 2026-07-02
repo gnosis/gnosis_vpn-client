@@ -28,7 +28,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15 # Depot Apple Silicon M2, 8 CPUs, 24 GB RAM, 400 GB SSD
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@eedb4b7701714299852ca5243f1544b817653f33 # build-binaries-v3
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@eedb4b7701714299852ca5243f1544b817653f33 # # hoprnet/hopr-workflows 0.11.1
     permissions:
       contents: read
       id-token: write
@@ -47,12 +47,50 @@ jobs:
       gpg_private_key_password: ${{ secrets.GNOSISVPN_GPG_PRIVATE_KEY_PASSWORD }}
       apple_certificate: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_P12_BASE64 }}
       apple_certificate_password: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_PASSWORD }}
+  update-client-version:
+    name: Update client version
+    if: github.event.pull_request.merged == true
+    runs-on: depot-ubuntu-22.04-4
+    needs:
+      - build-binaries
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Resolve build version
+        id: version
+        shell: bash
+        # Must match the version produced by hoprnet/hopr-workflows set-build-version
+        # (version_type: pr): <Cargo.toml version>+pr.<pr_number>
+        run: |
+          current_version=$(grep -E '^version\s*=' Cargo.toml | head -n1 | awk -F\" '{print $2}')
+          build_version="${current_version}+pr.${{ github.event.pull_request.number }}"
+          echo "Resolved build version: ${build_version}"
+          echo "build_version=${build_version}" >> "$GITHUB_OUTPUT"
+      - name: Generate GitHub App token
+        id: bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.GH_APP_GNOSISVPN_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
+          owner: gnosis
+      - name: Update GNOSISVPN_CLIENT_LATEST_VERSION in gnosis/gnosis_vpn
+        env:
+          GH_TOKEN: ${{ steps.bot-token.outputs.token }}
+          VERSION: ${{ steps.version.outputs.build_version }}
+        run: |
+          gh variable set GNOSISVPN_CLIENT_LATEST_VERSION --repo gnosis/gnosis_vpn --body "$VERSION"
   snapshot-build:
     name: Snapshot build
     if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'snapshot-build')
     runs-on: depot-ubuntu-22.04-4
     needs:
       - build-binaries
+      - update-client-version
     permissions:
       contents: read
     steps:

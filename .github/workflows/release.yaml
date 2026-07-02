@@ -51,6 +51,39 @@ jobs:
       gpg_private_key_password: ${{ secrets.GNOSISVPN_GPG_PRIVATE_KEY_PASSWORD }}
       apple_certificate: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_P12_BASE64 }}
       apple_certificate_password: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_PASSWORD }}
+  update-client-version:
+    name: Update client version
+    needs:
+      - build-binaries
+    runs-on: depot-ubuntu-22.04-4
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Resolve build version
+        id: version
+        shell: bash
+        run: |
+          current_version=$(grep -E '^version\s*=' Cargo.toml | head -n1 | awk -F\" '{print $2}')
+          echo "Resolved build version: ${current_version}"
+          echo "build_version=${current_version}" >> "$GITHUB_OUTPUT"
+      - name: Generate GitHub App token
+        id: bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.GH_APP_GNOSISVPN_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
+          owner: gnosis
+      - name: Update GNOSISVPN_CLIENT_LATEST_VERSION in gnosis/gnosis_vpn
+        env:
+          GH_TOKEN: ${{ steps.bot-token.outputs.token }}
+          VERSION: ${{ steps.version.outputs.build_version }}
+        run: |
+          gh variable set GNOSISVPN_CLIENT_LATEST_VERSION --repo gnosis/gnosis_vpn --body "$VERSION"
   release:
     name: Close release
     needs:
@@ -60,7 +93,7 @@ jobs:
       contents: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@eedb4b7701714299852ca5243f1544b817653f33 # release-version-v5
+        uses: hoprnet/hopr-workflows/actions/release-version@eedb4b7701714299852ca5243f1544b817653f33 # hoprnet/hopr-workflows 0.11.1
         with:
           source_branch: ${{ github.ref_name }}
           file: Cargo.toml
