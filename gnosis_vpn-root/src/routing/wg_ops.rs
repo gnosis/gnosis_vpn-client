@@ -17,7 +17,7 @@ use crate::wg_tooling;
 
 /// Abstraction over WireGuard interface management.
 #[async_trait]
-pub trait WgOps: Send + Sync + Clone {
+pub trait WgOps: Send + Sync {
     /// Bring up WireGuard via wg-quick. Returns the resolved interface name.
     async fn wg_quick_up(&self, state_home: PathBuf, config: String) -> Result<String, Error>;
 
@@ -26,7 +26,6 @@ pub trait WgOps: Send + Sync + Clone {
 }
 
 /// Production [`WgOps`] that delegates to `wg_tooling`.
-#[derive(Clone)]
 pub struct RealWgOps;
 
 #[async_trait]

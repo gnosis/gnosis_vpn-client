@@ -30,7 +30,7 @@ pub struct WanRoute {
 
 /// Abstraction over platform routing table operations.
 #[async_trait]
-pub trait RouteOps: Send + Sync + Clone {
+pub trait RouteOps: Send + Sync {
     /// Find the best WAN-layer route for `dest`: the most specific match in the
     /// main routing table that does NOT go through `exclude_iface` (the VPN tunnel).
     ///

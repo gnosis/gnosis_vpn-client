@@ -22,7 +22,6 @@ fn covers(prefix: Ipv4Addr, len: u8, dest: Ipv4Addr) -> bool {
 }
 
 /// Production [`RouteOps`] for Linux backed by an `rtnetlink::Handle`.
-#[derive(Clone)]
 pub struct NetlinkRouteOps {
     handle: rtnetlink::Handle,
 }
@@ -260,5 +259,74 @@ impl RouteOps for NetlinkRouteOps {
 
         self.handle.route().del(msg).execute().await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── covers ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn covers_default_route_matches_any_ip() {
+        assert!(covers(Ipv4Addr::new(0, 0, 0, 0), 0, Ipv4Addr::new(1, 1, 1, 1)));
+        assert!(covers(Ipv4Addr::new(0, 0, 0, 0), 0, Ipv4Addr::new(192, 168, 0, 1)));
+    }
+
+    #[test]
+    fn covers_subnet_matches_contained_host() {
+        assert!(covers(
+            Ipv4Addr::new(192, 168, 1, 0),
+            24,
+            Ipv4Addr::new(192, 168, 1, 100)
+        ));
+    }
+
+    #[test]
+    fn covers_subnet_rejects_outside_host() {
+        assert!(!covers(
+            Ipv4Addr::new(192, 168, 1, 0),
+            24,
+            Ipv4Addr::new(192, 168, 2, 1)
+        ));
+    }
+
+    #[test]
+    fn covers_host_route_exact_match_only() {
+        let ip = Ipv4Addr::new(10, 0, 0, 1);
+        assert!(covers(ip, 32, ip));
+        assert!(!covers(ip, 32, Ipv4Addr::new(10, 0, 0, 2)));
+    }
+
+    #[test]
+    fn covers_vpn_split_halves() {
+        // 0.0.0.0/1 covers the lower half of IPv4 space
+        assert!(covers(Ipv4Addr::new(0, 0, 0, 0), 1, Ipv4Addr::new(1, 1, 1, 1)));
+        assert!(!covers(Ipv4Addr::new(0, 0, 0, 0), 1, Ipv4Addr::new(128, 0, 0, 1)));
+        // 128.0.0.0/1 covers the upper half
+        assert!(covers(Ipv4Addr::new(128, 0, 0, 0), 1, Ipv4Addr::new(200, 0, 0, 1)));
+    }
+
+    // ── parse_dest ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_dest_cidr_notation() {
+        let (addr, prefix) = NetlinkRouteOps::parse_dest("10.0.0.0/8").unwrap();
+        assert_eq!(addr, Ipv4Addr::new(10, 0, 0, 0));
+        assert_eq!(prefix, 8);
+    }
+
+    #[test]
+    fn parse_dest_host_address_defaults_to_slash32() {
+        let (addr, prefix) = NetlinkRouteOps::parse_dest("1.2.3.4").unwrap();
+        assert_eq!(addr, Ipv4Addr::new(1, 2, 3, 4));
+        assert_eq!(prefix, 32);
+    }
+
+    #[test]
+    fn parse_dest_rejects_invalid_address() {
+        assert!(NetlinkRouteOps::parse_dest("not-an-ip").is_err());
+        assert!(NetlinkRouteOps::parse_dest("1.2.3.4/256").is_err()); // 256 overflows u8
     }
 }
