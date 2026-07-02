@@ -27,12 +27,12 @@ pub(super) const LAN_MULTICAST_NETS: [IpNetwork; 8] = [
     IpNetwork::V6(Ipv6Network::new_checked(Ipv6Addr::new(0xff05, 0, 0, 0, 0, 0, 0, 0), 16).unwrap()),
 ];
 
-cfg_if::cfg_if! {
-    if #[cfg(target_os = "linux")] {
-        mod linux;
-        pub use linux::{Error, Firewall};
-    } else if #[cfg(target_os = "macos")] {
-        mod macos;
-        pub use macos::{Error, Firewall};
-    }
-}
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::{Error, Firewall};
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::{Error, Firewall};

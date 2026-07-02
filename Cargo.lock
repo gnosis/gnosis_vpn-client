@@ -3212,7 +3212,6 @@ dependencies = [
  "anyhow",
  "backon",
  "bytesize",
- "cfg-if",
  "chrono",
  "edgli",
  "futures-util",
@@ -3252,7 +3251,6 @@ version = "0.91.1"
 dependencies = [
  "anyhow",
  "async-trait",
- "cfg-if",
  "clap",
  "exitcode",
  "futures",

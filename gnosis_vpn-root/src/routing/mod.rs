@@ -12,15 +12,15 @@ use std::net::Ipv4Addr;
 pub(crate) mod route_ops;
 pub(crate) mod wg_ops;
 
-cfg_if::cfg_if! {
-    if #[cfg(target_os = "linux")] {
-        pub(crate) mod route_ops_linux;
-        mod linux;
-    } else if #[cfg(target_os = "macos")] {
-        pub(crate) mod route_ops_macos;
-        mod macos;
-    }
-}
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub(crate) mod route_ops_linux;
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub(crate) mod route_ops_macos;
 
 // ============================================================================
 // Shared Utilities

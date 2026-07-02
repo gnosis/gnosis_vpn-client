@@ -10,7 +10,6 @@ version = { workspace = true }
 anyhow.workspace             = true
 backon.workspace             = true
 bytesize                     = { workspace = true, features = ["serde"] }
-cfg-if.workspace             = true
 chrono.workspace             = true
 edgli.workspace              = true
 futures-util.workspace       = true

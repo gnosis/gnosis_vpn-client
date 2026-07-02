@@ -53,33 +53,35 @@ pub async fn ping(opts: &Options) -> Result<Duration, Error> {
 }
 
 async fn ping_using_cmd(opts: &Options) -> Result<Duration, Error> {
+    // both platforms take the same options, only the flag names differ:
+    // timeout is -W on linux and -t on macos, TTL is -t on linux and -m on macos
+    let (timeout_flag, ttl_flag) = if cfg!(target_os = "linux") {
+        ("-W", "-t")
+    } else {
+        ("-t", "-m")
+    };
+
     let mut cmd = Command::new("ping");
     cmd.arg("-c").arg(opts.seq_count.to_string());
-    cfg_if::cfg_if! {
-        if #[cfg(target_os = "linux")] {
-            cmd.arg("-W").arg(opts.timeout.as_secs().to_string());
-            cmd.arg("-t").arg(opts.ttl.to_string());
-        } else if #[cfg(target_os = "macos")] {
-            cmd.arg("-t").arg(opts.timeout.as_secs().to_string());
-            cmd.arg("-m").arg(opts.ttl.to_string());
-        }
-    }
-
+    cmd.arg(timeout_flag).arg(opts.timeout.as_secs().to_string());
+    cmd.arg(ttl_flag).arg(opts.ttl.to_string());
     cmd.arg(opts.address.to_string());
     let output = cmd.run_stdout(Logs::Print).await.map_err(|_| Error::Timeout)?;
     parse_duration(output)
 }
 
 fn ping_using_ping_crate(opts: &Options) -> Result<Duration, Error> {
+    let socket_type = if cfg!(target_os = "linux") {
+        ping::RAW
+    } else {
+        ping::DGRAM
+    };
     let mut builder = ping::new(opts.address);
-    let mut ping = builder.timeout(opts.timeout).ttl(opts.ttl).seq_cnt(opts.seq_count);
-    cfg_if::cfg_if! {
-        if #[cfg(target_os = "linux")] {
-            ping = ping.socket_type(ping::RAW);
-        } else if #[cfg(target_os = "macos")] {
-            ping = ping.socket_type(ping::DGRAM);
-        }
-    }
+    let ping = builder
+        .timeout(opts.timeout)
+        .ttl(opts.ttl)
+        .seq_cnt(opts.seq_count)
+        .socket_type(socket_type);
     ping.send().map(|p| p.rtt).map_err(Error::from)
 }
 
