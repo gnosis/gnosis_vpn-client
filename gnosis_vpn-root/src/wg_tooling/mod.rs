@@ -23,22 +23,42 @@ cfg_if::cfg_if! {
     }
 }
 
-pub async fn available() -> Result<(), Error> {
-    use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
-    let out = tokio::process::Command::new("which")
-        .arg("wg")
-        .run_stdout(Logs::Print)
-        .await?;
-    tracing::debug!(at = %out, "wg command available");
-    Ok(())
-}
-
-pub async fn executable() -> Result<(), Error> {
+/// Verify the external tools needed for WireGuard bring-up are installed.
+///
+/// Both platforms need `wg` for setconf and key handling. Linux DNS goes
+/// through `resolvconf`, so it is required only when the effective config
+/// enables DNS — checked at startup to fail fast instead of at connect time.
+/// macOS needs `wireguard-go` to create the utun device; DNS uses the
+/// always-present `networksetup`.
+pub async fn check(dns_enabled: bool) -> Result<(), Error> {
     use gnosis_vpn_lib::shell_command_ext::ShellCommandExt;
+
+    check_command("wg").await?;
     tokio::process::Command::new("wg")
         .arg("--version")
         .spawn_no_capture()
         .await?;
+
+    cfg_if::cfg_if! {
+        if #[cfg(target_os = "linux")] {
+            if dns_enabled {
+                check_command("resolvconf").await?;
+            }
+        } else if #[cfg(target_os = "macos")] {
+            let _ = dns_enabled;
+            check_command("wireguard-go").await?;
+        }
+    }
+    Ok(())
+}
+
+async fn check_command(command: &str) -> Result<(), Error> {
+    use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
+    let out = tokio::process::Command::new("which")
+        .arg(command)
+        .run_stdout(Logs::Print)
+        .await?;
+    tracing::debug!(at = %out, %command, "wireguard tooling available");
     Ok(())
 }
 

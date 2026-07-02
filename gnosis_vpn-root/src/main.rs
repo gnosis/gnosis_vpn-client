@@ -457,15 +457,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Write root pidfile for the newsyslog service to send signals to
     write_pidfile(&args.pid_file).await?;
 
-    // check wireguard tooling
-    wg_tooling::available()
-        .await
-        .and(wg_tooling::executable().await)
-        .map_err(|err| {
-            tracing::error!(error = ?err, "error checking WireGuard tools");
-            exitcode::UNAVAILABLE
-        })?;
-
     // prepare worker resources
     let config_path = match args.config_path.canonicalize() {
         Ok(path) => path,
@@ -478,6 +469,13 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let config = config::read(config_path.as_path()).await.map_err(|err| {
         tracing::error!(error = ?err, "unable to read initial configuration file");
         exitcode::NOINPUT
+    })?;
+
+    // check wireguard tooling after reading the config:
+    // whether DNS is enabled decides which tools are required
+    wg_tooling::check(config.wireguard.dns.is_some()).await.map_err(|err| {
+        tracing::error!(error = ?err, "error checking WireGuard tools");
+        exitcode::UNAVAILABLE
     })?;
 
     // set up signal handlers

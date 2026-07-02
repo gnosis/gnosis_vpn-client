@@ -1,8 +1,9 @@
 # Routing solutions
 
-NOTE: generally wg-quick needs to be executed before any routing adaptions.
-Otherwise the script is quite clever and injusts it's rules with higher
-priority.
+NOTE: wg-quick is no longer used. WireGuard interfaces are brought up with
+direct native calls (rtnetlink + `wg setconf` on Linux, wireguard-go +
+`wg setconf` + `ifconfig` on macOS) and all routing is owned by the routing
+module in gnosis_vpn-root.
 
 ## Linux potential solution 1: fwmark + ip rule
 

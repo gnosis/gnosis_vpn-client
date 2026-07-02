@@ -104,7 +104,7 @@ impl Actor {
     }
 
     // Firewall ops (netlink / PF ioctls) are synchronous but complete in < 1 ms,
-    // so they run inline. Routing setup/teardown (wg-quick, route changes) is
+    // so they run inline. Routing setup/teardown (WireGuard bring-up, route changes) is
     // genuinely async and may take seconds — queued messages simply wait,
     // which is exactly the serialization we want.
     async fn handle(&mut self, msg: Msg) -> Option<MonitorAction> {
