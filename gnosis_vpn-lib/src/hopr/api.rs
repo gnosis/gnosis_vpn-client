@@ -325,8 +325,9 @@ impl Hopr {
             .await
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
         for kind in &mut cfg.strategies {
-            let edgli::strategy::EdgeStrategyKind::ChannelLifecycle(lc) = kind;
-            lc.selector = edgli::strategy::SelectorProfile::LowLatency;
+            if let edgli::strategy::EdgeStrategyKind::ChannelLifecycle(lc) = kind {
+                lc.selector = edgli::strategy::SelectorProfile::LowLatency;
+            }
         }
         self.edgli
             .run_reactor_from_cfg(cfg)
