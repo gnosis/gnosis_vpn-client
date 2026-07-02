@@ -143,54 +143,23 @@ impl WireGuard {
         Ok(WireGuard { config, key_pair })
     }
 
-    pub fn to_file_string(
-        &self,
-        interface: &InterfaceInfo,
-        peer: &PeerInfo,
-        extra_interface_lines: Vec<String>,
-    ) -> String {
-        let allowed_ips = &self.config.allowed_ips.clone().unwrap_or("0.0.0.0/0".to_string());
+    /// Render the configuration in `wg setconf` format.
+    ///
+    /// Only keys understood by `wg(8)` are emitted (PrivateKey, ListenPort and
+    /// the [Peer] block). Interface properties like address, MTU, DNS and
+    /// routing are applied natively by the platform tooling in gnosis_vpn-root.
+    pub fn to_setconf_string(&self, peer: &PeerInfo) -> String {
+        let allowed_ips = self.config.allowed_ips.clone().unwrap_or("0.0.0.0/0".to_string());
         let mut lines = Vec::new();
 
-        // [Interface] section
         lines.push("[Interface]".to_string());
         lines.push(format!("PrivateKey = {}", self.key_pair.priv_key));
-        lines.push(format!("Address = {}", interface.address));
-        lines.push(format!("MTU = {WG_MTU}"));
-        if let Some(dns) = &self.config.dns {
-            lines.push(format!("DNS = {dns}"));
-        }
         if let Some(listen_port) = self.config.listen_port {
             lines.push(format!("ListenPort = {}", listen_port));
-        }
-        lines.extend(extra_interface_lines);
-
-        // Blackhold Ipv6 traffic for now.
-        // Contrary to routing exceptions this happens in preup and postdown
-        // To avoid leakage and because those are global rules
-        #[cfg(target_os = "linux")]
-        {
-            // we cannot handle IPv6 yet, so blackhole it for now, make it idempotent to avoid wg-quick stopping because of errors
-            lines.push("PreUp = ip -6 route del blackhole ::/1 || true".to_string());
-            lines.push("PreUp = ip -6 route del blackhole 8000::/1 || true".to_string());
-            lines.push("PreUp = ip -6 route add blackhole ::/1".to_string());
-            lines.push("PreUp = ip -6 route add blackhole 8000::/1".to_string());
-            lines.push("PostDown = ip -6 route del blackhole ::/1 || true".to_string());
-            lines.push("PostDown = ip -6 route del blackhole 8000::/1 || true".to_string());
-        }
-        #[cfg(target_os = "macos")]
-        {
-            // on macos to avoid fighting router specific rules we split the range in two
-            // this way the routes are more specific and take precedence over other rules
-            lines.push("PreUp = route -n add -blackhole -inet6 ::/1 ::1".to_string());
-            lines.push("PreUp = route -n add -blackhole -inet6 8000::/1 ::1".to_string());
-            lines.push("PostDown = route -n delete -blackhole -inet6 ::/1 ::1".to_string());
-            lines.push("PostDown = route -n delete -blackhole -inet6 8000::/1 ::1".to_string());
         }
 
         lines.push("".to_string()); // Empty line for spacing
 
-        // [Peer] section
         lines.push("[Peer]".to_string());
         lines.push(format!("PublicKey = {}", peer.public_key));
         lines.push(format!("PresharedKey = {}", peer.preshared_key));
@@ -210,5 +179,71 @@ impl Display for WireGuard {
 impl fmt::Debug for WireGuard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "WireGuard {{ public_key: {} }}", self.key_pair.public_key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wireguard(listen_port: Option<u16>, allowed_ips: Option<String>) -> WireGuard {
+        WireGuard {
+            config: Config {
+                listen_port,
+                force_private_key: None,
+                allowed_ips,
+                dns: Some("1.1.1.1,8.8.8.8".to_string()),
+            },
+            key_pair: KeyPair {
+                priv_key: "PRIV_KEY".to_string(),
+                public_key: "PUB_KEY".to_string(),
+            },
+        }
+    }
+
+    fn peer() -> PeerInfo {
+        PeerInfo {
+            public_key: "SERVER_PUB_KEY".to_string(),
+            preshared_key: "PRESHARED_KEY".to_string(),
+            endpoint: "1.2.3.4:51820".to_string(),
+        }
+    }
+
+    #[test]
+    fn setconf_contains_only_wg_keys() {
+        let content = wireguard(None, None).to_setconf_string(&peer());
+        assert_eq!(
+            content,
+            "[Interface]\n\
+             PrivateKey = PRIV_KEY\n\
+             \n\
+             [Peer]\n\
+             PublicKey = SERVER_PUB_KEY\n\
+             PresharedKey = PRESHARED_KEY\n\
+             Endpoint = 1.2.3.4:51820\n\
+             AllowedIPs = 0.0.0.0/0"
+        );
+    }
+
+    #[test]
+    fn setconf_includes_listen_port_when_set() {
+        let content = wireguard(Some(51821), None).to_setconf_string(&peer());
+        assert!(content.contains("ListenPort = 51821"));
+    }
+
+    #[test]
+    fn setconf_uses_configured_allowed_ips() {
+        let content = wireguard(None, Some("10.128.0.0/9".to_string())).to_setconf_string(&peer());
+        assert!(content.contains("AllowedIPs = 10.128.0.0/9"));
+        assert!(!content.contains("0.0.0.0/0"));
+    }
+
+    #[test]
+    fn setconf_never_emits_interface_properties() {
+        // Address/MTU/DNS/Table are wg-quick keys; `wg setconf` rejects them.
+        let content = wireguard(Some(51821), None).to_setconf_string(&peer());
+        for key in ["Address", "MTU", "DNS", "Table", "PreUp", "PostDown"] {
+            assert!(!content.contains(key), "unexpected key in setconf output: {key}");
+        }
     }
 }
