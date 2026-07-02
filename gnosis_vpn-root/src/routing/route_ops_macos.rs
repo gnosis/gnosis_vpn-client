@@ -32,7 +32,6 @@ fn route_add_args(dest: &str, gateway: Option<&str>, device: &str) -> Vec<String
 }
 
 /// Production [`RouteOps`] for macOS backed by the `route` command.
-#[derive(Clone)]
 pub struct DarwinRouteOps;
 
 #[async_trait]
