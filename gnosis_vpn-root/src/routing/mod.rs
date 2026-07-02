@@ -4,8 +4,8 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+use gnosis_vpn_lib::dirs;
 use gnosis_vpn_lib::shell_command_ext::{self, Logs};
-use gnosis_vpn_lib::{dirs, wireguard};
 
 use std::net::Ipv4Addr;
 
@@ -62,8 +62,8 @@ pub enum Error {
     Dirs(#[from] dirs::Error),
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
-    #[error("wg-quick error: {0}")]
-    WgTooling(#[from] wireguard::Error),
+    #[error("wireguard tooling error: {0}")]
+    WgTooling(#[from] crate::wg_tooling::Error),
 
     #[cfg(target_os = "linux")]
     #[error("General error: {0}")]

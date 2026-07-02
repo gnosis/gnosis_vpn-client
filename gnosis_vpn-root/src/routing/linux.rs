@@ -2,7 +2,7 @@
 //!
 //! Provides a [`StaticRouter`] that:
 //! 1. Adds bypass routes for peer IPs and RFC1918 networks BEFORE bringing up WireGuard
-//! 2. Runs `wg-quick up` with `Table = off` (no automatic routing)
+//! 2. Brings up WireGuard natively (rtnetlink + `wg setconf`, no automatic routing)
 //! 3. Adds VPN split routes (`0.0.0.0/1`, `128.0.0.0/1`) and VPN subnet (`10.128.0.0/9`) via wg0
 //! 4. On teardown: removes VPN routes, brings down WireGuard, removes bypass routes
 //!
@@ -38,8 +38,8 @@ pub fn static_router(
 ) -> Result<impl Routing, Error> {
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::task::spawn(conn);
-    let route_ops = NetlinkRouteOps::new(handle);
-    let wg = RealWgOps;
+    let route_ops = NetlinkRouteOps::new(handle.clone());
+    let wg = RealWgOps::new(handle);
     Ok(StaticRouter {
         state_home: state_home.to_path_buf(),
         wg_data,
@@ -53,9 +53,9 @@ pub fn static_router(
 
 /// Linux static router using route operations via netlink.
 ///
-/// Uses `Table = off` so wg-quick only creates the WireGuard interface.
+/// WireGuard bring-up (via `WgOps`) only creates and configures the interface.
 /// All routing is owned explicitly by this struct via `RouteOps`:
-/// - bypass routes (peer IPs + RFC1918) via WAN — added before wg-quick up
+/// - bypass routes (peer IPs + RFC1918) via WAN — added before WireGuard up
 /// - VPN split routes (`0.0.0.0/1`, `128.0.0.0/1`) + VPN subnet via wg0 — static after setup
 struct StaticRouter {
     state_home: PathBuf,
@@ -67,7 +67,7 @@ struct StaticRouter {
     /// Used by `wan_changed()` to detect interface switches and DHCP reassignments.
     wan_info: Option<WanRoute>,
     /// Bypass routes currently installed: (dest_cidr, wan_device).
-    /// Tracked for explicit cleanup since the wg-quick config has no PreDown scripts.
+    /// Tracked for explicit cleanup during teardown and rollback.
     active_bypass_routes: Vec<(String, String)>,
 }
 
@@ -107,17 +107,17 @@ impl StaticRouter {
 impl Routing for StaticRouter {
     /// Install split-tunnel routing.
     ///
-    /// Phase 1 (before wg-quick up): add bypass routes via WAN
+    /// Phase 1 (before WireGuard up): add bypass routes via WAN
     ///   - Peer IP /32 routes (hard-fail: rollback all on error)
     ///   - RFC1918 bypass routes (soft-fail: warn and continue)
     ///
-    /// Phase 2: wg-quick up with Table = off (no automatic routing)
+    /// Phase 2: native WireGuard up (rtnetlink + wg setconf, no automatic routing)
     ///   - On failure: rollback Phase 1 bypass routes
     ///
-    /// Phase 3 (after wg-quick up): add VPN routes via wg0
+    /// Phase 3 (after WireGuard up): add VPN routes via wg0
     ///   - `0.0.0.0/1` and `128.0.0.0/1` override the WAN default for all internet traffic
     ///   - `10.128.0.0/9` overrides the `10.0.0.0/8` RFC1918 bypass for VPN server traffic
-    ///   - On failure: remove partial VPN routes, wg-quick down, rollback bypass routes
+    ///   - On failure: remove partial VPN routes, WireGuard down, rollback bypass routes
     async fn setup(&mut self) -> Result<String, Error> {
         // Snapshot the WAN route before any VPN routes are installed.
         // Including src_ip lets wan_changed() detect DHCP reassignments on the same
@@ -131,7 +131,7 @@ impl Routing for StaticRouter {
         let gateway = wan_route.gateway.clone();
         tracing::debug!(device = %device, gateway = ?gateway, src_ip = ?wan_route.src_ip, "WAN interface for bypass routes");
 
-        // Phase 1: bypass routes before wg-quick up (avoids race with HOPR p2p connections)
+        // Phase 1: bypass routes before WireGuard up (avoids race with HOPR p2p connections)
         for ip in &self.peer_ips.clone() {
             let dest = ip.to_string();
             let _ = self.route_ops.route_del(&dest, &device).await;
@@ -150,25 +150,20 @@ impl Routing for StaticRouter {
             }
         }
 
-        // Phase 2: wg-quick up with Table = off
-        let wg_content = self.wg_data.wg.to_file_string(
-            &self.wg_data.interface_info,
-            &self.wg_data.peer_info,
-            vec!["Table = off".to_string()],
-        );
-        let interface_name = match self.wg.wg_quick_up(self.state_home.clone(), wg_content).await {
+        // Phase 2: native WireGuard up (interface only, routing stays with us)
+        let interface_name = match self.wg.wg_up(self.state_home.clone(), &self.wg_data).await {
             Ok(n) => n,
             Err(e) => {
                 self.rollback_bypass_routes().await;
                 return Err(e);
             }
         };
-        tracing::debug!(%interface_name, "wg-quick up");
+        tracing::debug!(%interface_name, "wireguard up");
 
         // Phase 3: VPN routes via wg0 (split defaults + VPN subnet override)
         if let Err(e) = self.setup_vpn_routes().await {
             self.remove_vpn_routes().await;
-            let _ = self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await;
+            let _ = self.wg.wg_down(self.state_home.clone(), Logs::Suppress).await;
             self.rollback_bypass_routes().await;
             return Err(e);
         }
@@ -181,13 +176,13 @@ impl Routing for StaticRouter {
     /// Teardown split-tunnel routing.
     ///
     /// 1. Remove VPN routes (wg0) — warn on error, continue
-    /// 2. wg-quick down
+    /// 2. WireGuard down
     /// 3. Remove bypass routes (WAN) — warn on error, continue
     async fn teardown(&mut self, logs: Logs) {
         self.remove_vpn_routes().await;
-        match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
-            Ok(_) => tracing::debug!("wg-quick down"),
-            Err(error) => tracing::warn!(?error, "wg-quick down failed during teardown"),
+        match self.wg.wg_down(self.state_home.clone(), logs).await {
+            Ok(_) => tracing::debug!("wireguard down"),
+            Err(error) => tracing::warn!(?error, "wireguard down failed during teardown"),
         }
         for (dest, device) in self.active_bypass_routes.drain(..).collect::<Vec<_>>() {
             if let Err(e) = self.route_ops.route_del(&dest, &device).await {
