@@ -40,6 +40,8 @@ use crate::{
     info::Info,
 };
 
+const PATH_PLANNER_MIN_ACK_RATE: f64 = 0.1;
+
 pub struct Hopr {
     edgli: Arc<edgli::Edgli>,
     open_listeners: Arc<ListenerJoinHandles>,
@@ -55,7 +57,7 @@ impl Hopr {
         init_visitor: impl Fn(EdgliInitState) + Send + 'static,
     ) -> Result<Self, HoprError> {
         tracing::debug!("running hopr edge node");
-        cfg.protocol.path_planner = edgli::latency_path_planner_config(0.1);
+        cfg.protocol.path_planner = edgli::latency_path_planner_config(PATH_PLANNER_MIN_ACK_RATE);
         let edge_node = Edgli::new(
             cfg,
             keys,
@@ -324,10 +326,11 @@ impl Hopr {
         let mut cfg = edgli::strategy::default_strategy_cfg(&self.edgli, &sizing)
             .await
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
-        for kind in &mut cfg.strategies {
-            if let edgli::strategy::EdgeStrategyKind::ChannelLifecycle(lc) = kind {
+        match cfg.strategies.first_mut() {
+            Some(edgli::strategy::EdgeStrategyKind::ChannelLifecycle(lc)) => {
                 lc.selector = edgli::strategy::SelectorProfile::LowLatency;
             }
+            None => tracing::warn!("default_strategy_cfg returned no strategies; LowLatency selector not applied"),
         }
         self.edgli
             .run_reactor_from_cfg(cfg)

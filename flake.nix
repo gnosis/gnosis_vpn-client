@@ -163,22 +163,20 @@
               inherit pre-commit-check;
               checks = self.checks.${system};
 
-              packages =
-                [
-                  pkgs.cargo-machete
-                  pkgs.cargo-shear
-                  pkgs.just
-                  pkgs.rust-analyzer
-                ]
-                ++ lib.optionals pkgs.stdenv.isLinux [
-                  # Native gnu libs so mnl-sys/nftnl-sys build scripts can fall
-                  # through to pkg-config and link against the host ABI.
-                  # (pkgsStatic variants are musl and break gnu dev builds.)
-                  pkgs.libmnl
-                  pkgs.libnftnl
-                ];
+              packages = [
+                pkgs.cargo-machete
+                pkgs.cargo-shear
+                pkgs.just
+                pkgs.rust-analyzer
+              ];
 
               VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
+            }
+            // lib.optionalAttrs pkgs.stdenv.isLinux {
+              # Point mnl-sys and nftnl-sys directly to static library dirs,
+              # bypassing pkg-config which can fail in cross-compilation contexts
+              LIBMNL_LIB_DIR = "${pkgs.pkgsStatic.libmnl}/lib";
+              LIBNFTNL_LIB_DIR = "${pkgs.pkgsStatic.libnftnl}/lib";
             }
           );
 
