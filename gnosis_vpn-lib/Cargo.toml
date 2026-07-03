@@ -9,6 +9,7 @@ version = { workspace = true }
 [dependencies]
 anyhow.workspace             = true
 backon.workspace             = true
+base64.workspace             = true
 bytesize                     = { workspace = true, features = ["serde"] }
 cfg-if.workspace             = true
 chrono.workspace             = true
@@ -35,6 +36,7 @@ tracing.workspace            = true
 tracing-subscriber.workspace = true
 url.workspace                = true
 uzers.workspace              = true
+x25519-dalek.workspace       = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc  = { workspace = true }

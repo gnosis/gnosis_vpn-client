@@ -3211,6 +3211,7 @@ version = "0.91.1"
 dependencies = [
  "anyhow",
  "backon",
+ "base64",
  "bytesize",
  "cfg-if",
  "chrono",
@@ -3244,6 +3245,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uzers",
+ "x25519-dalek",
 ]
 
 [[package]]

@@ -156,8 +156,6 @@ impl Core {
         target_dest_id: Option<String>,
         outgoing_sender: mpsc::Sender<CoreToWorker>,
     ) -> Result<(Core, mpsc::Sender<WorkerToCore>), Error> {
-        wireguard::available().await?;
-        wireguard::executable().await?;
         let keys = worker_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
         let cancel_on_shutdown = CancellationToken::new();

@@ -1,13 +1,13 @@
+use base64::prelude::{BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
+use x25519_dalek::{PublicKey, StaticSecret};
 
 use std::fmt::{self, Display};
 use std::{io, string};
 
 use crate::dirs;
-use crate::shell_command_ext::{self, Logs, ShellCommandExt};
+use crate::shell_command_ext;
 
 pub const WG_INTERFACE: &str = "wg0_gnosisvpn";
 pub const WG_CONFIG_FILE: &str = "wg0_gnosisvpn.conf";
@@ -23,6 +23,8 @@ pub enum Error {
     Toml(#[from] toml::ser::Error),
     #[error("error generating wg key")]
     WgGenKey,
+    #[error("invalid wireguard key: {0}")]
+    InvalidKey(String),
     #[error("Dirs error: {0}")]
     Dirs(#[from] dirs::Error),
     #[error("Shell command error: {0}")]
@@ -86,46 +88,35 @@ impl Config {
     }
 }
 
-pub async fn available() -> Result<(), Error> {
-    let out = Command::new("which")
-        .arg("wg")
-        .run_stdout(Logs::Print)
-        .await
-        .map_err(Error::from)?;
-    tracing::debug!(at = %out, "wg command available");
-    Ok(())
+/// Decode a base64-encoded WireGuard private key into an X25519 secret.
+///
+/// Accepts the exact wire format `wg genkey` emits (standard base64 of 32 raw
+/// bytes). Surrounding whitespace/newlines are tolerated, matching the previous
+/// behavior where the key was piped through the `wg` binary.
+fn decode_secret(priv_key: &str) -> Result<StaticSecret, Error> {
+    let bytes = BASE64_STANDARD
+        .decode(priv_key.trim())
+        .map_err(|e| Error::InvalidKey(format!("base64 decode failed: {e}")))?;
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|v: Vec<u8>| Error::InvalidKey(format!("expected 32 key bytes, got {}", v.len())))?;
+    Ok(StaticSecret::from(bytes))
 }
 
-pub async fn executable() -> Result<(), Error> {
-    Command::new("wg")
-        .arg("--version")
-        .spawn_no_capture()
-        .await
-        .map_err(Error::from)
+/// Generate a fresh WireGuard private key, base64-encoded exactly as `wg genkey`
+/// would emit it. The secret is drawn from OS entropy and never leaves memory.
+fn generate_key() -> String {
+    let secret = StaticSecret::random();
+    BASE64_STANDARD.encode(secret.to_bytes())
 }
 
-async fn generate_key() -> Result<String, Error> {
-    Command::new("wg")
-        .arg("genkey")
-        .run_stdout(Logs::Print)
-        .await
-        .map_err(|_| Error::WgGenKey)
-}
-
-async fn public_key(priv_key: &str) -> Result<String, Error> {
-    let mut command = Command::new("wg")
-        .arg("pubkey")
-        .stdin(std::process::Stdio::piped()) // Enable piping to stdin
-        .stdout(std::process::Stdio::piped()) // Capture stdout
-        .spawn()?;
-
-    if let Some(stdin) = command.stdin.as_mut() {
-        stdin.write_all(priv_key.as_bytes()).await?
-    }
-
-    let cmd_debug = format!("{:?}", command);
-    let output = command.wait_with_output().await?;
-    shell_command_ext::stdout_from_output(cmd_debug, output, Logs::Print).map_err(|_| Error::WgGenKey)
+/// Derive the base64 WireGuard public key for a base64 private key, replacing
+/// the former `wg pubkey` shell-out with an in-process Curve25519 basepoint
+/// multiplication.
+fn public_key(priv_key: &str) -> Result<String, Error> {
+    let secret = decode_secret(priv_key)?;
+    let public = PublicKey::from(&secret);
+    Ok(BASE64_STANDARD.encode(public.as_bytes()))
 }
 
 impl WireGuard {
@@ -136,9 +127,9 @@ impl WireGuard {
     pub async fn from_config(config: Config) -> Result<Self, Error> {
         let priv_key = match config.force_private_key.clone() {
             Some(key) => key,
-            None => generate_key().await?,
+            None => generate_key(),
         };
-        let public_key = public_key(&priv_key).await?;
+        let public_key = public_key(&priv_key)?;
         let key_pair = KeyPair { priv_key, public_key };
         Ok(WireGuard { config, key_pair })
     }
@@ -210,5 +201,78 @@ impl Display for WireGuard {
 impl fmt::Debug for WireGuard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "WireGuard {{ public_key: {} }}", self.key_pair.public_key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Decode a 64-char hex string into 32 bytes (dependency-free test helper).
+    fn hex32(s: &str) -> [u8; 32] {
+        assert_eq!(s.len(), 64, "expected 64 hex chars");
+        let mut out = [0u8; 32];
+        for (i, byte) in out.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).expect("valid hex");
+        }
+        out
+    }
+
+    // RFC 7748 section 6.1 Diffie-Hellman example. WireGuard public-key
+    // derivation is exactly X25519(clamp(priv), basepoint), so Alice's published
+    // keypair is an independent known-answer test for `public_key`.
+    const RFC7748_ALICE_PRIV: &str = "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a";
+    const RFC7748_ALICE_PUB: &str = "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a";
+
+    #[test]
+    fn public_key_matches_rfc7748_known_answer() {
+        let priv_b64 = BASE64_STANDARD.encode(hex32(RFC7748_ALICE_PRIV));
+        let derived = public_key(&priv_b64).expect("valid key");
+        assert_eq!(derived, BASE64_STANDARD.encode(hex32(RFC7748_ALICE_PUB)));
+    }
+
+    #[test]
+    fn public_key_tolerates_trailing_newline() {
+        // `wg genkey` output historically carried a trailing newline; the decode
+        // path must stay lenient now that we own the parsing.
+        let priv_b64 = format!("{}\n", BASE64_STANDARD.encode(hex32(RFC7748_ALICE_PRIV)));
+        let derived = public_key(&priv_b64).expect("valid key despite newline");
+        assert_eq!(derived, BASE64_STANDARD.encode(hex32(RFC7748_ALICE_PUB)));
+    }
+
+    #[test]
+    fn generate_key_produces_valid_32_byte_key() {
+        let key = generate_key();
+        let raw = BASE64_STANDARD.decode(&key).expect("base64");
+        assert_eq!(raw.len(), 32);
+        // The derived public key must be computable and deterministic.
+        assert_eq!(public_key(&key).unwrap(), public_key(&key).unwrap());
+    }
+
+    #[test]
+    fn generate_key_is_not_constant() {
+        assert_ne!(generate_key(), generate_key());
+    }
+
+    #[test]
+    fn public_key_rejects_non_base64() {
+        let err = public_key("this is !!! not base64").unwrap_err();
+        assert!(matches!(err, Error::InvalidKey(_)));
+    }
+
+    #[test]
+    fn public_key_rejects_wrong_length() {
+        let short = BASE64_STANDARD.encode([0u8; 16]);
+        let err = public_key(&short).unwrap_err();
+        assert!(matches!(err, Error::InvalidKey(_)));
+    }
+
+    #[tokio::test]
+    async fn from_config_derives_public_key_for_forced_private_key() {
+        let priv_b64 = BASE64_STANDARD.encode(hex32(RFC7748_ALICE_PRIV));
+        let config = Config::new(None, None, Some(priv_b64.clone()), None);
+        let wg = WireGuard::from_config(config).await.expect("config accepted");
+        assert_eq!(wg.key_pair.priv_key, priv_b64);
+        assert_eq!(wg.key_pair.public_key, BASE64_STANDARD.encode(hex32(RFC7748_ALICE_PUB)));
     }
 }
