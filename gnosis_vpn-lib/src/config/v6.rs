@@ -42,6 +42,7 @@ pub(super) struct Connection {
     pub(super) lan_lockdown: Option<bool>,
     #[serde(default, with = "humantime_serde::option")]
     pub(super) session_pseudonym_ttl: Option<Duration>,
+    #[serde(default, deserialize_with = "validate_path_planner_min_ack_rate")]
     pub(super) path_planner_min_ack_rate: Option<f64>,
 }
 
@@ -133,6 +134,19 @@ pub(super) struct BlokliConfig {
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
+
+fn validate_path_planner_min_ack_rate<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<f64>::deserialize(deserializer)?;
+    match value {
+        Some(v) if !(0.0..=1.0).contains(&v) => Err(serde::de::Error::custom(
+            "path_planner_min_ack_rate must be in the range [0.0, 1.0]",
+        )),
+        other => Ok(other),
+    }
+}
 
 fn validate_n_pings<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
 where
@@ -752,6 +766,25 @@ path_planner_min_ack_rate = 0.5
         );
         let result: crate::config::Config = cfg.try_into().expect("should succeed");
         assert_eq!(result.connection.path_planner_min_ack_rate, 0.5);
+    }
+
+    #[test]
+    fn path_planner_min_ack_rate_rejects_out_of_range() {
+        for bad in &[-0.1_f64, 1.1, 2.0, -1.0] {
+            let toml = format!(
+                r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection]
+path_planner_min_ack_rate = {bad}
+"#####
+            );
+            let result = toml::from_str::<Config>(&toml);
+            assert!(result.is_err(), "expected rejection for path_planner_min_ack_rate = {bad}");
+        }
     }
 
     #[test]
