@@ -3,6 +3,7 @@ use thiserror::Error;
 use tokio::fs;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::compat::SafeModule;
 use crate::dirs;
@@ -64,30 +65,24 @@ pub async fn read_safe(state_home: PathBuf) -> Result<SafeModule, Error> {
     serde_saphyr::from_str::<SafeModule>(&content).map_err(Into::into)
 }
 
-pub async fn generate(safe_module: &SafeModule) -> Result<HoprLibConfig, Error> {
-    let content = format!(
-        r##"
-safe_module:
-    safe_address: {safe_address}
-    module_address: {module_address}
-publish: false
-protocol:
-    # Edge client: probe aggressively at startup so relay observations are
-    # populated before the first health check fires.  interval is the delay
-    # between probing rounds; it must be >= timeout (3 s).  recheck_threshold
-    # controls how quickly a relay gets re-examined after its last probe.
-    # At startup the graph needs to converge fast so health checks can
-    # succeed within the warm-up window — match interval so every relay
-    # is re-probed on every round.
-    probe:
-        timeout: 3s
-        interval: 3s
-        recheck_threshold: 3s
-"##,
-        safe_address = safe_module.safe_address,
-        module_address = safe_module.module_address,
-    );
-    serde_saphyr::from_str::<HoprLibConfig>(&content).map_err(Into::into)
+pub async fn generate(safe_module: &SafeModule, path_planner_min_ack_rate: f64) -> Result<HoprLibConfig, Error> {
+    let mut cfg = HoprLibConfig::default();
+    cfg.safe_module.safe_address = safe_module
+        .safe_address
+        .parse()
+        .map_err(|e| Error::Output(format!("invalid safe address: {e}")))?;
+    cfg.safe_module.module_address = safe_module
+        .module_address
+        .parse()
+        .map_err(|e| Error::Output(format!("invalid module address: {e}")))?;
+    // Edge client: probe aggressively at startup so relay observations are populated
+    // before the first health check fires. recheck_threshold matches interval so every
+    // relay is re-probed on every round during warm-up.
+    cfg.protocol.probe.timeout = Duration::from_secs(3);
+    cfg.protocol.probe.interval = Duration::from_secs(3);
+    cfg.protocol.probe.recheck_threshold = Duration::from_secs(3);
+    cfg.protocol.path_planner = edgli::latency_path_planner_config(path_planner_min_ack_rate);
+    Ok(cfg)
 }
 
 pub fn safe_file(state_home: PathBuf) -> PathBuf {

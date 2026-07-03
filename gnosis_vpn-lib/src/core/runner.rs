@@ -488,7 +488,7 @@ async fn run_hopr(
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<Hopr, Error> {
     tracing::debug!("starting hopr runner");
-    let cfg = worker_params.to_config(safe_module).await?;
+    let cfg = worker_params.to_config(safe_module, path_planner_min_ack_rate).await?;
     let keys = worker_params.calc_keys().await?;
     let blokli_url = worker_params.blokli_url();
     let sender = results_sender.clone();
@@ -498,7 +498,7 @@ async fn run_hopr(
         }
     };
 
-    Hopr::new(cfg, keys, blokli_url, blokli_config.into(), path_planner_min_ack_rate, visitor)
+    Hopr::new(cfg, keys, blokli_url, blokli_config.into(), visitor)
         .await
         .map_err(Error::from)
 }
