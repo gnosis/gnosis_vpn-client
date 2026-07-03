@@ -1409,7 +1409,14 @@ impl Core {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::hopr(worker_params, blokli_config, path_planner_min_ack_rate, &safe_module, results_sender).await;
+                    runner::hopr(
+                        worker_params,
+                        blokli_config,
+                        path_planner_min_ack_rate,
+                        &safe_module,
+                        results_sender,
+                    )
+                    .await;
                 })
                 .await
         });

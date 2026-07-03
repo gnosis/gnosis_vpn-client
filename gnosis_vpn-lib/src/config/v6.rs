@@ -783,7 +783,10 @@ path_planner_min_ack_rate = {bad}
 "#####
             );
             let result = toml::from_str::<Config>(&toml);
-            assert!(result.is_err(), "expected rejection for path_planner_min_ack_rate = {bad}");
+            assert!(
+                result.is_err(),
+                "expected rejection for path_planner_min_ack_rate = {bad}"
+            );
         }
     }
 

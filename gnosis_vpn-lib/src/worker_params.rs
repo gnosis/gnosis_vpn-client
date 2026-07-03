@@ -131,10 +131,16 @@ impl WorkerParams {
         identity::from_path(identity_file, identity_pass.clone()).map_err(Error::from)
     }
 
-    pub async fn to_config(&self, safe_module: &SafeModule, path_planner_min_ack_rate: f64) -> Result<HoprLibConfig, Error> {
+    pub async fn to_config(
+        &self,
+        safe_module: &SafeModule,
+        path_planner_min_ack_rate: f64,
+    ) -> Result<HoprLibConfig, Error> {
         match self.config_mode.clone() {
             ConfigFileMode::Manual(path) => config::from_path(path).await.map_err(Error::from),
-            ConfigFileMode::Generated => config::generate(safe_module, path_planner_min_ack_rate).await.map_err(Error::from),
+            ConfigFileMode::Generated => config::generate(safe_module, path_planner_min_ack_rate)
+                .await
+                .map_err(Error::from),
         }
     }
 

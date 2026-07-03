@@ -216,7 +216,14 @@ pub(crate) async fn hopr(
     safe_module: &SafeModule,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = run_hopr(worker_params, blokli_config, path_planner_min_ack_rate, safe_module, &results_sender).await;
+    let res = run_hopr(
+        worker_params,
+        blokli_config,
+        path_planner_min_ack_rate,
+        safe_module,
+        &results_sender,
+    )
+    .await;
     let _ = results_sender
         .send(Results::Hopr {
             res,
