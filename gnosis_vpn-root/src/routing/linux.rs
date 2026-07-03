@@ -57,14 +57,12 @@ pub fn static_router(
 /// All routing is owned explicitly by this struct via `RouteOps`:
 /// - bypass routes (peer IPs + RFC1918) via WAN — added before wg-quick up
 /// - VPN split routes (`0.0.0.0/1`, `128.0.0.0/1`) + VPN subnet via wg0 — static after setup
-///
-/// Generic over `R: RouteOps` and `W: WgOps` so tests can inject mock implementations.
-pub struct StaticRouter<R: RouteOps, W: WgOps> {
+struct StaticRouter {
     state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
-    route_ops: R,
-    wg: W,
+    route_ops: NetlinkRouteOps,
+    wg: RealWgOps,
     /// WAN route snapshot captured at setup time.
     /// Used by `wan_changed()` to detect interface switches and DHCP reassignments.
     wan_info: Option<WanRoute>,
@@ -73,7 +71,7 @@ pub struct StaticRouter<R: RouteOps, W: WgOps> {
     active_bypass_routes: Vec<(String, String)>,
 }
 
-impl<R: RouteOps, W: WgOps> StaticRouter<R, W> {
+impl StaticRouter {
     async fn setup_vpn_routes(&self) -> Result<(), Error> {
         for (net, prefix) in VPN_SPLIT_ROUTES {
             let cidr = format!("{}/{}", net, prefix);
@@ -106,7 +104,7 @@ impl<R: RouteOps, W: WgOps> StaticRouter<R, W> {
 }
 
 #[async_trait]
-impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
+impl Routing for StaticRouter {
     /// Install split-tunnel routing.
     ///
     /// Phase 1 (before wg-quick up): add bypass routes via WAN

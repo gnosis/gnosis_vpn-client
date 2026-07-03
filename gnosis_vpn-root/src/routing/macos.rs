@@ -56,14 +56,12 @@ pub fn static_router(
 /// All routing is owned explicitly by this struct via `RouteOps`:
 /// - bypass routes (peer IPs + RFC1918) via WAN — added before wg-quick up
 /// - VPN split routes (`0.0.0.0/1`, `128.0.0.0/1`) + VPN subnet via utun — static after setup
-///
-/// Generic over `R: RouteOps` and `W: WgOps` so tests can inject mock implementations.
-pub struct StaticRouter<R: RouteOps, W: WgOps> {
+struct StaticRouter {
     state_home: PathBuf,
     wg_data: event::WireGuardData,
     peer_ips: Vec<Ipv4Addr>,
-    route_ops: R,
-    wg: W,
+    route_ops: DarwinRouteOps,
+    wg: RealWgOps,
     /// Bypass routes currently installed: (dest_cidr, wan_device).
     /// Tracked for explicit cleanup since the wg-quick config has no PreDown scripts.
     active_bypass_routes: Vec<(String, String)>,
@@ -75,7 +73,7 @@ pub struct StaticRouter<R: RouteOps, W: WgOps> {
     wan_info: Option<WanRoute>,
 }
 
-impl<R: RouteOps, W: WgOps> StaticRouter<R, W> {
+impl StaticRouter {
     fn vpn_interface(&self) -> String {
         self.wg_interface_name
             .clone()
@@ -115,7 +113,7 @@ impl<R: RouteOps, W: WgOps> StaticRouter<R, W> {
 }
 
 #[async_trait]
-impl<R: RouteOps + 'static, W: WgOps + 'static> Routing for StaticRouter<R, W> {
+impl Routing for StaticRouter {
     /// Install split-tunnel routing.
     ///
     /// Phase 1 (before wg-quick up): add bypass routes via WAN
