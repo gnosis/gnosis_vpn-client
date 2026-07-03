@@ -1,3 +1,5 @@
+pub const DEFAULT_PATH_PLANNER_MIN_ACK_RATE: f64 = 0.1;
+
 use bytesize::ByteSize;
 use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionTarget, SurbBalancerConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
@@ -21,6 +23,9 @@ pub struct Options {
     /// avoids a cold-start SURB exchange. Currently set to 1s (effectively disabled)
     /// until hopr-lib supports PIX.
     pub session_pseudonym_ttl: Duration,
+    /// Minimum acknowledgement rate [0.0, 1.0] a path must sustain to be considered by
+    /// the latency path planner. Paths below this threshold are skipped.
+    pub path_planner_min_ack_rate: f64,
 }
 
 /// Controls how often each tier of health check runs.

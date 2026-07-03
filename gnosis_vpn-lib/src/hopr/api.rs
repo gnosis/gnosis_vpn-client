@@ -40,8 +40,6 @@ use crate::{
     info::Info,
 };
 
-const PATH_PLANNER_MIN_ACK_RATE: f64 = 0.1;
-
 pub struct Hopr {
     edgli: Arc<edgli::Edgli>,
     open_listeners: Arc<ListenerJoinHandles>,
@@ -54,10 +52,11 @@ impl Hopr {
         keys: edgli::hopr_lib::HoprKeys,
         blokli_url: Option<url::Url>,
         blokli_config: BlockchainConnectorConfig,
+        path_planner_min_ack_rate: f64,
         init_visitor: impl Fn(EdgliInitState) + Send + 'static,
     ) -> Result<Self, HoprError> {
         tracing::debug!("running hopr edge node");
-        cfg.protocol.path_planner = edgli::latency_path_planner_config(PATH_PLANNER_MIN_ACK_RATE);
+        cfg.protocol.path_planner = edgli::latency_path_planner_config(path_planner_min_ack_rate);
         let edge_node = Edgli::new(
             cfg,
             keys,

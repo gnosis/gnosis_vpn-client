@@ -212,10 +212,11 @@ pub(crate) async fn persist_safe(state_home: PathBuf, safe_module: SafeModule, r
 pub(crate) async fn hopr(
     worker_params: WorkerParams,
     blokli_config: BlokliConfig,
+    path_planner_min_ack_rate: f64,
     safe_module: &SafeModule,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = run_hopr(worker_params, blokli_config, safe_module, &results_sender).await;
+    let res = run_hopr(worker_params, blokli_config, path_planner_min_ack_rate, safe_module, &results_sender).await;
     let _ = results_sender
         .send(Results::Hopr {
             res,
@@ -482,6 +483,7 @@ async fn run_funding_tool(worker_params: WorkerParams, code: String) -> Result<O
 async fn run_hopr(
     worker_params: WorkerParams,
     blokli_config: BlokliConfig,
+    path_planner_min_ack_rate: f64,
     safe_module: &SafeModule,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<Hopr, Error> {
@@ -496,7 +498,7 @@ async fn run_hopr(
         }
     };
 
-    Hopr::new(cfg, keys, blokli_url, blokli_config.into(), visitor)
+    Hopr::new(cfg, keys, blokli_url, blokli_config.into(), path_planner_min_ack_rate, visitor)
         .await
         .map_err(Error::from)
 }
