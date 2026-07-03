@@ -28,7 +28,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15 # Depot Apple Silicon M2, 8 CPUs, 24 GB RAM, 400 GB SSD
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@eedb4b7701714299852ca5243f1544b817653f33 # build-binaries-v3
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@2a638be283c8cfa63c2cf89240973f8ebc1e5a7e # test
     permissions:
       contents: read
       id-token: write
