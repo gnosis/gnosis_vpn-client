@@ -42,6 +42,8 @@ pub(super) struct Connection {
     pub(super) lan_lockdown: Option<bool>,
     #[serde(default, with = "humantime_serde::option")]
     pub(super) session_pseudonym_ttl: Option<Duration>,
+    #[serde(default, deserialize_with = "validate_path_planner_min_ack_rate")]
+    pub(super) path_planner_min_ack_rate: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -132,6 +134,19 @@ pub(super) struct BlokliConfig {
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
+
+fn validate_path_planner_min_ack_rate<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<f64>::deserialize(deserializer)?;
+    match value {
+        Some(v) if !(0.0..=1.0).contains(&v) => Err(serde::de::Error::custom(
+            "path_planner_min_ack_rate must be in the range [0.0, 1.0]",
+        )),
+        other => Ok(other),
+    }
+}
 
 fn validate_n_pings<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
 where
@@ -316,6 +331,9 @@ impl From<Option<Connection>> for options::Options {
             health_check_intervals,
             lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
             session_pseudonym_ttl,
+            path_planner_min_ack_rate: connection
+                .and_then(|c| c.path_planner_min_ack_rate)
+                .unwrap_or(options::DEFAULT_PATH_PLANNER_MIN_ACK_RATE),
         }
     }
 }
@@ -406,6 +424,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         || k == "announced_peer_minimum_score"
                         || k == "lan_lockdown"
                         || k == "session_pseudonym_ttl"
+                        || k == "path_planner_min_ack_rate"
                     {
                         continue;
                     }
@@ -716,6 +735,59 @@ path = { hops = 4 }
 "#####,
         );
         assert!(result.is_err(), "v6 must reject hops > MAX_HOPS");
+    }
+
+    #[test]
+    fn path_planner_min_ack_rate_defaults_to_point_one() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(result.connection.path_planner_min_ack_rate, 0.1);
+    }
+
+    #[test]
+    fn path_planner_min_ack_rate_reads_from_connection() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection]
+path_planner_min_ack_rate = 0.5
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(result.connection.path_planner_min_ack_rate, 0.5);
+    }
+
+    #[test]
+    fn path_planner_min_ack_rate_rejects_out_of_range() {
+        for bad in &[-0.1_f64, 1.1, 2.0, -1.0] {
+            let toml = format!(
+                r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection]
+path_planner_min_ack_rate = {bad}
+"#####
+            );
+            let result = toml::from_str::<Config>(&toml);
+            assert!(
+                result.is_err(),
+                "expected rejection for path_planner_min_ack_rate = {bad}"
+            );
+        }
     }
 
     #[test]

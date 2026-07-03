@@ -841,9 +841,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "aquamarine"
@@ -2550,7 +2550,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "3.3.1"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=556365f7b544a25b78ec22cce31bef026993901b#556365f7b544a25b78ec22cce31bef026993901b"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=7da0fa5c713a5e904748802630bdafcf35f651b4#7da0fa5c713a5e904748802630bdafcf35f651b4"
 dependencies = [
  "anyhow",
  "async-signal",

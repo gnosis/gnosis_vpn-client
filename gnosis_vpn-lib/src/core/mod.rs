@@ -1403,12 +1403,20 @@ impl Core {
         let cancel = self.cancel_on_shutdown.clone();
         let worker_params = self.worker_params.clone();
         let blokli_config = self.config.blokli.clone();
+        let path_planner_min_ack_rate = self.config.connection.path_planner_min_ack_rate;
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::hopr(worker_params, blokli_config, &safe_module, results_sender).await;
+                    runner::hopr(
+                        worker_params,
+                        blokli_config,
+                        path_planner_min_ack_rate,
+                        &safe_module,
+                        results_sender,
+                    )
+                    .await;
                 })
                 .await
         });
