@@ -41,6 +41,7 @@ ipnetwork = "~0.21.1"
 libc = "~0.2.186"
 mnl = "~0.3.1"
 multiaddr = "~0.18.2"
+neptun = { git = "https://github.com/NordSecurity/neptun.git", tag = "v3.0.0" }
 nftnl = "~0.9.2"
 notify = "~8.2.0"
 pfctl = "~0.7.0"

@@ -88,19 +88,24 @@ impl Config {
     }
 }
 
-/// Decode a base64-encoded WireGuard private key into an X25519 secret.
+/// Decode a base64-encoded 32-byte WireGuard key (private, public, or preshared)
+/// into raw bytes.
 ///
-/// Accepts the exact wire format `wg genkey` emits (standard base64 of 32 raw
-/// bytes). Surrounding whitespace/newlines are tolerated, matching the previous
-/// behavior where the key was piped through the `wg` binary.
-fn decode_secret(priv_key: &str) -> Result<StaticSecret, Error> {
+/// Accepts the exact wire format `wg genkey`/`wg pubkey` emit (standard base64 of
+/// 32 raw bytes). Surrounding whitespace/newlines are tolerated, matching the
+/// previous behavior where keys were piped through the `wg` binary.
+pub(crate) fn decode_key32(key: &str) -> Result<[u8; 32], Error> {
     let bytes = BASE64_STANDARD
-        .decode(priv_key.trim())
+        .decode(key.trim())
         .map_err(|e| Error::InvalidKey(format!("base64 decode failed: {e}")))?;
-    let bytes: [u8; 32] = bytes
+    bytes
         .try_into()
-        .map_err(|v: Vec<u8>| Error::InvalidKey(format!("expected 32 key bytes, got {}", v.len())))?;
-    Ok(StaticSecret::from(bytes))
+        .map_err(|v: Vec<u8>| Error::InvalidKey(format!("expected 32 key bytes, got {}", v.len())))
+}
+
+/// Decode a base64-encoded WireGuard private key into an X25519 secret.
+fn decode_secret(priv_key: &str) -> Result<StaticSecret, Error> {
+    Ok(StaticSecret::from(decode_key32(priv_key)?))
 }
 
 /// Generate a fresh WireGuard private key, base64-encoded exactly as `wg genkey`
