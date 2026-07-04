@@ -40,8 +40,10 @@ url.workspace                = true
 uzers.workspace              = true
 x25519-dalek.workspace       = true
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
-libc  = { workspace = true }
 mnl   = { workspace = true }
 nftnl = { workspace = true }
 
