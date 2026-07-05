@@ -18,6 +18,7 @@ mod session;
 #[cfg(unix)]
 mod tun;
 mod tunnel;
+mod udp;
 
 use neptun::noise::errors::WireGuardError;
 
@@ -26,6 +27,7 @@ pub use session::{SessionReceiver, SessionSender};
 #[cfg(unix)]
 pub use tun::{PLATFORM_TUN_HEADER_LEN, TunReader, TunWriter, tun_endpoints};
 pub use tunnel::{Outputs, TimerTick, TunnelEngine, WgTunnel};
+pub use udp::{UdpReceiver, UdpSender, udp_endpoints};
 
 /// Upper bound on a single IP packet or WireGuard datagram the pump buffers.
 /// WG at MTU 1420 yields ciphertext up to ~1452 bytes; 2048 leaves headroom.
