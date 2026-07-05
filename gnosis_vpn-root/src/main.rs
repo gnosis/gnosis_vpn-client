@@ -1067,16 +1067,24 @@ impl DaemonState {
                     Ok((interface, tun_fd)) => match self.worker_child {
                         // Pass the fd out-of-band first; the worker recv_fd's it only
                         // after seeing TunnelReady below (a simple happens-before).
-                        Some(ref child) => match gnosis_vpn_lib::socket::fd_passing::send_fd(&child.tun_fd_socket, tun_fd)
-                        {
-                            Ok(()) => Ok(interface),
-                            Err(e) => {
-                                tracing::error!(error = %e, "failed to pass TUN fd to worker");
-                                self.teardown_any_routing().await;
-                                Err(format!("failed to pass TUN fd to worker: {e}"))
+                        Some(ref child) => {
+                            match gnosis_vpn_lib::socket::fd_passing::send_fd(&child.tun_fd_socket, tun_fd) {
+                                Ok(()) => Ok(interface),
+                                Err(e) => {
+                                    tracing::error!(error = %e, "failed to pass TUN fd to worker");
+                                    self.teardown_any_routing().await;
+                                    Err(format!("failed to pass TUN fd to worker: {e}"))
+                                }
                             }
-                        },
-                        None => Err("worker gone before TUN fd could be passed".to_string()),
+                        }
+                        None => {
+                            // Routing was set up but the worker vanished before the fd
+                            // could be handed over; tear it back down so we don't leave
+                            // an orphaned TUN + split routes with nothing driving them
+                            // (matches the send_fd-failure arm above).
+                            self.teardown_any_routing().await;
+                            Err("worker gone before TUN fd could be passed".to_string())
+                        }
                     },
                     Err(e) => Err(e),
                 };
@@ -1214,13 +1222,17 @@ impl DaemonState {
 
         let mut worker_command = TokioCommand::new(self.worker_user.binary.clone());
 
+        // into_raw_fd() releases these from RAII: they must stay open across the spawn
+        // so the worker inherits them, and the parent must then close its own copies
+        // (see after spawn) or it leaks two fds - and, because CLOEXEC was cleared,
+        // they would be re-inherited by every later worker spawn.
+        let child_ctrl_fd = child_socket.into_raw_fd();
+        let child_tun_fd = child_tun_socket.into_raw_fd();
+
         worker_command
             .current_dir(self.worker_user.home.clone())
-            .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
-            .env(
-                socket::worker::ENV_VAR_TUN_FD,
-                format!("{}", child_tun_socket.into_raw_fd()),
-            )
+            .env(socket::worker::ENV_VAR, format!("{child_ctrl_fd}"))
+            .env(socket::worker::ENV_VAR_TUN_FD, format!("{child_tun_fd}"))
             .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
             .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
             .uid(self.worker_user.uid)
@@ -1229,7 +1241,15 @@ impl DaemonState {
         if let Some(ref log_file) = self.log_file {
             worker_command.env(logging::ENV_VAR_LOG_FILE, log_file.to_string_lossy().to_string());
         }
-        let mut child = worker_command.spawn().map_err(|err| {
+        let spawn_result = worker_command.spawn();
+        // The worker (if spawned) now holds its own inherited copies; drop the parent's.
+        // SAFETY: both fds came from the UnixStreams consumed by into_raw_fd() above and
+        // are not referenced again in this process.
+        unsafe {
+            libc::close(child_ctrl_fd);
+            libc::close(child_tun_fd);
+        }
+        let mut child = spawn_result.map_err(|err| {
             tracing::error!(error = ?err, ?self.worker_user, "unable to spawn worker process");
             exitcode::IOERR
         })?;
