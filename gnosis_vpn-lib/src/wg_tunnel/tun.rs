@@ -62,13 +62,21 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
 fn read_fd(fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
     // SAFETY: buf is a valid writable slice; read(2) writes at most buf.len().
     let rc = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
-    if rc < 0 { Err(io::Error::last_os_error()) } else { Ok(rc as usize) }
+    if rc < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(rc as usize)
+    }
 }
 
 fn write_fd(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
     // SAFETY: buf is a valid readable slice of len buf.len().
     let rc = unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
-    if rc < 0 { Err(io::Error::last_os_error()) } else { Ok(rc as usize) }
+    if rc < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(rc as usize)
+    }
 }
 
 /// Wrap a TUN fd into a reader/writer pair sharing one non-blocking [`AsyncFd`].

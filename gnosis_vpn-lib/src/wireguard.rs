@@ -116,7 +116,6 @@ impl WireGuard {
         let key_pair = KeyPair { priv_key, public_key };
         Ok(WireGuard { config, key_pair })
     }
-
 }
 
 impl Display for WireGuard {

@@ -28,9 +28,10 @@ impl Tun {
     /// `wg0_gnosisvpn`); on macOS pass `utun` and the kernel assigns a `utunN`
     /// name, read back via [`Tun::name`]. Requires root / `CAP_NET_ADMIN`.
     pub fn create(requested_name: &str) -> Result<Self, Error> {
-        let socket =
-            TunSocket::new(requested_name).map_err(|e| Error::Tun(format!("create {requested_name}: {e}")))?;
-        let name = socket.name().map_err(|e| Error::Tun(format!("resolve interface name: {e}")))?;
+        let socket = TunSocket::new(requested_name).map_err(|e| Error::Tun(format!("create {requested_name}: {e}")))?;
+        let name = socket
+            .name()
+            .map_err(|e| Error::Tun(format!("resolve interface name: {e}")))?;
         tracing::info!(interface = %name, "created TUN device");
         Ok(Self { socket, name })
     }

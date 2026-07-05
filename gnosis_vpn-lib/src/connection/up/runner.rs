@@ -149,16 +149,8 @@ impl Runner {
             .send(progress(Progress::StaticWgTunnel(session.clone())))
             .await;
         let allowed_ips = parse_allowed_ips(self.wg_config.allowed_ips.as_deref());
-        let interface =
-            request_setup_tunnel(&registration, &self.wg_config, peer_ips.clone(), &results_sender).await?;
-        spawn_wg_pump(
-            self.cancel.clone(),
-            &wg,
-            &registration,
-            allowed_ips,
-            session.bound_host,
-        )
-        .await?;
+        let interface = request_setup_tunnel(&registration, &self.wg_config, peer_ips.clone(), &results_sender).await?;
+        spawn_wg_pump(self.cancel.clone(), &wg, &registration, allowed_ips, session.bound_host).await?;
 
         // 9. activate killswitch now that the interface name is known
         let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
@@ -431,7 +423,10 @@ async fn spawn_wg_pump(
         {
             None => tracing::debug!("wg pump stopped (connection cancelled)"),
             Some(Ok(exit)) => {
-                tracing::warn!(?exit, "wg pump exited; connection health monitoring will drive reconnect")
+                tracing::warn!(
+                    ?exit,
+                    "wg pump exited; connection health monitoring will drive reconnect"
+                )
             }
             Some(Err(e)) => {
                 tracing::warn!(error = %e, "wg pump error; connection health monitoring will drive reconnect")
