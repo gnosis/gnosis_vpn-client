@@ -37,10 +37,17 @@ pub fn set_tun_fd_socket(socket: UnixStream) {
 /// it. Intended to be called from `spawn_blocking` since it performs a blocking
 /// `recvmsg`. Errors if the socket was never initialized (worker not spawned by
 /// root with [`ENV_VAR_TUN_FD`]).
+///
+/// Uses [`recv_latest_fd`](super::fd_passing::recv_latest_fd) so that a descriptor
+/// orphaned by an aborted connection attempt (setup timeout or cancel firing after
+/// root sent the fd but before the worker consumed it) is drained and closed rather
+/// than mistaken for the current connection's device.
 pub fn recv_tun_fd() -> io::Result<OwnedFd> {
     let cell = TUN_FD_SOCKET
         .get()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "TUN fd socket not initialized"))?;
-    let socket = cell.lock().map_err(|_| io::Error::other("TUN fd socket lock poisoned"))?;
-    super::fd_passing::recv_fd(&socket)
+    let socket = cell
+        .lock()
+        .map_err(|_| io::Error::other("TUN fd socket lock poisoned"))?;
+    super::fd_passing::recv_latest_fd(&socket)
 }

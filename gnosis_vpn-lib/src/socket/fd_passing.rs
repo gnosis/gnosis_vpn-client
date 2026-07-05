@@ -70,11 +70,7 @@ pub fn send_fd(sock: &UnixStream, fd: RawFd) -> io::Result<()> {
         (*hdr).cmsg_level = libc::SOL_SOCKET;
         (*hdr).cmsg_type = libc::SCM_RIGHTS;
         (*hdr).cmsg_len = libc::CMSG_LEN(FD_SIZE) as _;
-        std::ptr::copy_nonoverlapping(
-            &fd as *const RawFd as *const u8,
-            libc::CMSG_DATA(hdr),
-            FD_SIZE as usize,
-        );
+        std::ptr::copy_nonoverlapping(&fd as *const RawFd as *const u8, libc::CMSG_DATA(hdr), FD_SIZE as usize);
     }
 
     // SAFETY: msg points at live, correctly typed local storage for the duration
@@ -86,12 +82,58 @@ pub fn send_fd(sock: &UnixStream, fd: RawFd) -> io::Result<()> {
     Ok(())
 }
 
-/// Receive a single file descriptor from the connected peer over `sock`.
+/// Receive a single file descriptor from the connected peer over `sock`, blocking
+/// until one arrives.
 ///
 /// Returns an [`OwnedFd`] that closes on drop, so any error decoding the control
 /// message - or an early return by the caller - cannot leak the descriptor. The
 /// returned fd is close-on-exec.
 pub fn recv_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
+    recv_one_fd(sock, 0)?.ok_or_else(|| io::Error::new(io::ErrorKind::WouldBlock, "no descriptor available"))
+}
+
+/// Non-blocking variant of [`recv_fd`]: returns `Ok(None)` when no descriptor is
+/// currently buffered on `sock`, instead of blocking. Used to drain descriptors
+/// left behind by aborted connection attempts (see [`recv_latest_fd`]).
+pub fn try_recv_fd(sock: &UnixStream) -> io::Result<Option<OwnedFd>> {
+    recv_one_fd(sock, libc::MSG_DONTWAIT)
+}
+
+/// Receive the most recent descriptor buffered on `sock`, discarding (and closing)
+/// any older ones.
+///
+/// The fd-passing socket is long-lived and shared across every in-process
+/// reconnect, and `SCM_RIGHTS` on a stream socket delivers descriptors strictly
+/// FIFO. If a connection attempt is aborted (disconnect, forced reconnect, or the
+/// setup timeout firing) *after* root has sent its TUN fd but *before* the worker
+/// consumed it, that fd stays buffered. Because connection bring-up is sequential -
+/// the next `SetupTunnel` is not requested until this receive completes - no
+/// descriptor for a *later* connection can be queued ahead of the current one. Any
+/// surplus descriptors are therefore strictly older orphans, so we block for the
+/// first, drain the rest non-blocking, and keep only the last. Draining also closes
+/// the orphaned fds, releasing the zombie TUN devices they were keeping alive.
+pub fn recv_latest_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
+    let mut fd = recv_fd(sock)?;
+    let mut discarded = 0u32;
+    // Reassigning `fd` drops the previously held OwnedFd, closing the stale fd it
+    // superseded.
+    while let Some(newer) = try_recv_fd(sock)? {
+        discarded += 1;
+        fd = newer;
+    }
+    if discarded > 0 {
+        tracing::warn!(
+            discarded,
+            "discarded stale TUN fd(s) buffered by aborted connection attempt(s); kept the newest"
+        );
+    }
+    Ok(fd)
+}
+
+/// Core `recvmsg` for one `SCM_RIGHTS` descriptor. With `MSG_DONTWAIT` in
+/// `extra_flags`, a would-block condition (nothing buffered) returns `Ok(None)`
+/// rather than an error; every other failure is a hard error.
+fn recv_one_fd(sock: &UnixStream, extra_flags: libc::c_int) -> io::Result<Option<OwnedFd>> {
     let mut byte: [u8; 1] = [0];
     let mut iov = libc::iovec {
         iov_base: byte.as_mut_ptr() as *mut libc::c_void,
@@ -110,14 +152,19 @@ pub fn recv_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
     // closing the small window where a concurrent spawn could leak it. macOS has
     // no such flag, so it is set with fcntl immediately after receipt below.
     #[cfg(target_os = "linux")]
-    let flags = libc::MSG_CMSG_CLOEXEC;
+    let flags = libc::MSG_CMSG_CLOEXEC | extra_flags;
     #[cfg(not(target_os = "linux"))]
-    let flags = 0;
+    let flags = extra_flags;
 
     // SAFETY: msg points at live, correctly typed local storage.
     let ret = unsafe { libc::recvmsg(sock.as_raw_fd(), &mut msg, flags) };
     if ret < 0 {
-        return Err(io::Error::last_os_error());
+        let err = io::Error::last_os_error();
+        // A non-blocking drain that finds nothing buffered is not an error.
+        if extra_flags & libc::MSG_DONTWAIT != 0 && err.kind() == io::ErrorKind::WouldBlock {
+            return Ok(None);
+        }
+        return Err(err);
     }
     if ret == 0 {
         return Err(io::Error::new(
@@ -150,11 +197,7 @@ pub fn recv_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
             ));
         }
         let mut fd: RawFd = -1;
-        std::ptr::copy_nonoverlapping(
-            libc::CMSG_DATA(hdr),
-            &mut fd as *mut RawFd as *mut u8,
-            FD_SIZE as usize,
-        );
+        std::ptr::copy_nonoverlapping(libc::CMSG_DATA(hdr), &mut fd as *mut RawFd as *mut u8, FD_SIZE as usize);
         if fd < 0 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "received an invalid fd"));
         }
@@ -165,7 +208,7 @@ pub fn recv_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
     #[cfg(not(target_os = "linux"))]
     set_cloexec(&owned)?;
 
-    Ok(owned)
+    Ok(Some(owned))
 }
 
 /// Force `FD_CLOEXEC` on a freshly received descriptor for platforms lacking
@@ -272,5 +315,57 @@ mod tests {
         );
         // The caller still owns a valid fd: fcntl on it must succeed.
         assert!(unsafe { libc::fcntl(pipe_r.as_raw_fd(), libc::F_GETFD) } >= 0);
+    }
+
+    #[test]
+    fn try_recv_fd_returns_none_when_nothing_is_buffered() {
+        // Keep `_a` alive so the peer is open (a closed peer would report EOF, not
+        // would-block). With nothing sent, a non-blocking receive must not block.
+        let (_a, b) = UnixStream::pair().unwrap();
+        assert!(try_recv_fd(&b).unwrap().is_none());
+    }
+
+    /// Read the whole contents readable through `fd` (its write end must be closed).
+    fn read_all(fd: OwnedFd) -> String {
+        let mut reader = std::fs::File::from(fd);
+        let mut got = String::new();
+        reader.read_to_string(&mut got).unwrap();
+        got
+    }
+
+    #[test]
+    fn recv_latest_fd_keeps_the_newest_and_drops_older() {
+        let (a, b) = UnixStream::pair().unwrap();
+        // Three independent pipes stand in for three connection attempts' TUN fds;
+        // the first two are orphans left by aborted attempts.
+        let (r1, _w1) = make_pipe();
+        let (r2, _w2) = make_pipe();
+        let (r3, w3) = make_pipe();
+        send_fd(&a, r1.as_raw_fd()).unwrap();
+        send_fd(&a, r2.as_raw_fd()).unwrap();
+        send_fd(&a, r3.as_raw_fd()).unwrap();
+
+        // Only the newest (r3) survives the drain.
+        let received = recv_latest_fd(&b).unwrap();
+
+        // Prove it is r3: data written to w3 is readable through the received fd.
+        drop(r3);
+        let mut writer = std::fs::File::from(w3);
+        writer.write_all(b"newest").unwrap();
+        drop(writer);
+        assert_eq!(read_all(received), "newest");
+    }
+
+    #[test]
+    fn recv_latest_fd_returns_the_only_descriptor() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let (r, w) = make_pipe();
+        send_fd(&a, r.as_raw_fd()).unwrap();
+        let received = recv_latest_fd(&b).unwrap();
+        drop(r);
+        let mut writer = std::fs::File::from(w);
+        writer.write_all(b"solo").unwrap();
+        drop(writer);
+        assert_eq!(read_all(received), "solo");
     }
 }
