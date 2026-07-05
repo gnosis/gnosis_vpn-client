@@ -4,13 +4,14 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+use gnosis_vpn_lib::dirs;
 use gnosis_vpn_lib::shell_command_ext::{self, Logs};
-use gnosis_vpn_lib::{dirs, wireguard};
 
 use std::net::Ipv4Addr;
 
+pub(crate) mod dns;
 pub(crate) mod route_ops;
-pub(crate) mod wg_ops;
+pub(crate) mod tun;
 
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
@@ -62,8 +63,8 @@ pub enum Error {
     Dirs(#[from] dirs::Error),
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
-    #[error("wg-quick error: {0}")]
-    WgTooling(#[from] wireguard::Error),
+    #[error("TUN device error: {0}")]
+    Tun(String),
 
     #[cfg(target_os = "linux")]
     #[error("General error: {0}")]
@@ -76,9 +77,12 @@ pub enum Error {
 
 #[async_trait]
 pub trait Routing {
-    /// Set up the VPN tunnel. Returns the resolved WireGuard interface name on success.
+    /// Set up the VPN tunnel. Returns the resolved TUN interface name on success.
     async fn setup(&mut self) -> Result<String, Error>;
     async fn teardown(&mut self, logs: Logs);
+    /// The raw fd of the TUN device root created, so it can be handed to the
+    /// worker via `SCM_RIGHTS`. `None` before setup or after teardown.
+    fn tun_fd(&self) -> Option<std::os::fd::RawFd>;
     /// Whether the WAN default route differs from the one captured during setup.
     ///
     /// Used to tell real network changes apart from route events caused by our

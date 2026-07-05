@@ -9,7 +9,6 @@ use std::time::Duration;
 use crate::command::{Response, WorkerCommand};
 use crate::config::Config;
 use crate::ping;
-use crate::wireguard::{self, WireGuard};
 use crate::worker_params::WorkerParams;
 
 /// Messages sent from worker to core application logic
@@ -54,6 +53,8 @@ pub enum RootToWorker {
 }
 
 /// Messages sent from worker to root
+/// Allowing large variant as this is sent between processes
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WorkerToRoot {
     /// Response to a socket command
@@ -70,8 +71,13 @@ pub(crate) enum RunnerToRoot {
         interface: String,
         resp: oneshot::Sender<Result<(), String>>,
     },
-    StaticWgRouting {
-        wg_data: WireGuardData,
+    /// Ask root to provision the TUN device and split-tunnel routing for the
+    /// NepTUN data plane. No key material crosses the process boundary: the
+    /// WireGuard keys stay in the worker where the `WgTunnel` lives.
+    SetupTunnel {
+        interface_address: String,
+        mtu: u32,
+        dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
         resp: oneshot::Sender<Result<String, String>>,
     },
@@ -79,14 +85,6 @@ pub(crate) enum RunnerToRoot {
         options: ping::Options,
         resp: oneshot::Sender<Result<Duration, String>>,
     },
-}
-
-/// Data required for WireGuard operations
-#[derive(Debug, Serialize, Deserialize)]
-pub struct WireGuardData {
-    pub wg: WireGuard,
-    pub interface_info: wireguard::InterfaceInfo,
-    pub peer_info: wireguard::PeerInfo,
 }
 
 impl AsRef<RootToWorker> for RootToWorker {
@@ -104,9 +102,11 @@ pub enum RequestToRoot {
         peer_ips: Vec<Ipv4Addr>,
         interface: String,
     },
-    StaticWgRouting {
+    SetupTunnel {
         request_id: u64,
-        wg_data: WireGuardData,
+        interface_address: String,
+        mtu: u32,
+        dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
     },
     TearDownWg,
@@ -132,8 +132,8 @@ pub enum ResponseFromRoot {
         request_id: u64,
         res: Result<(), String>,
     },
-    /// On success, the String is the resolved WireGuard interface name.
-    StaticWgRouting {
+    /// On success, the String is the resolved TUN interface name.
+    TunnelReady {
         request_id: u64,
         res: Result<String, String>,
     },

@@ -3,23 +3,25 @@
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backon::{FibonacciBuilder, Retryable};
 use edgli::hopr_lib::{HoprSessionClientConfig, api::types::internal::protocol::HoprPseudonym};
+use ipnetwork::IpNetwork;
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 use std::fmt::{self, Display};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::connection::destination::Destination;
 use crate::connection::options::{Options, SurbParams, surb_config_for};
 use crate::core::runner::Results;
-use crate::event::{self, RunnerToRoot};
+use crate::event::RunnerToRoot;
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError};
 use crate::wireguard::{self, WireGuard};
 use crate::worker_params::WorkerParams;
-use crate::{ping, remote_data};
+use crate::{ping, remote_data, wg_tunnel};
 
 use super::{Error, Event, Progress, Setback};
 
@@ -40,6 +42,10 @@ pub(crate) struct Runner {
     wg_config: wireguard::Config,
     worker_params: WorkerParams,
     prev_conn: PreviousConnection,
+    /// Cancelled when the connection is torn down; scopes the lifetime of the
+    /// spawned NepTUN pump so it stops (dropping the TUN fd and UDP socket) on
+    /// disconnect or reconnect.
+    cancel: CancellationToken,
 }
 
 impl Runner {
@@ -50,6 +56,7 @@ impl Runner {
         hopr: Arc<Hopr>,
         worker_params: WorkerParams,
         prev_conn: PreviousConnection,
+        cancel: CancellationToken,
     ) -> Self {
         Self {
             destination,
@@ -58,6 +65,7 @@ impl Runner {
             wg_config,
             worker_params,
             prev_conn,
+            cancel,
         }
     }
 
@@ -133,12 +141,24 @@ impl Runner {
         // firewall floor and stays reachable for the duration of the connection.
         peer_ips.extend(blokli_ips);
 
-        // 8. setup static wg tunnel — returns the resolved WireGuard interface name
+        // 8. set up the NepTUN data plane — root provisions the TUN device + routing
+        //    and returns the resolved interface name; the worker then receives the
+        //    TUN fd out-of-band and starts the pump, which is the WireGuard client
+        //    dialing the loopback UDP port the session bridge listens on.
         let _ = results_sender
             .send(progress(Progress::StaticWgTunnel(session.clone())))
             .await;
+        let allowed_ips = parse_allowed_ips(self.wg_config.allowed_ips.as_deref());
         let interface =
-            request_static_wg_tunnel(&wg, &registration, &session, peer_ips.clone(), &results_sender).await?;
+            request_setup_tunnel(&registration, &self.wg_config, peer_ips.clone(), &results_sender).await?;
+        spawn_wg_pump(
+            self.cancel.clone(),
+            &wg,
+            &registration,
+            allowed_ips,
+            session.bound_host,
+        )
+        .await?;
 
         // 9. activate killswitch now that the interface name is known
         let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
@@ -332,34 +352,21 @@ async fn request_killswitch_lockdown(
     )
 }
 
-async fn request_static_wg_tunnel(
-    wg: &WireGuard,
+/// Ask root to provision the TUN device + split-tunnel routing and return the
+/// resolved interface name. No key material is sent: the WireGuard keys stay in
+/// the worker, where the `WgTunnel` runs.
+async fn request_setup_tunnel(
     registration: &Registration,
-    session: &SessionClientMetadata,
+    wg_config: &wireguard::Config,
     peer_ips: Vec<Ipv4Addr>,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<String, Error> {
     let (tx, rx) = oneshot::channel();
-    let interface_info = wireguard::InterfaceInfo {
-        address: registration.address(),
-    };
-    let peer_info = wireguard::PeerInfo {
-        public_key: registration.server_public_key(),
-        preshared_key: registration.preshared_key(),
-        endpoint: format!(
-            "{host}:{port}",
-            host = session.bound_host.ip(),
-            port = session.bound_host.port()
-        ),
-    };
-    let wg_data = event::WireGuardData {
-        wg: wg.clone(),
-        peer_info,
-        interface_info,
-    };
     let _ = results_sender
-        .send(Results::ConnectionRequestToRoot(RunnerToRoot::StaticWgRouting {
-            wg_data,
+        .send(Results::ConnectionRequestToRoot(RunnerToRoot::SetupTunnel {
+            interface_address: registration.address(),
+            mtu: wireguard::WG_MTU,
+            dns: wg_config.dns.clone(),
             peer_ips,
             resp: tx,
         }))
@@ -375,6 +382,85 @@ async fn request_static_wg_tunnel(
             Err(Error::Runtime("Timed out waiting for response".to_string()))
         }
     )
+}
+
+/// Receive the TUN fd from root and start the NepTUN pump. The pump is the
+/// WireGuard client: its network side is a UDP socket connected to the loopback
+/// port the HOPR session bridge listens on (`bound_host`) - the port kernel
+/// WireGuard used to dial - and its TUN side is the fd root created. The task runs
+/// until `cancel` fires (disconnect/reconnect), at which point the TUN fd and UDP
+/// socket are dropped.
+async fn spawn_wg_pump(
+    cancel: CancellationToken,
+    wg: &WireGuard,
+    registration: &Registration,
+    allowed_ips: Vec<IpNetwork>,
+    bound_host: SocketAddr,
+) -> Result<(), Error> {
+    // The TUN fd is delivered out-of-band by root over the dedicated fd-passing
+    // socket; block for it off the async runtime.
+    let tun_fd = tokio::task::spawn_blocking(crate::socket::worker::recv_tun_fd)
+        .await
+        .map_err(|e| Error::Runtime(format!("tun fd receive task failed: {e}")))?
+        .map_err(|e| Error::Runtime(format!("failed to receive tun fd from root: {e}")))?;
+    let (tun_reader, tun_writer) = wg_tunnel::tun_endpoints(tun_fd, wg_tunnel::PLATFORM_TUN_HEADER_LEN)
+        .map_err(|e| Error::Runtime(format!("failed to wrap tun fd: {e}")))?;
+
+    let udp = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .map_err(|e| Error::Runtime(format!("failed to bind wg udp socket: {e}")))?;
+    udp.connect(bound_host)
+        .await
+        .map_err(|e| Error::Runtime(format!("failed to connect wg udp socket to {bound_host}: {e}")))?;
+    let (net_sender, net_receiver) = wg_tunnel::udp_endpoints(udp);
+
+    let preshared = registration.preshared_key();
+    let preshared = if preshared.is_empty() { None } else { Some(preshared) };
+    let engine = wg_tunnel::WgTunnel::new(
+        &wg.key_pair.priv_key,
+        &registration.server_public_key(),
+        preshared.as_deref(),
+        &allowed_ips,
+    )
+    .map_err(|e| Error::Runtime(format!("failed to build wg tunnel: {e}")))?;
+
+    tokio::spawn(async move {
+        match cancel
+            .run_until_cancelled(wg_tunnel::run(engine, net_sender, net_receiver, tun_writer, tun_reader))
+            .await
+        {
+            None => tracing::debug!("wg pump stopped (connection cancelled)"),
+            Some(Ok(exit)) => {
+                tracing::warn!(?exit, "wg pump exited; connection health monitoring will drive reconnect")
+            }
+            Some(Err(e)) => {
+                tracing::warn!(error = %e, "wg pump error; connection health monitoring will drive reconnect")
+            }
+        }
+    });
+    Ok(())
+}
+
+/// Parse the peer's allowed-IPs (comma-separated CIDRs) used for INGRESS filtering
+/// in the `WgTunnel`. Defaults to `0.0.0.0/0` (accept all from the single server
+/// peer), matching the client-side config that was replaced. Unparseable entries
+/// are skipped with a warning; an empty result falls back to the default.
+fn parse_allowed_ips(allowed: Option<&str>) -> Vec<IpNetwork> {
+    let default: IpNetwork = "0.0.0.0/0".parse().expect("valid default cidr");
+    let nets: Vec<IpNetwork> = allowed
+        .unwrap_or("0.0.0.0/0")
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| match s.parse::<IpNetwork>() {
+            Ok(net) => Some(net),
+            Err(e) => {
+                tracing::warn!(entry = %s, %e, "ignoring unparseable allowed-ip");
+                None
+            }
+        })
+        .collect();
+    if nets.is_empty() { vec![default] } else { nets }
 }
 
 async fn gather_peer_ips(hopr: &Hopr) -> Result<Vec<Ipv4Addr>, HoprError> {

@@ -10,7 +10,6 @@ use crate::dirs;
 use crate::shell_command_ext;
 
 pub const WG_INTERFACE: &str = "wg0_gnosisvpn";
-pub const WG_CONFIG_FILE: &str = "wg0_gnosisvpn.conf";
 pub const WG_MTU: u32 = 1420;
 
 #[derive(Error, Debug)]
@@ -37,27 +36,6 @@ pub struct WireGuard {
     pub key_pair: KeyPair,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct InterfaceInfo {
-    pub address: String,
-}
-
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-pub struct PeerInfo {
-    pub public_key: String,
-    pub preshared_key: String,
-    pub endpoint: String,
-}
-
-impl fmt::Debug for PeerInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PeerInfo")
-            .field("public_key", &self.public_key)
-            .field("preshared_key", &"****")
-            .field("endpoint", &self.endpoint)
-            .finish()
-    }
-}
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct KeyPair {
     pub priv_key: String,
@@ -139,62 +117,6 @@ impl WireGuard {
         Ok(WireGuard { config, key_pair })
     }
 
-    pub fn to_file_string(
-        &self,
-        interface: &InterfaceInfo,
-        peer: &PeerInfo,
-        extra_interface_lines: Vec<String>,
-    ) -> String {
-        let allowed_ips = &self.config.allowed_ips.clone().unwrap_or("0.0.0.0/0".to_string());
-        let mut lines = Vec::new();
-
-        // [Interface] section
-        lines.push("[Interface]".to_string());
-        lines.push(format!("PrivateKey = {}", self.key_pair.priv_key));
-        lines.push(format!("Address = {}", interface.address));
-        lines.push(format!("MTU = {WG_MTU}"));
-        if let Some(dns) = &self.config.dns {
-            lines.push(format!("DNS = {dns}"));
-        }
-        if let Some(listen_port) = self.config.listen_port {
-            lines.push(format!("ListenPort = {}", listen_port));
-        }
-        lines.extend(extra_interface_lines);
-
-        // Blackhold Ipv6 traffic for now.
-        // Contrary to routing exceptions this happens in preup and postdown
-        // To avoid leakage and because those are global rules
-        #[cfg(target_os = "linux")]
-        {
-            // we cannot handle IPv6 yet, so blackhole it for now, make it idempotent to avoid wg-quick stopping because of errors
-            lines.push("PreUp = ip -6 route del blackhole ::/1 || true".to_string());
-            lines.push("PreUp = ip -6 route del blackhole 8000::/1 || true".to_string());
-            lines.push("PreUp = ip -6 route add blackhole ::/1".to_string());
-            lines.push("PreUp = ip -6 route add blackhole 8000::/1".to_string());
-            lines.push("PostDown = ip -6 route del blackhole ::/1 || true".to_string());
-            lines.push("PostDown = ip -6 route del blackhole 8000::/1 || true".to_string());
-        }
-        #[cfg(target_os = "macos")]
-        {
-            // on macos to avoid fighting router specific rules we split the range in two
-            // this way the routes are more specific and take precedence over other rules
-            lines.push("PreUp = route -n add -blackhole -inet6 ::/1 ::1".to_string());
-            lines.push("PreUp = route -n add -blackhole -inet6 8000::/1 ::1".to_string());
-            lines.push("PostDown = route -n delete -blackhole -inet6 ::/1 ::1".to_string());
-            lines.push("PostDown = route -n delete -blackhole -inet6 8000::/1 ::1".to_string());
-        }
-
-        lines.push("".to_string()); // Empty line for spacing
-
-        // [Peer] section
-        lines.push("[Peer]".to_string());
-        lines.push(format!("PublicKey = {}", peer.public_key));
-        lines.push(format!("PresharedKey = {}", peer.preshared_key));
-        lines.push(format!("Endpoint = {}", peer.endpoint));
-        lines.push(format!("AllowedIPs = {}", allowed_ips));
-
-        lines.join("\n")
-    }
 }
 
 impl Display for WireGuard {

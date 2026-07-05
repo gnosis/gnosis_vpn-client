@@ -15,10 +15,9 @@
 
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
-use std::path::PathBuf;
+use std::os::fd::RawFd;
 use std::time::{Duration, Instant};
 
-use gnosis_vpn_lib::event;
 use gnosis_vpn_lib::killswitch::Firewall;
 use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::wireguard;
@@ -34,10 +33,11 @@ const DEBOUNCE_MAX: Duration = Duration::from_secs(1);
 
 pub enum Msg {
     SetupRouting {
-        state_home: PathBuf,
-        wg_data: Box<event::WireGuardData>,
+        interface_address: String,
+        mtu: u32,
+        dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
-        reply: oneshot::Sender<Result<String, String>>,
+        reply: oneshot::Sender<Result<(String, RawFd), String>>,
     },
     TeardownRouting {
         reply: oneshot::Sender<()>,
@@ -110,12 +110,13 @@ impl Actor {
     async fn handle(&mut self, msg: Msg) -> Option<MonitorAction> {
         match msg {
             Msg::SetupRouting {
-                state_home,
-                wg_data,
+                interface_address,
+                mtu,
+                dns,
                 peer_ips,
                 reply,
             } => {
-                let result = self.setup_routing(state_home, *wg_data, peer_ips).await;
+                let result = self.setup_routing(interface_address, mtu, dns, peer_ips).await;
                 let _ = reply.send(result);
                 None
             }
@@ -206,14 +207,15 @@ impl Actor {
 
     async fn setup_routing(
         &mut self,
-        state_home: PathBuf,
-        wg_data: event::WireGuardData,
+        interface_address: String,
+        mtu: u32,
+        dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
-    ) -> Result<String, String> {
+    ) -> Result<(String, RawFd), String> {
         // ensure clean slate
         self.teardown_routing().await;
 
-        let mut router = match routing::static_router(state_home, wg_data, peer_ips) {
+        let mut router = match routing::static_router(interface_address, mtu, dns, peer_ips) {
             Ok(router) => router,
             Err(error) => {
                 tracing::error!(?error, "failed to build static router");
@@ -221,14 +223,25 @@ impl Actor {
             }
         };
         let res_setup = router.setup().await;
+        // Capture the TUN fd while the router is still owned here; it stays valid
+        // because the router (which owns the device) is stored below and only
+        // dropped on teardown.
+        let tun_fd = router.tun_fd();
         // store the router even on setup error so partial state can be torn down
         self.router = Some(Box::new(router));
         match res_setup {
-            Ok(interface_name) => {
-                self.wg_interface_name = Some(interface_name.clone());
-                tracing::info!("static routing setup successfully");
-                Ok(interface_name)
-            }
+            Ok(interface_name) => match tun_fd {
+                Some(fd) => {
+                    self.wg_interface_name = Some(interface_name.clone());
+                    tracing::info!("static routing setup successfully");
+                    Ok((interface_name, fd))
+                }
+                None => {
+                    tracing::error!("routing setup reported success but produced no TUN fd");
+                    self.teardown_routing().await;
+                    Err("routing setup produced no TUN fd".to_string())
+                }
+            },
             Err(error) => {
                 tracing::error!(?error, "static routing setup error");
                 self.teardown_routing().await;

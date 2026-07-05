@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::{AsRawFd, IntoRawFd};
+use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{self};
@@ -23,7 +23,7 @@ use std::time::Duration;
 use gnosis_vpn_lib::command::{self, Command as LibCommand, Response, WorkerCommand};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::destination::Destination;
-use gnosis_vpn_lib::event::{self, RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
+use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::worker_params::WorkerParams;
 use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 
@@ -32,7 +32,6 @@ mod device_monitor;
 mod network_info;
 mod routing;
 mod routing_actor;
-mod wg_tooling;
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
@@ -91,6 +90,9 @@ struct SocketCmd {
 struct WorkerChild {
     socket_writer: BufWriter<WriteHalf<TokioUnixStream>>,
     cancel: CancellationToken,
+    /// Parent end of the dedicated fd-passing socket; used to hand the TUN device
+    /// fd to the worker via `SCM_RIGHTS` (kept blocking for a blocking `sendmsg`).
+    tun_fd_socket: UnixStream,
 }
 
 #[derive(Debug)]
@@ -456,15 +458,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     // Write root pidfile for the newsyslog service to send signals to
     write_pidfile(&args.pid_file).await?;
-
-    // check wireguard tooling
-    wg_tooling::available()
-        .await
-        .and(wg_tooling::executable().await)
-        .map_err(|err| {
-            tracing::error!(error = ?err, "error checking WireGuard tools");
-            exitcode::UNAVAILABLE
-        })?;
 
     // prepare worker resources
     let config_path = match args.config_path.canonicalize() {
@@ -1063,17 +1056,35 @@ impl DaemonState {
                 }
                 Ok(())
             }
-            RequestToRoot::StaticWgRouting {
+            RequestToRoot::SetupTunnel {
                 request_id,
-                wg_data,
+                interface_address,
+                mtu,
+                dns,
                 peer_ips,
             } => {
-                let res = self.setup_static_routing(wg_data, peer_ips).await;
+                let res = match self.setup_static_routing(interface_address, mtu, dns, peer_ips).await {
+                    Ok((interface, tun_fd)) => match self.worker_child {
+                        // Pass the fd out-of-band first; the worker recv_fd's it only
+                        // after seeing TunnelReady below (a simple happens-before).
+                        Some(ref child) => match gnosis_vpn_lib::socket::fd_passing::send_fd(&child.tun_fd_socket, tun_fd)
+                        {
+                            Ok(()) => Ok(interface),
+                            Err(e) => {
+                                tracing::error!(error = %e, "failed to pass TUN fd to worker");
+                                self.teardown_any_routing().await;
+                                Err(format!("failed to pass TUN fd to worker: {e}"))
+                            }
+                        },
+                        None => Err("worker gone before TUN fd could be passed".to_string()),
+                    },
+                    Err(e) => Err(e),
+                };
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
                     send_to_worker(
-                        RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { request_id, res }),
+                        RootToWorker::ResponseFromRoot(ResponseFromRoot::TunnelReady { request_id, res }),
                         &mut child.socket_writer,
                     )
                     .await?;
@@ -1174,18 +1185,30 @@ impl DaemonState {
             tracing::error!(error = ?err, "unable to create socket pair for worker communication");
             exitcode::IOERR
         })?;
+        // Dedicated socket for passing the TUN device fd to the worker via SCM_RIGHTS,
+        // kept separate from the newline-JSON control channel (a BufReader there would
+        // consume bytes past a newline that a raw recvmsg for the ancillary data needs).
+        let (parent_tun_socket, child_tun_socket) = UnixStream::pair().map_err(|err| {
+            tracing::error!(error = ?err, "unable to create socket pair for TUN fd passing");
+            exitcode::IOERR
+        })?;
 
-        // remove the "Close-On-Exec" flag to avoid premature socket closure by root
-        let fd = child_socket.as_raw_fd();
-        unsafe {
-            let flags = libc::fcntl(fd, libc::F_GETFD);
-            if flags < 0 {
-                tracing::warn!(
-                    error = ?std::io::Error::last_os_error(),
-                    "failed to read FD flags on child socket; CLOEXEC may remain set"
-                );
-            } else {
-                libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+        // remove the "Close-On-Exec" flag on the child ends so the worker inherits them
+        for (fd, label) in [
+            (child_socket.as_raw_fd(), "control"),
+            (child_tun_socket.as_raw_fd(), "tun-fd"),
+        ] {
+            unsafe {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags < 0 {
+                    tracing::warn!(
+                        socket = label,
+                        error = ?std::io::Error::last_os_error(),
+                        "failed to read FD flags on child socket; CLOEXEC may remain set"
+                    );
+                } else {
+                    libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+                }
             }
         }
 
@@ -1194,6 +1217,10 @@ impl DaemonState {
         worker_command
             .current_dir(self.worker_user.home.clone())
             .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
+            .env(
+                socket::worker::ENV_VAR_TUN_FD,
+                format!("{}", child_tun_socket.into_raw_fd()),
+            )
             .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
             .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
             .uid(self.worker_user.uid)
@@ -1265,7 +1292,11 @@ impl DaemonState {
             }
         });
 
-        self.worker_child = Some(WorkerChild { cancel, socket_writer });
+        self.worker_child = Some(WorkerChild {
+            cancel,
+            socket_writer,
+            tun_fd_socket: parent_tun_socket,
+        });
         Ok(())
     }
 
@@ -1300,15 +1331,18 @@ impl DaemonState {
 
     async fn setup_static_routing(
         &self,
-        wg_data: event::WireGuardData,
+        interface_address: String,
+        mtu: u32,
+        dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
-    ) -> Result<String, String> {
+    ) -> Result<(String, RawFd), String> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = self
             .routing_actor_sender
             .send(routing_actor::Msg::SetupRouting {
-                state_home: self.worker_params.state_home(),
-                wg_data: Box::new(wg_data),
+                interface_address,
+                mtu,
+                dns,
                 peer_ips,
                 reply: reply_tx,
             })

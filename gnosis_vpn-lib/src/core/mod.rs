@@ -299,16 +299,16 @@ impl Core {
                             );
                         }
                     }
-                    ResponseFromRoot::StaticWgRouting { request_id, res } => {
+                    ResponseFromRoot::TunnelReady { request_id, res } => {
                         if let Some(Responder::Str(tx)) = self.responders.remove(&request_id) {
                             let _ = tx.send(res).map_err(|_| {
-                                tracing::warn!("responder channel closed for static wg routing response");
+                                tracing::warn!("responder channel closed for tunnel ready response");
                             });
                         } else {
                             tracing::debug!(
                                 request_id,
                                 ?res,
-                                "no responder for static wg routing response (evicted or duplicate)"
+                                "no responder for tunnel ready response (evicted or duplicate)"
                             );
                         }
                     }
@@ -960,16 +960,20 @@ impl Core {
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
-                RunnerToRoot::StaticWgRouting {
-                    wg_data,
+                RunnerToRoot::SetupTunnel {
+                    interface_address,
+                    mtu,
+                    dns,
                     peer_ips,
                     resp,
                 } => {
                     let request_id = self.next_request_id();
                     self.responders.insert(request_id, Responder::Str(resp));
-                    let request = RequestToRoot::StaticWgRouting {
+                    let request = RequestToRoot::SetupTunnel {
                         request_id,
-                        wg_data,
+                        interface_address,
+                        mtu,
+                        dns,
                         peer_ips,
                     };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
@@ -1572,6 +1576,7 @@ impl Core {
                 hopr,
                 self.worker_params.clone(),
                 prev_conn,
+                self.cancel_connection.clone(),
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
