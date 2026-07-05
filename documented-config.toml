@@ -118,7 +118,10 @@ path    = { hops = 1 }
 # [wireguard]
 # interface listen port for incoming connections; defaults to 51820
 # listen_port = 51820
-# manually overwrite derived allowed_ips for the WireGuard interface
+# source-address filter for packets arriving from the VPN exit (ingress only);
+# egress is always full-tunnel via the OS routes regardless of this value, so a
+# range narrower than the default 0.0.0.0/0 drops the exit's return traffic.
+# defaults to 0.0.0.0/0 (accept all)
 # allowed_ips = "0.0.0.0/0"
 # If you want to disable WireGuard key rotation, provide a static private key here.
 # force_private_key = "<your WireGuard private key>"

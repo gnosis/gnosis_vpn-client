@@ -46,6 +46,11 @@ pub struct KeyPair {
 pub struct Config {
     pub listen_port: Option<u16>,
     pub force_private_key: Option<String>,
+    /// Source-address filter applied to packets decrypted from the VPN exit
+    /// (ingress only). Egress is unconditionally full-tunnel via the OS split
+    /// routes and does not consult this value, so a range narrower than the
+    /// default `0.0.0.0/0` will drop the exit's NATed return traffic. Defaults to
+    /// `0.0.0.0/0` (accept all) when unset.
     pub allowed_ips: Option<String>,
     pub dns: Option<String>,
 }
