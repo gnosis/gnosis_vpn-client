@@ -153,6 +153,31 @@ async fn incoming_socket() -> Result<
     Ok((owned_cancel, receiver, writer_half))
 }
 
+/// Register the dedicated TUN-fd passing socket handed over by root via
+/// [`socket::worker::ENV_VAR_TUN_FD`]. The connection runner pulls the TUN device fd
+/// from it once root reports the tunnel is ready. Kept in blocking mode on purpose:
+/// the runner receives the fd from a `spawn_blocking` task, and the underlying
+/// `recvmsg` is a blocking call.
+fn setup_tun_fd_socket() -> Result<(), exitcode::ExitCode> {
+    let fd: i32 = env::var(socket::worker::ENV_VAR_TUN_FD)
+        .map_err(|err| {
+            tracing::error!(error = %err, env = %socket::worker::ENV_VAR_TUN_FD, "missing worker TUN fd env var");
+            exitcode::NOINPUT
+        })?
+        .parse()
+        .map_err(|err| {
+            tracing::error!(error = %err, "invalid worker TUN fd socket env var");
+            exitcode::NOINPUT
+        })?;
+
+    // SAFETY: root cleared CLOEXEC on this fd before spawning us and handed it over
+    // via the environment; we take sole ownership of it here.
+    let socket = unsafe { UnixStream::from_raw_fd(fd) };
+    socket::worker::set_tun_fd_socket(socket);
+    tracing::info!("TUN fd passing socket set up");
+    Ok(())
+}
+
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Set up logging
     let log_handle = setup_logging(&args.log_file)?;
@@ -168,6 +193,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // setup socket communication with root process
     let (cancel_socket_reader, socket_receiver, writer_half) = incoming_socket().await?;
     let writer = BufWriter::new(writer_half);
+
+    // register the dedicated TUN-fd passing socket handed over by root
+    setup_tun_fd_socket()?;
 
     // enter main loop
     let mut state = State::new(log_handle, writer);
