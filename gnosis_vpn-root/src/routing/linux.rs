@@ -130,16 +130,28 @@ impl StaticRouter {
             .ok_or_else(|| Error::General(format!("TUN interface '{}' not found", wireguard::WG_INTERFACE)))?;
 
         let (ip, prefix) = parse_cidr(&self.interface_address)?;
+        // `.replace()` (NLM_F_REPLACE) keeps address assignment idempotent, matching
+        // the del-before-add pattern used for routes in this file. Without it the add
+        // uses NLM_F_EXCL and fails with EEXIST if the address is still present - e.g.
+        // on a reconnect that reattaches to a `wg0_gnosisvpn` a lingering worker fd
+        // kept alive.
         self.handle
             .address()
             .add(index, ip, prefix)
+            .replace()
             .execute()
             .await
             .map_err(|e| Error::General(format!("failed to assign address {}: {e}", self.interface_address)))?;
 
         self.handle
             .link()
-            .change(LinkMessageBuilder::<LinkUnspec>::new().index(index).mtu(self.mtu).up().build())
+            .change(
+                LinkMessageBuilder::<LinkUnspec>::new()
+                    .index(index)
+                    .mtu(self.mtu)
+                    .up()
+                    .build(),
+            )
             .execute()
             .await
             .map_err(|e| Error::General(format!("failed to bring up TUN: {e}")))?;
@@ -151,14 +163,18 @@ impl StaticRouter {
 fn parse_cidr(s: &str) -> Result<(IpAddr, u8), Error> {
     match s.split_once('/') {
         Some((addr, prefix)) => {
-            let ip: IpAddr = addr.parse().map_err(|e| Error::General(format!("invalid address '{addr}': {e}")))?;
+            let ip: IpAddr = addr
+                .parse()
+                .map_err(|e| Error::General(format!("invalid address '{addr}': {e}")))?;
             let prefix: u8 = prefix
                 .parse()
                 .map_err(|e| Error::General(format!("invalid prefix '{prefix}': {e}")))?;
             Ok((ip, prefix))
         }
         None => {
-            let ip: IpAddr = s.parse().map_err(|e| Error::General(format!("invalid address '{s}': {e}")))?;
+            let ip: IpAddr = s
+                .parse()
+                .map_err(|e| Error::General(format!("invalid address '{s}': {e}")))?;
             Ok((ip, 32))
         }
     }
