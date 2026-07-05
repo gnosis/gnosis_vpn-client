@@ -14,11 +14,17 @@
 //! unprivileged worker-side code.
 
 mod pump;
+mod session;
+#[cfg(unix)]
+mod tun;
 mod tunnel;
 
 use neptun::noise::errors::WireGuardError;
 
 pub use pump::{NetworkReceiver, NetworkSender, PumpExit, TunReceiver, TunSender, run};
+pub use session::{SessionReceiver, SessionSender};
+#[cfg(unix)]
+pub use tun::{PLATFORM_TUN_HEADER_LEN, TunReader, TunWriter, tun_endpoints};
 pub use tunnel::{Outputs, TimerTick, TunnelEngine, WgTunnel};
 
 /// Upper bound on a single IP packet or WireGuard datagram the pump buffers.
