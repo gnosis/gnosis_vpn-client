@@ -44,7 +44,6 @@ pub struct KeyPair {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
-    pub listen_port: Option<u16>,
     pub force_private_key: Option<String>,
     /// Source-address filter applied to packets decrypted from the VPN exit
     /// (ingress only). Egress is unconditionally full-tunnel via the OS split
@@ -56,14 +55,8 @@ pub struct Config {
 }
 
 impl Config {
-    pub(crate) fn new(
-        listen_port: Option<u16>,
-        allowed_ips: Option<String>,
-        force_private_key: Option<String>,
-        dns: Option<String>,
-    ) -> Self {
+    pub(crate) fn new(allowed_ips: Option<String>, force_private_key: Option<String>, dns: Option<String>) -> Self {
         Config {
-            listen_port,
             allowed_ips,
             force_private_key,
             dns,
@@ -201,7 +194,7 @@ mod tests {
     #[tokio::test]
     async fn from_config_derives_public_key_for_forced_private_key() {
         let priv_b64 = BASE64_STANDARD.encode(hex32(RFC7748_ALICE_PRIV));
-        let config = Config::new(None, None, Some(priv_b64.clone()), None);
+        let config = Config::new(None, Some(priv_b64.clone()), None);
         let wg = WireGuard::from_config(config).await.expect("config accepted");
         assert_eq!(wg.key_pair.priv_key, priv_b64);
         assert_eq!(wg.key_pair.public_key, BASE64_STANDARD.encode(hex32(RFC7748_ALICE_PUB)));

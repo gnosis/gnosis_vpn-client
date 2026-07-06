@@ -116,7 +116,8 @@ path    = { hops = 1 }
 ## wireguard section - specific VPN-related settings
 
 # [wireguard]
-# interface listen port for incoming connections; defaults to 51820
+# listen_port is deprecated and ignored: WireGuard runs in-process without a
+# listening socket. The key is still accepted so existing configs keep parsing.
 # listen_port = 51820
 # source-address filter for packets arriving from the VPN exit (ingress only);
 # egress is always full-tunnel via the OS routes regardless of this value, so a

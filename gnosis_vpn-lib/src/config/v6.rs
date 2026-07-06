@@ -322,7 +322,13 @@ impl From<Option<Connection>> for options::Options {
 
 impl From<Option<WireGuard>> for WireGuardConfig {
     fn from(value: Option<WireGuard>) -> Self {
-        let listen_port = value.as_ref().and_then(|wg| wg.listen_port);
+        // `listen_port` remains in the TOML schema for compatibility but is
+        // meaningless since WireGuard runs in-process without a listening socket.
+        if value.as_ref().and_then(|wg| wg.listen_port).is_some() {
+            tracing::warn!(
+                "wireguard.listen_port is deprecated and ignored; WireGuard runs in-process without a listening socket"
+            );
+        }
         let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
         let force_private_key = value.as_ref().and_then(|wg| wg.force_private_key.clone());
         let dns = value
@@ -337,7 +343,7 @@ impl From<Option<WireGuard>> for WireGuardConfig {
                 })
             })
             .unwrap_or(Some(WireGuardDNS::default_server()));
-        WireGuardConfig::new(listen_port, allowed_ips, force_private_key, dns)
+        WireGuardConfig::new(allowed_ips, force_private_key, dns)
     }
 }
 
@@ -636,7 +642,7 @@ pub fn convert_destinations(
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelAllowlistConfig, Config, Strategy, convert_destinations};
+    use super::{ChannelAllowlistConfig, Config, Strategy, WireGuardConfig, convert_destinations};
     use crate::hopr::strategy_config::StrategyConfig;
     use edgli::hopr_lib::HopRouting;
     use edgli::hopr_lib::api::types::primitive::prelude::Address;
@@ -716,6 +722,36 @@ path = { hops = 4 }
 "#####,
         );
         assert!(result.is_err(), "v6 must reject hops > MAX_HOPS");
+    }
+
+    #[test]
+    fn wireguard_listen_port_still_parses_but_is_dropped_on_conversion() {
+        // Deprecated key: the TOML schema keeps accepting `listen_port` so old
+        // configs do not fail to parse, but the converted `wireguard::Config`
+        // no longer has such a field — only the remaining options survive.
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[wireguard]
+listen_port = 51820
+allowed_ips = "10.0.0.0/8"
+"#####,
+        );
+        let wg = cfg.wireguard.expect("wireguard section parsed");
+        assert_eq!(wg.listen_port, Some(51820));
+        let converted: WireGuardConfig = Some(wg).into();
+        assert_eq!(
+            converted,
+            WireGuardConfig::new(
+                Some("10.0.0.0/8".to_string()),
+                None,
+                Some("1.1.1.1,8.8.8.8".to_string())
+            )
+        );
     }
 
     #[test]
