@@ -10,7 +10,7 @@ sequenceDiagram
     Worker-->>Hoprd: Register WG Pubkey
     Worker-->>Hoprd: Close TCP session
     Worker-->>Hoprd: Open UDP session
-    Worker->>Root: request wg-quick up
-    Root->>Worker: result of routing setup
+    Worker->>Root: SetupTunnel (address, MTU, DNS, peer IPs)
+    Root->>Worker: TunnelReady (interface name, TUN fd via SCM_RIGHTS)
     Worker-->>Hoprd: (run ping on connection)
     Worker-->>Hoprd: adjust UDP session

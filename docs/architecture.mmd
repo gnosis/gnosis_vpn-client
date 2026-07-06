@@ -10,19 +10,24 @@ flowchart
     `"]
     Root["`**Root System Service**
     - runs as root
-    - sets up routing
-    - wg-quick up/down
+    - provisions TUN device
+    - sets up routing and DNS
+    - passes TUN fd to worker
     - spawns worker
     `" ]
     Worker["`**Worker Process**
     - runs as gnosisvpn (unprivileged)
     - contains all application logic
+    - owns WG keys and NepTUN data plane
     - runs hopr edge client
     `"]
     SystemSocket(((named Unixsocket)))
     WorkerSocket(((unnamed Unixsocket pair)))
+    TunFdSocket(((TUN fd Unixsocket via SCM_RIGHTS)))
     UI <--> SystemSocket
     CLI <--> SystemSocket
     Root <--> SystemSocket
     Root <--> WorkerSocket
     WorkerSocket <--> Worker
+    Root --> TunFdSocket
+    TunFdSocket --> Worker
