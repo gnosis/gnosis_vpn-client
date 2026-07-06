@@ -142,3 +142,74 @@ pub enum ResponseFromRoot {
         res: Result<Duration, String>,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setup_tunnel_request_survives_serde_round_trip() {
+        let request = RequestToRoot::SetupTunnel {
+            request_id: 7,
+            interface_address: "10.128.0.5/9".to_string(),
+            mtu: 1420,
+            dns: Some("1.1.1.1,8.8.8.8".to_string()),
+            peer_ips: vec![Ipv4Addr::new(192, 0, 2, 1), Ipv4Addr::new(198, 51, 100, 42)],
+        };
+        let json = serde_json::to_string(&request).expect("serialize");
+        let decoded: RequestToRoot = serde_json::from_str(&json).expect("deserialize");
+        match decoded {
+            RequestToRoot::SetupTunnel {
+                request_id,
+                interface_address,
+                mtu,
+                dns,
+                peer_ips,
+            } => {
+                assert_eq!(request_id, 7);
+                assert_eq!(interface_address, "10.128.0.5/9");
+                assert_eq!(mtu, 1420);
+                assert_eq!(dns.as_deref(), Some("1.1.1.1,8.8.8.8"));
+                assert_eq!(
+                    peer_ips,
+                    vec![Ipv4Addr::new(192, 0, 2, 1), Ipv4Addr::new(198, 51, 100, 42)]
+                );
+            }
+            other => panic!("expected SetupTunnel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tunnel_ready_success_survives_serde_round_trip() {
+        let response = ResponseFromRoot::TunnelReady {
+            request_id: 7,
+            res: Ok("utun7".to_string()),
+        };
+        let json = serde_json::to_string(&response).expect("serialize");
+        let decoded: ResponseFromRoot = serde_json::from_str(&json).expect("deserialize");
+        match decoded {
+            ResponseFromRoot::TunnelReady { request_id, res } => {
+                assert_eq!(request_id, 7);
+                assert_eq!(res.as_deref(), Ok("utun7"));
+            }
+            other => panic!("expected TunnelReady, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tunnel_ready_failure_survives_serde_round_trip() {
+        let response = ResponseFromRoot::TunnelReady {
+            request_id: 8,
+            res: Err("routing setup failed".to_string()),
+        };
+        let json = serde_json::to_string(&response).expect("serialize");
+        let decoded: ResponseFromRoot = serde_json::from_str(&json).expect("deserialize");
+        match decoded {
+            ResponseFromRoot::TunnelReady { request_id, res } => {
+                assert_eq!(request_id, 8);
+                assert_eq!(res, Err("routing setup failed".to_string()));
+            }
+            other => panic!("expected TunnelReady, got {other:?}"),
+        }
+    }
+}
