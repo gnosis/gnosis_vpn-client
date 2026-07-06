@@ -4,30 +4,14 @@ use thiserror::Error;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use std::fmt::{self, Display};
-use std::{io, string};
-
-use crate::dirs;
-use crate::shell_command_ext;
 
 pub const WG_INTERFACE: &str = "wg0_gnosisvpn";
 pub const WG_MTU: u32 = 1420;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("IO error: {0}")]
-    IO(#[from] io::Error),
-    #[error("UTF8 conversion error: {0}")]
-    FromUtf8Error(#[from] string::FromUtf8Error),
-    #[error("TOML serialization error: {0}")]
-    Toml(#[from] toml::ser::Error),
-    #[error("error generating wg key")]
-    WgGenKey,
     #[error("invalid wireguard key: {0}")]
     InvalidKey(String),
-    #[error("Dirs error: {0}")]
-    Dirs(#[from] dirs::Error),
-    #[error("Shell command error: {0}")]
-    ShellCommandExt(#[from] shell_command_ext::Error),
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
