@@ -43,6 +43,8 @@ jobs:
       cachix_cache_name: gnosis-vpn-client
       build_command: ${{ matrix.build_command }}
       binary: gnosis_vpn-client
+      gcp_workload_identity_provider: projects/656686060169/locations/global/workloadIdentityPools/gnosisvpn-gh-pool/providers/github-provider
+      gcp_service_account: download-gnosisvpn-gh-sa@gnosisvpn-production.iam.gserviceaccount.com
       runner: ${{ matrix.runner }}
       timeout_minutes: 240
     secrets:
