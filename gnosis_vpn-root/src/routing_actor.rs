@@ -182,7 +182,7 @@ impl Actor {
         // if_indextoname already fails, so we emit LinkRemoved with a synthetic
         // "if#N" name. Check whether the resolved WG interface still exists.
         #[cfg(target_os = "macos")]
-        if removed_link.as_ref().map_or(false, |n| n.starts_with("if#")) {
+        if removed_link.as_ref().is_some_and(|n| n.starts_with("if#")) {
             let wg_gone = std::ffi::CString::new(wg_iface.as_str())
                 .map(|name| unsafe { libc::if_nametoindex(name.as_ptr()) } == 0)
                 .unwrap_or(false);
