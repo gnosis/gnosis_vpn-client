@@ -97,10 +97,6 @@ jobs:
         with:
           cachix_cache_name: gnosis-vpn-client
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Install system test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wireguard-tools resolvconf
       - name: Install just
         uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2
       - name: Build binaries and system test
