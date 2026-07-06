@@ -6,9 +6,10 @@ use edgli::hopr_lib::{HoprSessionClientConfig, api::types::internal::protocol::H
 use ipnetwork::IpNetwork;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use std::fmt::{self, Display};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,7 +18,7 @@ use crate::connection::options::{Options, SurbParams, surb_config_for};
 use crate::core::runner::Results;
 use crate::event::RunnerToRoot;
 use crate::gvpn_client::{self, Registration};
-use crate::hopr::types::SessionClientMetadata;
+use crate::hopr::types::{SessionClientMetadata, SplicedWgSession};
 use crate::hopr::{self, Hopr, HoprError};
 use crate::wireguard::{self, WireGuard};
 use crate::worker_params::WorkerParams;
@@ -43,12 +44,16 @@ pub(crate) struct Runner {
     worker_params: WorkerParams,
     prev_conn: PreviousConnection,
     /// Cancelled when the connection is torn down; scopes the lifetime of the
-    /// spawned NepTUN pump so it stops (dropping the TUN fd and UDP socket) on
-    /// disconnect or reconnect.
+    /// spawned NepTUN pump so it stops (dropping the TUN fd and its network
+    /// endpoint) on disconnect or reconnect.
     cancel: CancellationToken,
+    /// Tracks the spawned pump task so core can wait for it to finish (and thus
+    /// for the TUN fd to close) before asking root to tear down routing.
+    pump_tasks: TaskTracker,
 }
 
 impl Runner {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         destination: Destination,
         options: Options,
@@ -57,6 +62,7 @@ impl Runner {
         worker_params: WorkerParams,
         prev_conn: PreviousConnection,
         cancel: CancellationToken,
+        pump_tasks: TaskTracker,
     ) -> Self {
         Self {
             destination,
@@ -66,6 +72,7 @@ impl Runner {
             worker_params,
             prev_conn,
             cancel,
+            pump_tasks,
         }
     }
 
@@ -122,17 +129,37 @@ impl Runner {
             results_sender.clone(),
         );
 
-        // 6. open ping session
+        // 6. open the wg session (also carries the in-tunnel verification ping).
+        //    With the udp-bridge data plane this binds a local loopback listener;
+        //    with the spliced data plane the raw session is handed to the pump.
+        let data_plane = wg_tunnel::data_plane();
         let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
-        let session = open_ping_session(
-            &self.hopr,
-            &self.destination,
-            &self.options,
-            ping_surb,
-            self.prev_conn.pseudonym,
-            &results_sender,
-        )
-        .await?;
+        let (session, spliced) = match data_plane {
+            wg_tunnel::DataPlane::UdpBridge => {
+                let session = open_ping_session(
+                    &self.hopr,
+                    &self.destination,
+                    &self.options,
+                    ping_surb,
+                    self.prev_conn.pseudonym,
+                    &results_sender,
+                )
+                .await?;
+                (session, None)
+            }
+            wg_tunnel::DataPlane::Splice => {
+                let spliced = open_spliced_wg_session(
+                    &self.hopr,
+                    &self.destination,
+                    &self.options,
+                    ping_surb,
+                    self.prev_conn.pseudonym,
+                    &results_sender,
+                )
+                .await?;
+                (spliced.metadata.clone(), Some((spliced.session, spliced.configurator)))
+            }
+        };
 
         // 7. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
@@ -143,14 +170,38 @@ impl Runner {
 
         // 8. set up the NepTUN data plane — root provisions the TUN device + routing
         //    and returns the resolved interface name; the worker then receives the
-        //    TUN fd out-of-band and starts the pump, which is the WireGuard client
-        //    dialing the loopback UDP port the session bridge listens on.
+        //    TUN fd out-of-band and starts the pump. The pump's network side is
+        //    either a loopback UDP socket dialing the session bridge port or the
+        //    spliced session itself, per the data-plane selection above.
         let _ = results_sender
             .send(progress(Progress::StaticWgTunnel(session.clone())))
             .await;
         let allowed_ips = parse_allowed_ips(self.wg_config.allowed_ips.as_deref());
         let interface = request_setup_tunnel(&registration, &self.wg_config, peer_ips.clone(), &results_sender).await?;
-        spawn_wg_pump(self.cancel.clone(), &wg, &registration, allowed_ips, session.bound_host).await?;
+        let (engine, tun_reader, tun_writer) = prepare_pump(&wg, &registration, allowed_ips).await?;
+        let configurator = match spliced {
+            None => {
+                let udp = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+                    .await
+                    .map_err(|e| Error::Runtime(format!("failed to bind wg udp socket: {e}")))?;
+                udp.connect(session.bound_host).await.map_err(|e| {
+                    Error::Runtime(format!(
+                        "failed to connect wg udp socket to {}: {e}",
+                        session.bound_host
+                    ))
+                })?;
+                let (net_tx, net_rx) = wg_tunnel::udp_endpoints(udp);
+                self.spawn_pump_task(engine, net_tx, net_rx, tun_writer, tun_reader, &results_sender);
+                None
+            }
+            Some((hopr_session, configurator)) => {
+                let (read_half, write_half) = tokio::io::split(hopr_session);
+                let net_tx = wg_tunnel::SessionSender::new(write_half);
+                let net_rx = wg_tunnel::SessionReceiver::new(read_half);
+                self.spawn_pump_task(engine, net_tx, net_rx, tun_writer, tun_reader, &results_sender);
+                Some(configurator)
+            }
+        };
 
         // 9. activate killswitch now that the interface name is known
         let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
@@ -166,13 +217,26 @@ impl Runner {
             .await;
         let main_surb = surb_config_for(&self.options.surb_balancing.main)?;
         if let Some(main_config) = main_surb.management {
-            let active_client = match session.active_clients.as_slice() {
-                [] => return Err(HoprError::SessionNotFound.into()),
-                [client] => client.clone(),
-                _ => return Err(HoprError::SessionAmbiguousClient.into()),
-            };
-            tracing::debug!(bound_host = ?session.bound_host, "adjusting to main session");
-            self.hopr.adjust_session(main_config, active_client).await?;
+            match configurator {
+                // A spliced session is not in the listener registry, so the SURB
+                // balancer is adjusted through its configurator handle directly.
+                Some(configurator) => {
+                    tracing::debug!("adjusting spliced wg session to main session");
+                    configurator
+                        .update_surb_balancer_config(main_config)
+                        .await
+                        .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
+                }
+                None => {
+                    let active_client = match session.active_clients.as_slice() {
+                        [] => return Err(HoprError::SessionNotFound.into()),
+                        [client] => client.clone(),
+                        _ => return Err(HoprError::SessionAmbiguousClient.into()),
+                    };
+                    tracing::debug!(bound_host = ?session.bound_host, "adjusting to main session");
+                    self.hopr.adjust_session(main_config, active_client).await?;
+                }
+            }
         }
 
         Ok(session.clone())
@@ -318,6 +382,42 @@ async fn open_ping_session(
     .await
 }
 
+/// Splice-mode sibling of [`open_ping_session`]: same capabilities, target, and
+/// retry behavior, but returns the raw session for the pump instead of binding a
+/// local listener.
+async fn open_spliced_wg_session(
+    hopr: &Hopr,
+    destination: &Destination,
+    options: &Options,
+    surb: SurbParams,
+    pseudonym: Option<HoprPseudonym>,
+    results_sender: &mpsc::Sender<Results>,
+) -> Result<SplicedWgSession, HoprError> {
+    let cfg = HoprSessionClientConfig {
+        capabilities: options.sessions.wg.capabilities,
+        forward_path: destination.routing,
+        return_path: destination.routing,
+        always_max_out_surbs: surb.always_max_out_surbs,
+        surb_management: surb.management,
+        pseudonym,
+    };
+    (|| async {
+        tracing::debug!(%destination, "attempting to open spliced wg session");
+        hopr.open_wg_session(destination.address, options.sessions.wg.target.clone(), cfg.clone())
+            .await
+    })
+    .retry(remote_data::backoff_expo_short_delay())
+    .notify(|err: &HoprError, dur: Duration| {
+        tracing::warn!(error = ?err, "error opening spliced wg session - will retry after {:?}", dur);
+        let tx = results_sender.clone();
+        let payload = setback(Setback::OpenPing(err.to_string()));
+        tokio::spawn(async move {
+            let _ = tx.send(payload).await;
+        });
+    })
+    .await
+}
+
 async fn request_killswitch_lockdown(
     peer_ips: Vec<Ipv4Addr>,
     interface: String,
@@ -376,19 +476,13 @@ async fn request_setup_tunnel(
     )
 }
 
-/// Receive the TUN fd from root and start the NepTUN pump. The pump is the
-/// WireGuard client: its network side is a UDP socket connected to the loopback
-/// port the HOPR session bridge listens on (`bound_host`) - the port kernel
-/// WireGuard used to dial - and its TUN side is the fd root created. The task runs
-/// until `cancel` fires (disconnect/reconnect), at which point the TUN fd and UDP
-/// socket are dropped.
-async fn spawn_wg_pump(
-    cancel: CancellationToken,
+/// Receive the TUN fd from root and build the pump's engine and TUN endpoints.
+/// The network endpoint is supplied by the caller per the data-plane selection.
+async fn prepare_pump(
     wg: &WireGuard,
     registration: &Registration,
     allowed_ips: Vec<IpNetwork>,
-    bound_host: SocketAddr,
-) -> Result<(), Error> {
+) -> Result<(wg_tunnel::WgTunnel, wg_tunnel::TunReader, wg_tunnel::TunWriter), Error> {
     // The TUN fd is delivered out-of-band by root over the dedicated fd-passing
     // socket; block for it off the async runtime.
     let tun_fd = tokio::task::spawn_blocking(crate::socket::worker::recv_tun_fd)
@@ -397,14 +491,6 @@ async fn spawn_wg_pump(
         .map_err(|e| Error::Runtime(format!("failed to receive tun fd from root: {e}")))?;
     let (tun_reader, tun_writer) = wg_tunnel::tun_endpoints(tun_fd, wg_tunnel::PLATFORM_TUN_HEADER_LEN)
         .map_err(|e| Error::Runtime(format!("failed to wrap tun fd: {e}")))?;
-
-    let udp = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
-        .await
-        .map_err(|e| Error::Runtime(format!("failed to bind wg udp socket: {e}")))?;
-    udp.connect(bound_host)
-        .await
-        .map_err(|e| Error::Runtime(format!("failed to connect wg udp socket to {bound_host}: {e}")))?;
-    let (net_sender, net_receiver) = wg_tunnel::udp_endpoints(udp);
 
     let preshared = registration.preshared_key();
     let preshared = if preshared.is_empty() { None } else { Some(preshared) };
@@ -416,24 +502,53 @@ async fn spawn_wg_pump(
     )
     .map_err(|e| Error::Runtime(format!("failed to build wg tunnel: {e}")))?;
 
-    tokio::spawn(async move {
-        match cancel
-            .run_until_cancelled(wg_tunnel::run(engine, net_sender, net_receiver, tun_writer, tun_reader))
-            .await
-        {
-            None => tracing::debug!("wg pump stopped (connection cancelled)"),
-            Some(Ok(exit)) => {
-                tracing::warn!(
-                    ?exit,
-                    "wg pump exited; connection health monitoring will drive reconnect"
-                )
+    Ok((engine, tun_reader, tun_writer))
+}
+
+impl Runner {
+    /// Spawn the NepTUN pump onto the connection's task tracker. The task runs
+    /// until `cancel` fires (disconnect/reconnect), at which point the TUN fd and
+    /// network endpoint are dropped; core waits on the tracker before asking root
+    /// to tear down routing. A pump that exits on its own (WG session expiry, an
+    /// endpoint closing, or a pump error) reports through the results channel so
+    /// core reconnects immediately instead of waiting for a ping failure.
+    fn spawn_pump_task<NS, NR>(
+        &self,
+        engine: wg_tunnel::WgTunnel,
+        net_tx: NS,
+        net_rx: NR,
+        tun_writer: wg_tunnel::TunWriter,
+        tun_reader: wg_tunnel::TunReader,
+        results_sender: &mpsc::Sender<Results>,
+    ) where
+        NS: wg_tunnel::NetworkSender + 'static,
+        NR: wg_tunnel::NetworkReceiver + 'static,
+    {
+        let cancel = self.cancel.clone();
+        let results_sender = results_sender.clone();
+        self.pump_tasks.spawn(async move {
+            match cancel
+                .run_until_cancelled(wg_tunnel::run(engine, net_tx, net_rx, tun_writer, tun_reader))
+                .await
+            {
+                None => tracing::debug!("wg pump stopped (connection cancelled)"),
+                Some(Ok(exit)) => {
+                    tracing::warn!(?exit, "wg pump exited - requesting reconnect");
+                    let _ = results_sender
+                        .send(Results::WgPumpExited {
+                            reason: format!("{exit:?}"),
+                        })
+                        .await;
+                }
+                Some(Err(e)) => {
+                    tracing::warn!(error = %e, "wg pump error - requesting reconnect");
+                    let _ = results_sender
+                        .send(Results::WgPumpExited { reason: e.to_string() })
+                        .await;
+                }
             }
-            Some(Err(e)) => {
-                tracing::warn!(error = %e, "wg pump error; connection health monitoring will drive reconnect")
-            }
-        }
-    });
-    Ok(())
+        });
+    }
 }
 
 /// Parse the peer's allowed-IPs (comma-separated CIDRs) used for INGRESS filtering
@@ -537,4 +652,48 @@ fn setback(setback: Setback) -> Results {
 
 fn progress(progress: Progress) -> Results {
     Results::ConnectionEvent(Event::Progress(Box::new(progress)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn nets(s: &[&str]) -> Vec<IpNetwork> {
+        s.iter().map(|n| n.parse().expect("valid cidr")).collect()
+    }
+
+    #[test]
+    fn allowed_ips_default_to_accept_all_when_unset() {
+        assert_eq!(parse_allowed_ips(None), nets(&["0.0.0.0/0"]));
+    }
+
+    #[test]
+    fn allowed_ips_parse_a_comma_separated_list() {
+        assert_eq!(
+            parse_allowed_ips(Some("10.128.0.0/9,192.168.0.1/32")),
+            nets(&["10.128.0.0/9", "192.168.0.1/32"])
+        );
+    }
+
+    #[test]
+    fn allowed_ips_tolerate_whitespace_and_empty_entries() {
+        assert_eq!(
+            parse_allowed_ips(Some(" 10.128.0.0/9 , ,192.168.0.1/32 ")),
+            nets(&["10.128.0.0/9", "192.168.0.1/32"])
+        );
+    }
+
+    #[test]
+    fn allowed_ips_skip_unparseable_entries() {
+        assert_eq!(
+            parse_allowed_ips(Some("10.128.0.0/9,not-a-cidr")),
+            nets(&["10.128.0.0/9"])
+        );
+    }
+
+    #[test]
+    fn allowed_ips_fall_back_to_default_when_nothing_parses() {
+        assert_eq!(parse_allowed_ips(Some("not-a-cidr,also/bad")), nets(&["0.0.0.0/0"]));
+        assert_eq!(parse_allowed_ips(Some("")), nets(&["0.0.0.0/0"]));
+    }
 }

@@ -21,7 +21,7 @@ use edgli::{
 };
 use futures_util::{StreamExt, future::AbortHandle};
 use hopr_utils_session::{
-    HopSessionFactory, ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding,
+    HopSessionFactory, ListenerId, ListenerJoinHandles, SessionFactory, SessionTargetSpec, create_tcp_client_binding,
     create_udp_client_binding,
 };
 use multiaddr::Protocol;
@@ -36,7 +36,10 @@ use std::{
 use crate::peer::Peer;
 use crate::{
     balance::{self, Balances},
-    hopr::{HoprError, types::SessionClientMetadata},
+    hopr::{
+        HoprError,
+        types::{SessionClientMetadata, SplicedWgSession},
+    },
     info::Info,
 };
 
@@ -179,6 +182,78 @@ impl Hopr {
             max_surb_upstream,
             response_buffer,
             session_pool,
+        })
+    }
+
+    /// Open a raw HOPR session for the spliced WireGuard data plane.
+    ///
+    /// Bypasses the local UDP listener bridge that [`Self::open_session`] sets up:
+    /// the returned session is consumed in-process by the NepTUN pump, so no
+    /// loopback socket is bound and no listener is registered. The metadata mirrors
+    /// what `open_session` reports, with a placeholder `bound_host`.
+    #[tracing::instrument(skip(self, cfg), level = "debug", err)]
+    pub async fn open_wg_session(
+        &self,
+        destination: Address,
+        target: SessionTarget,
+        cfg: HoprSessionClientConfig,
+    ) -> Result<SplicedWgSession, HoprError> {
+        tracing::debug!("open spliced hopr wg session");
+        let target_spec = match &target {
+            SessionTarget::UdpStream(addr) => match addr {
+                edgli::hopr_lib::exports::transport::session::SealedHost::Plain(ip_or_host) => {
+                    SessionTargetSpec::Plain(ip_or_host.to_string())
+                }
+                edgli::hopr_lib::exports::transport::session::SealedHost::Sealed(items) => {
+                    SessionTargetSpec::Sealed(items.clone().into())
+                }
+            },
+            _ => {
+                return Err(HoprError::Construction(
+                    "spliced wg session requires a UdpStream target".into(),
+                ));
+            }
+        };
+
+        let factory = HopSessionFactory::new(self.edgli.as_hopr());
+        let (session, configurator) = factory
+            .create_session(destination, target, cfg.clone())
+            .await
+            .map_err(|e| HoprError::Construction(format!("failed to create spliced wg session: {e}")))?;
+
+        let max_surb_upstream = cfg.surb_management.as_ref().map(|v| {
+            human_bandwidth::parse_bandwidth(format!("{} bps", v.max_surbs_per_sec * SURB_SIZE as u64 * 8).as_ref())
+                .expect("config value extract that cannot fail")
+        });
+        let response_buffer: Option<bytesize::ByteSize> = cfg
+            .surb_management
+            .as_ref()
+            .map(|v| ByteSize::b(v.target_surb_buffer_size * SESSION_MTU as u64));
+
+        // No socket is bound for a spliced session; the placeholder keeps the
+        // metadata shape identical for status reporting and the pseudonym cache.
+        let bound_host: SocketAddr = std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0).into();
+
+        let metadata = SessionClientMetadata {
+            protocol: IpProtocol::UDP,
+            bound_host,
+            target: target_spec.to_string(),
+            destination,
+            forward_path: cfg.forward_path,
+            return_path: cfg.return_path,
+            hopr_mtu: SESSION_MTU,
+            surb_len: SURB_SIZE,
+            active_clients: vec![session.id().to_string()],
+            max_client_sessions: 1,
+            max_surb_upstream,
+            response_buffer,
+            session_pool: None,
+        };
+
+        Ok(SplicedWgSession {
+            session,
+            configurator,
+            metadata,
         })
     }
 

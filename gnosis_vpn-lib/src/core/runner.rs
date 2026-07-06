@@ -94,6 +94,11 @@ pub(crate) enum Results {
         res: Result<(), connection::down::Error>,
     },
     SessionMonitorFailed,
+    /// The NepTUN pump task terminated on its own (WG session expired, or an
+    /// endpoint closed/errored) rather than through connection cancellation.
+    WgPumpExited {
+        reason: String,
+    },
     TunnelPingResult {
         rtt: Result<Duration, String>,
     },
@@ -624,6 +629,7 @@ impl Display for Results {
                 Err(err) => write!(f, "DisconnectionResult ({}): Error({})", wg_public_key, err),
             },
             Results::SessionMonitorFailed => write!(f, "SessionMonitorFailed"),
+            Results::WgPumpExited { reason } => write!(f, "WgPumpExited: {}", reason),
             Results::TunnelPingResult { rtt } => match rtt {
                 Ok(d) => write!(f, "TunnelPingResult: {:.1}ms", d.as_secs_f64() * 1000.0),
                 Err(err) => write!(f, "TunnelPingResult: Error({})", err),
