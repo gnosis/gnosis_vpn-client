@@ -1,9 +1,8 @@
 # NepTUN port: Phase 3-4 implementation blueprint
 
-> **Historical.** All phases described here have landed on
-> `tb/202607-neptun`; decisions and deviations are recorded in
-> `neptun-spec.md`, remaining manual work in
-> `neptun-phase3-4-testing-guide.md`. Kept for the verified API anchors.
+> **Historical.** All phases described here have landed on `tb/202607-neptun`;
+> decisions and deviations are recorded in `neptun-spec.md`, remaining manual
+> work in `neptun-phase3-4-testing-guide.md`. Kept for the verified API anchors.
 
 Companion to `neptun-spec.md`. Phases 0-2 are landed on branch
 `tb/202607-neptun`; this document is the executable plan for the remaining,
@@ -66,11 +65,11 @@ transfers, never line-buffered JSON, so there is no `BufReader` contamination.
   `pipe`, `send_fd` the read end, `recv_fd` on the peer, write to the pipe on
   the sender, read through the received fd - assert the bytes match, and assert
   no fd leak on the error paths (send to a closed peer, recv with no cmsg).
-- Ordering with the JSON channel: root sends `TunnelReady` (JSON, interface
-  name) on the main channel; the fd travels on the dedicated socket. The worker
-  waits for `TunnelReady`, then `recv_fd` on the dedicated socket. Because the
-  sockets are independent, ordering is a simple happens-before, not a framing
-  hazard.
+- Ordering with the JSON channel: root sends the fd on the dedicated socket,
+  then sends `TunnelReady` (JSON, interface name) on the main channel. The
+  worker waits for `TunnelReady`, then `recv_fd`s on the dedicated socket.
+  Because the sockets are independent, ordering is a simple happens-before, not
+  a framing hazard.
 
 ### 3b. protocol change (event/mod.rs)
 

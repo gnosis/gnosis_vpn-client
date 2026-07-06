@@ -9,25 +9,25 @@ server. This guide is the checklist for that pass, plus the follow-ups.
 
 ## What is landed
 
-| Piece | Where | Tests |
-|---|---|---|
-| In-process keygen (x25519-dalek) | `gnosis_vpn-lib/src/wireguard.rs` | RFC 7748 KAT, base64 round-trip |
-| `WgTunnel` engine + pump | `wg_tunnel/{tunnel,pump}.rs` | 18 (handshake, drain, expiry, allowed-IPs, boundaries) |
-| SCM_RIGHTS fd passing (dedicated socket, `INTERNAL_WORKER_TUN_FD`) | `socket/fd_passing.rs`, `socket/worker.rs` | 8 (transfer, CLOEXEC, EOF, orphan drain) |
-| Session splice adapters | `wg_tunnel/session.rs` | 3 |
-| TUN adapters (macOS utun header) | `wg_tunnel/tun.rs` | 5 |
-| UDP bridge adapter (interim default) | `wg_tunnel/udp.rs` | 2 |
-| Data-plane selection | `wg_tunnel::data_plane()` | 4 |
-| Direct `HoprSession` splice | `hopr/api.rs::open_wg_session`, runner step 6/8/11 | compile + adapter tests; e2e pending (risk #1) |
-| Pump exit -> reconnect | `Results::WgPumpExited`, `core/mod.rs` | via pump exit tests |
-| Ordered teardown (pump stops before `TearDownWg`) | `TaskTracker` in core + runner | - (see storm test below) |
-| `SetupTunnel`/`TunnelReady` protocol | `event/mod.rs` | serde round-trips |
-| Root TUN provisioning | `routing/tun.rs`, `routing/{linux,macos}.rs` | root-gated (below) |
-| DNS: resolvectl -> resolvconf fallback (Linux), scutil key (macOS), restore guard | `routing/dns.rs` | 7 argv/script builder tests |
-| IPv6 blackholes | `routing/ipv6_blackhole.rs` | 2 (wg-quick verbatim argv) |
-| Crash-recovery sweep (state file + startup sweep) | `routing/sweep.rs`, root `daemon()` | 7 |
-| `listen_port` deprecation (accept + warn + ignore) | `config/v6.rs`, `documented-config.toml` | 1 |
-| CI/packaging: no wireguard-tools/resolvconf, deny.toml allows neptun source, diagrams updated | `.github/workflows/pr.yml`, `deny.toml`, `docs/*.mmd` | cargo-deny green |
+| Piece                                                                                         | Where                                                 | Tests                                                  |
+| --------------------------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------ |
+| In-process keygen (x25519-dalek)                                                              | `gnosis_vpn-lib/src/wireguard.rs`                     | RFC 7748 KAT, base64 round-trip                        |
+| `WgTunnel` engine + pump                                                                      | `wg_tunnel/{tunnel,pump}.rs`                          | 18 (handshake, drain, expiry, allowed-IPs, boundaries) |
+| SCM_RIGHTS fd passing (dedicated socket, `INTERNAL_WORKER_TUN_FD`)                            | `socket/fd_passing.rs`, `socket/worker.rs`            | 8 (transfer, CLOEXEC, EOF, orphan drain)               |
+| Session splice adapters                                                                       | `wg_tunnel/session.rs`                                | 3                                                      |
+| TUN adapters (macOS utun header)                                                              | `wg_tunnel/tun.rs`                                    | 5                                                      |
+| UDP bridge adapter (interim default)                                                          | `wg_tunnel/udp.rs`                                    | 2                                                      |
+| Data-plane selection                                                                          | `wg_tunnel::data_plane()`                             | 4                                                      |
+| Direct `HoprSession` splice                                                                   | `hopr/api.rs::open_wg_session`, runner step 6/8/11    | compile + adapter tests; e2e pending (risk #1)         |
+| Pump exit -> reconnect                                                                        | `Results::WgPumpExited`, `core/mod.rs`                | via pump exit tests                                    |
+| Ordered teardown (pump stops before `TearDownWg`)                                             | `TaskTracker` in core + runner                        | - (see storm test below)                               |
+| `SetupTunnel`/`TunnelReady` protocol                                                          | `event/mod.rs`                                        | serde round-trips                                      |
+| Root TUN provisioning                                                                         | `routing/tun.rs`, `routing/{linux,macos}.rs`          | root-gated (below)                                     |
+| DNS: resolvectl -> resolvconf fallback (Linux), scutil key (macOS), restore guard             | `routing/dns.rs`                                      | 7 argv/script builder tests                            |
+| IPv6 blackholes                                                                               | `routing/ipv6_blackhole.rs`                           | 2 (wg-quick verbatim argv)                             |
+| Crash-recovery sweep (state file + startup sweep)                                             | `routing/sweep.rs`, root `daemon()`                   | 7                                                      |
+| `listen_port` deprecation (accept + warn + ignore)                                            | `config/v6.rs`, `documented-config.toml`              | 1                                                      |
+| CI/packaging: no wireguard-tools/resolvconf, deny.toml allows neptun source, diagrams updated | `.github/workflows/pr.yml`, `deny.toml`, `docs/*.mmd` | cargo-deny green                                       |
 
 ## Runtime switch
 
@@ -40,14 +40,14 @@ server. This guide is the checklist for that pass, plus the follow-ups.
 
 ## Manual validation checklist (root + staging)
 
-Targets: `gvpn-staging.toml` / `gvpn-staging-0hop.toml` in the repo root.
-Run everything on **both** platforms (Linux x86_64, macOS arm64).
+Targets: `gvpn-staging.toml` / `gvpn-staging-0hop.toml` in the repo root. Run
+everything on **both** platforms (Linux x86_64, macOS arm64).
 
 ### 1. Baseline e2e with `udp-bridge`
 
 - [ ] Connect; `TunnelReady` logs the interface (`wg0_gnosisvpn` / `utunN`).
-- [ ] `ping 10.128.0.1` through the tunnel succeeds (step-10 verification and
-      by hand).
+- [ ] `ping 10.128.0.1` through the tunnel succeeds (step-10 verification and by
+      hand).
 - [ ] Sustained transfer >= 60 s (e.g. `curl` a large file through the tunnel);
       no pump warnings, no stalls.
 - [ ] DNS applied: Linux `resolvectl status <iface>` shows the configured
@@ -65,13 +65,13 @@ Run everything on **both** platforms (Linux x86_64, macOS arm64).
 
 ### 2. Reconnect storm & teardown ordering
 
-- [ ] >= 10 rapid connect/disconnect/reconnect cycles plus forced reconnects
-      (WAN flap). Each converges to Connected.
+- [ ] At least 10 rapid connect/disconnect/reconnect cycles plus forced
+      reconnects (WAN flap). Each converges to Connected.
 - [ ] `lsof -p <worker-pid> | grep -c tun` (macOS: utun) stays at <= 1 - no
       accumulating TUN fds (exercises `recv_latest_fd` drain and the
-      TaskTracker-ordered teardown; on Linux specifically watch that a
-      reconnect never lands on a stale multi-queue device - symptom would be a
-      connected state with silently blackholed flows).
+      TaskTracker-ordered teardown; on Linux specifically watch that a reconnect
+      never lands on a stale multi-queue device - symptom would be a connected
+      state with silently blackholed flows).
 - [ ] No duplicate bypass/split routes after the storm.
 
 ### 3. Unclean-kill recovery
@@ -90,16 +90,15 @@ Repeat sections 1-3 with `GNOSISVPN_WG_DATAPLANE=splice`, plus:
       coalesced read surfaces as NepTUN decrypt errors / dropped-datagram
       warnings from the pump (`dropping datagram`, `wireguard protocol error`)
       and degraded throughput. Zero such warnings = boundaries hold. If they do
-      not: switch `wg_tunnel/session.rs` to the documented length-prefix
-      framing fallback (local change, pump untouched).
+      not: switch `wg_tunnel/session.rs` to the documented length-prefix framing
+      fallback (local change, pump untouched).
 - [ ] Expiry soak: idle past WG Reject-After-Time (~3 min past last handshake +
-      rekey attempts) and confirm `WgPumpExited` triggers an immediate
-      reconnect (log: "wg pump exited - reconnecting"), not a ping-timeout
-      wait.
+      rekey attempts) and confirm `WgPumpExited` triggers an immediate reconnect
+      (log: "wg pump exited - reconnecting"), not a ping-timeout wait.
 - [ ] Throughput comparison vs `udp-bridge` (spec risk #5; expectation: parity,
       the mixnet is the bottleneck).
-- [ ] Server side treats the registration-reported `bound_host` as
-      informational (registration succeeds; server logs show no use of it).
+- [ ] Server side treats the registration-reported `bound_host` as informational
+      (registration succeeds; server logs show no use of it).
 
 ### 5. Post-validation flip (code change, after 4 is green)
 
@@ -112,9 +111,9 @@ Repeat sections 1-3 with `GNOSISVPN_WG_DATAPLANE=splice`, plus:
 ## Follow-ups (out of scope for the swap)
 
 - Surface `Tunn::stats()` (handshake age, RTT, loss) in `Status` for the UIs.
-- CI: run cargo tests on darwin (builds exist; the old root-test compile
-  blocker is fixed on this branch); add a CAP_NET_ADMIN job for root-side
-  integration tests (TUN create, DNS set/restore, blackholes).
+- CI: run cargo tests on darwin (builds exist; the old root-test compile blocker
+  is fixed on this branch); add a CAP_NET_ADMIN job for root-side integration
+  tests (TUN create, DNS set/restore, blackholes).
 - fd-passing child-process integration test across the env-var handshake (unit
   tests cover the socketpair layer; the spawn wiring is exercised only e2e
   today).

@@ -116,7 +116,7 @@ async fn send_tun<TS: TunSender>(tun_tx: &mut TS, packet: &[u8]) -> Result<Sent,
 /// reader (the intended replacement for the old silent-drop queue). This does
 /// mean a long outbound write briefly delays inbound and timer servicing
 /// (head-of-line), which is acceptable since the mixnet, not WG crypto, is the
-/// bottleneck; the [`SEND_TIMEOUT`] bound guarantees a wedged write can never
+/// bottleneck; the send timeout bound guarantees a wedged write can never
 /// stall expiry detection and reconnect forever.
 pub async fn run<E, NS, NR, TS, TR>(
     mut engine: E,

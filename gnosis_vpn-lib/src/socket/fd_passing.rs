@@ -8,8 +8,8 @@
 //! `BufReader`, which buffers bytes past a newline that a raw `recvmsg` for the
 //! ancillary data would then miss. A dedicated socket only ever does
 //! `sendmsg`/`recvmsg`, so there is no framing hazard - ordering reduces to a
-//! simple happens-before (root sends `TunnelReady` on the JSON channel first, then
-//! the worker `recv_fd`s here).
+//! simple happens-before: root sends the fd first, then reports `TunnelReady` on the
+//! JSON channel; the worker waits for `TunnelReady` before `recv_fd`ing here.
 //!
 //! `recv_fd` returns an [`OwnedFd`] so a decode error or an early drop never leaks
 //! the descriptor, and it forces close-on-exec (via `MSG_CMSG_CLOEXEC` on Linux, a
