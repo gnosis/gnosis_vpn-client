@@ -60,6 +60,7 @@ jobs:
     runs-on: depot-ubuntu-22.04-4
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Release version
         uses: hoprnet/hopr-workflows/actions/release-version@9d3880d21d35d3ee6d3bc5cde6b62e91a84b56d8 # release-version-v5
@@ -73,7 +74,8 @@ jobs:
           zulip_email: ${{ secrets.ZULIP_EMAIL }}
           zulip_channel: GnosisVPN
           zulip_topic: Releases
-          gcp_service_account: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
+          gcp_workload_identity_provider: projects/656686060169/locations/global/workloadIdentityPools/gnosisvpn-gh-pool/providers/github-provider
+          gcp_service_account: download-gnosisvpn-gh-sa@gnosisvpn-production.iam.gserviceaccount.com
           gcp_artifact_package: gnosis_vpn-client
           github_app_private_key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
           github_app_client_id: ${{ secrets.GH_APP_GNOSISVPN_CLIENT_ID }}
