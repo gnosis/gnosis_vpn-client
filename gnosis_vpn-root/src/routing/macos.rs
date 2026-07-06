@@ -24,7 +24,7 @@ use std::os::fd::RawFd;
 
 use super::route_ops::{RouteOps, WanRoute};
 use super::route_ops_macos::DarwinRouteOps;
-use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET, dns, tun};
+use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET, dns, ipv6_blackhole, sweep, tun};
 
 /// Public IP used to identify the WAN route and detect DHCP reassignments.
 const PUBLIC_INTERNET_ADDRESS: Ipv4Addr = Ipv4Addr::new(1, 1, 1, 1);
@@ -44,6 +44,7 @@ pub fn static_router(
         interface_address,
         mtu,
         dns,
+        dns_mechanism: None,
         peer_ips,
         route_ops: DarwinRouteOps,
         active_bypass_routes: Vec::new(),
@@ -65,6 +66,8 @@ struct StaticRouter {
     mtu: u32,
     /// DNS servers to push (comma-separated), or `None` to leave DNS unmanaged.
     dns: Option<String>,
+    /// Resolver mechanism that took effect at setup; teardown reverses exactly this one.
+    dns_mechanism: Option<dns::Mechanism>,
     peer_ips: Vec<Ipv4Addr>,
     route_ops: DarwinRouteOps,
     /// Bypass routes currently installed: (dest_cidr, wan_device).
@@ -129,29 +132,6 @@ async fn configure_interface(iface: &str, interface_address: &str, mtu: u32) -> 
         .run(Logs::Print)
         .await?;
     Ok(())
-}
-
-/// Blackhole IPv6 to prevent leakage while the tunnel is IPv4-only (previously done
-/// by wg-quick's PreUp lines). Split into two /1 halves so the routes are more
-/// specific than any router-provided default. Best-effort.
-async fn add_ipv6_blackhole() {
-    for dst in ["::/1", "8000::/1"] {
-        let mut cmd = Command::new("route");
-        cmd.args(["-n", "add", "-blackhole", "-inet6", dst, "::1"]);
-        if let Err(e) = cmd.run(Logs::Suppress).await {
-            tracing::warn!(%e, dst, "failed to add IPv6 blackhole route (continuing)");
-        }
-    }
-}
-
-async fn remove_ipv6_blackhole() {
-    for dst in ["::/1", "8000::/1"] {
-        let mut cmd = Command::new("route");
-        cmd.args(["-n", "delete", "-blackhole", "-inet6", dst, "::1"]);
-        if let Err(e) = cmd.run(Logs::Suppress).await {
-            tracing::warn!(%e, dst, "failed to remove IPv6 blackhole route (continuing)");
-        }
-    }
 }
 
 #[async_trait]
@@ -224,10 +204,17 @@ impl Routing for StaticRouter {
         }
 
         // Phase 4: IPv6 blackhole + DNS (previously handled inside wg-quick)
-        add_ipv6_blackhole().await;
-        if let Some(servers) = self.dns.clone() {
-            dns::set(&interface_name, &servers).await;
-        }
+        ipv6_blackhole::add().await;
+        self.dns_mechanism = match self.dns.clone() {
+            Some(servers) => dns::set(&interface_name, &servers).await,
+            None => None,
+        };
+        // Record what was applied so a SIGKILLed root can be swept at next start.
+        sweep::record(&sweep::TeardownState {
+            interface_name: interface_name.clone(),
+            dns_mechanism_applied: self.dns_mechanism,
+            blackholes_added: true,
+        });
 
         self.wan_info = Some(wan_route);
         tracing::info!("routing is ready (macOS static)");
@@ -242,9 +229,13 @@ impl Routing for StaticRouter {
     /// 4. Remove bypass routes (WAN) — warn on error, continue
     async fn teardown(&mut self, _logs: Logs) {
         self.remove_vpn_routes().await;
-        remove_ipv6_blackhole().await;
-        if self.dns.is_some() {
-            dns::restore(&self.vpn_interface()).await;
+        ipv6_blackhole::remove().await;
+        // DNS restore must target the recorded utunN name: the compile-time fallback
+        // from vpn_interface() can never exist as a scutil service key on macOS.
+        match (self.wg_interface_name.clone(), self.dns_mechanism.take()) {
+            (Some(iface), Some(mechanism)) => dns::restore(&iface, mechanism).await,
+            (None, Some(_)) => tracing::warn!("skipping DNS restore: utun interface name not recorded"),
+            _ => {}
         }
         // Drop root's fd last so routes are removed before the interface can vanish.
         self.tun = None;
@@ -255,6 +246,7 @@ impl Routing for StaticRouter {
         }
         self.wg_interface_name = None;
         self.wan_info = None;
+        sweep::clear();
         tracing::info!("routing teardown complete");
     }
 

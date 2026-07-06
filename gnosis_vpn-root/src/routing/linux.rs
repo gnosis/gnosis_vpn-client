@@ -16,9 +16,8 @@
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use rtnetlink::{LinkMessageBuilder, LinkUnspec};
-use tokio::process::Command;
 
-use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
+use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::wireguard;
 
 use std::net::{IpAddr, Ipv4Addr};
@@ -26,7 +25,7 @@ use std::os::fd::RawFd;
 
 use super::route_ops::{RouteOps, WanRoute};
 use super::route_ops_linux::NetlinkRouteOps;
-use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET, dns, tun};
+use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET, dns, ipv6_blackhole, sweep, tun};
 
 /// Public IP used to identify the WAN route and detect DHCP reassignments.
 const PUBLIC_INTERNET_ADDRESS: Ipv4Addr = Ipv4Addr::new(1, 1, 1, 1);
@@ -49,6 +48,7 @@ pub fn static_router(
         interface_address,
         mtu,
         dns,
+        dns_mechanism: None,
         peer_ips,
         handle,
         route_ops,
@@ -70,6 +70,8 @@ struct StaticRouter {
     mtu: u32,
     /// DNS servers to push (comma-separated), or `None` to leave DNS unmanaged.
     dns: Option<String>,
+    /// Resolver mechanism that took effect at setup; teardown reverses exactly this one.
+    dns_mechanism: Option<dns::Mechanism>,
     peer_ips: Vec<Ipv4Addr>,
     /// Netlink handle used for address + link-state assignment on the TUN.
     handle: rtnetlink::Handle,
@@ -180,31 +182,6 @@ fn parse_cidr(s: &str) -> Result<(IpAddr, u8), Error> {
     }
 }
 
-/// Blackhole IPv6 to prevent leakage while the tunnel is IPv4-only (previously done
-/// by wg-quick's PreUp lines). Two /1 halves so the routes are more specific than
-/// any router-provided default. Idempotent (del-before-add), best-effort.
-async fn add_ipv6_blackhole() {
-    for dst in ["::/1", "8000::/1"] {
-        let _ = run_ip6(&["route", "del", "blackhole", dst]).await;
-        if let Err(e) = run_ip6(&["route", "add", "blackhole", dst]).await {
-            tracing::warn!(%e, dst, "failed to add IPv6 blackhole route (continuing)");
-        }
-    }
-}
-
-async fn remove_ipv6_blackhole() {
-    for dst in ["::/1", "8000::/1"] {
-        if let Err(e) = run_ip6(&["route", "del", "blackhole", dst]).await {
-            tracing::warn!(%e, dst, "failed to remove IPv6 blackhole route (continuing)");
-        }
-    }
-}
-
-async fn run_ip6(args: &[&str]) -> Result<(), Error> {
-    Command::new("ip").arg("-6").args(args).run(Logs::Suppress).await?;
-    Ok(())
-}
-
 #[async_trait]
 impl Routing for StaticRouter {
     /// Install split-tunnel routing (see the macOS impl for the phase rationale; the
@@ -265,10 +242,17 @@ impl Routing for StaticRouter {
         }
 
         // Phase 4: IPv6 blackhole + DNS (previously handled inside wg-quick)
-        add_ipv6_blackhole().await;
-        if let Some(servers) = self.dns.clone() {
-            dns::set(&interface_name, &servers).await;
-        }
+        ipv6_blackhole::add().await;
+        self.dns_mechanism = match self.dns.clone() {
+            Some(servers) => dns::set(&interface_name, &servers).await,
+            None => None,
+        };
+        // Record what was applied so a SIGKILLed root can be swept at next start.
+        sweep::record(&sweep::TeardownState {
+            interface_name: interface_name.clone(),
+            dns_mechanism_applied: self.dns_mechanism,
+            blackholes_added: true,
+        });
 
         self.wan_info = Some(wan_route);
         tracing::info!("routing is ready (linux static)");
@@ -277,9 +261,9 @@ impl Routing for StaticRouter {
 
     async fn teardown(&mut self, _logs: Logs) {
         self.remove_vpn_routes().await;
-        remove_ipv6_blackhole().await;
-        if self.dns.is_some() {
-            dns::restore(wireguard::WG_INTERFACE).await;
+        ipv6_blackhole::remove().await;
+        if let Some(mechanism) = self.dns_mechanism.take() {
+            dns::restore(wireguard::WG_INTERFACE, mechanism).await;
         }
         // Drop root's fd last so routes are removed before the interface can vanish.
         self.tun = None;
@@ -289,6 +273,7 @@ impl Routing for StaticRouter {
             }
         }
         self.wan_info = None;
+        sweep::clear();
         tracing::info!("routing teardown complete");
     }
 

@@ -10,7 +10,9 @@ use gnosis_vpn_lib::shell_command_ext::{self, Logs};
 use std::net::Ipv4Addr;
 
 pub(crate) mod dns;
+pub(crate) mod ipv6_blackhole;
 pub(crate) mod route_ops;
+pub(crate) mod sweep;
 pub(crate) mod tun;
 
 cfg_if::cfg_if! {

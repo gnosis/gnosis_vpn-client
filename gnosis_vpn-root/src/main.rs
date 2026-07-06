@@ -456,6 +456,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let network_info = network_info::NetworkInfo::gather().await;
     tracing::info!(%network_info, "host network info");
 
+    // Sweep tunnel side effects (IPv6 blackhole routes, DNS diversion) left behind
+    // if a previous root exited without tearing down its tunnel.
+    routing::sweep::startup_sweep().await;
+
     // Write root pidfile for the newsyslog service to send signals to
     write_pidfile(&args.pid_file).await?;
 
