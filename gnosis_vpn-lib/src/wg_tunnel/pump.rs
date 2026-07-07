@@ -255,6 +255,26 @@ mod tests {
         }
     }
 
+    /// A sender that accepts a write but never completes it - a wedged endpoint.
+    struct WedgedTx;
+
+    #[async_trait::async_trait]
+    impl NetworkSender for WedgedTx {
+        async fn send(&mut self, _datagram: &[u8]) -> std::io::Result<()> {
+            std::future::pending().await
+        }
+    }
+
+    /// A sender whose writes fail with a fixed io error kind.
+    struct FailingTx(std::io::ErrorKind);
+
+    #[async_trait::async_trait]
+    impl NetworkSender for FailingTx {
+        async fn send(&mut self, _datagram: &[u8]) -> std::io::Result<()> {
+            Err(std::io::Error::new(self.0, "endpoint failure"))
+        }
+    }
+
     /// A programmable engine to test the pump's control flow in isolation from
     /// real crypto and real time.
     #[derive(Default)]
@@ -421,6 +441,67 @@ mod tests {
         .expect("no timeout")
         .expect("pump ok");
         assert_eq!(exit, PumpExit::NetworkClosed);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pump_fails_when_a_network_write_wedges_past_the_send_timeout() {
+        // A hung endpoint must surface as a fatal TimedOut error bounded by
+        // SEND_TIMEOUT rather than stalling the pump (and expiry detection)
+        // forever. Paused time auto-advances past the timeout while the
+        // handshake-init write is wedged.
+        let engine = ScriptedEngine {
+            init: vec![1],
+            ..Default::default()
+        };
+        let (tun_out_tx, _tun_out) = channel(8);
+        let (_keep_net_in, net_in) = channel::<Vec<u8>>(8);
+        let (_keep_tun_in, tun_in) = channel::<Vec<u8>>(8);
+
+        let err = run(
+            engine,
+            WedgedTx,
+            ChannelRx(net_in),
+            ChannelTx(tun_out_tx),
+            ChannelRx(tun_in),
+        )
+        .await
+        .expect_err("a wedged write must be fatal");
+        match err {
+            Error::Io(e) => assert_eq!(e.kind(), std::io::ErrorKind::TimedOut),
+            other => panic!("expected an io timeout, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pump_fails_on_a_non_close_network_write_error() {
+        // Only BrokenPipe/ConnectionReset count as a clean endpoint close; any
+        // other write error is fatal and must surface as Error::Io instead of a
+        // PumpExit.
+        let engine = ScriptedEngine {
+            init: vec![1],
+            ..Default::default()
+        };
+        let (tun_out_tx, _tun_out) = channel(8);
+        let (_keep_net_in, net_in) = channel::<Vec<u8>>(8);
+        let (_keep_tun_in, tun_in) = channel::<Vec<u8>>(8);
+
+        let err = tokio::time::timeout(
+            Duration::from_secs(3),
+            run(
+                engine,
+                FailingTx(std::io::ErrorKind::PermissionDenied),
+                ChannelRx(net_in),
+                ChannelTx(tun_out_tx),
+                ChannelRx(tun_in),
+            ),
+        )
+        .await
+        .expect("no timeout")
+        .expect_err("a non-close write error must be fatal");
+        match err {
+            Error::Io(e) => assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied),
+            other => panic!("expected a fatal io error, got: {other:?}"),
+        }
     }
 
     #[tokio::test]
