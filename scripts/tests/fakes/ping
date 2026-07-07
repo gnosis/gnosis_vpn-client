@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+#
+# Fake ping for the offline smoke-test suite. Emits canned ping summary output
+# the script's parsers understand. Behavior is driven by FAKE_PING_* env vars;
+# with none set, it reports a healthy 0%-loss result.
+set -u
+
+size=""
+prev=""
+for a in "$@"; do
+    [ "$prev" = "-s" ] && size="$a"
+    prev="$a"
+done
+
+# A payload-carrying ping (-s <size>) is the don't-fragment MTU probe.
+if [ -n "$size" ]; then
+    if [ -n "${FAKE_PING_MTU_FRAG:-}" ]; then
+        printf 'ping: sendto: Message too long\n'
+        exit 1
+    fi
+    printf 'PING mtu ok\n'
+    exit 0
+fi
+
+if [ -n "${FAKE_PING_FAIL:-}" ]; then
+    printf 'ping: cannot reach host\n'
+    exit 2
+fi
+
+loss="${FAKE_PING_LOSS:-0}"
+cat <<EOF
+PING gateway: 56 data bytes
+64 bytes from gateway: icmp_seq=1 ttl=57 time=13.1 ms
+64 bytes from gateway: icmp_seq=2 ttl=57 time=10.1 ms
+64 bytes from gateway: icmp_seq=3 ttl=57 time=9.46 ms
+
+--- gateway ping statistics ---
+3 packets transmitted, 3 received, ${loss}% packet loss, time 2003ms
+rtt min/avg/max/mdev = 9.458/10.937/13.208/1.629 ms
+EOF
+exit 0

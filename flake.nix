@@ -165,6 +165,7 @@
               checks = self.checks.${system};
 
               packages = [
+                pkgs.bats
                 pkgs.cargo-machete
                 pkgs.cargo-shear
                 pkgs.just

@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#
+# Fake curl for the offline smoke-test suite. Recognizes the shapes the smoke
+# test uses (metrics downloads, the cdn-cgi/trace body, HEAD reachability, and
+# IPv6 attempts) and emits canned output. Behavior is driven by FAKE_CURL_*
+# environment variables; with none set, every request succeeds.
+set -u
+
+is_v6=0
+url=""
+for a in "$@"; do
+    case "$a" in
+        -6) is_v6=1 ;;
+        http://* | https://*) url="$a" ;;
+    esac
+done
+
+[ -n "${FAKE_LOG:-}" ] && printf '%s\n' "$url" >>"$FAKE_LOG"
+
+# Emit the five write-out fields the script parses:
+# http_code size_download speed_download time_total time_namelookup
+metrics() { printf '%s %s %s %s %s' "$1" "$2" "$3" "$4" "$5"; }
+
+# An IPv6 attempt is expected to be blocked (blackholed) unless allowed.
+if [ "$is_v6" -eq 1 ]; then
+    if [ -n "${FAKE_CURL_IPV6_OK:-}" ]; then
+        metrics 200 100 100 0.1 0.01
+        exit 0
+    fi
+    exit 7
+fi
+
+case "$url" in
+    *__down*)
+        n="${url##*bytes=}"
+        n="${n%%[!0-9]*}"
+        [ -n "$n" ] || n=0
+        # Byte counts above the sized ladder (max 10 MB) are the streaming target.
+        if [ "$n" -ge 20000000 ]; then
+            # Streaming target: large byte count, time-capped, data still flowed.
+            if [ -n "${FAKE_CURL_STREAM_STALL:-}" ]; then
+                metrics 200 0 0 0.0 0.0
+                exit 28
+            fi
+            metrics 200 5000000 250000 20.0 0.01
+            exit 28
+        fi
+        size="$n"
+        [ -n "${FAKE_CURL_SHORT:-}" ] && size=$((n / 2))
+        metrics 200 "$size" 2000000 0.5 0.01
+        exit 0
+        ;;
+    *cdn-cgi/trace*)
+        [ -n "${FAKE_CURL_EGRESS_FAIL:-}" ] && exit 7
+        printf 'fl=1a2b\nip=%s\nloc=CH\ncolo=ZRH\n' "${FAKE_CURL_EGRESS_IP:-203.0.113.7}"
+        exit 0
+        ;;
+    *)
+        host="${url#http://}"
+        host="${host#https://}"
+        host="${host%%/*}"
+        case " ${FAKE_CURL_DNS_FAIL:-} " in
+            *" $host "*)
+                metrics 000 0 0 0.0 0.0
+                exit 6
+                ;;
+        esac
+        case " ${FAKE_CURL_HTTP_FAIL:-} " in
+            *" $host "*)
+                metrics 000 0 0 0.0 0.0
+                exit 7
+                ;;
+        esac
+        metrics 200 0 0 0.12 0.02
+        exit 0
+        ;;
+esac
