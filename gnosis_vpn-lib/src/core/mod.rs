@@ -1772,6 +1772,10 @@ impl Core {
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
+        // The cancelled runner's pending root responders belong to a connection
+        // that no longer exists; clear them so stale entries do not outlive it,
+        // matching disconnect_from_connection.
+        self.responders.clear();
         wait_for_pump_stop(pump_tasks).await;
 
         // this is a oneshot command and we do not wait for any result
