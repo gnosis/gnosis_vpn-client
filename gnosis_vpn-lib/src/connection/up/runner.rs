@@ -696,4 +696,12 @@ mod tests {
         assert_eq!(parse_allowed_ips(Some("not-a-cidr,also/bad")), nets(&["0.0.0.0/0"]));
         assert_eq!(parse_allowed_ips(Some("")), nets(&["0.0.0.0/0"]));
     }
+
+    #[test]
+    fn allowed_ips_parse_mixed_ipv4_and_ipv6_cidrs() {
+        assert_eq!(
+            parse_allowed_ips(Some("10.128.0.0/9, fd00::/8 , 2001:db8::1/128")),
+            nets(&["10.128.0.0/9", "fd00::/8", "2001:db8::1/128"])
+        );
+    }
 }

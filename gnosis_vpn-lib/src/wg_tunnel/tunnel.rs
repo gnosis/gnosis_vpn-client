@@ -231,6 +231,15 @@ mod tests {
         p
     }
 
+    /// Minimal well-formed 40-byte IPv6 header: version 6, zero payload length,
+    /// next-header 59 (no-next-header), src and dst in bytes 8..24 and 24..40.
+    fn ipv6_packet(src: [u8; 16], dst: [u8; 16]) -> Vec<u8> {
+        let mut p = vec![0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 59, 0x40];
+        p.extend_from_slice(&src);
+        p.extend_from_slice(&dst);
+        p
+    }
+
     /// Drive the handshake to completion: client initiates, server responds,
     /// client consumes the response.
     fn complete_handshake(client: &mut WgTunnel, server: &mut WgTunnel) {
@@ -318,6 +327,30 @@ mod tests {
         let ct = client.encapsulate(&foreign).expect("encap").expect("dg");
         let out = server.decapsulate(&ct).expect("decap");
         assert!(out.to_tun.is_empty(), "foreign-source packet must be dropped");
+    }
+
+    #[test]
+    fn decapsulate_enforces_allowed_ips_for_ipv6_sources() {
+        // The ingress source filter is family-agnostic: an IPv6 allowed-IPs range
+        // admits an in-range IPv6 source and drops an out-of-range one, exactly as
+        // for IPv4.
+        let (mut client, mut server) = tunnel_pair(&["fd00::/8".parse().unwrap()]);
+        complete_handshake(&mut client, &mut server);
+
+        let allowed = ipv6_packet(
+            [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9],
+            [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        );
+        let ct = client.encapsulate(&allowed).expect("encap").expect("dg");
+        assert_eq!(server.decapsulate(&ct).expect("decap").to_tun, vec![allowed]);
+
+        let foreign = ipv6_packet(
+            [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5],
+            [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        );
+        let ct = client.encapsulate(&foreign).expect("encap").expect("dg");
+        let out = server.decapsulate(&ct).expect("decap");
+        assert!(out.to_tun.is_empty(), "out-of-range IPv6 source must be dropped");
     }
 
     #[test]
