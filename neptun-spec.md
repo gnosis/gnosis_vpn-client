@@ -390,15 +390,21 @@ ResponseFromRoot::TunnelReady {
 
 ## Test plan
 
-- Unit: pump state machine against `tokio::io::duplex` with a peer `Tunn` acting
-  as the server (handshake, data, rekey at simulated time, expiry, drain-loop
-  correctness, boundary preservation, allowed-IPs rejection). Keygen: base64
-  round-trip against fixtures generated with `wg` once. **[decision]** Keygen
-  fixtures use RFC 7748 §6.1 known-answer vectors (equivalent, dependency-free)
-  instead of wg-generated ones. Rekey/expiry _timing_ is delegated to NepTUN's
-  own timer tests plus the e2e soak - NepTUN offers no clock injection, so a
-  simulated-time test is not possible without patching upstream; the pump's
-  reaction to expiry is covered via a scripted engine.
+- Unit: pump state machine against a peer `Tunn` acting as the server (handshake,
+  data, expiry, drain-loop correctness, boundary preservation, allowed-IPs
+  rejection incl. IPv6 sources). **[decision]** The pump is covered two ways: a
+  scripted engine over boundary-preserving mpsc doubles for control-flow paths
+  (expiry, endpoint close, the `SEND_TIMEOUT` wedged-write and fatal-write
+  branches under paused time), and a real `WgTunnel` peer for crypto. The
+  production `SessionSender`/`SessionReceiver` splice adapters are composed with
+  the pump over a `tokio::io::duplex` (`pump_carries_data_over_the_session_splice_adapters`),
+  driven strictly lock-step so it does not depend on the unresolved frame-boundary
+  question (risk #1). Keygen: base64 round-trip against RFC 7748 §6.1 known-answer
+  vectors (equivalent to wg-generated fixtures, dependency-free). Rekey/expiry
+  _timing_ is delegated to NepTUN's own timer tests plus the e2e soak - NepTUN
+  offers no clock injection, so a simulated-time test is not possible without
+  patching upstream; the pump's reaction to expiry is covered via the scripted
+  engine.
 - Integration: real TUN + pump on macOS and Linux (needs root or CAP_NET_ADMIN
   in CI), fd passing over the socket layer, DNS set/restore, IPv6 blackhole
   presence during up and absence after down.
@@ -423,6 +429,6 @@ The full checklist with commands lives in
    registration-reported `bound_host` as informational.
 3. Follow-ups (out of scope for the swap): surface `Tunn::stats()` in `Status`;
    darwin cargo-test job in CI (builds exist, tests do not run); CAP_NET_ADMIN
-   CI harness for root-side integration tests; declare a workspace
-   `rust-version`; update the external installer repo to drop
-   wireguard-tools/wireguard-go.
+   CI harness for root-side integration tests; update the external installer repo
+   to drop wireguard-tools/wireguard-go. (The workspace `rust-version` is now
+   declared as `1.94`.)

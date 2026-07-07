@@ -9,25 +9,25 @@ server. This guide is the checklist for that pass, plus the follow-ups.
 
 ## What is landed
 
-| Piece                                                                                         | Where                                                 | Tests                                                  |
-| --------------------------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------ |
-| In-process keygen (x25519-dalek)                                                              | `gnosis_vpn-lib/src/wireguard.rs`                     | RFC 7748 KAT, base64 round-trip                        |
-| `WgTunnel` engine + pump                                                                      | `wg_tunnel/{tunnel,pump}.rs`                          | 18 (handshake, drain, expiry, allowed-IPs, boundaries) |
-| SCM_RIGHTS fd passing (dedicated socket, `INTERNAL_WORKER_TUN_FD`)                            | `socket/fd_passing.rs`, `socket/worker.rs`            | 8 (transfer, CLOEXEC, EOF, orphan drain)               |
-| Session splice adapters                                                                       | `wg_tunnel/session.rs`                                | 3                                                      |
-| TUN adapters (macOS utun header)                                                              | `wg_tunnel/tun.rs`                                    | 5                                                      |
-| UDP bridge adapter (interim default)                                                          | `wg_tunnel/udp.rs`                                    | 2                                                      |
-| Data-plane selection                                                                          | `wg_tunnel::data_plane()`                             | 4                                                      |
-| Direct `HoprSession` splice                                                                   | `hopr/api.rs::open_wg_session`, runner step 6/8/11    | compile + adapter tests; e2e pending (risk #1)         |
-| Pump exit -> reconnect                                                                        | `Results::WgPumpExited`, `core/mod.rs`                | via pump exit tests                                    |
-| Ordered teardown (pump stops before `TearDownWg`)                                             | `TaskTracker` in core + runner                        | - (see storm test below)                               |
-| `SetupTunnel`/`TunnelReady` protocol                                                          | `event/mod.rs`                                        | serde round-trips                                      |
-| Root TUN provisioning                                                                         | `routing/tun.rs`, `routing/{linux,macos}.rs`          | root-gated (below)                                     |
-| DNS: resolvectl -> resolvconf fallback (Linux), scutil key (macOS), restore guard             | `routing/dns.rs`                                      | 7 argv/script builder tests                            |
-| IPv6 blackholes                                                                               | `routing/ipv6_blackhole.rs`                           | 2 (wg-quick verbatim argv)                             |
-| Crash-recovery sweep (state file + startup sweep)                                             | `routing/sweep.rs`, root `daemon()`                   | 7                                                      |
-| `listen_port` deprecation (accept + warn + ignore)                                            | `config/v6.rs`, `documented-config.toml`              | 1                                                      |
-| CI/packaging: no wireguard-tools/resolvconf, deny.toml allows neptun source, diagrams updated | `.github/workflows/pr.yml`, `deny.toml`, `docs/*.mmd` | cargo-deny green                                       |
+| Piece                                                                                         | Where                                                 | Tests                                                                                                           |
+| --------------------------------------------------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| In-process keygen (x25519-dalek)                                                              | `gnosis_vpn-lib/src/wireguard.rs`                     | RFC 7748 KAT, base64 round-trip                                                                                 |
+| `WgTunnel` engine + pump                                                                      | `wg_tunnel/{tunnel,pump}.rs`                          | handshake, drain, expiry, allowed-IPs (v4+v6), boundaries, send-timeout/fatal-write, pump+splice-adapter duplex |
+| SCM_RIGHTS fd passing (dedicated socket, `INTERNAL_WORKER_TUN_FD`)                            | `socket/fd_passing.rs`, `socket/worker.rs`            | 8 (transfer, CLOEXEC, EOF, orphan drain)                                                                        |
+| Session splice adapters                                                                       | `wg_tunnel/session.rs`                                | 3                                                                                                               |
+| TUN adapters (macOS utun header)                                                              | `wg_tunnel/tun.rs`                                    | 5                                                                                                               |
+| UDP bridge adapter (interim default)                                                          | `wg_tunnel/udp.rs`                                    | 2                                                                                                               |
+| Data-plane selection                                                                          | `wg_tunnel::data_plane()`                             | 4                                                                                                               |
+| Direct `HoprSession` splice                                                                   | `hopr/api.rs::open_wg_session`, runner step 6/8/11    | compile + adapter tests; e2e pending (risk #1)                                                                  |
+| Pump exit -> reconnect                                                                        | `Results::WgPumpExited`, `core/mod.rs`                | via pump exit tests                                                                                             |
+| Ordered teardown (pump stops before `TearDownWg`)                                             | `TaskTracker` in core + runner                        | - (see storm test below)                                                                                        |
+| `SetupTunnel`/`TunnelReady` protocol                                                          | `event/mod.rs`                                        | serde round-trips                                                                                               |
+| Root TUN provisioning                                                                         | `routing/tun.rs`, `routing/{linux,macos}.rs`          | root-gated (below)                                                                                              |
+| DNS: resolvectl -> resolvconf fallback (Linux), scutil key (macOS), restore guard             | `routing/dns.rs`                                      | 7 argv/script builder tests                                                                                     |
+| IPv6 blackholes                                                                               | `routing/ipv6_blackhole.rs`                           | 2 (wg-quick verbatim argv)                                                                                      |
+| Crash-recovery sweep (state file + startup sweep)                                             | `routing/sweep.rs`, root `daemon()`                   | 7                                                                                                               |
+| `listen_port` deprecation (accept + warn + ignore)                                            | `config/v6.rs`, `documented-config.toml`              | 1                                                                                                               |
+| CI/packaging: no wireguard-tools/resolvconf, deny.toml allows neptun source, diagrams updated | `.github/workflows/pr.yml`, `deny.toml`, `docs/*.mmd` | cargo-deny green                                                                                                |
 
 ## Runtime switch
 
@@ -117,9 +117,38 @@ Repeat sections 1-3 with `GNOSISVPN_WG_DATAPLANE=splice`, plus:
 - fd-passing child-process integration test across the env-var handshake (unit
   tests cover the socketpair layer; the spawn wiring is exercised only e2e
   today).
-- Declare a workspace `rust-version` (NepTUN needs >= 1.89; toolchain pins
-  1.94).
 - External installer repo: drop wireguard-tools / wireguard-go install
   requirements.
 - Rekey/expiry timing against a real `Tunn` needs upstream clock injection;
   currently delegated to NepTUN's own tests + the expiry soak above.
+
+Done since the initial handoff: the workspace `rust-version` is declared (`1.94`,
+inherited by all member crates); the pump's `SEND_TIMEOUT` wedged-write / fatal-write
+branches, the composed pump+splice-adapter path over a `tokio::io::duplex`, and IPv6
+allowed-IPs parsing + ingress filtering now have unit coverage.
+
+## Known lifecycle edge cases to watch during the reconnect-storm pass
+
+These are narrow, low-severity timing windows found by code review. They self-heal
+or are theoretical, but the section-2 reconnect storm is where they would surface:
+
+- **Pump death during `Connecting`.** `WgPumpExited` only triggers an immediate
+  reconnect from the `Connected` phase (`core/mod.rs`); if the pump dies after the
+  step-10 ping passes but before the phase flips to `Connected`, the event is logged
+  and dropped, and recovery falls back to the tunnel-ping health check (slower, but
+  it does recover). Watch for a connection that reports Connected with no traffic and
+  only recovers after the first ping-failure threshold.
+- **Orphaned blocking `recv_tun_fd`.** The worker receives the TUN fd via a blocking
+  `recvmsg` on a `spawn_blocking` task under a process-global mutex
+  (`socket/worker.rs`). If a connect is cancelled while that task is parked waiting
+  for the fd (cancel firing before root sends it), the blocking thread is not
+  cancelled and can consume the next connection's fd, then hold the mutex while the
+  reconnect's own `recv_tun_fd` waits behind it. `recv_latest_fd` only drains
+  _already-delivered_ orphaned fds, not a wait parked before delivery. Symptom in the
+  storm: a reconnect that hangs in `prepare_pump` with no fd. If observed, the fix is
+  a bounded read timeout on the fd socket (must exceed root's worst-case setup time)
+  or an async, cancellable receive instead of `spawn_blocking`.
+
+`force_reconnect` now clears pending root responders alongside the pump-task swap,
+matching `disconnect_from_connection`, so a WAN-flap reconnect mid-`SetupTunnel` no
+longer leaves stale responder entries behind.
