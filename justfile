@@ -1,3 +1,10 @@
+default:
+    just --list
+
+# run root binary locally with a config file and Blokli URL
+run-local config_file blokli_url binary="./target/release/gnosis_vpn-root" worker_binary="./target/release/gnosis_vpn-worker" rust_log="info":
+    sudo RUST_LOG="{{ rust_log }}" "{{ binary }}" --config-path "{{ config_file }}" --hopr-blokli-url "{{ blokli_url }}" --worker-binary "{{ worker_binary }}"
+
 # build static linux binary (x86_64)
 build:
     nix build -L .#binary-gnosis_vpn-x86_64-linux
@@ -93,11 +100,11 @@ system-tests test_binary="gnosis_vpn-system_tests":
     else
         echo "Resolved home for user ${worker_user}: ${res_worker_home}"
     fi
-    
+
     # Create worker home directory
     sudo mkdir -p "${worker_config_dir}" "${config_dir}" "${state_dir}" "${runtime_dir}"
-    
-    # Moves the ID, password, safe, and config into the worker's config directory 
+
+    # Moves the ID, password, safe, and config into the worker's config directory
     printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.id" > /dev/null
     printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.pass" > /dev/null
     printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.safe" > /dev/null
