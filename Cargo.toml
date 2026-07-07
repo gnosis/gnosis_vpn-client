@@ -3,9 +3,10 @@ members  = ["gnosis_vpn*"]
 resolver = "2"
 
 [workspace.package]
-edition = "2024"
-license = "LGPL-3.0"
-version = "0.91.1"
+edition      = "2024"
+license      = "LGPL-3.0"
+rust-version = "1.94"
+version      = "0.91.1"
 
 [workspace.metadata.crane]
 name = "gnosis_vpn"
