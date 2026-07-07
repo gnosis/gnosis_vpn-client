@@ -119,6 +119,7 @@
             extraFormatters = {
               programs.deno.enable = true;
               settings.formatter.deno.excludes = [
+                "*.md"
                 "*.toml"
                 "*.yml"
                 "*.yaml"
