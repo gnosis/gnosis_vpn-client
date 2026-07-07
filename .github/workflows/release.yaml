@@ -32,7 +32,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15 # Depot Apple Silicon M2, 8 CPUs, 24 GB RAM, 400 GB SSD
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@9d3880d21d35d3ee6d3bc5cde6b62e91a84b56d8 # build-binaries-v3
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # build-binaries-v3.1.1
     permissions:
       contents: read
       id-token: write
@@ -43,6 +43,8 @@ jobs:
       cachix_cache_name: gnosis-vpn-client
       build_command: ${{ matrix.build_command }}
       binary: gnosis_vpn-client
+      gcp_workload_identity_provider: projects/656686060169/locations/global/workloadIdentityPools/gnosisvpn-gh-pool/providers/github-provider
+      gcp_service_account: download-gnosisvpn-gh-sa@gnosisvpn-production.iam.gserviceaccount.com
       runner: ${{ matrix.runner }}
       timeout_minutes: 240
     secrets:
@@ -58,9 +60,10 @@ jobs:
     runs-on: depot-ubuntu-22.04-4
     permissions:
       contents: write
+      id-token: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@9d3880d21d35d3ee6d3bc5cde6b62e91a84b56d8 # release-version-v5
+        uses: hoprnet/hopr-workflows/actions/release-version@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # release-version-v5.1.1
         with:
           source_branch: ${{ github.ref_name }}
           file: Cargo.toml
@@ -71,7 +74,8 @@ jobs:
           zulip_email: ${{ secrets.ZULIP_EMAIL }}
           zulip_channel: GnosisVPN
           zulip_topic: Releases
-          gcp_service_account: ${{ secrets.GCP_SA_GITHUB_ACTIONS }}
+          gcp_workload_identity_provider: projects/656686060169/locations/global/workloadIdentityPools/gnosisvpn-gh-pool/providers/github-provider
+          gcp_service_account: download-gnosisvpn-gh-sa@gnosisvpn-production.iam.gserviceaccount.com
           gcp_artifact_package: gnosis_vpn-client
           github_app_private_key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
           github_app_client_id: ${{ secrets.GH_APP_GNOSISVPN_CLIENT_ID }}
