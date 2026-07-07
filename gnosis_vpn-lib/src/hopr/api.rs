@@ -62,6 +62,7 @@ impl Hopr {
             cfg,
             keys,
             blokli_url.map(|u| u.to_string()),
+            None, // blokli_dns_override
             Some(blokli_config),
             init_visitor,
         )
@@ -394,9 +395,15 @@ impl Hopr {
         &self,
         sizing: edgli::strategy::IncentiveConfiguration,
     ) -> Result<AbortHandle, HoprError> {
-        let cfg = edgli::strategy::default_strategy_cfg(&self.edgli, &sizing)
+        let mut cfg = edgli::strategy::default_strategy_cfg(&self.edgli, &sizing)
             .await
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
+        match cfg.strategies.first_mut() {
+            Some(edgli::strategy::EdgeStrategyKind::ChannelLifecycle(lc)) => {
+                lc.selector = edgli::strategy::SelectorProfile::LowLatency;
+            }
+            None => tracing::warn!("default_strategy_cfg returned no strategies; LowLatency selector not applied"),
+        }
         self.edgli
             .run_reactor_from_cfg(cfg)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))

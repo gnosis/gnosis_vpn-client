@@ -56,6 +56,11 @@ path    = { hops = 1 }
 # disabled) until hopr-lib supports PIX; set to "30s" once that lands.
 # session_pseudonym_ttl = "30s"
 
+# path_planner_min_ack_rate - minimum acknowledgement rate [0.0, 1.0] a path must
+# sustain to be considered by the latency path planner. Paths below this threshold are
+# skipped. Lower values accept noisier paths; higher values are more selective.
+# path_planner_min_ack_rate = 0.1
+
 # determine specific connection parameters for ephemeral bridge connection
 # [connection.bridge]
 # capabilities = [ "segmentation", "retransmission", "retransmission_ack_only", "no_rate_control" ]

@@ -28,7 +28,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15 # Depot Apple Silicon M2, 8 CPUs, 24 GB RAM, 400 GB SSD
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@eedb4b7701714299852ca5243f1544b817653f33 # build-binaries-v3
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # build-binaries-v3.1.1
     permissions:
       contents: read
       id-token: write
@@ -39,6 +39,8 @@ jobs:
       cachix_cache_name: gnosis-vpn-client
       build_command: ${{ matrix.build_command }}
       binary: gnosis_vpn-client
+      gcp_workload_identity_provider: projects/656686060169/locations/global/workloadIdentityPools/gnosisvpn-gh-pool/providers/github-provider
+      gcp_service_account: download-gnosisvpn-gh-sa@gnosisvpn-production.iam.gserviceaccount.com
       runner: ${{ matrix.runner }}
       timeout_minutes: 240
     secrets:
