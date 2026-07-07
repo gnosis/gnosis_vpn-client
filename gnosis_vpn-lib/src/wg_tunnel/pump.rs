@@ -668,4 +668,93 @@ mod tests {
         pump.abort();
         driver.abort();
     }
+
+    /// The full splice path exactly as the runner wires it (runner.rs:197-201):
+    /// the pump's network side is the production `SessionSender`/`SessionReceiver`
+    /// over a `tokio::io::split` of a byte-stream session, here a `tokio::io::duplex`
+    /// standing in for the spliced `HoprSession`. Unlike the mpsc-backed peer test,
+    /// this proves the real adapters carry whole WireGuard datagrams through the
+    /// pump loop's `send`/`recv` calls.
+    ///
+    /// The exchange is kept strictly lock-step so the byte duplex never coalesces
+    /// two datagrams into one read (the unresolved spec risk #1, which this test
+    /// deliberately does not depend on): the server is driven inline, one datagram
+    /// per read, and the application packet is injected only after the initiator's
+    /// post-handshake keepalive confirms the handshake completed with nothing
+    /// queued - so every pump write is a solitary datagram.
+    #[tokio::test]
+    async fn pump_carries_data_over_the_session_splice_adapters() {
+        use crate::wg_tunnel::{SessionReceiver, SessionSender};
+
+        let client_secret = StaticSecret::random();
+        let server_secret = StaticSecret::random();
+        let client_pub = BASE64_STANDARD.encode(PublicKey::from(&client_secret).to_bytes());
+        let server_pub = BASE64_STANDARD.encode(PublicKey::from(&server_secret).to_bytes());
+        let client_priv = BASE64_STANDARD.encode(client_secret.to_bytes());
+        let server_priv = BASE64_STANDARD.encode(server_secret.to_bytes());
+        let all_v4 = ["0.0.0.0/0".parse().unwrap()];
+
+        let client = WgTunnel::new(&client_priv, &server_pub, None, &all_v4).unwrap();
+        let mut server = WgTunnel::new(&server_priv, &client_pub, None, &all_v4).unwrap();
+
+        // The byte-stream session stand-in, split into halves exactly like the runner.
+        let (client_side, server_side) = tokio::io::duplex(crate::wg_tunnel::MAX_FRAME * 4);
+        let (client_read, client_write) = tokio::io::split(client_side);
+        let net_tx = SessionSender::new(client_write);
+        let net_rx = SessionReceiver::new(client_read);
+
+        let (tun_in_tx, tun_in_rx) = channel::<Vec<u8>>(16);
+        let (tun_out_tx, mut tun_out_rx) = channel::<Vec<u8>>(16);
+
+        let pump = tokio::spawn(run(client, net_tx, net_rx, ChannelTx(tun_out_tx), ChannelRx(tun_in_rx)));
+
+        // Drive the server inline over the raw session bytes so ordering is fully
+        // controlled and each `recv` returns exactly one datagram.
+        let (server_read, server_write) = tokio::io::split(server_side);
+        let mut srv_rx = SessionReceiver::new(server_read);
+        let mut srv_tx = SessionSender::new(server_write);
+        let mut buf = vec![0u8; crate::wg_tunnel::MAX_FRAME];
+
+        async fn one<'a>(rx: &mut impl NetworkReceiver, buf: &'a mut [u8]) -> &'a [u8] {
+            let n = tokio::time::timeout(Duration::from_secs(5), rx.recv(buf))
+                .await
+                .expect("datagram before timeout")
+                .expect("recv ok")
+                .expect("a datagram, not EOF");
+            &buf[..n]
+        }
+
+        // 1. handshake initiation -> response.
+        let init = one(&mut srv_rx, &mut buf).await.to_vec();
+        let handshake = server.decapsulate(&init).expect("server handshake");
+        assert_eq!(handshake.to_network.len(), 1, "one handshake response datagram");
+        srv_tx.send(&handshake.to_network[0]).await.unwrap();
+
+        // 2. the initiator's post-handshake keepalive: proof the handshake is
+        //    complete and nothing is queued. Decrypts to no tunnel packet.
+        let keepalive = one(&mut srv_rx, &mut buf).await.to_vec();
+        let ka_out = server.decapsulate(&keepalive).expect("server keepalive");
+        assert!(ka_out.to_tun.is_empty() && ka_out.to_network.is_empty());
+
+        // 3. now inject an application packet; it encrypts to a single datagram.
+        let up_packet = ipv4_packet([10, 0, 0, 2], [10, 128, 0, 1]);
+        tun_in_tx.send(up_packet.clone()).await.unwrap();
+        let data = one(&mut srv_rx, &mut buf).await.to_vec();
+        let up_out = server.decapsulate(&data).expect("server data");
+        assert_eq!(up_out.to_tun, vec![up_packet], "up packet delivered decrypted");
+
+        // 4. server replies; the pump must surface it on the client's TUN.
+        let down_packet = ipv4_packet([10, 128, 0, 1], [10, 0, 0, 2]);
+        let reply = server
+            .encapsulate(&down_packet)
+            .expect("server encap")
+            .expect("datagram");
+        srv_tx.send(&reply).await.unwrap();
+        let received = tokio::time::timeout(Duration::from_secs(5), tun_out_rx.recv())
+            .await
+            .expect("down packet before timeout");
+        assert_eq!(received, Some(down_packet));
+
+        pump.abort();
+    }
 }
