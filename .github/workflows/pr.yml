@@ -36,7 +36,7 @@ jobs:
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
             build_debug_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin-dev
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@9d3880d21d35d3ee6d3bc5cde6b62e91a84b56d8 # build-binaries-v3
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # build-binaries-v3.1.1
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     permissions:
       contents: read
@@ -49,6 +49,8 @@ jobs:
       build_command: ${{ matrix.build_command }}
       build_debug_command: ${{ matrix.build_debug_command }}
       binary: gnosis_vpn-client
+      gcp_workload_identity_provider: projects/656686060169/locations/global/workloadIdentityPools/gnosisvpn-gh-pool/providers/github-provider
+      gcp_service_account: download-gnosisvpn-gh-sa@gnosisvpn-production.iam.gserviceaccount.com
       runner: ${{ matrix.runner }}
       timeout_minutes: 240
       enabled: ${{ matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label) }}
@@ -64,7 +66,7 @@ jobs:
     runs-on: depot-ubuntu-22.04-4
     steps:
       - name: Run checks
-        uses: hoprnet/hopr-workflows/actions/nix-action@9d3880d21d35d3ee6d3bc5cde6b62e91a84b56d8 # nix-action-v1
+        uses: hoprnet/hopr-workflows/actions/nix-action@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # nix-action-v1.1.3
         with:
           source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
           cachix_cache_name: gnosis-vpn-client
@@ -93,7 +95,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+        uses: hoprnet/hopr-workflows/actions/setup-nix@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # setup-nix-v2.0.2
         with:
           cachix_cache_name: gnosis-vpn-client
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
