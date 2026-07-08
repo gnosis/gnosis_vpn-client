@@ -1218,8 +1218,14 @@ impl DaemonState {
                         error = ?std::io::Error::last_os_error(),
                         "failed to read FD flags on child socket; CLOEXEC may remain set"
                     );
-                } else {
-                    libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+                } else if libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    // If clearing CLOEXEC fails the worker would inherit a fd that is
+                    // closed on exec, silently killing the control or data plane.
+                    tracing::warn!(
+                        socket = label,
+                        error = ?std::io::Error::last_os_error(),
+                        "failed to clear CLOEXEC on child socket; worker may not inherit it"
+                    );
                 }
             }
         }

@@ -34,11 +34,15 @@ const SCRATCH_LEN: usize = super::MAX_FRAME + WG_DATA_OVERHEAD;
 /// `to_network` holds WireGuard datagrams that must be written back to the
 /// session (handshake responses and any packets flushed by the post-handshake
 /// drain). `to_tun` holds decrypted IP packets destined for the local TUN device
-/// whose source address passed the allowed-IPs check.
+/// whose source address passed the allowed-IPs check. `decap_failed` records that
+/// the inbound datagram was dropped by a WireGuard error (bad tag, replay, no
+/// current session) so the pump can watch for a stream that has desynced - e.g. a
+/// transport that coalesced two datagrams into one read.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Outputs {
     pub to_network: Vec<Vec<u8>>,
     pub to_tun: Vec<Vec<u8>>,
+    pub decap_failed: bool,
 }
 
 /// The result of a timer tick: WireGuard datagrams to send (handshake
@@ -69,6 +73,8 @@ pub trait TunnelEngine {
 /// loop can reuse the buffer across iterations.
 enum Step {
     Done,
+    /// The datagram was dropped by a WireGuard decapsulation error.
+    Failed,
     Network(Vec<u8>),
     Tunnel(Vec<u8>, IpAddr),
 }
@@ -127,7 +133,7 @@ impl WgTunnel {
                 // (log-and-continue); a persistently failing peer still
                 // self-heals via the handshake-expiry path in `update_timers`.
                 tracing::debug!(?e, "dropping inbound datagram: wireguard decapsulate error");
-                Step::Done
+                Step::Failed
             }
         }
     }
@@ -164,6 +170,10 @@ impl TunnelEngine for WgTunnel {
         loop {
             match step {
                 Step::Done => break,
+                Step::Failed => {
+                    outputs.decap_failed = true;
+                    break;
+                }
                 Step::Network(datagram) => {
                     // Post-handshake drain: NepTUN documents that after a
                     // WriteToNetwork the caller must keep decapsulating with an

@@ -24,6 +24,17 @@ const TIMER_PERIOD: Duration = Duration::from_millis(250);
 /// write.
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Number of inbound datagrams over which the decapsulation-failure rate is
+/// evaluated. Small enough to react within a few seconds of traffic, large enough
+/// that isolated replays/reorderings over the mixnet never trip the guard.
+const DECAP_FAILURE_WINDOW: u32 = 256;
+
+/// Reconnect if more than this fraction (expressed as `1/N`th's numerator over the
+/// window) of a window's datagrams failed to decapsulate. `> window / 2` means a
+/// majority failing - far above the near-zero failure rate of a healthy stream, so
+/// only a genuinely desynced session (e.g. coalesced frames) trips it.
+const DECAP_FAILURE_MAJORITY_DIVISOR: u32 = 2;
+
 /// Writes whole WireGuard datagrams to the session. Each call MUST become a
 /// single session write so datagram boundaries survive as message frames.
 #[async_trait::async_trait]
@@ -70,6 +81,10 @@ pub enum PumpExit {
     NetworkClosed,
     /// The TUN side closed.
     TunClosed,
+    /// Inbound datagrams failed to decapsulate at a rate high enough that the
+    /// session stream is presumed desynced (e.g. a transport that coalesced two
+    /// datagrams into one read); the caller should reconnect a fresh session.
+    DecapStalled,
 }
 
 /// Outcome of a bounded write to an endpoint.
@@ -143,6 +158,12 @@ where
     let mut timer = tokio::time::interval_at(tokio::time::Instant::now() + TIMER_PERIOD, TIMER_PERIOD);
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+    // Sliding window over inbound datagrams: if a majority fail to decapsulate the
+    // session stream has desynced (a healthy stream fails on nothing but the odd
+    // replay), so tear down for a fresh session rather than degrade silently.
+    let mut decap_window_total: u32 = 0;
+    let mut decap_window_failures: u32 = 0;
+
     loop {
         tokio::select! {
             // Outbound: a plaintext IP packet from the local TUN device.
@@ -166,6 +187,22 @@ where
                     Some(n) => {
                         debug_assert!(n <= net_buf.len(), "NetworkReceiver reported oversized read");
                         let outputs = engine.decapsulate(&net_buf[..n])?;
+                        decap_window_total += 1;
+                        if outputs.decap_failed {
+                            decap_window_failures += 1;
+                        }
+                        if decap_window_total >= DECAP_FAILURE_WINDOW {
+                            if decap_window_failures * DECAP_FAILURE_MAJORITY_DIVISOR > decap_window_total {
+                                tracing::warn!(
+                                    failures = decap_window_failures,
+                                    window = decap_window_total,
+                                    "inbound decapsulation-failure rate too high - session stream desynced, reconnecting"
+                                );
+                                return Ok(PumpExit::DecapStalled);
+                            }
+                            decap_window_total = 0;
+                            decap_window_failures = 0;
+                        }
                         for datagram in outputs.to_network {
                             if let Sent::Closed = send_network(&mut net_tx, &datagram).await? {
                                 return Ok(PumpExit::NetworkClosed);
@@ -282,6 +319,9 @@ mod tests {
         init: Vec<u8>,
         decap: VecDeque<Outputs>,
         ticks: VecDeque<TimerTick>,
+        /// When set, every `decapsulate` reports a dropped datagram, standing in for
+        /// a desynced/coalesced session stream.
+        decap_always_fails: bool,
     }
     impl TunnelEngine for ScriptedEngine {
         fn handshake_initiation(&mut self) -> Result<Vec<u8>, Error> {
@@ -293,6 +333,12 @@ mod tests {
             Ok(Some(packet.to_vec()))
         }
         fn decapsulate(&mut self, _datagram: &[u8]) -> Result<Outputs, Error> {
+            if self.decap_always_fails {
+                return Ok(Outputs {
+                    decap_failed: true,
+                    ..Default::default()
+                });
+            }
             Ok(self.decap.pop_front().unwrap_or_default())
         }
         fn update_timers(&mut self) -> Result<TimerTick, Error> {
@@ -337,6 +383,7 @@ mod tests {
             decap: VecDeque::from([Outputs {
                 to_network: vec![],
                 to_tun: vec![packet.clone()],
+                ..Default::default()
             }]),
             ..Default::default()
         };
@@ -411,6 +458,40 @@ mod tests {
         tun_in_tx.send(packet.clone()).await.unwrap();
         assert_eq!(net_out.recv().await, Some(packet));
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn pump_reconnects_when_decapsulation_failure_rate_is_high() {
+        // A stream where every inbound datagram fails to decapsulate (as a coalesced
+        // or otherwise desynced session would) trips the failure-rate guard and exits
+        // with DecapStalled so the caller reconnects, rather than silently dropping
+        // all traffic forever.
+        let engine = ScriptedEngine {
+            init: vec![1],
+            decap_always_fails: true,
+            ..Default::default()
+        };
+        // net_out is kept alive so the up-front handshake write succeeds.
+        let (net_tx, _net_out) = channel(8);
+        let (tun_out_tx, _tun_out) = channel(8);
+        let (net_in_tx, net_in) = channel::<Vec<u8>>(512);
+        let (_keep_tun_in, tun_in) = channel::<Vec<u8>>(8);
+
+        let handle = tokio::spawn(run(
+            engine,
+            ChannelTx(net_tx),
+            ChannelRx(net_in),
+            ChannelTx(tun_out_tx),
+            ChannelRx(tun_in),
+        ));
+        // Feed more than a full window; every datagram fails, so the guard fires.
+        for _ in 0..(super::DECAP_FAILURE_WINDOW + 16) {
+            if net_in_tx.send(vec![0xde, 0xad]).await.is_err() {
+                break;
+            }
+        }
+        let exit = handle.await.expect("pump task joins").expect("pump ok");
+        assert_eq!(exit, PumpExit::DecapStalled);
     }
 
     #[tokio::test]

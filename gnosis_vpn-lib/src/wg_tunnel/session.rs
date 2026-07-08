@@ -132,4 +132,32 @@ mod tests {
             assert_eq!(&buf[..n], &payload[..]);
         }
     }
+
+    /// Two datagrams written back-to-back before a single `recv` are COALESCED into
+    /// one read: a byte-duplex transport does not preserve datagram boundaries by
+    /// itself. This documents spec risk #1 - the pump's one-datagram-per-recv
+    /// contract holds only because a healthy `HoprSession` delivers one application
+    /// frame per read, not because this adapter enforces it. If a real session ever
+    /// coalesces under load, the pump's decapsulation-failure guard reconnects a
+    /// fresh session rather than corrupting traffic silently.
+    #[tokio::test]
+    async fn back_to_back_writes_can_coalesce_into_one_read() {
+        let (client, server) = tokio::io::duplex(4096);
+        let (_c_r, c_w) = tokio::io::split(client);
+        let (s_r, _s_w) = tokio::io::split(server);
+        let mut sender = SessionSender::new(c_w);
+        let mut receiver = SessionReceiver::new(s_r);
+
+        // Both datagrams are written (and buffered) before any read is issued.
+        sender.send(&[1u8; 8]).await.unwrap();
+        sender.send(&[2u8; 8]).await.unwrap();
+
+        let mut buf = vec![0u8; 2048];
+        let n = receiver.recv(&mut buf).await.unwrap().expect("data");
+        // The single read returns both datagrams concatenated, proving the boundary
+        // is not preserved by the adapter.
+        assert_eq!(n, 16);
+        assert_eq!(&buf[..8], &[1u8; 8]);
+        assert_eq!(&buf[8..16], &[2u8; 8]);
+    }
 }

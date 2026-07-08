@@ -7,15 +7,12 @@ use edgli::{
         api::{
             chain::{AccountSelector, ChainReadAccountOperations},
             node::HasChainApi,
-            types::{
-                internal::channels::ChannelStatus,
-                primitive::{prelude::Address, traits::ToHex},
-            },
+            types::{internal::channels::ChannelStatus, primitive::prelude::Address},
         },
         errors::HoprLibError,
         exports::{
             network::types::types::IpProtocol,
-            transport::{SESSION_MTU, SURB_SIZE, SessionId, SessionTarget, SurbBalancerConfig},
+            transport::{SESSION_MTU, SURB_SIZE, SessionTarget},
         },
     },
 };
@@ -299,54 +296,6 @@ impl Hopr {
         }
 
         Ok(())
-    }
-
-    #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub async fn list_sessions(&self, protocol: IpProtocol) -> Vec<SessionClientMetadata> {
-        tracing::debug!("list hopr sessions");
-        self.open_listeners
-            .as_ref()
-            .0
-            .iter()
-            .filter(|content| content.key().0 == protocol)
-            .map(|content| {
-                let key = content.key();
-                let entry = content.value();
-                SessionClientMetadata {
-                    protocol,
-                    bound_host: key.1,
-                    target: entry.target.to_string(),
-                    forward_path: entry.forward_path,
-                    return_path: entry.return_path,
-                    destination: entry.destination,
-                    hopr_mtu: SESSION_MTU,
-                    surb_len: SURB_SIZE,
-                    active_clients: entry.get_clients().iter().map(|e| e.key().to_string()).collect(),
-                    max_client_sessions: entry.max_client_sessions,
-                    max_surb_upstream: entry.max_surb_upstream,
-                    response_buffer: entry.response_buffer,
-                    session_pool: entry.session_pool,
-                }
-            })
-            .collect::<Vec<_>>()
-    }
-
-    #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub async fn adjust_session(&self, balancer_cfg: SurbBalancerConfig, client: String) -> Result<(), HoprError> {
-        tracing::debug!("adjust hopr session");
-        let session_id = SessionId::from_hex(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
-
-        // NOTE: the live SURB balancer is updated via the configurator below, but the
-        // cached `max_surb_upstream` and `response_buffer` snapshots stored in
-        // `open_listeners` (computed once at session creation) are not refreshed —
-        // so list_sessions continues to report the originally-configured values for
-        // adjusted sessions.
-        self.open_listeners
-            .find_configurator(&session_id)
-            .ok_or(HoprError::SessionNotFound)?
-            .update_surb_balancer_config(balancer_cfg)
-            .await
-            .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]

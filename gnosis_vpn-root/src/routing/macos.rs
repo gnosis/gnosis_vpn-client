@@ -87,6 +87,21 @@ impl StaticRouter {
             .unwrap_or_else(|| wireguard::WG_INTERFACE.to_string())
     }
 
+    /// Snapshot the current side effects into the crash-recovery state file. Called
+    /// after setup and after every bypass-route change so the persisted set - which a
+    /// SIGKILLed root is swept against at next start - always reflects reality.
+    fn persist_teardown_state(&self) {
+        let Some(interface_name) = self.wg_interface_name.clone() else {
+            return;
+        };
+        sweep::record(&sweep::TeardownState {
+            interface_name,
+            dns_mechanism_applied: self.dns_mechanism,
+            blackholes_added: true,
+            bypass_routes: self.active_bypass_routes.clone(),
+        });
+    }
+
     async fn setup_vpn_routes(&self, iface: &str) -> Result<(), Error> {
         for (net, prefix) in VPN_SPLIT_ROUTES {
             let cidr = format!("{}/{}", net, prefix);
@@ -210,11 +225,7 @@ impl Routing for StaticRouter {
             None => None,
         };
         // Record what was applied so a SIGKILLed root can be swept at next start.
-        sweep::record(&sweep::TeardownState {
-            interface_name: interface_name.clone(),
-            dns_mechanism_applied: self.dns_mechanism,
-            blackholes_added: true,
-        });
+        self.persist_teardown_state();
 
         self.wan_info = Some(wan_route);
         tracing::info!("routing is ready (macOS static)");
@@ -278,6 +289,7 @@ impl Routing for StaticRouter {
         let _ = self.route_ops.route_del(&dest, &device).await;
         self.route_ops.route_add(&dest, gateway.as_deref(), &device).await?;
         self.active_bypass_routes.push((dest, device));
+        self.persist_teardown_state();
         Ok(())
     }
 
@@ -291,6 +303,7 @@ impl Routing for StaticRouter {
             tracing::warn!(%e, %ip, "failed to remove dynamic peer bypass route");
         }
         self.active_bypass_routes.retain(|(d, _)| d != &dest);
+        self.persist_teardown_state();
         Ok(())
     }
 }

@@ -1,11 +1,15 @@
 //! Crash-recovery sweep for tunnel side effects that survive an unclean root exit.
 //!
 //! Routes bound to the TUN interface vanish with root's fd when the process dies,
-//! but the IPv6 blackhole routes and the DNS diversion (resolvectl/resolvconf on
-//! Linux, the `State:/Network/Service/<utunN>/DNS` scutil key on macOS) do not.
-//! Tunnel setup records them in a small state file which clean teardown deletes;
-//! if the file is still present at the next daemon start, the recorded side
-//! effects are removed best-effort.
+//! but several side effects do not: the IPv6 blackhole routes, the DNS diversion
+//! (resolvectl/resolvconf on Linux, the `State:/Network/Service/<utunN>/DNS` scutil
+//! key on macOS), the WAN-scoped bypass routes (peer `/32` + RFC1918, pinned to the
+//! physical device), and the killswitch firewall lockdown. Tunnel setup records the
+//! interface, DNS mechanism, blackhole status, and bypass routes in a small state
+//! file which clean teardown deletes; if the file is still present at the next
+//! daemon start, the recorded side effects are removed best-effort. The killswitch
+//! is reset unconditionally by name at every start, since its default-drop lockdown
+//! would otherwise leave the host with no connectivity after a crash.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +27,12 @@ pub struct TeardownState {
     pub dns_mechanism_applied: Option<dns::Mechanism>,
     /// Whether the IPv6 blackhole routes were added.
     pub blackholes_added: bool,
+    /// WAN-scoped bypass routes installed at setup and as peers are discovered:
+    /// `(dest_cidr, wan_device)`. Pinned to the physical device, so unlike TUN
+    /// routes they survive an unclean exit and must be removed explicitly. Defaults
+    /// to empty when reading a state file written before this field existed.
+    #[serde(default)]
+    pub bypass_routes: Vec<(String, String)>,
 }
 
 /// Preferred and fallback locations for the state file. Root can normally write
@@ -50,6 +60,12 @@ pub fn clear() {
 /// fd; only the IPv6 blackhole routes and the DNS diversion survive and are
 /// removed here, best-effort.
 pub async fn startup_sweep() {
+    // The killswitch default-drop firewall survives an unclean exit independently of
+    // the state file (and can outlive a lost state file), so reset it unconditionally
+    // by name first - otherwise a crashed root leaves the host firewalled off with no
+    // connectivity until the next successful connect.
+    reset_leftover_killswitch();
+
     let Some(state) = take_leftover_at(&candidate_paths()) else {
         return;
     };
@@ -57,6 +73,7 @@ pub async fn startup_sweep() {
         interface = %state.interface_name,
         dns_mechanism = ?state.dns_mechanism_applied,
         blackholes = state.blackholes_added,
+        bypass_routes = state.bypass_routes.len(),
         "found teardown state from an unclean exit - sweeping leftover tunnel side effects"
     );
     if state.blackholes_added {
@@ -65,8 +82,64 @@ pub async fn startup_sweep() {
     if let Some(mechanism) = state.dns_mechanism_applied {
         dns::restore(&state.interface_name, mechanism).await;
     }
+    remove_bypass_routes(&state.bypass_routes).await;
     tracing::info!("crash-recovery sweep complete");
 }
+
+/// Reset the killswitch firewall by its fixed anchor/table name. Idempotent and safe
+/// to call when nothing is installed, so it runs unconditionally at every start.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn reset_leftover_killswitch() {
+    match gnosis_vpn_lib::killswitch::Firewall::new() {
+        Ok(mut firewall) => {
+            if let Err(e) = firewall.reset_policy() {
+                tracing::warn!(%e, "failed to reset leftover killswitch at startup (continuing)");
+            }
+        }
+        Err(e) => tracing::warn!(%e, "failed to build firewall for startup killswitch reset (continuing)"),
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn reset_leftover_killswitch() {}
+
+/// Remove WAN-scoped bypass routes recorded by a previous root. Best-effort: a route
+/// that is already gone (or whose WAN device changed) just logs a warning.
+#[cfg(target_os = "macos")]
+async fn remove_bypass_routes(routes: &[(String, String)]) {
+    use super::route_ops::RouteOps;
+    let ops = super::route_ops_macos::DarwinRouteOps;
+    for (dest, device) in routes {
+        if let Err(e) = ops.route_del(dest, device).await {
+            tracing::warn!(%e, dest = %dest, "failed to remove leftover bypass route (continuing)");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn remove_bypass_routes(routes: &[(String, String)]) {
+    use super::route_ops::RouteOps;
+    if routes.is_empty() {
+        return;
+    }
+    let (connection, handle, _) = match rtnetlink::new_connection() {
+        Ok(conn) => conn,
+        Err(e) => {
+            tracing::warn!(%e, "failed to open netlink for bypass-route sweep (continuing)");
+            return;
+        }
+    };
+    tokio::spawn(connection);
+    let ops = super::route_ops_linux::NetlinkRouteOps::new(handle);
+    for (dest, device) in routes {
+        if let Err(e) = ops.route_del(dest, device).await {
+            tracing::warn!(%e, dest = %dest, device = %device, "failed to remove leftover bypass route (continuing)");
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+async fn remove_bypass_routes(_routes: &[(String, String)]) {}
 
 /// Persist `state` at the first writable candidate path.
 fn record_at(paths: &[PathBuf], state: &TeardownState) {
@@ -133,6 +206,7 @@ mod tests {
             interface_name: "utun8".to_string(),
             dns_mechanism_applied: Some(dns::Mechanism::Scutil),
             blackholes_added: true,
+            bypass_routes: vec![("35.213.7.172".to_string(), "en0".to_string())],
         }
     }
 
@@ -155,10 +229,33 @@ mod tests {
             interface_name: "wg0_gnosisvpn".to_string(),
             dns_mechanism_applied: None,
             blackholes_added: false,
+            bypass_routes: Vec::new(),
         };
         let json = serde_json::to_string(&state)?;
         let parsed: TeardownState = serde_json::from_str(&json)?;
         assert_eq!(parsed, state);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_state_without_bypass_routes_field_defaults_to_empty() -> anyhow::Result<()> {
+        // A state file written before the bypass_routes field existed must still
+        // parse (upgrade path), with bypass_routes defaulting to empty.
+        let mut value = serde_json::to_value(sample_state())?;
+        value
+            .as_object_mut()
+            .expect("state serializes to an object")
+            .remove("bypass_routes");
+        let parsed: TeardownState = serde_json::from_value(value)?;
+        assert!(parsed.bypass_routes.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn bypass_routes_survive_a_serde_round_trip() -> anyhow::Result<()> {
+        let state = sample_state();
+        let parsed: TeardownState = serde_json::from_str(&serde_json::to_string(&state)?)?;
+        assert_eq!(parsed.bypass_routes, state.bypass_routes);
         Ok(())
     }
 

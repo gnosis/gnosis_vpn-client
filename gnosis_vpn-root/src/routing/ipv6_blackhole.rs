@@ -65,10 +65,14 @@ async fn run_ip6(args: &[&str]) -> Result<(), gnosis_vpn_lib::shell_command_ext:
     Command::new("ip").args(args).run(Logs::Suppress).await
 }
 
-/// Add the blackhole routes. Best-effort.
+/// Add the blackhole routes. Idempotent (del-before-add) so a stale route left by an
+/// unclean exit never blocks setup. Best-effort.
 #[cfg(target_os = "macos")]
 pub async fn add() {
     for dst in BLACKHOLE_DESTINATIONS {
+        let mut del = Command::new("route");
+        del.args(macos_delete_args(dst));
+        let _ = del.run(Logs::Suppress).await;
         let mut cmd = Command::new("route");
         cmd.args(macos_add_args(dst));
         if let Err(e) = cmd.run(Logs::Suppress).await {

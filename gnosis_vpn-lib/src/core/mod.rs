@@ -22,11 +22,10 @@ use crate::connection;
 use crate::connection::destination::{Address, Destination};
 use crate::connection::pseudonym_cache::PseudonymCache;
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
-use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::route_health::{self, RouteHealth};
 use crate::worker_params::{self, WorkerParams};
-use crate::{balance, log_output, ticket_stats, wg_tunnel, wireguard};
+use crate::{balance, log_output, ticket_stats, wireguard};
 
 pub(crate) mod runner;
 
@@ -872,7 +871,7 @@ impl Core {
             }
 
             Results::ConnectionResult { res } => match (res, self.phase.clone()) {
-                (Ok(session), Phase::Connecting(mut conn)) => {
+                (Ok(_session), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     self.reconnecting_since = None;
                     conn.connected();
@@ -884,13 +883,8 @@ impl Core {
                         log_output::address(&conn.destination.address)
                     );
                     log_output::print_session_established(route.as_str());
-                    match wg_tunnel::data_plane() {
-                        // The monitor polls list_sessions for the local listener;
-                        // a spliced session has none - its pump task reports its
-                        // own death via WgPumpExited instead.
-                        wg_tunnel::DataPlane::UdpBridge => self.spawn_session_monitoring(session, results_sender),
-                        wg_tunnel::DataPlane::Splice => {}
-                    }
+                    // A spliced session has no local listener to poll; the pump task
+                    // reports its own death via WgPumpExited instead of a monitor.
                     self.spawn_tunnel_ping_probe(results_sender);
                     self.cancel_announced_peers.cancel();
                     self.cancel_announced_peers = self.cancel_on_shutdown.child_token();
@@ -929,17 +923,6 @@ impl Core {
                 self.ongoing_disconnections.retain(|c| c.wg_public_key != wg_public_key);
                 self.act_on_target(results_sender);
             }
-
-            Results::SessionMonitorFailed => match self.phase.clone() {
-                Phase::Connected(conn) => {
-                    tracing::warn!(%conn, "session monitor failed - reconnecting");
-                    self.reconnecting_since = Some(SystemTime::now());
-                    self.disconnect_from_connection(&conn, results_sender);
-                }
-                phase => {
-                    tracing::error!(?phase, "session monitor failed in unexpected phase");
-                }
-            },
 
             Results::WgPumpExited { reason } => match self.phase.clone() {
                 Phase::Connected(conn) => {
@@ -1658,20 +1641,6 @@ impl Core {
                         runner.start(results_sender).await;
                     })
                     .await;
-            });
-        }
-    }
-
-    fn spawn_session_monitoring(&self, session: SessionClientMetadata, results_sender: &mpsc::Sender<Results>) {
-        if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_connection.clone();
-            let results_sender = results_sender.clone();
-            tokio::spawn(async move {
-                cancel
-                    .run_until_cancelled(async move {
-                        runner::monitor_session(hopr, &session, results_sender).await;
-                    })
-                    .await
             });
         }
     }

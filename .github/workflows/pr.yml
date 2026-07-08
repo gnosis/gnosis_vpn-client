@@ -101,6 +101,8 @@ jobs:
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Install just
         uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2
+      - name: Run offline smoke-test suite
+        run: nix develop -c just smoke-test-check
       - name: Build binaries and system test
         run: |
           nix build .#binary-gnosis_vpn-system_tests
