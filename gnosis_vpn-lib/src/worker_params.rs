@@ -4,6 +4,7 @@ use edgli::hopr_lib::config::HoprLibConfig;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use url::Url;
 
 use std::net::Ipv4Addr;
@@ -103,7 +104,20 @@ impl WorkerParams {
                             "No HOPR identity pass provided - generating new one and storing alongside identity file"
                         );
                         let pw = identity::generate_pass();
-                        fs::write(&path, pw.as_bytes()).await.map_err(|e| {
+                        let mut file = fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .mode(0o600)
+                            .open(&path)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!(error = %e, ?path, "failed to create HOPR identity pass file");
+                                Error::IOFile {
+                                    path: path.clone(),
+                                    source: e,
+                                }
+                            })?;
+                        file.write_all(pw.as_bytes()).await.map_err(|e| {
                             tracing::error!(error = %e, ?path, "failed to write generated HOPR identity pass file");
                             Error::IOFile {
                                 path: path.clone(),
