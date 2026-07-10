@@ -816,7 +816,11 @@ impl DaemonState {
                     });
                     Ok(())
                 } else {
-                    let _ = resp.send(Response::WorkerOffline).map_err(|error| {
+                    let response = match self.shutdown_ongoing {
+                        Shutdown::None | Shutdown::RestartWorker => Response::WorkerRestarting,
+                        _ => Response::WorkerOffline,
+                    };
+                    let _ = resp.send(response).map_err(|error| {
                         tracing::error!(?error, "socket command response channel closed");
                     });
                     Ok(())
@@ -879,8 +883,13 @@ impl DaemonState {
                 route_health: None,
             })
             .collect();
+        let run_mode = match self.shutdown_ongoing {
+            // Shutdown::None with no worker means unexpected exit — root will auto-restart
+            Shutdown::None | Shutdown::RestartWorker => command::RunMode::Restarting,
+            _ => command::RunMode::NotRunning,
+        };
         Response::status(command::StatusResponse {
-            run_mode: command::RunMode::NotRunning,
+            run_mode,
             destinations,
             target_destination: self.target_dest_id.clone(),
             connecting: None,
@@ -898,7 +907,10 @@ impl DaemonState {
             | LibCommand::Disconnect
             | LibCommand::Balance
             | LibCommand::FundingTool(_)
-            | LibCommand::Telemetry => Ok(Response::WorkerOffline),
+            | LibCommand::Telemetry => Ok(match self.shutdown_ongoing {
+                Shutdown::None | Shutdown::RestartWorker => Response::WorkerRestarting,
+                _ => Response::WorkerOffline,
+            }),
             LibCommand::Ping => Ok(Response::Pong),
             LibCommand::Destinations => {
                 let mut ids: Vec<String> = self.config.destinations.keys().cloned().collect();
