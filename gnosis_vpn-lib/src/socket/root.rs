@@ -91,6 +91,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn process_cmd_returns_deserialization_error_on_invalid_response() -> anyhow::Result<()> {
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join("socket");
+        let listener_path = path.clone();
+
+        let server = tokio::spawn(async move {
+            let listener = tokio::net::UnixListener::bind(&listener_path).expect("bind");
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = String::new();
+                stream.read_to_string(&mut buf).await.expect("read");
+                stream.write_all(b"not valid json").await.expect("write");
+                stream.flush().await.expect("flush");
+            }
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let err = process_cmd(path.as_path(), &sample_command())
+            .await
+            .expect_err("invalid response should fail");
+
+        assert!(matches!(err, Error::Deserialization(_)));
+        server.await.expect("listener task");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn process_cmd_serializes_request_and_parses_response() -> anyhow::Result<()> {
         let tmp = tempdir().expect("tempdir");
         let path = tmp.path().join("socket");
