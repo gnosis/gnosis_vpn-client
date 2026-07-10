@@ -94,10 +94,9 @@ mod tests {
     async fn process_cmd_returns_deserialization_error_on_invalid_response() -> anyhow::Result<()> {
         let tmp = tempdir().expect("tempdir");
         let path = tmp.path().join("socket");
-        let listener_path = path.clone();
+        let listener = tokio::net::UnixListener::bind(&path).expect("bind");
 
         let server = tokio::spawn(async move {
-            let listener = tokio::net::UnixListener::bind(&listener_path).expect("bind");
             if let Ok((mut stream, _)) = listener.accept().await {
                 let mut buf = String::new();
                 stream.read_to_string(&mut buf).await.expect("read");
@@ -105,8 +104,6 @@ mod tests {
                 stream.flush().await.expect("flush");
             }
         });
-
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         let err = process_cmd(path.as_path(), &sample_command())
             .await
@@ -121,10 +118,9 @@ mod tests {
     async fn process_cmd_serializes_request_and_parses_response() -> anyhow::Result<()> {
         let tmp = tempdir().expect("tempdir");
         let path = tmp.path().join("socket");
-        let listener_path = path.clone();
+        let listener = tokio::net::UnixListener::bind(&path).expect("bind");
 
         let server = tokio::spawn(async move {
-            let listener = tokio::net::UnixListener::bind(&listener_path).expect("bind");
             if let Ok((mut stream, _)) = listener.accept().await {
                 let mut buf = String::new();
                 stream.read_to_string(&mut buf).await.expect("read");
@@ -139,8 +135,6 @@ mod tests {
                 stream.flush().await.expect("flush");
             }
         });
-
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         let resp = process_cmd(path.as_path(), &sample_command()).await.expect("response");
 
