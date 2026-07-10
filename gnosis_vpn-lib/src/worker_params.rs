@@ -213,7 +213,7 @@ fn log_path_diagnostics(path: &std::path::Path) {
         Ok(meta) => tracing::error!(
             uid = meta.uid(),
             gid = meta.gid(),
-            mode = format!("{:o}", meta.mode()),
+            mode = format!("{:o}", meta.mode() & 0o777),
             ?path,
             "pass file metadata"
         ),
@@ -228,7 +228,7 @@ fn log_path_diagnostics(path: &std::path::Path) {
         tracing::error!(
             uid = meta.uid(),
             gid = meta.gid(),
-            mode = format!("{:o}", meta.mode()),
+            mode = format!("{:o}", meta.mode() & 0o777),
             path = ?parent,
             "pass file parent directory metadata"
         );
