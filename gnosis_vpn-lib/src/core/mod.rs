@@ -536,6 +536,7 @@ impl Core {
 
                     WorkerCommand::Disconnect => {
                         self.target_destination = None;
+                        self.reconnecting_since = None;
                         self.cached_resolved_blokli_ips = Vec::new();
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
