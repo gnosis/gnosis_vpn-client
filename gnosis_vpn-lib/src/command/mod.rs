@@ -81,6 +81,7 @@ pub enum Response {
     StopClient(StopClientResponse),
     Destinations(Vec<String>),
     WorkerOffline,
+    WorkerRestarting,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -166,6 +167,8 @@ pub enum RunMode {
     },
     /// Shutting down edge client,
     Shutdown,
+    /// Worker process is not running but a restart is in progress
+    Restarting,
     /// Worker process is not running; only config-level information is available
     NotRunning,
 }
@@ -542,6 +545,7 @@ impl Display for RunMode {
                 Ok(())
             }
             RunMode::Shutdown => write!(f, "Shutting down"),
+            RunMode::Restarting => write!(f, "Worker restarting"),
             RunMode::NotRunning => write!(f, "Worker offline"),
         }
     }
