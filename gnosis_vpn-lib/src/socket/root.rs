@@ -16,7 +16,9 @@ pub enum Error {
     #[error("service not running")]
     ServiceNotRunning,
     #[error("failed serializing command: {0}")]
-    Serialization(#[from] serde_json::Error),
+    Serialization(serde_json::Error),
+    #[error("failed deserializing response: {0}")]
+    Deserialization(serde_json::Error),
     #[error("IO error: {0}")]
     IO(#[from] io::Error),
 }
@@ -26,10 +28,10 @@ pub async fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<Response, 
 
     let mut stream = UnixStream::connect(socket_path).await?;
 
-    let json_cmd = serde_json::to_string(cmd)?;
+    let json_cmd = serde_json::to_string(cmd).map_err(Error::Serialization)?;
     push_command(&mut stream, &json_cmd).await?;
     let str_resp = pull_response(&mut stream).await?;
-    serde_json::from_str::<Response>(&str_resp).map_err(Error::Serialization)
+    serde_json::from_str::<Response>(&str_resp).map_err(Error::Deserialization)
 }
 
 fn check_path(socket_path: &Path) -> Result<(), Error> {
