@@ -217,7 +217,10 @@ fn log_path_diagnostics(path: &std::path::Path) {
             ?path,
             "pass file metadata"
         ),
-        Err(_) => tracing::error!(?path, "pass file does not exist"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::error!(?path, "pass file does not exist")
+        }
+        Err(e) => tracing::error!(error = %e, ?path, "pass file metadata error"),
     }
     if let Some(parent) = path.parent()
         && let Ok(meta) = std::fs::metadata(parent)
