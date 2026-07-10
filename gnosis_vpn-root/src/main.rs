@@ -817,7 +817,7 @@ impl DaemonState {
                     Ok(())
                 } else {
                     let response = match self.shutdown_ongoing {
-                        Shutdown::None | Shutdown::RestartWorker => Response::WorkerRestarting,
+                        Shutdown::RestartWorker => Response::WorkerRestarting,
                         _ => Response::WorkerOffline,
                     };
                     let _ = resp.send(response).map_err(|error| {
@@ -884,8 +884,7 @@ impl DaemonState {
             })
             .collect();
         let run_mode = match self.shutdown_ongoing {
-            // Shutdown::None with no worker means unexpected exit — root will auto-restart
-            Shutdown::None | Shutdown::RestartWorker => command::RunMode::Restarting,
+            Shutdown::RestartWorker => command::RunMode::Restarting,
             _ => command::RunMode::NotRunning,
         };
         Response::status(command::StatusResponse {
@@ -908,7 +907,7 @@ impl DaemonState {
             | LibCommand::Balance
             | LibCommand::FundingTool(_)
             | LibCommand::Telemetry => Ok(match self.shutdown_ongoing {
-                Shutdown::None | Shutdown::RestartWorker => Response::WorkerRestarting,
+                Shutdown::RestartWorker => Response::WorkerRestarting,
                 _ => Response::WorkerOffline,
             }),
             LibCommand::Ping => Ok(Response::Pong),
