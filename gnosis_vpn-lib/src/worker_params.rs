@@ -4,6 +4,7 @@ use edgli::hopr_lib::config::HoprLibConfig;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use url::Url;
 
 use std::net::Ipv4Addr;
@@ -18,8 +19,8 @@ use crate::hopr::{config, identity};
 pub enum Error {
     #[error("HOPR identity error: {0}")]
     HoprIdentity(#[from] identity::Error),
-    #[error("IO error: {0}")]
-    IO(#[from] std::io::Error),
+    #[error("IO error accessing {path}: {source}")]
+    IOFile { path: PathBuf, source: std::io::Error },
     #[error("HOPR config error: {0}")]
     Config(#[from] config::Error),
     #[error("URL parse error: {0}")]
@@ -103,10 +104,35 @@ impl WorkerParams {
                             "No HOPR identity pass provided - generating new one and storing alongside identity file"
                         );
                         let pw = identity::generate_pass();
-                        fs::write(&path, pw.as_bytes()).await?;
+                        let mut file = fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .mode(0o600)
+                            .open(&path)
+                            .await
+                            .map_err(|e| {
+                                tracing::error!(error = %e, ?path, "failed to create HOPR identity pass file");
+                                Error::IOFile {
+                                    path: path.clone(),
+                                    source: e,
+                                }
+                            })?;
+                        file.write_all(pw.as_bytes()).await.map_err(|e| {
+                            tracing::error!(error = %e, ?path, "failed to write generated HOPR identity pass file");
+                            Error::IOFile {
+                                path: path.clone(),
+                                source: e,
+                            }
+                        })?;
                         Ok(pw)
                     }
-                    Err(e) => Err(e),
+                    Err(e) => {
+                        tracing::error!(error = %e, ?path, "failed to read HOPR identity pass file");
+                        if e.kind() == std::io::ErrorKind::PermissionDenied {
+                            log_path_diagnostics(&path);
+                        }
+                        Err(Error::IOFile { path, source: e })
+                    }
                 }?
             }
         };
@@ -124,7 +150,13 @@ impl WorkerParams {
             Some(pass) => pass.to_string(),
             None => {
                 let path = identity::pass_file(self.state_home());
-                fs::read_to_string(&path).await?
+                fs::read_to_string(&path).await.map_err(|e| {
+                    tracing::error!(error = %e, ?path, "failed to read HOPR identity pass file");
+                    Error::IOFile {
+                        path: path.clone(),
+                        source: e,
+                    }
+                })?
             }
         };
 
@@ -172,5 +204,33 @@ impl WorkerParams {
 
     pub fn state_home(&self) -> PathBuf {
         self.state_home.clone()
+    }
+}
+
+fn log_path_diagnostics(path: &std::path::Path) {
+    use std::os::unix::fs::MetadataExt;
+    match std::fs::metadata(path) {
+        Ok(meta) => tracing::error!(
+            uid = meta.uid(),
+            gid = meta.gid(),
+            mode = format!("{:o}", meta.mode() & 0o777),
+            ?path,
+            "pass file metadata"
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::error!(?path, "pass file does not exist")
+        }
+        Err(e) => tracing::error!(error = %e, ?path, "pass file metadata error"),
+    }
+    if let Some(parent) = path.parent()
+        && let Ok(meta) = std::fs::metadata(parent)
+    {
+        tracing::error!(
+            uid = meta.uid(),
+            gid = meta.gid(),
+            mode = format!("{:o}", meta.mode() & 0o777),
+            path = ?parent,
+            "pass file parent directory metadata"
+        );
     }
 }
