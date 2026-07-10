@@ -18,8 +18,6 @@ use crate::hopr::{config, identity};
 pub enum Error {
     #[error("HOPR identity error: {0}")]
     HoprIdentity(#[from] identity::Error),
-    #[error("IO error: {0}")]
-    IO(#[from] std::io::Error),
     #[error("IO error accessing {path}: {source}")]
     IOFile { path: PathBuf, source: std::io::Error },
     #[error("HOPR config error: {0}")]
