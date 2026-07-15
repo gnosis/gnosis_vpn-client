@@ -512,8 +512,21 @@ Testing hooks: GVPN_CURL, GVPN_PING (substitute the curl/ping binaries).
 EOF
 }
 
+require_option_value() {
+    if [ "$#" -lt 2 ]; then
+        printf 'Option %s requires a value.\n\n' "$1" >&2
+        usage >&2
+        exit 2
+    fi
+}
+
 parse_args() {
     while [ "$#" -gt 0 ]; do
+        case "$1" in
+        -g | --gateway | --iface | --baseline-ip | --targets | --sizes | --stream-secs | --http-timeout | --dl-timeout | --ping-timeout | --down-url | --trace-url)
+            require_option_value "$@"
+            ;;
+        esac
         case "$1" in
         -g | --gateway)
             GATEWAY="$2"

@@ -74,6 +74,18 @@ setup() {
     [ "$status" -eq 2 ]
 }
 
+@test "value-taking options reject a missing value" {
+    for option in \
+        -g --gateway --iface --baseline-ip --targets --sizes \
+        --stream-secs --http-timeout --dl-timeout --ping-timeout \
+        --down-url --trace-url; do
+        run "$SCRIPT" "$option"
+        [ "$status" -eq 2 ]
+        [[ "$output" == *"Option $option requires a value."* ]]
+        [[ "$output" == *"Usage: vpn-smoke-test.sh"* ]]
+    done
+}
+
 @test "missing curl aborts with code 2" {
     export GVPN_CURL="/nonexistent/curl"
     run "$SCRIPT" --no-color
