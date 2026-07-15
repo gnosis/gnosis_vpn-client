@@ -15,7 +15,7 @@
 
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
-use std::os::fd::RawFd;
+use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
 
 use gnosis_vpn_lib::killswitch::Firewall;
@@ -37,7 +37,7 @@ pub enum Msg {
         mtu: u32,
         dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
-        reply: oneshot::Sender<Result<(String, RawFd), String>>,
+        reply: oneshot::Sender<Result<(String, OwnedFd), String>>,
     },
     TeardownRouting {
         reply: oneshot::Sender<()>,
@@ -211,7 +211,7 @@ impl Actor {
         mtu: u32,
         dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
-    ) -> Result<(String, RawFd), String> {
+    ) -> Result<(String, OwnedFd), String> {
         // ensure clean slate
         self.teardown_routing().await;
 
@@ -223,23 +223,30 @@ impl Actor {
             }
         };
         let res_setup = router.setup().await;
-        // Capture the TUN fd while the router is still owned here; it stays valid
-        // because the router (which owns the device) is stored below and only
-        // dropped on teardown.
-        let tun_fd = router.tun_fd();
+        // Duplicate the TUN fd with close-on-exec while the router still owns the
+        // original. The duplicate can then cross the actor channel as an OwnedFd.
+        let tun_fd = router
+            .tun_fd()
+            .map(|fd| rustix::io::fcntl_dupfd_cloexec(fd, 0))
+            .transpose();
         // store the router even on setup error so partial state can be torn down
         self.router = Some(Box::new(router));
         match res_setup {
             Ok(interface_name) => match tun_fd {
-                Some(fd) => {
+                Ok(Some(fd)) => {
                     self.wg_interface_name = Some(interface_name.clone());
                     tracing::info!("static routing setup successfully");
                     Ok((interface_name, fd))
                 }
-                None => {
+                Ok(None) => {
                     tracing::error!("routing setup reported success but produced no TUN fd");
                     self.teardown_routing().await;
                     Err("routing setup produced no TUN fd".to_string())
+                }
+                Err(error) => {
+                    tracing::error!(?error, "failed to duplicate TUN fd");
+                    self.teardown_routing().await;
+                    Err(format!("failed to duplicate TUN fd: {error}"))
                 }
             },
             Err(error) => {

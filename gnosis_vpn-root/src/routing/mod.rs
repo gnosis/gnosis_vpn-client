@@ -8,6 +8,7 @@ use gnosis_vpn_lib::dirs;
 use gnosis_vpn_lib::shell_command_ext::{self, Logs};
 
 use std::net::Ipv4Addr;
+use std::os::fd::BorrowedFd;
 
 pub(crate) mod dns;
 pub(crate) mod ipv6_blackhole;
@@ -82,9 +83,10 @@ pub trait Routing {
     /// Set up the VPN tunnel. Returns the resolved TUN interface name on success.
     async fn setup(&mut self) -> Result<String, Error>;
     async fn teardown(&mut self, logs: Logs);
-    /// The raw fd of the TUN device root created, so it can be handed to the
-    /// worker via `SCM_RIGHTS`. `None` before setup or after teardown.
-    fn tun_fd(&self) -> Option<std::os::fd::RawFd>;
+    /// A borrowed fd for the TUN device root created, so it can be duplicated
+    /// before being handed to the worker via `SCM_RIGHTS`. `None` before setup
+    /// or after teardown.
+    fn tun_fd(&self) -> Option<BorrowedFd<'_>>;
     /// Whether the WAN default route differs from the one captured during setup.
     ///
     /// Used to tell real network changes apart from route events caused by our

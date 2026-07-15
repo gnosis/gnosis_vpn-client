@@ -8,7 +8,7 @@
 //! MTU and link-state assignment is platform-specific and lives in the platform
 //! routers.
 
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
 use neptun::device::tun::TunSocket;
 
@@ -46,5 +46,13 @@ impl Tun {
     /// a dup to the worker via `SCM_RIGHTS`.
     pub fn as_raw_fd(&self) -> RawFd {
         self.socket.as_raw_fd()
+    }
+}
+
+impl AsFd for Tun {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        // SAFETY: NepTUN exposes only AsRawFd. Its TunSocket owns this descriptor
+        // for the full lifetime of self, so the returned borrow cannot outlive it.
+        unsafe { BorrowedFd::borrow_raw(self.as_raw_fd()) }
     }
 }

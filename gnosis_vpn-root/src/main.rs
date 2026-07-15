@@ -13,8 +13,9 @@ use tokio_util::sync::CancellationToken;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, IntoRawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{self};
@@ -1072,7 +1073,7 @@ impl DaemonState {
                         // Pass the fd out-of-band first; the worker recv_fd's it only
                         // after seeing TunnelReady below (a simple happens-before).
                         Some(ref child) => {
-                            match gnosis_vpn_lib::socket::fd_passing::send_fd(&child.tun_fd_socket, tun_fd) {
+                            match gnosis_vpn_lib::socket::fd_passing::send_fd(&child.tun_fd_socket, &tun_fd) {
                                 Ok(()) => Ok(interface),
                                 Err(e) => {
                                     tracing::error!(error = %e, "failed to pass TUN fd to worker");
@@ -1365,7 +1366,7 @@ impl DaemonState {
         mtu: u32,
         dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
-    ) -> Result<(String, RawFd), String> {
+    ) -> Result<(String, OwnedFd), String> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = self
             .routing_actor_sender

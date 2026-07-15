@@ -16,24 +16,17 @@
 //! post-receipt `fcntl` on platforms without the flag) so a received TUN fd is
 //! never inherited by an unrelated spawned child.
 
-use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+#![deny(unsafe_code)]
+
+use std::io::{self, IoSlice, IoSliceMut};
+use std::mem::MaybeUninit;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 
-/// Backing storage for one `SCM_RIGHTS` control message. `CMSG_SPACE(4)` is well
-/// under 32 bytes on every supported platform; 64 with `cmsghdr` alignment leaves
-/// generous headroom while satisfying the kernel's alignment requirement.
-#[repr(C, align(8))]
-struct CmsgBuf([u8; 64]);
-
-impl CmsgBuf {
-    fn zeroed() -> Self {
-        CmsgBuf([0u8; 64])
-    }
-}
-
-/// The size, in bytes, of a single `RawFd` payload carried by the control message.
-const FD_SIZE: u32 = std::mem::size_of::<RawFd>() as u32;
+use rustix::net::{
+    RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, SendAncillaryBuffer, SendAncillaryMessage,
+    SendFlags,
+};
 
 /// Send a single open file descriptor to the connected peer over `sock`.
 ///
@@ -42,42 +35,21 @@ const FD_SIZE: u32 = std::mem::size_of::<RawFd>() as u32;
 /// transmitted. The caller retains ownership of `fd`; the kernel duplicates it
 /// into the receiver, so `fd` remains valid here and should be closed by the
 /// caller as usual.
-pub fn send_fd(sock: &UnixStream, fd: RawFd) -> io::Result<()> {
-    let payload: [u8; 1] = [0];
-    let mut iov = libc::iovec {
-        iov_base: payload.as_ptr() as *mut libc::c_void,
-        iov_len: payload.len(),
-    };
-
-    let mut cmsg = CmsgBuf::zeroed();
-    // SAFETY: msghdr has private padding on some platforms, so it must be
-    // zero-initialized and then filled field by field rather than built with a
-    // struct literal.
-    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-    msg.msg_iov = &mut iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = cmsg.0.as_mut_ptr() as *mut libc::c_void;
-    msg.msg_controllen = unsafe { libc::CMSG_SPACE(FD_SIZE) } as _;
-
-    // SAFETY: the control buffer is sized for exactly one fd and correctly
-    // aligned, so CMSG_FIRSTHDR yields a valid header we fully initialize before
-    // copying the descriptor into its data region.
-    unsafe {
-        let hdr = libc::CMSG_FIRSTHDR(&msg);
-        if hdr.is_null() {
-            return Err(io::Error::other("no room for SCM_RIGHTS control message"));
-        }
-        (*hdr).cmsg_level = libc::SOL_SOCKET;
-        (*hdr).cmsg_type = libc::SCM_RIGHTS;
-        (*hdr).cmsg_len = libc::CMSG_LEN(FD_SIZE) as _;
-        std::ptr::copy_nonoverlapping(&fd as *const RawFd as *const u8, libc::CMSG_DATA(hdr), FD_SIZE as usize);
+pub fn send_fd(sock: &UnixStream, fd: &impl AsFd) -> io::Result<()> {
+    let payload = [0];
+    let iov = [IoSlice::new(&payload)];
+    let fds = [fd.as_fd()];
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut control = SendAncillaryBuffer::new(&mut space);
+    if !control.push(SendAncillaryMessage::ScmRights(&fds)) {
+        return Err(io::Error::other("no room for SCM_RIGHTS control message"));
     }
-
-    // SAFETY: msg points at live, correctly typed local storage for the duration
-    // of the call.
-    let ret = unsafe { libc::sendmsg(sock.as_raw_fd(), &msg, 0) };
-    if ret < 0 {
-        return Err(io::Error::last_os_error());
+    let sent = rustix::net::sendmsg(sock, &iov, &mut control, SendFlags::empty()).map_err(io::Error::from)?;
+    if sent != payload.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::WriteZero,
+            "fd-passing socket did not send its complete payload",
+        ));
     }
     Ok(())
 }
@@ -89,14 +61,15 @@ pub fn send_fd(sock: &UnixStream, fd: RawFd) -> io::Result<()> {
 /// message - or an early return by the caller - cannot leak the descriptor. The
 /// returned fd is close-on-exec.
 pub fn recv_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
-    recv_one_fd(sock, 0)?.ok_or_else(|| io::Error::new(io::ErrorKind::WouldBlock, "no descriptor available"))
+    recv_one_fd(sock, RecvFlags::empty())?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::WouldBlock, "no descriptor available"))
 }
 
 /// Non-blocking variant of [`recv_fd`]: returns `Ok(None)` when no descriptor is
 /// currently buffered on `sock`, instead of blocking. Used to drain descriptors
 /// left behind by aborted connection attempts (see [`recv_latest_fd`]).
 pub fn try_recv_fd(sock: &UnixStream) -> io::Result<Option<OwnedFd>> {
-    recv_one_fd(sock, libc::MSG_DONTWAIT)
+    recv_one_fd(sock, RecvFlags::DONTWAIT)
 }
 
 /// Receive the most recent descriptor buffered on `sock`, discarding (and closing)
@@ -133,40 +106,31 @@ pub fn recv_latest_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
 /// Core `recvmsg` for one `SCM_RIGHTS` descriptor. With `MSG_DONTWAIT` in
 /// `extra_flags`, a would-block condition (nothing buffered) returns `Ok(None)`
 /// rather than an error; every other failure is a hard error.
-fn recv_one_fd(sock: &UnixStream, extra_flags: libc::c_int) -> io::Result<Option<OwnedFd>> {
-    let mut byte: [u8; 1] = [0];
-    let mut iov = libc::iovec {
-        iov_base: byte.as_mut_ptr() as *mut libc::c_void,
-        iov_len: byte.len(),
-    };
-
-    let mut cmsg = CmsgBuf::zeroed();
-    // SAFETY: see send_fd - msghdr must be zeroed then filled field by field.
-    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-    msg.msg_iov = &mut iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = cmsg.0.as_mut_ptr() as *mut libc::c_void;
-    msg.msg_controllen = unsafe { libc::CMSG_SPACE(FD_SIZE) } as _;
-
+fn recv_one_fd(sock: &UnixStream, extra_flags: RecvFlags) -> io::Result<Option<OwnedFd>> {
+    let mut byte = [0];
+    let mut iov = [IoSliceMut::new(&mut byte)];
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut control = RecvAncillaryBuffer::new(&mut space);
     // MSG_CMSG_CLOEXEC atomically marks the received fd close-on-exec on Linux,
     // closing the small window where a concurrent spawn could leak it. macOS has
     // no such flag, so it is set with fcntl immediately after receipt below.
     #[cfg(target_os = "linux")]
-    let flags = libc::MSG_CMSG_CLOEXEC | extra_flags;
+    let flags = RecvFlags::CMSG_CLOEXEC | extra_flags;
     #[cfg(not(target_os = "linux"))]
     let flags = extra_flags;
 
-    // SAFETY: msg points at live, correctly typed local storage.
-    let ret = unsafe { libc::recvmsg(sock.as_raw_fd(), &mut msg, flags) };
-    if ret < 0 {
-        let err = io::Error::last_os_error();
-        // A non-blocking drain that finds nothing buffered is not an error.
-        if extra_flags & libc::MSG_DONTWAIT != 0 && err.kind() == io::ErrorKind::WouldBlock {
-            return Ok(None);
+    let message = match rustix::net::recvmsg(sock, &mut iov, &mut control, flags) {
+        Ok(message) => message,
+        Err(error) => {
+            let error = io::Error::from(error);
+            // A non-blocking drain that finds nothing buffered is not an error.
+            if extra_flags.contains(RecvFlags::DONTWAIT) && error.kind() == io::ErrorKind::WouldBlock {
+                return Ok(None);
+            }
+            return Err(error);
         }
-        return Err(err);
-    }
-    if ret == 0 {
+    };
+    if message.bytes == 0 {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "peer closed the fd-passing socket before sending a descriptor",
@@ -174,36 +138,32 @@ fn recv_one_fd(sock: &UnixStream, extra_flags: libc::c_int) -> io::Result<Option
     }
     // A truncated control message means the kernel dropped (and closed) fds that
     // did not fit; treat it as a hard error rather than silently proceeding.
-    if msg.msg_flags & libc::MSG_CTRUNC != 0 {
+    if message.flags.contains(ReturnFlags::CTRUNC) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "SCM_RIGHTS control message was truncated",
         ));
     }
 
-    // SAFETY: recvmsg populated msg; CMSG_FIRSTHDR returns either null or a valid
-    // header pointer into our control buffer. We validate level/type/len before
-    // reading exactly one fd out of the data region.
-    let owned = unsafe {
-        let hdr = libc::CMSG_FIRSTHDR(&msg);
-        if hdr.is_null()
-            || (*hdr).cmsg_level != libc::SOL_SOCKET
-            || (*hdr).cmsg_type != libc::SCM_RIGHTS
-            || (*hdr).cmsg_len as usize != libc::CMSG_LEN(FD_SIZE) as usize
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "expected exactly one SCM_RIGHTS file descriptor",
-            ));
+    let mut received = None;
+    let mut count = 0;
+    for ancillary in control.drain() {
+        if let RecvAncillaryMessage::ScmRights(fds) = ancillary {
+            for fd in fds {
+                count += 1;
+                if received.is_none() {
+                    received = Some(fd);
+                }
+            }
         }
-        let mut fd: RawFd = -1;
-        std::ptr::copy_nonoverlapping(libc::CMSG_DATA(hdr), &mut fd as *mut RawFd as *mut u8, FD_SIZE as usize);
-        if fd < 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "received an invalid fd"));
-        }
-        // Take ownership immediately so every subsequent early return closes it.
-        OwnedFd::from_raw_fd(fd)
-    };
+    }
+    if count != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "expected exactly one SCM_RIGHTS file descriptor",
+        ));
+    }
+    let owned = received.expect("one descriptor was counted");
 
     #[cfg(not(target_os = "linux"))]
     set_cloexec(&owned)?;
@@ -215,16 +175,8 @@ fn recv_one_fd(sock: &UnixStream, extra_flags: libc::c_int) -> io::Result<Option
 /// `MSG_CMSG_CLOEXEC` (e.g. macOS).
 #[cfg(not(target_os = "linux"))]
 fn set_cloexec(fd: &OwnedFd) -> io::Result<()> {
-    let raw = fd.as_raw_fd();
-    // SAFETY: raw is a live fd owned by `fd` for the duration of these calls.
-    let flags = unsafe { libc::fcntl(raw, libc::F_GETFD) };
-    if flags < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    if unsafe { libc::fcntl(raw, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
+    let flags = rustix::io::fcntl_getfd(fd).map_err(io::Error::from)?;
+    rustix::io::fcntl_setfd(fd, flags | rustix::io::FdFlags::CLOEXEC).map_err(io::Error::from)
 }
 
 #[cfg(test)]
@@ -236,19 +188,26 @@ mod tests {
     /// across the socket in tests; writing to the write end and reading it back
     /// through the *received* fd proves the descriptor really was transferred.
     fn make_pipe() -> (OwnedFd, OwnedFd) {
-        let mut fds = [0 as RawFd; 2];
-        // SAFETY: fds is a valid 2-element array; pipe(2) fills it on success.
-        let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
-        assert_eq!(rc, 0, "pipe() failed: {}", io::Error::last_os_error());
-        // SAFETY: both fds are freshly created and owned by nobody else.
-        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
+        rustix::pipe::pipe().expect("pipe() failed")
     }
 
     fn is_cloexec(fd: &OwnedFd) -> bool {
-        // SAFETY: fd is live and owned.
-        let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFD) };
-        assert!(flags >= 0, "fcntl F_GETFD failed");
-        flags & libc::FD_CLOEXEC != 0
+        rustix::io::fcntl_getfd(fd)
+            .expect("fcntl F_GETFD failed")
+            .contains(rustix::io::FdFlags::CLOEXEC)
+    }
+
+    fn send_fds(sock: &UnixStream, fds: &[&OwnedFd]) {
+        let payload = [0];
+        let iov = [IoSlice::new(&payload)];
+        let fds = fds.iter().map(|fd| fd.as_fd()).collect::<Vec<_>>();
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(16))];
+        let mut control = SendAncillaryBuffer::new(&mut space);
+        assert!(control.push(SendAncillaryMessage::ScmRights(&fds)));
+        assert_eq!(
+            rustix::net::sendmsg(sock, &iov, &mut control, SendFlags::empty()).unwrap(),
+            payload.len()
+        );
     }
 
     #[test]
@@ -256,7 +215,7 @@ mod tests {
         let (a, b) = UnixStream::pair().unwrap();
         let (pipe_r, pipe_w) = make_pipe();
 
-        send_fd(&a, pipe_r.as_raw_fd()).unwrap();
+        send_fd(&a, &pipe_r).unwrap();
         let received = recv_fd(&b).unwrap();
 
         // The sender may now drop its copy of the read end; the transferred fd is
@@ -277,7 +236,7 @@ mod tests {
     fn received_fd_is_close_on_exec() {
         let (a, b) = UnixStream::pair().unwrap();
         let (pipe_r, _pipe_w) = make_pipe();
-        send_fd(&a, pipe_r.as_raw_fd()).unwrap();
+        send_fd(&a, &pipe_r).unwrap();
         let received = recv_fd(&b).unwrap();
         assert!(
             is_cloexec(&received),
@@ -295,6 +254,28 @@ mod tests {
     }
 
     #[test]
+    fn recv_fd_rejects_multiple_descriptors() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let (first, _first_writer) = make_pipe();
+        let (second, _second_writer) = make_pipe();
+        send_fds(&a, &[&first, &second]);
+        let err = recv_fd(&b).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(err.to_string(), "expected exactly one SCM_RIGHTS file descriptor");
+    }
+
+    #[test]
+    fn recv_fd_rejects_truncated_ancillary_data() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let pipes = (0..16).map(|_| make_pipe()).collect::<Vec<_>>();
+        let fds = pipes.iter().map(|(reader, _writer)| reader).collect::<Vec<_>>();
+        send_fds(&a, &fds);
+        let err = recv_fd(&b).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(err.to_string(), "SCM_RIGHTS control message was truncated");
+    }
+
+    #[test]
     fn recv_fd_on_closed_peer_reports_eof() {
         let (a, b) = UnixStream::pair().unwrap();
         drop(a); // peer gone without sending anything
@@ -307,14 +288,14 @@ mod tests {
         let (a, b) = UnixStream::pair().unwrap();
         drop(b); // no receiver
         let (pipe_r, _pipe_w) = make_pipe();
-        let err = send_fd(&a, pipe_r.as_raw_fd()).unwrap_err();
+        let err = send_fd(&a, &pipe_r).unwrap_err();
         assert!(
             matches!(err.kind(), io::ErrorKind::BrokenPipe),
             "expected broken pipe, got {:?}",
             err.kind()
         );
         // The caller still owns a valid fd: fcntl on it must succeed.
-        assert!(unsafe { libc::fcntl(pipe_r.as_raw_fd(), libc::F_GETFD) } >= 0);
+        rustix::io::fcntl_getfd(&pipe_r).expect("sender must retain the descriptor");
     }
 
     #[test]
@@ -341,9 +322,9 @@ mod tests {
         let (r1, _w1) = make_pipe();
         let (r2, _w2) = make_pipe();
         let (r3, w3) = make_pipe();
-        send_fd(&a, r1.as_raw_fd()).unwrap();
-        send_fd(&a, r2.as_raw_fd()).unwrap();
-        send_fd(&a, r3.as_raw_fd()).unwrap();
+        send_fd(&a, &r1).unwrap();
+        send_fd(&a, &r2).unwrap();
+        send_fd(&a, &r3).unwrap();
 
         // Only the newest (r3) survives the drain.
         let received = recv_latest_fd(&b).unwrap();
@@ -360,7 +341,7 @@ mod tests {
     fn recv_latest_fd_returns_the_only_descriptor() {
         let (a, b) = UnixStream::pair().unwrap();
         let (r, w) = make_pipe();
-        send_fd(&a, r.as_raw_fd()).unwrap();
+        send_fd(&a, &r).unwrap();
         let received = recv_latest_fd(&b).unwrap();
         drop(r);
         let mut writer = std::fs::File::from(w);

@@ -21,7 +21,7 @@ use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::wireguard;
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::os::fd::RawFd;
+use std::os::fd::{AsFd, BorrowedFd};
 
 use super::route_ops::{RouteOps, WanRoute};
 use super::route_ops_linux::NetlinkRouteOps;
@@ -285,8 +285,8 @@ impl Routing for StaticRouter {
         tracing::info!("routing teardown complete");
     }
 
-    fn tun_fd(&self) -> Option<RawFd> {
-        self.tun.as_ref().map(|t| t.as_raw_fd())
+    fn tun_fd(&self) -> Option<BorrowedFd<'_>> {
+        self.tun.as_ref().map(AsFd::as_fd)
     }
 
     async fn wan_changed(&mut self) -> Result<bool, Error> {
