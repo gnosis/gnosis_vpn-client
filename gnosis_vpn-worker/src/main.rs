@@ -106,6 +106,10 @@ async fn incoming_socket() -> Result<
         })?;
 
     let child_socket = unsafe { UnixStream::from_raw_fd(fd) };
+    socket::worker::set_cloexec(&child_socket, true).map_err(|err| {
+        tracing::error!(error = %err, "failed to restore CLOEXEC on worker socket");
+        exitcode::IOERR
+    })?;
     child_socket.set_nonblocking(true).map_err(|err| {
         tracing::error!(error = %err, "failed to set non-blocking mode on worker socket");
         exitcode::IOERR
@@ -173,6 +177,10 @@ fn setup_tun_fd_socket() -> Result<(), exitcode::ExitCode> {
     // SAFETY: root cleared CLOEXEC on this fd before spawning us and handed it over
     // via the environment; we take sole ownership of it here.
     let socket = unsafe { UnixStream::from_raw_fd(fd) };
+    socket::worker::set_cloexec(&socket, true).map_err(|err| {
+        tracing::error!(error = %err, "failed to restore CLOEXEC on worker TUN fd socket");
+        exitcode::IOERR
+    })?;
     socket::worker::set_tun_fd_socket(socket);
     tracing::info!("TUN fd passing socket set up");
     Ok(())

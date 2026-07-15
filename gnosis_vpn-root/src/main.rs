@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::{AsRawFd, IntoRawFd};
+use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{self};
@@ -1206,39 +1206,25 @@ impl DaemonState {
             exitcode::IOERR
         })?;
 
-        // remove the "Close-On-Exec" flag on the child ends so the worker inherits them
-        for (fd, label) in [
-            (child_socket.as_raw_fd(), "control"),
-            (child_tun_socket.as_raw_fd(), "tun-fd"),
-        ] {
-            unsafe {
-                let flags = libc::fcntl(fd, libc::F_GETFD);
-                if flags < 0 {
-                    tracing::warn!(
-                        socket = label,
-                        error = ?std::io::Error::last_os_error(),
-                        "failed to read FD flags on child socket; CLOEXEC may remain set"
-                    );
-                } else if libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
-                    // If clearing CLOEXEC fails the worker would inherit a fd that is
-                    // closed on exec, silently killing the control or data plane.
-                    tracing::warn!(
-                        socket = label,
-                        error = ?std::io::Error::last_os_error(),
-                        "failed to clear CLOEXEC on child socket; worker may not inherit it"
-                    );
-                }
-            }
+        // Remove close-on-exec from the child ends so the worker inherits them.
+        for (socket, label) in [(&child_socket, "control"), (&child_tun_socket, "tun-fd")] {
+            socket::worker::set_cloexec(socket, false).map_err(|err| {
+                tracing::error!(
+                    socket = label,
+                    error = ?err,
+                    "failed to clear CLOEXEC on child socket"
+                );
+                exitcode::IOERR
+            })?;
         }
 
         let mut worker_command = TokioCommand::new(self.worker_user.binary.clone());
 
-        // into_raw_fd() releases these from RAII: they must stay open across the spawn
-        // so the worker inherits them, and the parent must then close its own copies
-        // (see after spawn) or it leaks two fds - and, because CLOEXEC was cleared,
-        // they would be re-inherited by every later worker spawn.
-        let child_ctrl_fd = child_socket.into_raw_fd();
-        let child_tun_fd = child_tun_socket.into_raw_fd();
+        // Keep both child ends alive across spawn, then drop the parent's copies.
+        // Because close-on-exec is temporarily disabled, retaining either copy would
+        // also make it inheritable by every later worker spawn.
+        let child_ctrl_fd = child_socket.as_raw_fd();
+        let child_tun_fd = child_tun_socket.as_raw_fd();
 
         worker_command
             .current_dir(self.worker_user.home.clone())
@@ -1254,12 +1240,8 @@ impl DaemonState {
         }
         let spawn_result = worker_command.spawn();
         // The worker (if spawned) now holds its own inherited copies; drop the parent's.
-        // SAFETY: both fds came from the UnixStreams consumed by into_raw_fd() above and
-        // are not referenced again in this process.
-        unsafe {
-            libc::close(child_ctrl_fd);
-            libc::close(child_tun_fd);
-        }
+        drop(child_socket);
+        drop(child_tun_socket);
         let mut child = spawn_result.map_err(|err| {
             tracing::error!(error = ?err, ?self.worker_user, "unable to spawn worker process");
             exitcode::IOERR

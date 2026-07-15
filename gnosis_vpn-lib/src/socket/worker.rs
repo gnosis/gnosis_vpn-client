@@ -10,7 +10,7 @@
 //!   connection runner can pull the fd when root reports the tunnel is ready.
 
 use std::io;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::{Mutex, OnceLock};
 
@@ -24,6 +24,13 @@ pub const ENV_VAR_TUN_FD: &str = "INTERNAL_WORKER_TUN_FD";
 /// per worker process, so a process-global avoids threading it through the whole
 /// core/runner construction path.
 static TUN_FD_SOCKET: OnceLock<Mutex<UnixStream>> = OnceLock::new();
+
+/// Enable or disable close-on-exec for a worker socket descriptor.
+pub fn set_cloexec(fd: &impl AsFd, enabled: bool) -> io::Result<()> {
+    let mut flags = rustix::io::fcntl_getfd(fd).map_err(io::Error::from)?;
+    flags.set(rustix::io::FdFlags::CLOEXEC, enabled);
+    rustix::io::fcntl_setfd(fd, flags).map_err(io::Error::from)
+}
 
 /// Register the worker's TUN-fd passing socket, taken from [`ENV_VAR_TUN_FD`] at
 /// startup. Idempotent: a second call is ignored.
@@ -50,4 +57,24 @@ pub fn recv_tun_fd() -> io::Result<OwnedFd> {
         .lock()
         .map_err(|_| io::Error::other("TUN fd socket lock poisoned"))?;
     super::fd_passing::recv_latest_fd(&socket)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cloexec_can_be_cleared_and_restored() {
+        let (socket, _peer) = UnixStream::pair().expect("socket pair");
+        let initial = rustix::io::fcntl_getfd(&socket).expect("read initial fd flags");
+        assert!(initial.contains(rustix::io::FdFlags::CLOEXEC));
+
+        set_cloexec(&socket, false).expect("clear close-on-exec");
+        let cleared = rustix::io::fcntl_getfd(&socket).expect("read cleared fd flags");
+        assert!(!cleared.contains(rustix::io::FdFlags::CLOEXEC));
+
+        set_cloexec(&socket, true).expect("restore close-on-exec");
+        let restored = rustix::io::fcntl_getfd(&socket).expect("read restored fd flags");
+        assert!(restored.contains(rustix::io::FdFlags::CLOEXEC));
+    }
 }
