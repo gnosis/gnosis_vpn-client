@@ -35,13 +35,9 @@ pub struct TeardownState {
     pub bypass_routes: Vec<(String, String)>,
 }
 
-/// Preferred and fallback locations for the state file. Root can normally write
-/// under `/var/run`; `/tmp` covers environments where it cannot.
-fn candidate_paths() -> [PathBuf; 2] {
-    [
-        PathBuf::from("/var/run/gnosisvpn/teardown-state.json"),
-        PathBuf::from("/tmp/gnosisvpn-teardown-state.json"),
-    ]
+/// Root-owned location for the teardown state file.
+fn candidate_paths() -> [PathBuf; 1] {
+    [PathBuf::from("/var/run/gnosisvpn/teardown-state.json")]
 }
 
 /// Persist `state` so a crashed root can be swept at the next start. Best-effort:
@@ -260,10 +256,10 @@ mod tests {
     }
 
     #[test]
-    fn prefers_var_run_with_tmp_fallback() {
+    fn production_state_path_is_root_owned() {
         let paths = candidate_paths();
+        assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], PathBuf::from("/var/run/gnosisvpn/teardown-state.json"));
-        assert_eq!(paths[1], PathBuf::from("/tmp/gnosisvpn-teardown-state.json"));
     }
 
     #[test]
