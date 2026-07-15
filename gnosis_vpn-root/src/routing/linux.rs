@@ -173,7 +173,7 @@ impl StaticRouter {
     }
 }
 
-/// Parse `10.128.0.5/32` (or a bare `10.128.0.5`, treated as /32) into (addr, prefix).
+/// Parse an IP network, treating bare IPv4 addresses as /32 and bare IPv6 addresses as /128.
 fn parse_cidr(s: &str) -> Result<(IpAddr, u8), Error> {
     match s.split_once('/') {
         Some((addr, prefix)) => {
@@ -189,7 +189,11 @@ fn parse_cidr(s: &str) -> Result<(IpAddr, u8), Error> {
             let ip: IpAddr = s
                 .parse()
                 .map_err(|e| Error::General(format!("invalid address '{s}': {e}")))?;
-            Ok((ip, 32))
+            let prefix = match ip {
+                IpAddr::V4(_) => 32,
+                IpAddr::V6(_) => 128,
+            };
+            Ok((ip, prefix))
         }
     }
 }
@@ -329,5 +333,32 @@ impl Routing for StaticRouter {
         self.active_bypass_routes.retain(|(d, _)| d != &dest);
         self.persist_teardown_state();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bare_ipv4_address_defaults_to_host_prefix() {
+        assert_eq!(parse_cidr("192.0.2.25").unwrap(), ("192.0.2.25".parse().unwrap(), 32));
+    }
+
+    #[test]
+    fn bare_ipv6_address_defaults_to_host_prefix() {
+        assert_eq!(
+            parse_cidr("2001:db8::25").unwrap(),
+            ("2001:db8::25".parse().unwrap(), 128)
+        );
+    }
+
+    #[test]
+    fn explicit_prefixes_are_unchanged() {
+        assert_eq!(parse_cidr("10.128.0.5/9").unwrap(), ("10.128.0.5".parse().unwrap(), 9));
+        assert_eq!(
+            parse_cidr("2001:db8::25/64").unwrap(),
+            ("2001:db8::25".parse().unwrap(), 64)
+        );
     }
 }
