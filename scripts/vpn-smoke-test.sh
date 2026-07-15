@@ -363,7 +363,7 @@ check_https() {
     local host ok=0 bad=0
     for host in $TARGETS; do
         local metrics rc=0 code time
-        metrics="$(http_metrics "https://$host" "$HTTP_TIMEOUT" --head)" || rc=$?
+        metrics="$(http_metrics "https://$host" "$HTTP_TIMEOUT")" || rc=$?
         read -r code _ _ time _ <<<"$metrics"
         if [ "$rc" -eq 0 ] && printf '%s' "$code" | grep -qE '^[23]'; then
             record PASS "GET $host" "HTTP $code in $(fmt_secs "$time")"

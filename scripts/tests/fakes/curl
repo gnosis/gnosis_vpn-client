@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
 #
 # Fake curl for the offline smoke-test suite. Recognizes the shapes the smoke
-# test uses (metrics downloads, the cdn-cgi/trace body, HEAD reachability, and
-# IPv6 attempts) and emits canned output. Behavior is driven by FAKE_CURL_*
+# test uses (metrics downloads, the cdn-cgi/trace body, DNS HEAD probes, HTTPS
+# GET reachability, and IPv6 attempts) and emits canned output. Behavior is driven by FAKE_CURL_*
 # environment variables; with none set, every request succeeds.
 set -u
 
 is_v6=0
+method=GET
 url=""
 for a in "$@"; do
     case "$a" in
         -6) is_v6=1 ;;
+        --head) method=HEAD ;;
         http://* | https://*) url="$a" ;;
     esac
 done
 
 [ -n "${FAKE_LOG:-}" ] && printf '%s\n' "$url" >>"$FAKE_LOG"
+[ -n "${FAKE_METHOD_LOG:-}" ] && printf '%s %s\n' "$method" "$url" >>"$FAKE_METHOD_LOG"
 
 # Emit the five write-out fields the script parses:
 # http_code size_download speed_download time_total time_namelookup
