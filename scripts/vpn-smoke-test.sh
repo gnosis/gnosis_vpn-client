@@ -8,8 +8,9 @@
 # IP + geolocation, and an IPv6 leak check. Each check prints PASS / WARN /
 # FAIL / SKIP; the process exits non-zero if any check FAILs.
 #
-# Dependencies: bash, curl, ping - all of which ship with Linux and macOS. No
-# extra tools need to be installed.
+# Required commands: awk, bash, cat, curl, grep, ping, and uname. The optional
+# ip and ifconfig commands enable tunnel-interface discovery; getent and
+# dscacheutil add resolved addresses to verbose DNS output.
 #
 # Run `./vpn-smoke-test.sh --help` for options.
 
