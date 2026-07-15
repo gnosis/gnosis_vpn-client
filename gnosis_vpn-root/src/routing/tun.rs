@@ -8,18 +8,18 @@
 //! MTU and link-state assignment is platform-specific and lives in the platform
 //! routers.
 
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 
 use neptun::device::tun::TunSocket;
 
 use super::Error;
 
-/// A TUN device owned by root. Holding the [`TunSocket`] keeps the interface alive
-/// (a TUN vanishes when its last fd closes); dropping it on teardown closes root's
-/// fd. The worker receives an independent dup of the fd via `SCM_RIGHTS`, so the
+/// A TUN device owned by root. Holding the fd keeps the interface alive (a TUN
+/// vanishes when its last fd closes); dropping it on teardown closes root's fd.
+/// The worker receives an independent dup of the fd via `SCM_RIGHTS`, so the
 /// interface persists until both processes drop their fds.
 pub struct Tun {
-    socket: TunSocket,
+    fd: OwnedFd,
     name: String,
 }
 
@@ -32,8 +32,18 @@ impl Tun {
         let name = socket
             .name()
             .map_err(|e| Error::Tun(format!("resolve interface name: {e}")))?;
+        // NepTUN's TunSocket exposes its descriptor only as a bare RawFd. Dup it
+        // into an OwnedFd and drop the TunSocket, so fd ownership is typed from
+        // here on: the duplicate refers to the same open device (keeping the
+        // interface alive) and gains CLOEXEC, which the original lacks.
+        // SAFETY: `socket` owns the descriptor and stays alive until `drop(socket)`
+        // below, so the borrow cannot outlive an open fd.
+        let borrowed = unsafe { BorrowedFd::borrow_raw(socket.as_raw_fd()) };
+        let fd =
+            rustix::io::fcntl_dupfd_cloexec(borrowed, 0).map_err(|e| Error::Tun(format!("dup fd of {name}: {e}")))?;
+        drop(socket);
         tracing::info!(interface = %name, "created TUN device");
-        Ok(Self { socket, name })
+        Ok(Self { fd, name })
     }
 
     /// The kernel-resolved interface name (`wg0_gnosisvpn` on Linux, `utunN` on
@@ -41,18 +51,10 @@ impl Tun {
     pub fn name(&self) -> &str {
         &self.name
     }
-
-    /// Root's raw fd for the device. Valid while this `Tun` is alive; used to hand
-    /// a dup to the worker via `SCM_RIGHTS`.
-    pub fn as_raw_fd(&self) -> RawFd {
-        self.socket.as_raw_fd()
-    }
 }
 
 impl AsFd for Tun {
     fn as_fd(&self) -> BorrowedFd<'_> {
-        // SAFETY: NepTUN exposes only AsRawFd. Its TunSocket owns this descriptor
-        // for the full lifetime of self, so the returned borrow cannot outlive it.
-        unsafe { BorrowedFd::borrow_raw(self.as_raw_fd()) }
+        self.fd.as_fd()
     }
 }

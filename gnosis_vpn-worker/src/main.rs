@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
 use tokio::net::UnixStream as TokioUnixStream;
 use tokio::signal::unix::{SignalKind, signal};
@@ -5,10 +7,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use std::env;
-use std::os::unix::io::FromRawFd;
 use std::os::unix::net::UnixStream;
 use std::process;
+use std::time::Duration;
 
 use gnosis_vpn_lib::core::Core;
 use gnosis_vpn_lib::event::{CoreToWorker, ResponseFromRoot, RootToWorker, WorkerToCore, WorkerToRoot};
@@ -85,7 +86,9 @@ async fn signal_swallower() -> Result<CancellationToken, exitcode::ExitCode> {
     Ok(owned_cancel)
 }
 
-async fn incoming_socket() -> Result<
+async fn incoming_socket(
+    child_socket: UnixStream,
+) -> Result<
     (
         CancellationToken,
         mpsc::Receiver<RootToWorker>,
@@ -93,23 +96,6 @@ async fn incoming_socket() -> Result<
     ),
     exitcode::ExitCode,
 > {
-    // accessing unix socket from fd
-    let fd: i32 = env::var(socket::worker::ENV_VAR)
-        .map_err(|err| {
-            tracing::error!(error = %err, env = %socket::worker::ENV_VAR, "missing worker env var");
-            exitcode::NOINPUT
-        })?
-        .parse()
-        .map_err(|err| {
-            tracing::error!(error = %err, "invalid worker socket fd env var");
-            exitcode::NOINPUT
-        })?;
-
-    let child_socket = unsafe { UnixStream::from_raw_fd(fd) };
-    socket::worker::set_cloexec(&child_socket, true).map_err(|err| {
-        tracing::error!(error = %err, "failed to restore CLOEXEC on worker socket");
-        exitcode::IOERR
-    })?;
     child_socket.set_nonblocking(true).map_err(|err| {
         tracing::error!(error = %err, "failed to set non-blocking mode on worker socket");
         exitcode::IOERR
@@ -157,31 +143,38 @@ async fn incoming_socket() -> Result<
     Ok((owned_cancel, receiver, writer_half))
 }
 
-/// Register the dedicated TUN-fd passing socket handed over by root via
-/// [`socket::worker::ENV_VAR_TUN_FD`]. The connection runner pulls the TUN device fd
-/// from it once root reports the tunnel is ready. Kept in blocking mode on purpose:
-/// the runner receives the fd from a `spawn_blocking` task, and the underlying
-/// `recvmsg` is a blocking call.
-fn setup_tun_fd_socket() -> Result<(), exitcode::ExitCode> {
-    let fd: i32 = env::var(socket::worker::ENV_VAR_TUN_FD)
-        .map_err(|err| {
-            tracing::error!(error = %err, env = %socket::worker::ENV_VAR_TUN_FD, "missing worker TUN fd env var");
-            exitcode::NOINPUT
-        })?
-        .parse()
-        .map_err(|err| {
-            tracing::error!(error = %err, "invalid worker TUN fd socket env var");
-            exitcode::NOINPUT
-        })?;
+/// How long to wait for root's TUN-fd socket bootstrap message. Root sends it
+/// before spawning the worker, so it is already buffered on a healthy startup;
+/// the timeout only turns a misbehaving parent into a clean exit instead of a hang.
+const TUN_FD_SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
 
-    // SAFETY: root cleared CLOEXEC on this fd before spawning us and handed it over
-    // via the environment; we take sole ownership of it here.
-    let socket = unsafe { UnixStream::from_raw_fd(fd) };
-    socket::worker::set_cloexec(&socket, true).map_err(|err| {
-        tracing::error!(error = %err, "failed to restore CLOEXEC on worker TUN fd socket");
+/// Receive the dedicated TUN-fd passing socket from root and register it. The
+/// connection runner pulls the TUN device fd from it once root reports the tunnel
+/// is ready.
+///
+/// Root sends this socket's fd as the first message on the control socket (a
+/// single `SCM_RIGHTS` datagram ahead of any JSON line), so this must run before
+/// the control socket is handed to tokio: `recv_fd` consumes exactly the one-byte
+/// fd message and leaves the JSON stream intact for the buffered reader. The
+/// received socket stays in blocking mode on purpose: the runner receives TUN
+/// device fds from a `spawn_blocking` task, and the underlying `recvmsg` is a
+/// blocking call.
+fn setup_tun_fd_socket(control_socket: &UnixStream) -> Result<(), exitcode::ExitCode> {
+    control_socket
+        .set_read_timeout(Some(TUN_FD_SOCKET_TIMEOUT))
+        .map_err(|err| {
+            tracing::error!(error = %err, "failed to set read timeout on control socket");
+            exitcode::IOERR
+        })?;
+    let tun_fd_socket = socket::fd_passing::recv_fd(control_socket).map_err(|err| {
+        tracing::error!(error = %err, "failed to receive TUN fd socket from root");
+        exitcode::NOINPUT
+    })?;
+    control_socket.set_read_timeout(None).map_err(|err| {
+        tracing::error!(error = %err, "failed to clear read timeout on control socket");
         exitcode::IOERR
     })?;
-    socket::worker::set_tun_fd_socket(socket);
+    socket::worker::set_tun_fd_socket(UnixStream::from(tun_fd_socket));
     tracing::info!("TUN fd passing socket set up");
     Ok(())
 }
@@ -198,12 +191,19 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // set up signal swallower
     let cancel_signal_swallower = signal_swallower().await?;
 
-    // setup socket communication with root process
-    let (cancel_socket_reader, socket_receiver, writer_half) = incoming_socket().await?;
-    let writer = BufWriter::new(writer_half);
+    // claim the control socket root passed as stdin
+    let control_socket = socket::worker::claim_stdin_socket().map_err(|err| {
+        tracing::error!(error = %err, "failed to claim control socket from stdin");
+        exitcode::NOINPUT
+    })?;
 
-    // register the dedicated TUN-fd passing socket handed over by root
-    setup_tun_fd_socket()?;
+    // receive the dedicated TUN-fd passing socket sent by root ahead of any
+    // JSON traffic; must happen before the control socket is handed to tokio
+    setup_tun_fd_socket(&control_socket)?;
+
+    // setup socket communication with root process
+    let (cancel_socket_reader, socket_receiver, writer_half) = incoming_socket(control_socket).await?;
+    let writer = BufWriter::new(writer_half);
 
     // enter main loop
     let mut state = State::new(log_handle, writer);

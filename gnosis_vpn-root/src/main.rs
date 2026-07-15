@@ -15,10 +15,9 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{self};
+use std::process::{self, Stdio};
 use std::time::Duration;
 
 use gnosis_vpn_lib::command::{self, Command as LibCommand, Response, WorkerCommand};
@@ -1206,30 +1205,24 @@ impl DaemonState {
             exitcode::IOERR
         })?;
 
-        // Remove close-on-exec from the child ends so the worker inherits them.
-        for (socket, label) in [(&child_socket, "control"), (&child_tun_socket, "tun-fd")] {
-            socket::worker::set_cloexec(socket, false).map_err(|err| {
-                tracing::error!(
-                    socket = label,
-                    error = ?err,
-                    "failed to clear CLOEXEC on child socket"
-                );
-                exitcode::IOERR
-            })?;
-        }
+        // Hand the worker its end of the TUN-fd socket as the first message on the
+        // control socket (a single SCM_RIGHTS datagram ahead of any JSON traffic).
+        // The kernel dups the fd into the message, so it can be sent before the
+        // worker even spawns and the local end dropped right away.
+        socket::fd_passing::send_fd(&parent_socket, &child_tun_socket).map_err(|err| {
+            tracing::error!(error = ?err, "unable to send TUN fd socket to worker");
+            exitcode::IOERR
+        })?;
+        drop(child_tun_socket);
 
         let mut worker_command = TokioCommand::new(self.worker_user.binary.clone());
 
-        // Keep both child ends alive across spawn, then drop the parent's copies.
-        // Because close-on-exec is temporarily disabled, retaining either copy would
-        // also make it inheritable by every later worker spawn.
-        let child_ctrl_fd = child_socket.as_raw_fd();
-        let child_tun_fd = child_tun_socket.as_raw_fd();
-
         worker_command
             .current_dir(self.worker_user.home.clone())
-            .env(socket::worker::ENV_VAR, format!("{child_ctrl_fd}"))
-            .env(socket::worker::ENV_VAR_TUN_FD, format!("{child_tun_fd}"))
+            // The control channel arrives as the worker's stdin: spawn dup2s the fd
+            // onto fd 0 in the child, so no fd number crosses the environment and
+            // no CLOEXEC toggling is needed.
+            .stdin(Stdio::from(OwnedFd::from(child_socket)))
             .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
             .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
             .uid(self.worker_user.uid)
@@ -1238,11 +1231,7 @@ impl DaemonState {
         if let Some(ref log_file) = self.log_file {
             worker_command.env(logging::ENV_VAR_LOG_FILE, log_file.to_string_lossy().to_string());
         }
-        let spawn_result = worker_command.spawn();
-        // The worker (if spawned) now holds its own inherited copies; drop the parent's.
-        drop(child_socket);
-        drop(child_tun_socket);
-        let mut child = spawn_result.map_err(|err| {
+        let mut child = worker_command.spawn().map_err(|err| {
             tracing::error!(error = ?err, ?self.worker_user, "unable to spawn worker process");
             exitcode::IOERR
         })?;

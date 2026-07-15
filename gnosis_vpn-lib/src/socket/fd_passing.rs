@@ -139,6 +139,13 @@ fn recv_one_fd(sock: &UnixStream, extra_flags: RecvFlags) -> io::Result<Option<O
     // A truncated control message means the kernel dropped (and closed) fds that
     // did not fit; treat it as a hard error rather than silently proceeding.
     if message.flags.contains(ReturnFlags::CTRUNC) {
+        // rustix 1.1.4's RecvAncillaryBuffer::drop re-parses the buffer and
+        // mishandles a truncated SCM_RIGHTS payload (debug: subtract-with-overflow
+        // panic in AncillaryDrain::advance; release: out-of-bounds payload slice).
+        // Skip its Drop entirely: the buffer is a borrowed stack array, so this
+        // leaks at most the descriptors that did fit, on a path that already
+        // reports a hard protocol error.
+        std::mem::forget(control);
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "SCM_RIGHTS control message was truncated",
@@ -242,6 +249,24 @@ mod tests {
             is_cloexec(&received),
             "a received fd must be close-on-exec so it is not leaked across a spawn"
         );
+    }
+
+    #[test]
+    fn recv_fd_leaves_following_stream_bytes_intact() {
+        // The worker bootstrap sends one fd message ahead of newline-JSON traffic
+        // on the same stream: recv_fd must consume exactly the one-byte fd message
+        // and leave every byte that follows for a buffered reader.
+        let (a, b) = UnixStream::pair().unwrap();
+        let (pipe_r, _pipe_w) = make_pipe();
+
+        send_fd(&a, &pipe_r).unwrap();
+        (&a).write_all(b"{\"kind\":\"startup\"}\n").unwrap();
+
+        let _received = recv_fd(&b).unwrap();
+        let mut lines = std::io::BufReader::new(&b);
+        let mut line = String::new();
+        std::io::BufRead::read_line(&mut lines, &mut line).unwrap();
+        assert_eq!(line, "{\"kind\":\"startup\"}\n");
     }
 
     #[test]

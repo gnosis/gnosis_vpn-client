@@ -18,8 +18,10 @@
 //! ([`PLATFORM_TUN_HEADER_LEN`] `= 4`); [`TunReader`] strips it and [`TunWriter`]
 //! prepends it, chosen from the packet's IP version.
 
+#![deny(unsafe_code)]
+
 use std::io;
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, OwnedFd};
 use std::sync::Arc;
 
 use tokio::io::unix::AsyncFd;
@@ -47,36 +49,12 @@ fn utun_header(packet: &[u8]) -> [u8; 4] {
     }
 }
 
-fn set_nonblocking(fd: RawFd) -> io::Result<()> {
-    // SAFETY: fd is a live descriptor for the duration of these calls.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
+fn read_fd(fd: impl AsFd, buf: &mut [u8]) -> io::Result<usize> {
+    rustix::io::read(fd, buf).map_err(io::Error::from)
 }
 
-fn read_fd(fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
-    // SAFETY: buf is a valid writable slice; read(2) writes at most buf.len().
-    let rc = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
-    if rc < 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(rc as usize)
-    }
-}
-
-fn write_fd(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
-    // SAFETY: buf is a valid readable slice of len buf.len().
-    let rc = unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
-    if rc < 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(rc as usize)
-    }
+fn write_fd(fd: impl AsFd, buf: &[u8]) -> io::Result<usize> {
+    rustix::io::write(fd, buf).map_err(io::Error::from)
 }
 
 fn require_complete_packet_write(written: usize, expected: usize) -> io::Result<()> {
@@ -96,7 +74,7 @@ fn require_complete_packet_write(written: usize, expected: usize) -> io::Result<
 /// pass `0` for a headerless device or `4` for macOS `utun`. Must be called from
 /// within a Tokio runtime (it registers the fd with the reactor).
 pub fn tun_endpoints(fd: OwnedFd, header_len: usize) -> io::Result<(TunReader, TunWriter)> {
-    set_nonblocking(fd.as_raw_fd())?;
+    rustix::io::ioctl_fionbio(&fd, true).map_err(io::Error::from)?;
     let shared = Arc::new(AsyncFd::new(fd)?);
     Ok((
         TunReader {
@@ -124,7 +102,7 @@ impl TunReceiver for TunReader {
         let mut scratch = [0u8; super::MAX_FRAME + 4];
         loop {
             let mut guard = self.inner.readable().await?;
-            match guard.try_io(|fd| read_fd(fd.as_raw_fd(), &mut scratch)) {
+            match guard.try_io(|fd| read_fd(fd, &mut scratch)) {
                 Ok(Ok(0)) => return Ok(None),
                 Ok(Ok(n)) => {
                     let start = self.header_len.min(n);
@@ -167,7 +145,7 @@ impl TunSender for TunWriter {
         };
         loop {
             let mut guard = self.inner.writable().await?;
-            match guard.try_io(|fd| write_fd(fd.as_raw_fd(), payload)) {
+            match guard.try_io(|fd| write_fd(fd, payload)) {
                 // A short write on a packet device drops the tail. Never retry it
                 // as a second packet; reject the incomplete write instead.
                 Ok(Ok(n)) => return require_complete_packet_write(n, payload.len()),
@@ -180,20 +158,19 @@ impl TunSender for TunWriter {
 
 #[cfg(test)]
 mod tests {
-    use std::os::fd::FromRawFd;
-
     use super::*;
 
     /// A connected, message-preserving (`SOCK_DGRAM`) socket pair standing in for
     /// the packet-oriented TUN device: one `write` on the peer becomes exactly one
     /// `read` on the endpoint. `a` is the endpoint fd; `b` is the test's peer.
     fn dgram_pair() -> (OwnedFd, OwnedFd) {
-        let mut fds = [0 as RawFd; 2];
-        // SAFETY: fds is a valid 2-slot array; socketpair fills it on success.
-        let rc = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_DGRAM, 0, fds.as_mut_ptr()) };
-        assert_eq!(rc, 0, "socketpair failed: {}", io::Error::last_os_error());
-        // SAFETY: both fds are freshly created and owned by nobody else.
-        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
+        rustix::net::socketpair(
+            rustix::net::AddressFamily::UNIX,
+            rustix::net::SocketType::DGRAM,
+            rustix::net::SocketFlags::empty(),
+            None,
+        )
+        .expect("socketpair failed")
     }
 
     fn ipv4_packet() -> Vec<u8> {
@@ -214,7 +191,7 @@ mod tests {
         let (a, b) = dgram_pair();
         let (mut reader, _writer) = tun_endpoints(a, 0).unwrap();
         let packet = ipv4_packet();
-        assert_eq!(write_fd(b.as_raw_fd(), &packet).unwrap(), packet.len());
+        assert_eq!(write_fd(&b, &packet).unwrap(), packet.len());
 
         let mut out = vec![0u8; 2048];
         let n = reader.recv(&mut out).await.unwrap().expect("a packet");
@@ -229,7 +206,7 @@ mod tests {
         // Peer delivers a utun-framed packet: [AF header][packet].
         let mut framed = AF_INET_BE.to_vec();
         framed.extend_from_slice(&packet);
-        write_fd(b.as_raw_fd(), &framed).unwrap();
+        write_fd(&b, &framed).unwrap();
 
         let mut out = vec![0u8; 2048];
         let n = reader.recv(&mut out).await.unwrap().expect("a packet");
@@ -244,7 +221,7 @@ mod tests {
         writer.send(&packet).await.unwrap();
 
         let mut buf = vec![0u8; 2048];
-        let n = read_fd(b.as_raw_fd(), &mut buf).unwrap();
+        let n = read_fd(&b, &mut buf).unwrap();
         assert_eq!(&buf[..4], &AF_INET_BE, "IPv4 utun header prepended");
         assert_eq!(&buf[4..n], &packet[..]);
     }
@@ -276,11 +253,11 @@ mod tests {
         let out_packet = ipv4_packet();
         writer.send(&out_packet).await.unwrap();
         let mut peer_buf = vec![0u8; 2048];
-        let n = read_fd(b.as_raw_fd(), &mut peer_buf).unwrap();
+        let n = read_fd(&b, &mut peer_buf).unwrap();
         assert_eq!(&peer_buf[..n], &out_packet[..], "writer reached the peer");
 
         let in_packet = ipv4_packet();
-        write_fd(b.as_raw_fd(), &in_packet).unwrap();
+        write_fd(&b, &in_packet).unwrap();
         let mut buf = vec![0u8; 2048];
         let m = reader.recv(&mut buf).await.unwrap().expect("a packet");
         assert_eq!(&buf[..m], &in_packet[..], "reader saw the peer's packet");
