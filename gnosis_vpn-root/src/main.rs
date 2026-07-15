@@ -995,7 +995,7 @@ impl DaemonState {
             exitcode::DATAERR
         })?;
         match cmd {
-            WorkerToRoot::Response { id, resp } => self.incoming_worker_response(id, resp).await,
+            WorkerToRoot::Response { id, resp } => self.incoming_worker_response(id, *resp).await,
             WorkerToRoot::RequestToRoot(request) => self.incoming_worker_request(request).await,
         }
     }

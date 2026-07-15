@@ -443,7 +443,14 @@ impl State {
                         let res_recv = resp_recv.await;
                         match res_recv {
                             Ok(resp) => {
-                                send_to_root(Box::new(WorkerToRoot::Response { id, resp }), &mut self.root_socket_writer).await?;
+                                send_to_root(
+                                    Box::new(WorkerToRoot::Response {
+                                        id,
+                                        resp: Box::new(resp),
+                                    }),
+                                    &mut self.root_socket_writer,
+                                )
+                                .await?;
                             }
                             Err(err) => {
                                 tracing::warn!(error = ?err, "core-to-worker receiver unexpectedly closed while awaiting response for command from root");

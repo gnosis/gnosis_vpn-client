@@ -53,12 +53,10 @@ pub enum RootToWorker {
 }
 
 /// Messages sent from worker to root
-/// Allowing large variant as this is sent between processes
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WorkerToRoot {
     /// Response to a socket command
-    Response { resp: Response, id: u64 },
+    Response { resp: Box<Response>, id: u64 },
     /// Request to root execution
     RequestToRoot(RequestToRoot),
 }
@@ -146,6 +144,30 @@ pub enum ResponseFromRoot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_to_root_stays_below_large_enum_threshold() {
+        let size = std::mem::size_of::<WorkerToRoot>();
+        assert!(size <= 128, "WorkerToRoot is {size} bytes");
+    }
+
+    #[test]
+    fn boxed_worker_response_preserves_json_representation() {
+        let response = WorkerToRoot::Response {
+            resp: Box::new(Response::Pong),
+            id: 42,
+        };
+        let value = serde_json::to_value(response).expect("serialize worker response");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "Response": {
+                    "resp": "Pong",
+                    "id": 42
+                }
+            })
+        );
+    }
 
     #[test]
     fn setup_tunnel_request_survives_serde_round_trip() {
