@@ -31,14 +31,14 @@ allow = [
   "ISC",
   "MIT",
   "MPL-2.0",
-  "OpenSSL",
+  # "OpenSSL",
   "Unicode-3.0",
   "Unlicense",
   "Zlib",
   # need to allow our own license
-  "LGPL-3.0",
-  # HOPR dependencies use GPL-3.0 and GPL-3.0-only
-  # "GPL-3.0",
+  "LGPL-3.0-only",
+  # HOPR dependencies use GPL-3.0 (deprecated) and GPL-3.0-only
+  "GPL-3.0",
   "GPL-3.0-only",
 ]
 private = { ignore = true }

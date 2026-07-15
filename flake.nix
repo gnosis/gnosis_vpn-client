@@ -100,7 +100,8 @@
               check-symlinks.enable = true;
               check-merge-conflicts.enable = true;
               check-added-large-files.enable = true;
-              commitizen.enable = true;
+              # commitizen 4.13.9 fails to build against Python 3.14 in this nixpkgs revision.
+              commitizen.enable = false;
             };
             tools = pkgs;
             excludes = [ ];

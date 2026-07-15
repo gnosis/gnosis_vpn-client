@@ -4,7 +4,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-license = "LGPL-3.0"
+license = "LGPL-3.0-only"
 version = "0.93.0"
 
 [workspace.metadata.crane]
@@ -23,14 +23,14 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.1", features = ["derive", "env"] }
 clap_complete = "~4.6.5"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "7da0fa5c713a5e904748802630bdafcf35f651b4", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "5c3201afaa17d5f80971005d85c548ca8ade7caf", features = [
   "blokli",
   "telemetry",
 ] }
 exitcode = "~1.1.2"
 futures = "~0.3.32"
 futures-util = "~0.3.32"
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "d670a6c50517e50e400d40d21e2c11bd078461ac", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "d601edc42c2c4b44416274cd6f32ae6f9c721ba1", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
