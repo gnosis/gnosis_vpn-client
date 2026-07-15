@@ -111,7 +111,7 @@ impl Default for SurbBalancing {
         Self {
             ping: SessionSurbOptions::new(true, ByteSize::mb(1), Bandwidth::from_kbps(512)),
             // maximum allowed buffer size is 10 MB
-            main: SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(16)),
+            main: SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(32)),
             bridge: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
             health_check: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
         }
