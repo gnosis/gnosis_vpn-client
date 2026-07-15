@@ -104,6 +104,9 @@ pub struct Core {
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
     reconnecting_since: Option<SystemTime>,
     pseudonym_cache: PseudonymCache,
+    // WireGuard tunnel interface name, captured from the killswitch request during
+    // connection setup; used by the tunnel ping probe to detect data flow.
+    tunnel_interface: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +220,7 @@ impl Core {
             cached_resolved_blokli_ips,
             pseudonym_cache,
             reconnecting_since: None,
+            tunnel_interface: None,
         };
         Ok((core, incoming_sender))
     }
@@ -933,16 +937,22 @@ impl Core {
                 }
             },
 
-            Results::TunnelPingResult { rtt } => {
+            Results::TunnelPingResult { rtt, data_flowing } => {
                 if let Phase::Connected(conn) = self.phase.clone()
                     && let Some(rh) = self.route_healths.get_mut(&conn.destination.id)
                 {
-                    let failures = rh.tunnel_ping_result(rtt);
-                    let max = self.config.connection.health_check_intervals.tunnel_ping_max_failures;
-                    if failures >= max {
-                        tracing::warn!(%conn, failures, "tunnel ping exceeded max failures - reconnecting");
-                        self.reconnecting_since = Some(SystemTime::now());
-                        self.disconnect_from_connection(&conn, results_sender);
+                    if rtt.is_err() && data_flowing {
+                        // Ping drowned in a saturated tunnel while data kept moving —
+                        // congestion, not a dead tunnel. Do not count it as a failure.
+                        tracing::info!(%conn, "tunnel ping failed but traffic is flowing - treating tunnel as alive");
+                    } else {
+                        let failures = rh.tunnel_ping_result(rtt);
+                        let max = self.config.connection.health_check_intervals.tunnel_ping_max_failures;
+                        if failures >= max {
+                            tracing::warn!(%conn, failures, "tunnel ping exceeded max failures - reconnecting");
+                            self.reconnecting_since = Some(SystemTime::now());
+                            self.disconnect_from_connection(&conn, results_sender);
+                        }
                     }
                 }
             }
@@ -953,6 +963,7 @@ impl Core {
                     interface,
                     resp,
                 } => {
+                    self.tunnel_interface = Some(interface.clone());
                     let request_id = self.next_request_id();
                     self.responders.insert(request_id, Responder::Unit(resp));
                     let request = RequestToRoot::KillswitchLockdown {
@@ -1644,12 +1655,13 @@ impl Core {
 
     fn spawn_tunnel_ping_probe(&self, results_sender: &mpsc::Sender<Results>) {
         let interval = self.config.connection.health_check_intervals.tunnel_ping;
+        let interface = self.tunnel_interface.clone();
         let cancel = self.cancel_connection.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
-                    runner::tunnel_ping_loop(interval, results_sender).await;
+                    runner::tunnel_ping_loop(interval, interface, results_sender).await;
                 })
                 .await
         });
