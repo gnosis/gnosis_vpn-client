@@ -79,6 +79,17 @@ fn write_fd(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
     }
 }
 
+fn require_complete_packet_write(written: usize, expected: usize) -> io::Result<()> {
+    if written == expected {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::WriteZero,
+            format!("short TUN write: wrote {written} of {expected} bytes"),
+        ))
+    }
+}
+
 /// Wrap a TUN fd into a reader/writer pair sharing one non-blocking [`AsyncFd`].
 ///
 /// `header_len` is the per-packet platform header ([`PLATFORM_TUN_HEADER_LEN`]);
@@ -139,24 +150,27 @@ pub struct TunWriter {
 #[async_trait::async_trait]
 impl TunSender for TunWriter {
     async fn send(&mut self, packet: &[u8]) -> io::Result<()> {
+        if packet.len() > super::MAX_FRAME {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "TUN packet exceeds maximum frame size",
+            ));
+        }
         let mut framed = [0u8; super::MAX_FRAME + 4];
         let payload: &[u8] = if self.header_len == 0 {
             packet
         } else {
             let header = utun_header(packet);
-            let cap = framed.len() - header.len();
-            let n = packet.len().min(cap);
             framed[..header.len()].copy_from_slice(&header);
-            framed[header.len()..header.len() + n].copy_from_slice(&packet[..n]);
-            &framed[..header.len() + n]
+            framed[header.len()..header.len() + packet.len()].copy_from_slice(packet);
+            &framed[..header.len() + packet.len()]
         };
         loop {
             let mut guard = self.inner.writable().await?;
             match guard.try_io(|fd| write_fd(fd.as_raw_fd(), payload)) {
-                // A short write on a packet device drops the tail; treat a
-                // successful syscall as one packet injected (TUN writes are
-                // all-or-nothing per packet).
-                Ok(Ok(_n)) => return Ok(()),
+                // A short write on a packet device drops the tail. Never retry it
+                // as a second packet; reject the incomplete write instead.
+                Ok(Ok(n)) => return require_complete_packet_write(n, payload.len()),
                 Ok(Err(e)) => return Err(e),
                 Err(_would_block) => continue,
             }
@@ -233,6 +247,23 @@ mod tests {
         let n = read_fd(b.as_raw_fd(), &mut buf).unwrap();
         assert_eq!(&buf[..4], &AF_INET_BE, "IPv4 utun header prepended");
         assert_eq!(&buf[4..n], &packet[..]);
+    }
+
+    #[tokio::test]
+    async fn write_rejects_packet_larger_than_max_frame() {
+        let (a, _b) = dgram_pair();
+        let (_reader, mut writer) = tun_endpoints(a, 0).unwrap();
+        let packet = vec![0x45; super::super::MAX_FRAME + 1];
+        let err = writer.send(&packet).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(err.to_string(), "TUN packet exceeds maximum frame size");
+    }
+
+    #[test]
+    fn short_packet_write_is_rejected() {
+        let err = require_complete_packet_write(7, 20).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::WriteZero);
+        assert_eq!(err.to_string(), "short TUN write: wrote 7 of 20 bytes");
     }
 
     #[tokio::test]
