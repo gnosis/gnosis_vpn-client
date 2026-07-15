@@ -61,6 +61,7 @@ impl Hopr {
             blokli_url.map(|u| u.to_string()),
             None, // blokli_dns_override
             Some(blokli_config),
+            false, // probe_local_addresses: filter out non-public peer addresses
             init_visitor,
         )
         .await
@@ -270,7 +271,6 @@ impl Hopr {
             .find_configurator(&session_id)
             .ok_or(HoprError::SessionNotFound)?
             .update_surb_balancer_config(balancer_cfg)
-            .await
             .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))
     }
 
