@@ -42,8 +42,9 @@ uzers.workspace              = true
 x25519-dalek.workspace       = true
 
 [target.'cfg(unix)'.dependencies]
-libc   = { workspace = true }
-rustix = { workspace = true }
+libc           = { workspace = true }
+rustix         = { workspace = true }
+unix-ancillary = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 mnl   = { workspace = true }
@@ -60,3 +61,8 @@ tokio              = { workspace = true, features = ["test-util"] }
 
 [lib]
 doctest = false
+
+[[test]]
+harness = false
+name    = "worker_bootstrap"
+path    = "tests/worker_bootstrap.rs"

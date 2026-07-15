@@ -1,3 +1,4 @@
+// The worker process keeps all descriptor ownership behind safe APIs.
 #![deny(unsafe_code)]
 
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
