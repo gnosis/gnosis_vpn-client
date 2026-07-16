@@ -45,11 +45,13 @@ connections.
 1. Create an extra user on your system (e.g. `gnosisvpn`) with normal
    privileges. This user will be used to run the worker process.
 
-2. ***Only for: Ubuntu 26.04 LTS*** 
+2. _**Only for: Ubuntu 26.04 LTS**_ (TODO: remove once userspace wireguard is
+   merged)
+
 ```
 sudo tee /etc/apparmor.d/local/wg-quick >/dev/null <<'EOF'
 # Local build: allow wg-quick to read the dev user's managed config.
-/home/<VPN_USER>/.cache/wg0_gnosisvpn.conf r,
+/home/<VPN_USER>/.cache/wg0_gnosisvpn.conf r, # VPN_USER: e.g. gnosisvpn, gnosisvpnrotsee, gnosisvpnjura
 EOF
 
 sudo apparmor_parser -r /etc/apparmor.d/wg-quick`
