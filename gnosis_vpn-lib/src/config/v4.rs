@@ -1,5 +1,6 @@
 use edgli::hopr_lib::HopRouting;
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::exports::transport::SessionTarget;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
@@ -9,7 +10,9 @@ use std::vec::Vec;
 
 use crate::config;
 use crate::config::v5;
+use crate::config::v6;
 use crate::connection::destination::Destination as ConnDestination;
+use crate::connection::options;
 
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -131,8 +134,12 @@ impl TryFrom<Config> for config::Config {
     type Error = config::Error;
 
     fn try_from(value: Config) -> Result<Self, Self::Error> {
-        let connection = value.connection.into();
-        let destinations = convert_destinations(value.destinations)?;
+        let connection: options::Options = value.connection.into();
+        let destinations = convert_destinations(
+            value.destinations,
+            &connection.sessions.bridge.target,
+            &connection.sessions.wg.target,
+        )?;
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
         Ok(config::Config {
@@ -147,11 +154,17 @@ impl TryFrom<Config> for config::Config {
 
 pub fn convert_destinations(
     value: Option<HashMap<Address, Destination>>,
+    default_bridge_target: &SessionTarget,
+    default_wg_target: &SessionTarget,
 ) -> Result<HashMap<String, ConnDestination>, config::Error> {
     let config_dests = value.ok_or(config::Error::NoDestinations)?;
     if config_dests.is_empty() {
         return Err(config::Error::NoDestinations);
     }
+
+    // v4 doesn't support per-destination target/ping overrides — every destination
+    // gets the global default, with the ping address derived from the wg target's IP.
+    let ping_address = v6::ip_of(default_wg_target);
 
     let mut result = HashMap::new();
     for (address, dest) in config_dests.iter() {
@@ -167,7 +180,15 @@ pub fn convert_destinations(
 
         let meta = dest.meta.clone().unwrap_or_default();
 
-        let dest = ConnDestination::new(address.to_string(), *address, path, meta);
+        let dest = ConnDestination::new(
+            address.to_string(),
+            *address,
+            path,
+            meta,
+            default_bridge_target.clone(),
+            default_wg_target.clone(),
+            ping_address,
+        );
         result.insert(address.to_string(), dest);
     }
     Ok(result)
@@ -176,6 +197,7 @@ pub fn convert_destinations(
 #[cfg(test)]
 mod tests {
     use super::{Config, convert_destinations};
+    use crate::connection::options;
     use edgli::hopr_lib::HopRouting;
 
     fn parse(toml: &str) -> Config {
@@ -192,7 +214,12 @@ version = 4
 path = { hops = 2 }
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert_destinations(
+            cfg.destinations,
+            &options::default_bridge_target(),
+            &options::default_wg_target(),
+        )
+        .expect("should succeed");
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
     }
@@ -207,7 +234,12 @@ version = 4
 path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA", "0x25865191AdDe377fd85E91566241178070F4797A"] }
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert_destinations(
+            cfg.destinations,
+            &options::default_bridge_target(),
+            &options::default_wg_target(),
+        )
+        .expect("should succeed");
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
     }
@@ -222,7 +254,12 @@ version = 4
 path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA", "0x25865191AdDe377fd85E91566241178070F4797A", "0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254", "0xa5Ca174Ef94403d6162a969341a61baeA48F57F8"] }
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert_destinations(
+            cfg.destinations,
+            &options::default_bridge_target(),
+            &options::default_wg_target(),
+        )
+        .expect("should succeed");
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(3).unwrap());
     }
@@ -236,20 +273,29 @@ version = 4
 [destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert_destinations(
+            cfg.destinations,
+            &options::default_bridge_target(),
+            &options::default_wg_target(),
+        )
+        .expect("should succeed");
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
     }
 
     #[test]
     fn convert_destinations_empty_map_errors() {
-        let result = convert_destinations(Some(std::collections::HashMap::new()));
+        let result = convert_destinations(
+            Some(std::collections::HashMap::new()),
+            &options::default_bridge_target(),
+            &options::default_wg_target(),
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn convert_destinations_none_errors() {
-        let result = convert_destinations(None);
+        let result = convert_destinations(None, &options::default_bridge_target(), &options::default_wg_target());
         assert!(result.is_err());
     }
 

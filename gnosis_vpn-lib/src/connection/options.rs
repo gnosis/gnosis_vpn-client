@@ -1,14 +1,32 @@
 pub const DEFAULT_PATH_PLANNER_MIN_ACK_RATE: f64 = 0.1;
 
 use bytesize::ByteSize;
+use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
 use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionTarget, SurbBalancerConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use crate::ping;
+
+// Shared by all config versions that build a `Sessions` default — also the fallback
+// target for destinations that don't override their bridge/wg address.
+pub fn default_bridge_target() -> SessionTarget {
+    SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
+        [172, 30, 0, 1],
+        8000,
+    )))))
+}
+
+pub fn default_wg_target() -> SessionTarget {
+    SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
+        [172, 30, 0, 1],
+        51820,
+    )))))
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Options {

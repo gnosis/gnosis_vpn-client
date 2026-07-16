@@ -263,8 +263,13 @@ pub(crate) async fn monitor_session(
     let _ = results_sender.send(Results::SessionMonitorFailed).await;
 }
 
-pub(crate) async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>) {
+pub(crate) async fn tunnel_ping_loop(
+    interval: Duration,
+    destination: connection::destination::Destination,
+    sender: mpsc::Sender<Results>,
+) {
     let ping_opts = ping::Options {
+        address: destination.ping_address,
         seq_count: 1,
         ..Default::default()
     };

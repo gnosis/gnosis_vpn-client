@@ -1,9 +1,11 @@
 pub use edgli::hopr_lib::HopRouting;
 pub use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::exports::transport::SessionTarget;
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 use std::fmt::{self, Display};
+use std::net::IpAddr;
 
 use crate::log_output;
 use crate::serde_utils;
@@ -15,15 +17,33 @@ pub struct Destination {
     #[serde(with = "serde_utils::address")]
     pub address: Address,
     pub routing: HopRouting,
+    /// Exit-side address the ephemeral bridge session connects to.
+    pub bridge_target: SessionTarget,
+    /// Exit-side address the persistent wg (main tunnel) session connects to.
+    pub wg_target: SessionTarget,
+    /// Address pinged through the tunnel to validate connectivity/health.
+    pub ping_address: IpAddr,
 }
 
 impl Destination {
-    pub fn new(id: String, address: Address, routing: HopRouting, meta: HashMap<String, String>) -> Self {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: String,
+        address: Address,
+        routing: HopRouting,
+        meta: HashMap<String, String>,
+        bridge_target: SessionTarget,
+        wg_target: SessionTarget,
+        ping_address: IpAddr,
+    ) -> Self {
         Self {
             id,
             address,
             routing,
             meta,
+            bridge_target,
+            wg_target,
+            ping_address,
         }
     }
 

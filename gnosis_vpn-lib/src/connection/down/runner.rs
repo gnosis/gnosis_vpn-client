@@ -97,7 +97,7 @@ async fn open_bridge_session(
     };
     hopr.open_session(
         down.destination.address,
-        options.sessions.bridge.target.clone(),
+        down.destination.bridge_target.clone(),
         Some(1),
         Some(1),
         cfg.clone(),

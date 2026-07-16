@@ -21,6 +21,15 @@ version = 6
 # meta = { location = <location> }
 # session path: number of intermediate hops (0–3)
 # path = { hops = 1 }
+# override the bridge session's exit-side address for this destination only
+# (defaults to connection.bridge.target)
+# bridge_target = "172.30.0.1:8000"
+# override the wg session's exit-side address for this destination only
+# (defaults to connection.wg.target)
+# wg_target = "172.30.0.1:51820"
+# override the tunnel health-check ping address for this destination only
+# (defaults to the host part of this destination's wg_target)
+# ping_address = "172.30.0.1"
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
@@ -71,9 +80,9 @@ path    = { hops = 1 }
 # capabilities = [ "segmentation", "no_delay" ]
 # target = "172.30.0.1:51820"
 
-# adjust internal session validation ping settings
+# adjust internal session validation ping settings (the ping address itself is
+# configured per destination — see destinations.<id>.ping_address above)
 # [connection.ping]
-# address = "10.128.0.1"
 # timeout = "15s"
 # ttl = 6
 # seq_count = 3

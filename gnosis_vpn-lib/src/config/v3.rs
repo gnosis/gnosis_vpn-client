@@ -163,8 +163,12 @@ impl TryFrom<Config> for config::Config {
     type Error = config::Error;
 
     fn try_from(value: Config) -> Result<Self, Self::Error> {
-        let connection = value.connection.into();
-        let destinations = v4::convert_destinations(value.destinations)?;
+        let connection: crate::connection::options::Options = value.connection.into();
+        let destinations = v4::convert_destinations(
+            value.destinations,
+            &connection.sessions.bridge.target,
+            &connection.sessions.wg.target,
+        )?;
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
         Ok(config::Config {

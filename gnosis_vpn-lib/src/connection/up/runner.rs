@@ -146,7 +146,11 @@ impl Runner {
 
         // 10. verify tunnel with ping — give it some leeway with 5 retries
         let _ = results_sender.send(progress(Progress::Ping)).await;
-        let round_trip_time = request_ping(&self.options.ping_options, 5, &results_sender).await?;
+        let ping_options = ping::Options {
+            address: self.destination.ping_address,
+            ..self.options.ping_options.clone()
+        };
+        let round_trip_time = request_ping(&ping_options, 5, &results_sender).await?;
 
         // 11. adjust to main session
         let _ = results_sender
@@ -206,7 +210,7 @@ async fn open_bridge_session(
         tracing::debug!(%destination, "attempting to open bridge session");
         hopr.open_session(
             destination.address,
-            options.sessions.bridge.target.clone(),
+            destination.bridge_target.clone(),
             Some(1),
             Some(1),
             cfg.clone(),
@@ -287,7 +291,7 @@ async fn open_ping_session(
         tracing::debug!(%destination, "attempting to open ping session");
         hopr.open_session(
             destination.address,
-            options.sessions.wg.target.clone(),
+            destination.wg_target.clone(),
             None,
             None,
             cfg.clone(),
