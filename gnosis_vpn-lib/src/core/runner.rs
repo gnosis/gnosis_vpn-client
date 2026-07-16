@@ -96,9 +96,6 @@ pub(crate) enum Results {
     SessionMonitorFailed,
     TunnelPingResult {
         rtt: Result<Duration, String>,
-        /// Tunnel interface moved a meaningful amount of data since the previous
-        /// ping attempt — a failed ping is then congestion, not a dead tunnel.
-        data_flowing: bool,
     },
     HealthCheck {
         id: String,
@@ -266,54 +263,15 @@ pub(crate) async fn monitor_session(
     let _ = results_sender.send(Results::SessionMonitorFailed).await;
 }
 
-/// Minimum interface byte delta between two ping attempts that counts as
-/// "data is flowing". Well above WireGuard keep-alive/handshake trickle,
-/// well below any real transfer.
-const TUNNEL_DATA_FLOWING_THRESHOLD_BYTES: u64 = 10_000;
-
-/// Total rx+tx bytes of a network interface, without requiring root.
-///
-/// Linux: sysfs statistics; macOS: `netstat -ibn` (Ibytes/Obytes of the Link entry).
-async fn read_interface_bytes(interface: &str) -> Option<u64> {
-    let sysfs = async {
-        let base = format!("/sys/class/net/{interface}/statistics");
-        let rx = tokio::fs::read_to_string(format!("{base}/rx_bytes")).await.ok()?;
-        let tx = tokio::fs::read_to_string(format!("{base}/tx_bytes")).await.ok()?;
-        Some(rx.trim().parse::<u64>().ok()? + tx.trim().parse::<u64>().ok()?)
-    };
-    if let Some(total) = sysfs.await {
-        return Some(total);
-    }
-
-    let output = tokio::process::Command::new("netstat")
-        .args(["-ibn"])
-        .output()
-        .await
-        .ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.lines().find_map(|line| {
-        let cols: Vec<&str> = line.split_whitespace().collect();
-        // Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes ...
-        if cols.first() == Some(&interface) && cols.get(2).is_some_and(|c| c.starts_with("<Link")) {
-            let rx = cols.get(6)?.parse::<u64>().ok()?;
-            let tx = cols.get(9)?.parse::<u64>().ok()?;
-            Some(rx + tx)
-        } else {
-            None
-        }
-    })
-}
-
-pub(crate) async fn tunnel_ping_loop(interval: Duration, interface: Option<String>, sender: mpsc::Sender<Results>) {
+pub(crate) async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>) {
     let ping_opts = ping::Options {
         seq_count: 1,
         ..Default::default()
     };
     let ping_timeout = ping_opts.timeout;
 
-    tracing::debug!(?interval, ?interface, "starting tunnel ping probe");
+    tracing::debug!(?interval, "starting tunnel ping probe");
 
-    let mut prev_bytes: Option<u64> = None;
     loop {
         time::sleep(route_health::jitter(interval)).await;
 
@@ -333,15 +291,7 @@ pub(crate) async fn tunnel_ping_loop(interval: Duration, interface: Option<Strin
             Err(_) => Err("ping response timed out".to_string()),
         };
 
-        let cur_bytes = match &interface {
-            Some(iface) => read_interface_bytes(iface).await,
-            None => None,
-        };
-        let data_flowing = matches!((prev_bytes, cur_bytes), (Some(prev), Some(cur))
-            if cur.saturating_sub(prev) > TUNNEL_DATA_FLOWING_THRESHOLD_BYTES);
-        prev_bytes = cur_bytes;
-
-        if sender.send(Results::TunnelPingResult { rtt, data_flowing }).await.is_err() {
+        if sender.send(Results::TunnelPingResult { rtt }).await.is_err() {
             break;
         }
     }
@@ -683,9 +633,9 @@ impl Display for Results {
                 Err(err) => write!(f, "DisconnectionResult ({}): Error({})", wg_public_key, err),
             },
             Results::SessionMonitorFailed => write!(f, "SessionMonitorFailed"),
-            Results::TunnelPingResult { rtt, data_flowing } => match rtt {
+            Results::TunnelPingResult { rtt } => match rtt {
                 Ok(d) => write!(f, "TunnelPingResult: {:.1}ms", d.as_secs_f64() * 1000.0),
-                Err(err) => write!(f, "TunnelPingResult: Error({err}, data_flowing={data_flowing})"),
+                Err(err) => write!(f, "TunnelPingResult: Error({})", err),
             },
             Results::QuerySafe { res } => match res {
                 Ok(Some(_)) => write!(f, "QuerySafe: Safe found"),
