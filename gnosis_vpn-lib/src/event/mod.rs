@@ -32,8 +32,6 @@ pub enum CoreToWorker {
 }
 
 /// Messages sent from root to worker
-/// Allowing large variant as this is sent between processes
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RootToWorker {
     /// Wrap up and tear down any resources before worker process exits
@@ -42,8 +40,8 @@ pub enum RootToWorker {
     RotateLogs,
     /// Startup parameters
     StartupParams {
-        config: Config,
-        worker_params: WorkerParams,
+        config: Box<Config>,
+        worker_params: Box<WorkerParams>,
         target_dest_id: Option<String>,
     },
     /// Socket command received by root
@@ -144,6 +142,12 @@ pub enum ResponseFromRoot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn root_to_worker_stays_below_large_enum_threshold() {
+        let size = std::mem::size_of::<RootToWorker>();
+        assert!(size <= 128, "RootToWorker is {size} bytes");
+    }
 
     #[test]
     fn worker_to_root_stays_below_large_enum_threshold() {

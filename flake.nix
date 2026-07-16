@@ -126,6 +126,7 @@
               ];
               programs.shellcheck.enable = true;
               programs.shfmt.indent_size = 4;
+              programs.nixfmt.enable = true;
             };
           };
 
@@ -170,7 +171,8 @@
                 pkgs.cargo-shear
                 pkgs.just
                 pkgs.rust-analyzer
-              ];
+              ]
+              ++ lib.attrValues config.treefmt.build.programs;
 
               VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
             }

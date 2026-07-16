@@ -317,8 +317,8 @@ impl State {
                 target_dest_id,
             } => {
                 self.cmd_startup_params(
-                    config,
-                    worker_params,
+                    *config,
+                    *worker_params,
                     target_dest_id,
                     worker_to_core_receiver_wrapper,
                     core_to_worker_sender,

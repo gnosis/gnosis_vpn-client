@@ -1256,8 +1256,8 @@ impl DaemonState {
         // send initial configuration and resources to worker
         send_to_worker(
             RootToWorker::StartupParams {
-                config: self.config.clone(),
-                worker_params: self.worker_params.clone(),
+                config: Box::new(self.config.clone()),
+                worker_params: Box::new(self.worker_params.clone()),
                 target_dest_id: self.target_dest_id.clone(),
             },
             &mut socket_writer,

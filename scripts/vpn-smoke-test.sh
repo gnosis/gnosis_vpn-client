@@ -514,7 +514,7 @@ EOF
 }
 
 require_option_value() {
-    if [ "$#" -lt 2 ]; then
+    if [ "$#" -lt 2 ] || [ "${2#-}" != "$2" ]; then
         printf 'Option %s requires a value.\n\n' "$1" >&2
         usage >&2
         exit 2
