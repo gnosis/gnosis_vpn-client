@@ -108,7 +108,6 @@ pub(super) struct SurbBalancingConfig {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct WireGuard {
-    pub(super) listen_port: Option<u16>,
     pub(super) allowed_ips: Option<String>,
     pub(super) force_private_key: Option<String>,
     pub(super) dns: Option<WireGuardDNS>,
@@ -340,13 +339,6 @@ impl From<Option<Connection>> for options::Options {
 
 impl From<Option<WireGuard>> for WireGuardConfig {
     fn from(value: Option<WireGuard>) -> Self {
-        // `listen_port` remains in the TOML schema for compatibility but is
-        // meaningless since WireGuard runs in-process without a listening socket.
-        if value.as_ref().and_then(|wg| wg.listen_port).is_some() {
-            tracing::warn!(
-                "wireguard.listen_port is deprecated and ignored; WireGuard runs in-process without a listening socket"
-            );
-        }
         let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
         let force_private_key = value.as_ref().and_then(|wg| wg.force_private_key.clone());
         let dns = value
@@ -393,7 +385,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
                 for (k, v) in wg.iter() {
-                    if k == "listen_port" || k == "allowed_ips" || k == "force_private_key" {
+                    if k == "allowed_ips" || k == "force_private_key" {
                         continue;
                     }
                     if k == "dns" {
@@ -744,12 +736,11 @@ path = { hops = 4 }
     }
 
     #[test]
-    fn wireguard_listen_port_still_parses_but_is_dropped_on_conversion() {
-        // Deprecated key: the TOML schema keeps accepting `listen_port` so old
-        // configs do not fail to parse, but the converted `wireguard::Config`
-        // no longer has such a field — only the remaining options survive.
-        let cfg = parse(
-            r#####"
+    fn wireguard_listen_port_is_reported_as_a_wrong_key() {
+        // `listen_port` is not part of the schema: WireGuard runs in-process
+        // without a listening socket, so the key is flagged like any other
+        // unknown key instead of being special-cased.
+        let table: toml::Table = r#####"
 version = 6
 
 [destinations.Germany]
@@ -758,10 +749,26 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 [wireguard]
 listen_port = 51820
 allowed_ips = "10.0.0.0/8"
+"#####
+            .parse()
+            .expect("valid TOML");
+        assert_eq!(super::wrong_keys(&table), vec!["wireguard.listen_port".to_string()]);
+    }
+
+    #[test]
+    fn wireguard_section_converts_to_config() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[wireguard]
+allowed_ips = "10.0.0.0/8"
 "#####,
         );
         let wg = cfg.wireguard.expect("wireguard section parsed");
-        assert_eq!(wg.listen_port, Some(51820));
         let converted: WireGuardConfig = Some(wg).into();
         assert_eq!(
             converted,

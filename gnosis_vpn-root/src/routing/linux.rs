@@ -183,6 +183,15 @@ fn parse_cidr(s: &str) -> Result<(IpAddr, u8), Error> {
             let prefix: u8 = prefix
                 .parse()
                 .map_err(|e| Error::General(format!("invalid prefix '{prefix}': {e}")))?;
+            let max = match ip {
+                IpAddr::V4(_) => 32,
+                IpAddr::V6(_) => 128,
+            };
+            if prefix > max {
+                return Err(Error::General(format!(
+                    "invalid prefix '/{prefix}' for address '{addr}': maximum is /{max}"
+                )));
+            }
             Ok((ip, prefix))
         }
         None => {
@@ -360,5 +369,21 @@ mod tests {
             parse_cidr("2001:db8::25/64").unwrap(),
             ("2001:db8::25".parse().unwrap(), 64)
         );
+    }
+
+    #[test]
+    fn maximum_prefix_for_each_family_is_accepted() {
+        assert_eq!(parse_cidr("10.0.0.1/32").unwrap(), ("10.0.0.1".parse().unwrap(), 32));
+        assert_eq!(
+            parse_cidr("2001:db8::25/128").unwrap(),
+            ("2001:db8::25".parse().unwrap(), 128)
+        );
+    }
+
+    #[test]
+    fn prefix_beyond_the_address_family_is_rejected() {
+        assert!(parse_cidr("10.0.0.1/33").is_err());
+        assert!(parse_cidr("10.0.0.1/128").is_err());
+        assert!(parse_cidr("2001:db8::25/129").is_err());
     }
 }

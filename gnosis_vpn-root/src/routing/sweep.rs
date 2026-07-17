@@ -150,7 +150,7 @@ fn record_at(paths: &[PathBuf], state: &TeardownState) {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        match std::fs::write(path, &payload) {
+        match write_owner_only(path, payload.as_bytes()) {
             Ok(()) => {
                 tracing::debug!(path = %path.display(), "recorded teardown state");
                 return;
@@ -161,6 +161,24 @@ fn record_at(paths: &[PathBuf], state: &TeardownState) {
         }
     }
     tracing::warn!("failed to persist teardown state (crash recovery disabled for this tunnel)");
+}
+
+/// Write `payload` at `path` readable by the owner only (0600): the file holds
+/// routing/DNS details of a privileged tunnel. The mode is enforced via `fchmod`
+/// on the open handle, so a pre-existing file with looser permissions is
+/// tightened as well.
+fn write_owner_only(path: &std::path::Path, payload: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.write_all(payload)?;
+    Ok(())
 }
 
 /// Remove the state file from every candidate path.
@@ -299,6 +317,23 @@ mod tests {
         let paths = [path.clone()];
         assert_eq!(take_leftover_at(&paths), None);
         assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn recorded_state_is_owner_readable_only() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = test_dir("perms");
+        let path = dir.join("teardown-state.json");
+        let paths = [path.clone()];
+        record_at(&paths, &sample_state());
+        assert_eq!(std::fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+        // A state file left behind with looser permissions is tightened on the
+        // next record, not just at creation.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))?;
+        record_at(&paths, &sample_state());
+        assert_eq!(std::fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
