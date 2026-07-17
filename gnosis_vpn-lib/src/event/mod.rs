@@ -57,9 +57,9 @@ pub enum RootToWorker {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WorkerToRoot {
     /// Response to a socket command
-    Response { resp: Response, id: u64 },
+    Response { resp: Box<Response>, id: u64 },
     /// Request to root execution
-    RequestToRoot(RequestToRoot),
+    RequestToRoot(Box<RequestToRoot>),
 }
 
 /// Runner requesting root command and usually waiting for response

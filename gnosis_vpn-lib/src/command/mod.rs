@@ -230,7 +230,7 @@ pub enum ConnectResponse {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum DisconnectResponse {
-    Disconnecting(Destination),
+    Disconnecting(Box<Destination>),
     NotConnected,
 }
 
@@ -387,7 +387,7 @@ impl ConnectResponse {
 
 impl DisconnectResponse {
     pub fn new(destination: Destination) -> Self {
-        DisconnectResponse::Disconnecting(destination)
+        DisconnectResponse::Disconnecting(Box::new(destination))
     }
 
     pub fn not_connected() -> Self {

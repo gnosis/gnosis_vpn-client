@@ -16,10 +16,9 @@ use crate::config;
 use crate::connection::{destination::Destination as ConnDestination, options};
 use crate::ping;
 
-// Types from v6 that are schema-identical in v5 are re-used directly.
-// Connection, PingOptions, BufferOptions, and MaxSurbUpstreamOptions are defined below:
-// v5 uses separate `buffer` and `max_surb_upstream` sections instead of `surb_balancing`,
-// and v5's `ping` still accepts the deprecated `address` field that v6 dropped.
+// Types from v6 that are schema-identical in v5 are re-used directly. Types that
+// diverge (Connection, PingOptions, BufferOptions, MaxSurbUpstreamOptions) are
+// defined below, each with the reason it differs.
 pub(super) use super::v6::{
     BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, WireGuard, to_flags,
 };
@@ -40,10 +39,8 @@ pub(super) struct Connection {
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
 }
 
-// v5 defines its own PingOptions (rather than reusing v6's) because it still accepts the
-// deprecated `address` field: older configs set the global ping target here, and that value
-// is forward-converted into each destination's `ping_address` since v5 has no per-destination
-// override of its own. v6 dropped the field entirely in favor of `destination.ping_address`.
+// Unlike v6, v5 still accepts the deprecated `address` field; its value is
+// forward-converted into every destination's `ping_address`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct PingOptions {
     pub(super) address: Option<IpAddr>,
@@ -397,9 +394,8 @@ pub fn convert_destinations(
         return Err(config::Error::NoDestinations);
     }
 
-    // v5 doesn't support per-destination target/ping overrides — every destination gets the
-    // global default. `legacy_ping_address` forwards a deprecated `connection.ping.address`
-    // from the config file, if present; otherwise it falls back to the default wg IP.
+    // v5 has no per-destination overrides: every destination gets the global targets,
+    // and the deprecated `connection.ping.address` (when set) as its ping address.
     let ping_address = legacy_ping_address.unwrap_or_else(options::default_wg_ip);
 
     let mut result = HashMap::new();

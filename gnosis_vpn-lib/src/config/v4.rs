@@ -169,9 +169,8 @@ pub fn convert_destinations(
         return Err(config::Error::NoDestinations);
     }
 
-    // v4 doesn't support per-destination target/ping overrides — every destination gets the
-    // global default. `legacy_ping_address` forwards a deprecated `connection.ping.address`
-    // from the config file, if present; otherwise it falls back to the default wg IP.
+    // v4 has no per-destination overrides: every destination gets the global targets,
+    // and the deprecated `connection.ping.address` (when set) as its ping address.
     let ping_address = legacy_ping_address.unwrap_or_else(options::default_wg_ip);
 
     let mut result = HashMap::new();
