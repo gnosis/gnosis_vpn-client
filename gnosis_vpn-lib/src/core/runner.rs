@@ -265,11 +265,11 @@ pub(crate) async fn monitor_session(
 
 pub(crate) async fn tunnel_ping_loop(
     interval: Duration,
-    destination: connection::destination::Destination,
+    ping_address: std::net::IpAddr,
     sender: mpsc::Sender<Results>,
 ) {
     let ping_opts = ping::Options {
-        address: destination.ping_address,
+        address: ping_address,
         seq_count: 1,
         ..Default::default()
     };
