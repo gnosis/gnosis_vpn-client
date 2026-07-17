@@ -576,6 +576,17 @@ async fn send_to_worker(
     Ok(())
 }
 
+async fn run_blocking_io<T>(operation: impl FnOnce() -> io::Result<T> + Send + 'static) -> io::Result<T>
+where
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(operation).await.map_err(io::Error::other)?
+}
+
+async fn send_fd_async(sock: UnixStream, fd: OwnedFd) -> io::Result<()> {
+    run_blocking_io(move || gnosis_vpn_lib::socket::fd_passing::send_fd(&sock, &fd)).await
+}
+
 async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) -> Result<(), exitcode::ExitCode> {
     let serialized = serde_json::to_string(msg).map_err(|err| {
         tracing::error!(error = ?err, "failed to serialize response");
@@ -1072,7 +1083,11 @@ impl DaemonState {
                         // Pass the fd out-of-band first; the worker recv_fd's it only
                         // after seeing TunnelReady below (a simple happens-before).
                         Some(ref child) => {
-                            match gnosis_vpn_lib::socket::fd_passing::send_fd(&child.tun_fd_socket, &tun_fd) {
+                            let send_result = match child.tun_fd_socket.try_clone() {
+                                Ok(socket) => send_fd_async(socket, tun_fd).await,
+                                Err(error) => Err(error),
+                            };
+                            match send_result {
                                 Ok(()) => Ok(interface),
                                 Err(e) => {
                                     tracing::error!(error = %e, "failed to pass TUN fd to worker");
@@ -1377,5 +1392,29 @@ impl DaemonState {
             }
             _ => (),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fd_send_does_not_block_the_async_runtime() {
+        let started = Instant::now();
+        let operation = tokio::spawn(run_blocking_io(|| {
+            std::thread::sleep(Duration::from_millis(150));
+            Ok(())
+        }));
+
+        time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "the async runtime was blocked by send_fd"
+        );
+
+        operation.await.unwrap().unwrap();
     }
 }

@@ -107,9 +107,14 @@ impl TunReceiver for TunReader {
                 Ok(Ok(n)) => {
                     let start = self.header_len.min(n);
                     let packet = &scratch[start..n];
-                    let m = packet.len().min(out.len());
-                    out[..m].copy_from_slice(&packet[..m]);
-                    return Ok(Some(m));
+                    if packet.len() > out.len() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "TUN packet exceeds output buffer size",
+                        ));
+                    }
+                    out[..packet.len()].copy_from_slice(packet);
+                    return Ok(Some(packet.len()));
                 }
                 Ok(Err(e)) => return Err(e),
                 // Spurious readiness: readiness was cleared, poll again.
@@ -196,6 +201,19 @@ mod tests {
         let mut out = vec![0u8; 2048];
         let n = reader.recv(&mut out).await.unwrap().expect("a packet");
         assert_eq!(&out[..n], &packet[..]);
+    }
+
+    #[tokio::test]
+    async fn read_rejects_an_output_buffer_smaller_than_the_packet() {
+        let (a, b) = dgram_pair();
+        let (mut reader, _writer) = tun_endpoints(a, 0).unwrap();
+        let packet = ipv4_packet();
+        assert_eq!(write_fd(&b, &packet).unwrap(), packet.len());
+
+        let mut out = [0u8; 8];
+        let err = reader.recv(&mut out).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(err.to_string(), "TUN packet exceeds output buffer size");
     }
 
     #[tokio::test]

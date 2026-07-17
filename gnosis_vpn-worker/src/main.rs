@@ -170,11 +170,12 @@ fn setup_tun_fd_socket(control_socket: &UnixStream) -> Result<(), exitcode::Exit
     let tun_fd_socket = socket::fd_passing::recv_fd(control_socket).map_err(|err| {
         tracing::error!(error = %err, "failed to receive TUN fd socket from root");
         exitcode::NOINPUT
-    })?;
+    });
     control_socket.set_read_timeout(None).map_err(|err| {
         tracing::error!(error = %err, "failed to clear read timeout on control socket");
         exitcode::IOERR
     })?;
+    let tun_fd_socket = tun_fd_socket?;
     socket::worker::set_tun_fd_socket(UnixStream::from(tun_fd_socket));
     tracing::info!("TUN fd passing socket set up");
     Ok(())
@@ -488,5 +489,25 @@ impl State {
     async fn teardown(&mut self) {
         // should be already empty from main loop drainage
         self.core_task.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+
+    #[test]
+    fn tun_fd_socket_timeout_is_cleared_when_receiving_the_fd_fails() {
+        let (mut root_socket, worker_socket) = UnixStream::pair().unwrap();
+        worker_socket.set_read_timeout(Some(TUN_FD_SOCKET_TIMEOUT)).unwrap();
+        assert_eq!(worker_socket.read_timeout().unwrap(), Some(TUN_FD_SOCKET_TIMEOUT));
+        worker_socket.set_read_timeout(None).unwrap();
+        root_socket.write_all(&[0]).unwrap();
+        drop(root_socket);
+
+        assert!(setup_tun_fd_socket(&worker_socket).is_err());
+        assert_eq!(worker_socket.read_timeout().unwrap(), None);
     }
 }
