@@ -22,10 +22,10 @@ version = 6
 # session path: number of intermediate hops (0–3)
 # path = { hops = 1 }
 # override the bridge session's exit-side address for this destination only
-# (defaults to connection.bridge.target)
+# (defaults to 172.30.0.1:8000)
 # bridge_target = "172.30.0.1:8000"
 # override the wg session's exit-side address for this destination only
-# (defaults to connection.wg.target)
+# (defaults to 172.30.0.1:51820)
 # wg_target = "172.30.0.1:51820"
 # override the tunnel health-check ping address for this destination only
 # (defaults to the host part of this destination's wg_target)
@@ -71,14 +71,16 @@ path    = { hops = 1 }
 # path_planner_min_ack_rate = 0.1
 
 # determine specific connection parameters for ephemeral bridge connection
+# (the session target itself is configured per destination — see
+# destinations.<id>.bridge_target above)
 # [connection.bridge]
 # capabilities = [ "segmentation", "retransmission", "retransmission_ack_only", "no_rate_control" ]
-# target = "172.30.0.1:8000"
 
 # determine specific connection parameters for persistent main connection
+# (the session target itself is configured per destination — see
+# destinations.<id>.wg_target above)
 # [connection.wg]
 # capabilities = [ "segmentation", "no_delay" ]
-# target = "172.30.0.1:51820"
 
 # adjust internal session validation ping settings (the ping address itself is
 # configured per destination — see destinations.<id>.ping_address above)

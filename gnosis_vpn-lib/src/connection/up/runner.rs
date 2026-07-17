@@ -194,7 +194,7 @@ async fn open_bridge_session(
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = HoprSessionClientConfig {
-        capabilities: options.sessions.bridge.capabilities,
+        capabilities: options.sessions.bridge_capabilities,
         forward_path: destination.routing,
         return_path: destination.routing,
         always_max_out_surbs: surb.always_max_out_surbs,
@@ -280,7 +280,7 @@ async fn open_ping_session(
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = HoprSessionClientConfig {
-        capabilities: options.sessions.wg.capabilities,
+        capabilities: options.sessions.wg_capabilities,
         forward_path: destination.routing,
         return_path: destination.routing,
         always_max_out_surbs: surb.always_max_out_surbs,

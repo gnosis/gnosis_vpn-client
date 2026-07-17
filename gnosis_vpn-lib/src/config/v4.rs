@@ -139,13 +139,13 @@ impl TryFrom<Config> for config::Config {
             .as_ref()
             .and_then(|c| c.ping.as_ref())
             .and_then(|p| p.address);
-        let connection: options::Options = value.connection.into();
         let destinations = convert_destinations(
             value.destinations,
-            &connection.sessions.bridge.target,
-            &connection.sessions.wg.target,
+            &v5::legacy_bridge_target(value.connection.as_ref()),
+            &v5::legacy_wg_target(value.connection.as_ref()),
             legacy_ping_address,
         )?;
+        let connection: options::Options = value.connection.into();
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
         Ok(config::Config {

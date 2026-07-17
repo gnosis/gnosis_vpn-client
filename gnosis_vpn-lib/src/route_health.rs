@@ -900,7 +900,7 @@ impl HealthSession {
         let health_surb =
             surb_config_for(&options.surb_balancing.health_check).map_err(|e| HoprError::Session(e.to_string()))?;
         let cfg = HoprSessionClientConfig {
-            capabilities: options.sessions.bridge.capabilities,
+            capabilities: options.sessions.bridge_capabilities,
             forward_path: destination.routing,
             return_path: destination.routing,
             always_max_out_surbs: health_surb.always_max_out_surbs,

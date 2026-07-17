@@ -60,10 +60,11 @@ pub(super) enum Capability {
     NoRateControl,
 }
 
+// Session targets are configured per destination (`destinations.<id>.bridge_target`/`wg_target`);
+// only the capabilities remain global.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct ConnectionProtocol {
     pub(super) capabilities: Option<Vec<Capability>>,
-    pub(super) target: Option<SocketAddr>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -237,31 +238,17 @@ fn apply_session_surb(cfg: Option<SessionSurbConfig>, def: options::SessionSurbO
 impl From<Option<Connection>> for options::Options {
     fn from(conn: Option<Connection>) -> Self {
         let connection = conn.as_ref();
-        let bridge_target = connection
-            .and_then(|c| c.bridge.as_ref())
-            .and_then(|b| b.target)
-            .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
-            .unwrap_or(options::default_bridge_target());
         let bridge_caps = connection
             .and_then(|c| c.bridge.as_ref())
             .and_then(|b| b.capabilities.clone())
             .unwrap_or(Connection::default_bridge_capabilities());
-        let params_bridge = options::SessionParameters::new(bridge_target, to_flags(bridge_caps));
-
-        let wg_target = connection
-            .and_then(|c| c.wg.as_ref())
-            .and_then(|w| w.target)
-            .map(|socket| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
-            .unwrap_or(options::default_wg_target());
         let wg_caps = connection
             .and_then(|c| c.wg.as_ref())
             .and_then(|w| w.capabilities.clone())
             .unwrap_or(Connection::default_wg_capabilities());
-        let params_wg = options::SessionParameters::new(wg_target, to_flags(wg_caps));
-
         let sessions = options::Sessions {
-            bridge: params_bridge,
-            wg: params_wg,
+            bridge_capabilities: to_flags(bridge_caps),
+            wg_capabilities: to_flags(wg_caps),
         };
 
         let def_opts = ping::Options::default();
@@ -418,7 +405,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "bridge" || k == "wg" {
                         if let Some(prot) = v.as_table() {
                             for (k2, _) in prot.iter() {
-                                if k2 == "capabilities" || k2 == "target" {
+                                if k2 == "capabilities" {
                                     continue;
                                 }
                                 wrong.push(format!("connection.{k}.{k2}"));
@@ -617,11 +604,7 @@ impl TryFrom<Config> for config::Config {
         if connection.surb_balancing.ping.enabled != connection.surb_balancing.main.enabled {
             return Err(config::Error::SurbBalancingMismatch);
         }
-        let destinations = convert_destinations(
-            value.destinations,
-            &connection.sessions.bridge.target,
-            &connection.sessions.wg.target,
-        )?;
+        let destinations = convert_destinations(value.destinations)?;
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
         let strategy = value.strategy.into();
@@ -637,8 +620,6 @@ impl TryFrom<Config> for config::Config {
 
 pub fn convert_destinations(
     value: Option<HashMap<String, Destination>>,
-    default_bridge_target: &SessionTarget,
-    default_wg_target: &SessionTarget,
 ) -> Result<HashMap<String, ConnDestination>, config::Error> {
     let config_dests = value.ok_or(config::Error::NoDestinations)?;
     if config_dests.is_empty() {
@@ -656,11 +637,11 @@ pub fn convert_destinations(
         let bridge_target = dest
             .bridge_target
             .map(|addr| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(addr))))
-            .unwrap_or_else(|| default_bridge_target.clone());
+            .unwrap_or_else(options::default_bridge_target);
         let wg_target = dest
             .wg_target
             .map(|addr| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(addr))))
-            .unwrap_or_else(|| default_wg_target.clone());
+            .unwrap_or_else(options::default_wg_target);
         let ping_address = dest
             .ping_address
             .or_else(|| dest.wg_target.map(|addr| addr.ip()))
@@ -695,11 +676,7 @@ mod tests {
         cfg: &Config,
     ) -> Result<std::collections::HashMap<String, crate::connection::destination::Destination>, crate::config::Error>
     {
-        convert_destinations(
-            cfg.destinations.clone(),
-            &options::default_bridge_target(),
-            &options::default_wg_target(),
-        )
+        convert_destinations(cfg.destinations.clone())
     }
 
     #[test]
@@ -735,17 +712,13 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 
     #[test]
     fn convert_destinations_empty_map_errors() {
-        let result = convert_destinations(
-            Some(std::collections::HashMap::new()),
-            &options::default_bridge_target(),
-            &options::default_wg_target(),
-        );
+        let result = convert_destinations(Some(std::collections::HashMap::new()));
         assert!(result.is_err());
     }
 
     #[test]
     fn convert_destinations_none_errors() {
-        let result = convert_destinations(None, &options::default_bridge_target(), &options::default_wg_target());
+        let result = convert_destinations(None);
         assert!(result.is_err());
     }
 
@@ -800,7 +773,26 @@ wg_target = "10.0.0.5:51820"
     }
 
     #[test]
-    fn convert_destinations_falls_back_to_global_defaults() {
+    fn wrong_keys_flags_global_connection_targets() {
+        let table: toml::Table = toml::from_str(
+            r#####"
+version = 6
+
+[connection.bridge]
+target = "10.0.0.5:8000"
+
+[connection.wg]
+target = "10.0.0.5:51820"
+"#####,
+        )
+        .expect("valid TOML");
+        let mut wrong = super::wrong_keys(&table);
+        wrong.sort();
+        assert_eq!(wrong, vec!["connection.bridge.target", "connection.wg.target"]);
+    }
+
+    #[test]
+    fn convert_destinations_falls_back_to_default_targets() {
         let cfg = parse(
             r#####"
 version = 6

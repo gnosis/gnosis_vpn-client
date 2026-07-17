@@ -12,8 +12,7 @@ use std::time::Duration;
 
 use crate::ping;
 
-// Shared by all config versions that build a `Sessions` default — also the fallback
-// target for destinations that don't override their bridge/wg address.
+// Fallback targets for destinations that don't set `bridge_target`/`wg_target`.
 pub fn default_bridge_target() -> SessionTarget {
     SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
         [172, 30, 0, 1],
@@ -67,19 +66,13 @@ pub struct HealthCheckIntervals {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Sessions {
-    pub bridge: SessionParameters,
-    pub wg: SessionParameters,
+    pub bridge_capabilities: SessionCapabilities,
+    pub wg_capabilities: SessionCapabilities,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Timeouts {
     pub http: Duration,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SessionParameters {
-    pub target: SessionTarget,
-    pub capabilities: SessionCapabilities,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -97,12 +90,6 @@ pub struct SurbBalancing {
     pub main: SessionSurbOptions,
     pub bridge: SessionSurbOptions,
     pub health_check: SessionSurbOptions,
-}
-
-impl SessionParameters {
-    pub fn new(target: SessionTarget, capabilities: SessionCapabilities) -> Self {
-        Self { target, capabilities }
-    }
 }
 
 impl SessionSurbOptions {

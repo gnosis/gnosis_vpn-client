@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use std::vec::Vec;
 
@@ -19,9 +19,7 @@ use crate::ping;
 // Types from v6 that are schema-identical in v5 are re-used directly. Types that
 // diverge (Connection, PingOptions, BufferOptions, MaxSurbUpstreamOptions) are
 // defined below, each with the reason it differs.
-pub(super) use super::v6::{
-    BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, WireGuard, to_flags,
-};
+pub(super) use super::v6::{BlokliConfig, Capability, HealthCheckIntervalOptions, WireGuard, to_flags};
 use super::v6::{MAX_HOPS, validate_hops};
 
 // v5 defines its own Connection to carry the separate `buffer` and `max_surb_upstream`
@@ -37,6 +35,14 @@ pub(super) struct Connection {
     pub(super) max_surb_upstream: Option<MaxSurbUpstreamOptions>,
     pub(super) announced_peer_minimum_score: Option<f64>,
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
+}
+
+// Unlike v6, v5 still accepts the deprecated global `target` field; its value is
+// forward-converted into every destination's `bridge_target`/`wg_target`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct ConnectionProtocol {
+    pub(super) capabilities: Option<Vec<Capability>>,
+    pub(super) target: Option<SocketAddr>,
 }
 
 // Unlike v6, v5 still accepts the deprecated `address` field; its value is
@@ -113,34 +119,37 @@ fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstrea
     }
 }
 
+// Effective global session targets of legacy configs (v3–v5): the deprecated
+// `connection.{bridge,wg}.target`, falling back to the built-in defaults. Used to
+// forward-convert into every destination's `bridge_target`/`wg_target`.
+pub(super) fn legacy_bridge_target(conn: Option<&Connection>) -> SessionTarget {
+    conn.and_then(|c| c.bridge.as_ref())
+        .and_then(|b| b.target)
+        .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
+        .unwrap_or_else(options::default_bridge_target)
+}
+
+pub(super) fn legacy_wg_target(conn: Option<&Connection>) -> SessionTarget {
+    conn.and_then(|c| c.wg.as_ref())
+        .and_then(|w| w.target)
+        .map(|socket| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
+        .unwrap_or_else(options::default_wg_target)
+}
+
 impl From<Option<Connection>> for options::Options {
     fn from(conn: Option<Connection>) -> Self {
         let connection = conn.as_ref();
-        let bridge_target = connection
-            .and_then(|c| c.bridge.as_ref())
-            .and_then(|b| b.target)
-            .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
-            .unwrap_or(options::default_bridge_target());
         let bridge_caps = connection
             .and_then(|c| c.bridge.as_ref())
             .and_then(|b| b.capabilities.clone())
             .unwrap_or(Connection::default_bridge_capabilities());
-        let params_bridge = options::SessionParameters::new(bridge_target, to_flags(bridge_caps));
-
-        let wg_target = connection
-            .and_then(|c| c.wg.as_ref())
-            .and_then(|w| w.target)
-            .map(|socket| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
-            .unwrap_or(options::default_wg_target());
         let wg_caps = connection
             .and_then(|c| c.wg.as_ref())
             .and_then(|w| w.capabilities.clone())
             .unwrap_or(Connection::default_wg_capabilities());
-        let params_wg = options::SessionParameters::new(wg_target, to_flags(wg_caps));
-
         let sessions = options::Sessions {
-            bridge: params_bridge,
-            wg: params_wg,
+            bridge_capabilities: to_flags(bridge_caps),
+            wg_capabilities: to_flags(wg_caps),
         };
 
         let def_opts = ping::Options::default();
@@ -364,13 +373,13 @@ impl TryFrom<Config> for config::Config {
             .as_ref()
             .and_then(|c| c.ping.as_ref())
             .and_then(|p| p.address);
-        let connection: options::Options = value.connection.into();
         let destinations = convert_destinations(
             value.destinations,
-            &connection.sessions.bridge.target,
-            &connection.sessions.wg.target,
+            &legacy_bridge_target(value.connection.as_ref()),
+            &legacy_wg_target(value.connection.as_ref()),
             legacy_ping_address,
         )?;
+        let connection: options::Options = value.connection.into();
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
         Ok(config::Config {
@@ -564,6 +573,36 @@ address = "10.128.0.1"
         let result: crate::config::Config = cfg.try_into().expect("should succeed");
         let d = result.destinations.values().next().unwrap();
         assert_eq!(d.ping_address, "10.128.0.1".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn connection_targets_are_parsed_and_forwarded_end_to_end() {
+        use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
+        use edgli::hopr_lib::exports::transport::SessionTarget;
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.bridge]
+target = "10.0.0.5:8000"
+
+[connection.wg]
+target = "10.0.0.5:51820"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let d = result.destinations.values().next().unwrap();
+        assert_eq!(
+            d.bridge_target,
+            SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip("10.0.0.5:8000".parse().unwrap())))
+        );
+        assert_eq!(
+            d.wg_target,
+            SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip("10.0.0.5:51820".parse().unwrap())))
+        );
     }
 
     #[test]
