@@ -188,7 +188,6 @@ impl Runner {
             tracing::debug!("adjusting spliced wg session to main session");
             configurator
                 .update_surb_balancer_config(main_config)
-                .await
                 .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
         }
 

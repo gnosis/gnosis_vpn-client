@@ -16,7 +16,9 @@ pub enum Error {
     #[error("service not running")]
     ServiceNotRunning,
     #[error("failed serializing command: {0}")]
-    Serialization(#[from] serde_json::Error),
+    Serialization(serde_json::Error),
+    #[error("failed deserializing response: {0}")]
+    Deserialization(serde_json::Error),
     #[error("IO error: {0}")]
     IO(#[from] io::Error),
 }
@@ -26,10 +28,10 @@ pub async fn process_cmd(socket_path: &Path, cmd: &Command) -> Result<Response, 
 
     let mut stream = UnixStream::connect(socket_path).await?;
 
-    let json_cmd = serde_json::to_string(cmd)?;
+    let json_cmd = serde_json::to_string(cmd).map_err(Error::Serialization)?;
     push_command(&mut stream, &json_cmd).await?;
     let str_resp = pull_response(&mut stream).await?;
-    serde_json::from_str::<Response>(&str_resp).map_err(Error::Serialization)
+    serde_json::from_str::<Response>(&str_resp).map_err(Error::Deserialization)
 }
 
 fn check_path(socket_path: &Path) -> Result<(), Error> {
@@ -89,13 +91,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn process_cmd_returns_deserialization_error_on_invalid_response() -> anyhow::Result<()> {
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join("socket");
+        let listener = tokio::net::UnixListener::bind(&path).expect("bind");
+
+        let server = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = String::new();
+                stream.read_to_string(&mut buf).await.expect("read");
+                stream.write_all(b"not valid json").await.expect("write");
+                stream.flush().await.expect("flush");
+            }
+        });
+
+        let err = process_cmd(path.as_path(), &sample_command())
+            .await
+            .expect_err("invalid response should fail");
+
+        assert!(matches!(err, Error::Deserialization(_)));
+        server.await.expect("listener task");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn process_cmd_serializes_request_and_parses_response() -> anyhow::Result<()> {
         let tmp = tempdir().expect("tempdir");
         let path = tmp.path().join("socket");
-        let listener_path = path.clone();
+        let listener = tokio::net::UnixListener::bind(&path).expect("bind");
 
         let server = tokio::spawn(async move {
-            let listener = tokio::net::UnixListener::bind(&listener_path).expect("bind");
             if let Ok((mut stream, _)) = listener.accept().await {
                 let mut buf = String::new();
                 stream.read_to_string(&mut buf).await.expect("read");
@@ -110,8 +135,6 @@ mod tests {
                 stream.flush().await.expect("flush");
             }
         });
-
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         let resp = process_cmd(path.as_path(), &sample_command()).await.expect("response");
 

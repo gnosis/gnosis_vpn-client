@@ -61,6 +61,7 @@ impl Hopr {
             blokli_url.map(|u| u.to_string()),
             None, // blokli_dns_override
             Some(blokli_config),
+            false, // probe_local_addresses: filter out non-public peer addresses
             init_visitor,
         )
         .await

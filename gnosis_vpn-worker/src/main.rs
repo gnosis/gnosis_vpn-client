@@ -418,7 +418,7 @@ impl State {
                 IncomingResolution::Shutdown(exitcode::SOFTWARE)
             }
             (Err(err), _) => {
-                tracing::error!(error = ?err, "failed to initialize core logic");
+                tracing::error!(error = %err, "failed to initialize core logic");
                 IncomingResolution::Shutdown(exitcode::OSERR)
             }
         }

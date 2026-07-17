@@ -4,15 +4,15 @@ resolver = "2"
 
 [workspace.package]
 edition      = "2024"
-license      = "LGPL-3.0"
+license      = "LGPL-3.0-only"
 rust-version = "1.94"
-version      = "0.91.1"
+version      = "0.93.0"
 
 [workspace.metadata.crane]
 name = "gnosis_vpn"
 
 [workspace.dependencies]
-anyhow = { version = "~1.0.102" }
+anyhow = { version = "~1.0.103" }
 async-trait = "~0.1.89"
 backon = { version = "~1.6.0" }
 base64 = "~0.22.1"
@@ -25,14 +25,14 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.1", features = ["derive", "env"] }
 clap_complete = "~4.6.5"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "7da0fa5c713a5e904748802630bdafcf35f651b4", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "ee0e1baf76789dfe5ac6bb760832162a82c7eb7d", features = [
   "blokli",
   "telemetry",
 ] }
 exitcode = "~1.1.2"
 futures = "~0.3.32"
 futures-util = "~0.3.32"
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "d670a6c50517e50e400d40d21e2c11bd078461ac", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "118c4951f907bae5ca39083404f88357f2fa3722", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
@@ -52,7 +52,7 @@ reqwest = { version = "~0.13.4", features = ["blocking", "json"] }
 rtnetlink = "~0.21.0"
 rustix = { version = "~1.1.4", features = ["net", "pipe", "stdio"] }
 serde = { version = "~1.0.228", features = ["derive"] }
-serde-saphyr = "~0.0.27"
+serde-saphyr = "~0.0.28"
 serde_json = "~1.0.150"
 serde_with = "~3.21.0"
 tempfile = "~3.27.0"

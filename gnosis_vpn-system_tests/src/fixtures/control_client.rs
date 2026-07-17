@@ -121,7 +121,7 @@ impl ControlClient {
         lib::wait_for_condition("safe created", timeout, Duration::from_secs(5), || async {
             match self.status().await {
                 Ok(Some(status)) => match status.run_mode {
-                    RunMode::Init { .. } | RunMode::NotRunning => Ok(ConditionCheck::Pending),
+                    RunMode::Init { .. } | RunMode::NotRunning | RunMode::Restarting => Ok(ConditionCheck::Pending),
                     RunMode::PreparingSafe { .. } => {
                         warn!("safe being prepared");
                         Ok(ConditionCheck::Pending)
