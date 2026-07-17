@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::time::Duration;
 use std::vec::Vec;
 
@@ -16,10 +17,11 @@ use crate::connection::{destination::Destination as ConnDestination, options};
 use crate::ping;
 
 // Types from v6 that are schema-identical in v5 are re-used directly.
-// Connection, BufferOptions, and MaxSurbUpstreamOptions are defined below because
-// v5 uses separate `buffer` and `max_surb_upstream` sections instead of `surb_balancing`.
+// Connection, PingOptions, BufferOptions, and MaxSurbUpstreamOptions are defined below:
+// v5 uses separate `buffer` and `max_surb_upstream` sections instead of `surb_balancing`,
+// and v5's `ping` still accepts the deprecated `address` field that v6 dropped.
 pub(super) use super::v6::{
-    BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, PingOptions, WireGuard, to_flags,
+    BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, WireGuard, to_flags,
 };
 use super::v6::{MAX_HOPS, validate_hops};
 
@@ -36,6 +38,19 @@ pub(super) struct Connection {
     pub(super) max_surb_upstream: Option<MaxSurbUpstreamOptions>,
     pub(super) announced_peer_minimum_score: Option<f64>,
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
+}
+
+// v5 defines its own PingOptions (rather than reusing v6's) because it still accepts the
+// deprecated `address` field: older configs set the global ping target here, and that value
+// is forward-converted into each destination's `ping_address` since v5 has no per-destination
+// override of its own. v6 dropped the field entirely in favor of `destination.ping_address`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct PingOptions {
+    pub(super) address: Option<IpAddr>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) timeout: Option<Duration>,
+    pub(super) ttl: Option<u32>,
+    pub(super) seq_count: Option<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -347,11 +362,17 @@ impl TryFrom<Config> for config::Config {
     type Error = config::Error;
 
     fn try_from(value: Config) -> Result<Self, Self::Error> {
+        let legacy_ping_address = value
+            .connection
+            .as_ref()
+            .and_then(|c| c.ping.as_ref())
+            .and_then(|p| p.address);
         let connection: options::Options = value.connection.into();
         let destinations = convert_destinations(
             value.destinations,
             &connection.sessions.bridge.target,
             &connection.sessions.wg.target,
+            legacy_ping_address,
         )?;
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
@@ -369,15 +390,17 @@ pub fn convert_destinations(
     value: Option<HashMap<String, Destination>>,
     default_bridge_target: &SessionTarget,
     default_wg_target: &SessionTarget,
+    legacy_ping_address: Option<IpAddr>,
 ) -> Result<HashMap<String, ConnDestination>, config::Error> {
     let config_dests = value.ok_or(config::Error::NoDestinations)?;
     if config_dests.is_empty() {
         return Err(config::Error::NoDestinations);
     }
 
-    // v5 doesn't support per-destination target/ping overrides — every destination
-    // gets the global default, with the ping address derived from the wg target's IP.
-    let ping_address = super::v6::ip_of(default_wg_target);
+    // v5 doesn't support per-destination target/ping overrides — every destination gets the
+    // global default. `legacy_ping_address` forwards a deprecated `connection.ping.address`
+    // from the config file, if present; otherwise it's derived from the wg target's IP.
+    let ping_address = legacy_ping_address.unwrap_or_else(|| super::v6::ip_of(default_wg_target));
 
     let mut result = HashMap::new();
     for (id, dest) in config_dests.iter() {
@@ -436,6 +459,7 @@ path = { hops = 2 }
             cfg.destinations,
             &options::default_bridge_target(),
             &options::default_wg_target(),
+            None,
         )
         .expect("should succeed");
         let d = result.values().next().unwrap();
@@ -456,6 +480,7 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
             cfg.destinations,
             &options::default_bridge_target(),
             &options::default_wg_target(),
+            None,
         )
         .expect("should succeed");
         let d = result.values().next().unwrap();
@@ -468,14 +493,81 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
             Some(std::collections::HashMap::new()),
             &options::default_bridge_target(),
             &options::default_wg_target(),
+            None,
         );
         assert!(result.is_err());
     }
 
     #[test]
     fn convert_destinations_none_errors() {
-        let result = convert_destinations(None, &options::default_bridge_target(), &options::default_wg_target());
+        let result = convert_destinations(
+            None,
+            &options::default_bridge_target(),
+            &options::default_wg_target(),
+            None,
+        );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn convert_destinations_ping_address_defaults_to_wg_target_ip() {
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result = convert_destinations(
+            cfg.destinations,
+            &options::default_bridge_target(),
+            &options::default_wg_target(),
+            None,
+        )
+        .expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(d.ping_address, super::super::v6::ip_of(&options::default_wg_target()));
+    }
+
+    #[test]
+    fn convert_destinations_forwards_legacy_connection_ping_address() {
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let legacy_ping_address = "10.128.0.1".parse().unwrap();
+        let result = convert_destinations(
+            cfg.destinations,
+            &options::default_bridge_target(),
+            &options::default_wg_target(),
+            Some(legacy_ping_address),
+        )
+        .expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(d.ping_address, legacy_ping_address);
+    }
+
+    #[test]
+    fn connection_ping_address_is_parsed_and_forwarded_end_to_end() {
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.ping]
+address = "10.128.0.1"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let d = result.destinations.values().next().unwrap();
+        assert_eq!(d.ping_address, "10.128.0.1".parse::<std::net::IpAddr>().unwrap());
     }
 
     #[test]
