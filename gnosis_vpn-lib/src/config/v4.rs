@@ -11,7 +11,6 @@ use std::vec::Vec;
 
 use crate::config;
 use crate::config::v5;
-use crate::config::v6;
 use crate::connection::destination::Destination as ConnDestination;
 use crate::connection::options;
 
@@ -172,8 +171,8 @@ pub fn convert_destinations(
 
     // v4 doesn't support per-destination target/ping overrides — every destination gets the
     // global default. `legacy_ping_address` forwards a deprecated `connection.ping.address`
-    // from the config file, if present; otherwise it's derived from the wg target's IP.
-    let ping_address = legacy_ping_address.unwrap_or_else(|| v6::ip_of(default_wg_target));
+    // from the config file, if present; otherwise it falls back to the default wg IP.
+    let ping_address = legacy_ping_address.unwrap_or_else(options::default_wg_ip);
 
     let mut result = HashMap::new();
     for (address, dest) in config_dests.iter() {

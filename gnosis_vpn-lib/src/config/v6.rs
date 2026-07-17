@@ -635,18 +635,6 @@ impl TryFrom<Config> for config::Config {
     }
 }
 
-/// Extracts the plain IP from a `SessionTarget` built by this module — always
-/// `TcpStream`/`UdpStream(SealedHost::Plain(IpOrHost::Ip(_)))`, since that's the only
-/// shape `bridge_target`/`wg_target` are ever constructed in (see `default_bridge_target`,
-/// `default_wg_target`, and the `SocketAddr`-only TOML `target`/`bridge_target`/`wg_target` fields).
-pub(super) fn ip_of(target: &SessionTarget) -> IpAddr {
-    match target {
-        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(addr)))
-        | SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(addr))) => addr.ip(),
-        other => unreachable!("bridge/wg targets are always plain IP sockets, got {other:?}"),
-    }
-}
-
 pub fn convert_destinations(
     value: Option<HashMap<String, Destination>>,
     default_bridge_target: &SessionTarget,
@@ -673,7 +661,10 @@ pub fn convert_destinations(
             .wg_target
             .map(|addr| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(addr))))
             .unwrap_or_else(|| default_wg_target.clone());
-        let ping_address = dest.ping_address.unwrap_or_else(|| ip_of(&wg_target));
+        let ping_address = dest
+            .ping_address
+            .or_else(|| dest.wg_target.map(|addr| addr.ip()))
+            .unwrap_or_else(options::default_wg_ip);
         let dest = ConnDestination::new(
             id.to_string(),
             dest.address,

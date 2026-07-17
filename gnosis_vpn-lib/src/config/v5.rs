@@ -399,8 +399,8 @@ pub fn convert_destinations(
 
     // v5 doesn't support per-destination target/ping overrides — every destination gets the
     // global default. `legacy_ping_address` forwards a deprecated `connection.ping.address`
-    // from the config file, if present; otherwise it's derived from the wg target's IP.
-    let ping_address = legacy_ping_address.unwrap_or_else(|| super::v6::ip_of(default_wg_target));
+    // from the config file, if present; otherwise it falls back to the default wg IP.
+    let ping_address = legacy_ping_address.unwrap_or_else(options::default_wg_ip);
 
     let mut result = HashMap::new();
     for (id, dest) in config_dests.iter() {
@@ -527,7 +527,7 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
         )
         .expect("should succeed");
         let d = result.values().next().unwrap();
-        assert_eq!(d.ping_address, super::super::v6::ip_of(&options::default_wg_target()));
+        assert_eq!(d.ping_address, options::default_wg_ip());
     }
 
     #[test]

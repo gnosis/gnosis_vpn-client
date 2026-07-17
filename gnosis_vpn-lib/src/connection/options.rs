@@ -7,7 +7,7 @@ use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use crate::ping;
@@ -23,9 +23,13 @@ pub fn default_bridge_target() -> SessionTarget {
 
 pub fn default_wg_target() -> SessionTarget {
     SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-        [172, 30, 0, 1],
+        default_wg_ip(),
         51820,
     )))))
+}
+
+pub fn default_wg_ip() -> IpAddr {
+    IpAddr::from(Ipv4Addr::new(172, 30, 0, 1))
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
