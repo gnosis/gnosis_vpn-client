@@ -48,6 +48,7 @@ pub fn static_router(
         peer_ips,
         route_ops: DarwinRouteOps,
         active_bypass_routes: Vec::new(),
+        blackholes_added: false,
         tun: None,
         wg_interface_name: None,
         wan_info: None,
@@ -72,6 +73,8 @@ struct StaticRouter {
     route_ops: DarwinRouteOps,
     /// Bypass routes currently installed: (dest_cidr, wan_device).
     active_bypass_routes: Vec<(String, String)>,
+    /// Whether IPv6 blackhole cleanup is still required.
+    blackholes_added: bool,
     /// The created TUN device; holding it keeps root's fd (and the interface) alive.
     tun: Option<tun::Tun>,
     /// Resolved utun interface name (e.g. "utun8"); populated after the TUN is created.
@@ -91,14 +94,12 @@ impl StaticRouter {
     /// after setup and after every bypass-route change so the persisted set - which a
     /// SIGKILLed root is swept against at next start - always reflects reality.
     fn persist_teardown_state(&self) {
-        let Some(interface_name) = self.wg_interface_name.clone() else {
-            return;
-        };
         sweep::record(&sweep::TeardownState {
-            interface_name,
+            interface_name: self.wg_interface_name.clone(),
             dns_mechanism_applied: self.dns_mechanism,
-            blackholes_added: true,
+            blackholes_added: self.blackholes_added,
             bypass_routes: self.active_bypass_routes.clone(),
+            ..sweep::TeardownState::default()
         });
     }
 
@@ -126,11 +127,15 @@ impl StaticRouter {
     }
 
     async fn rollback_bypass_routes(&mut self) {
-        for (dest, device) in self.active_bypass_routes.drain(..).collect::<Vec<_>>() {
+        let mut failed = Vec::new();
+        for (dest, device) in self.active_bypass_routes.drain(..) {
             if let Err(e) = self.route_ops.route_del(&dest, &device).await {
                 tracing::warn!(%e, dest = %dest, "failed to remove bypass route during rollback");
+                failed.push((dest, device));
             }
         }
+        self.active_bypass_routes = failed;
+        self.persist_teardown_state();
     }
 }
 
@@ -183,12 +188,16 @@ impl Routing for StaticRouter {
                 return Err(e);
             }
             self.active_bypass_routes.push((dest, device.clone()));
+            self.persist_teardown_state();
         }
         for (net, prefix) in RFC1918_BYPASS_NETS {
             let cidr = format!("{}/{}", net, prefix);
             let _ = self.route_ops.route_del(&cidr, &device).await;
             match self.route_ops.route_add(&cidr, gateway.as_deref(), &device).await {
-                Ok(_) => self.active_bypass_routes.push((cidr, device.clone())),
+                Ok(_) => {
+                    self.active_bypass_routes.push((cidr, device.clone()));
+                    self.persist_teardown_state();
+                }
                 Err(e) => tracing::warn!(%e, cidr = %cidr, "RFC1918 bypass route failed, continuing"),
             }
         }
@@ -220,6 +229,7 @@ impl Routing for StaticRouter {
 
         // Phase 4: IPv6 blackhole + DNS (previously handled inside wg-quick)
         ipv6_blackhole::add().await;
+        self.blackholes_added = true;
         self.dns_mechanism = match self.dns.clone() {
             Some(servers) => dns::set(&interface_name, &servers).await,
             None => None,
@@ -240,24 +250,31 @@ impl Routing for StaticRouter {
     /// 4. Remove bypass routes (WAN) — warn on error, continue
     async fn teardown(&mut self, _logs: Logs) {
         self.remove_vpn_routes().await;
-        ipv6_blackhole::remove().await;
+        if self.blackholes_added && ipv6_blackhole::remove().await {
+            self.blackholes_added = false;
+        }
         // DNS restore must target the recorded utunN name: the compile-time fallback
         // from vpn_interface() can never exist as a scutil service key on macOS.
-        match (self.wg_interface_name.clone(), self.dns_mechanism.take()) {
-            (Some(iface), Some(mechanism)) => dns::restore(&iface, mechanism).await,
+        match (self.wg_interface_name.clone(), self.dns_mechanism) {
+            (Some(iface), Some(mechanism)) if dns::restore(&iface, mechanism).await => {
+                self.dns_mechanism = None;
+            }
             (None, Some(_)) => tracing::warn!("skipping DNS restore: utun interface name not recorded"),
             _ => {}
         }
         // Drop root's fd last so routes are removed before the interface can vanish.
         self.tun = None;
-        for (dest, device) in self.active_bypass_routes.drain(..).collect::<Vec<_>>() {
+        let mut failed = Vec::new();
+        for (dest, device) in self.active_bypass_routes.drain(..) {
             if let Err(e) = self.route_ops.route_del(&dest, &device).await {
                 tracing::warn!(%e, dest = %dest, device = %device, "failed to remove bypass route");
+                failed.push((dest, device));
             }
         }
-        self.wg_interface_name = None;
+        self.active_bypass_routes = failed;
         self.wan_info = None;
-        sweep::clear();
+        self.persist_teardown_state();
+        self.wg_interface_name = None;
         tracing::info!("routing teardown complete");
     }
 
@@ -299,9 +316,7 @@ impl Routing for StaticRouter {
         };
         let dest = ip.to_string();
         let device = wan.device.clone();
-        if let Err(e) = self.route_ops.route_del(&dest, &device).await {
-            tracing::warn!(%e, %ip, "failed to remove dynamic peer bypass route");
-        }
+        self.route_ops.route_del(&dest, &device).await?;
         self.active_bypass_routes.retain(|(d, _)| d != &dest);
         self.persist_teardown_state();
         Ok(())

@@ -12,6 +12,7 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use std::collections::HashMap;
+use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr};
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::PermissionsExt;
@@ -40,6 +41,23 @@ mod routing_actor;
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
+const DAEMON_LOCK_PATH: &str = "/var/run/gnosisvpn/daemon.lock";
+
+fn try_acquire_daemon_lock_at(path: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .open(path)?;
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).map_err(std::io::Error::from)?;
+    Ok(file)
+}
 
 struct DaemonState {
     worker_user: worker::Worker,
@@ -453,11 +471,23 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         env!("CARGO_PKG_NAME")
     );
 
+    // This fixed lock guards global recovery and networking state. It must be held
+    // before the startup sweep, including when an alternate socket path is used.
+    let _daemon_lock = try_acquire_daemon_lock_at(Path::new(DAEMON_LOCK_PATH)).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::WouldBlock {
+            tracing::error!("system service is already running - cannot start another instance");
+            exitcode::TEMPFAIL
+        } else {
+            tracing::error!(%error, path = DAEMON_LOCK_PATH, "failed to acquire daemon lock");
+            exitcode::IOERR
+        }
+    })?;
+
     let network_info = network_info::NetworkInfo::gather().await;
     tracing::info!(%network_info, "host network info");
 
-    // Sweep tunnel side effects (IPv6 blackhole routes, DNS diversion) left behind
-    // if a previous root exited without tearing down its tunnel.
+    // Sweep persistent tunnel side effects left behind if a previous root exited
+    // without tearing down its tunnel.
     routing::sweep::startup_sweep().await;
 
     // Write root pidfile for the newsyslog service to send signals to
@@ -1427,5 +1457,21 @@ mod tests {
         );
 
         operation.await.unwrap().unwrap();
+    }
+
+    #[test]
+    fn daemon_lock_excludes_another_instance_until_released() -> anyhow::Result<()> {
+        let path = std::env::temp_dir().join(format!("gvpn-daemon-lock-{}", std::process::id()));
+        let first = try_acquire_daemon_lock_at(&path)?;
+
+        assert_eq!(
+            try_acquire_daemon_lock_at(&path).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+
+        drop(first);
+        let _second = try_acquire_daemon_lock_at(&path)?;
+        std::fs::remove_file(path)?;
+        Ok(())
     }
 }

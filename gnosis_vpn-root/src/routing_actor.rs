@@ -144,6 +144,8 @@ impl Actor {
                 self.applied_policy = None;
                 if let Err(error) = self.firewall.reset_policy() {
                     tracing::warn!(?error, "failed to disable killswitch on disconnect");
+                } else {
+                    routing::sweep::clear_killswitch();
                 }
                 Some(MonitorAction::Stop)
             }
@@ -286,20 +288,30 @@ impl Actor {
             return;
         }
 
+        let mut reconciled = self.active_bypass.clone();
         if let Some(ref mut router) = self.router {
-            for ip in alive.difference(&self.active_bypass).copied().collect::<Vec<_>>() {
-                if let Err(e) = router.add_peer_bypass_route(ip).await {
-                    tracing::warn!(error = %e, peer_ip = %ip, "failed to add dynamic peer bypass route");
+            for ip in alive.difference(&self.active_bypass) {
+                match router.add_peer_bypass_route(*ip).await {
+                    Ok(()) => {
+                        reconciled.insert(*ip);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, peer_ip = %ip, "failed to add dynamic peer bypass route");
+                    }
                 }
             }
-            for ip in self.active_bypass.difference(&alive).copied().collect::<Vec<_>>() {
-                if let Err(e) = router.remove_peer_bypass_route(ip).await {
-                    tracing::warn!(error = %e, peer_ip = %ip, "failed to remove dynamic peer bypass route");
+            for ip in self.active_bypass.difference(&alive) {
+                match router.remove_peer_bypass_route(*ip).await {
+                    Ok(()) => {
+                        reconciled.remove(ip);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, peer_ip = %ip, "failed to remove dynamic peer bypass route");
+                    }
                 }
             }
         }
-
-        self.active_bypass = alive.clone();
+        self.active_bypass = reconciled;
 
         // Union the static floor (policy.ips) with the dynamic delta (alive) so blokli
         // and the initial peer snapshot stay allowed even when alive is empty.
@@ -308,13 +320,13 @@ impl Actor {
                 .ips
                 .iter()
                 .copied()
-                .chain(alive.iter().map(|ip| IpAddr::V4(*ip)))
+                .chain(self.active_bypass.iter().map(|ip| IpAddr::V4(*ip)))
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect();
             if let Err(e) = self
                 .firewall
-                .apply_policy(&policy.interface, &combined, policy.lan_lockdown)
+                .reapply_policy(&policy.interface, &combined, policy.lan_lockdown)
             {
                 tracing::warn!(error = %e, interface = %policy.interface, "failed to refresh killswitch after peer allowlist update");
             } else {
@@ -329,6 +341,11 @@ impl Actor {
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
+        let recovery_state = self
+            .firewall
+            .capture_recovery_state()
+            .map_err(|error| error.to_string())?;
+        routing::sweep::record_killswitch(recovery_state);
         let result = self
             .firewall
             .apply_policy(&interface, &ips, lan_lockdown)
@@ -374,6 +391,8 @@ impl Actor {
         self.teardown_routing().await;
         if let Err(error) = self.firewall.reset_policy() {
             tracing::warn!(?error, "failed to reset killswitch policy on shutdown");
+        } else {
+            routing::sweep::clear_killswitch();
         }
     }
 }

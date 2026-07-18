@@ -52,12 +52,15 @@ pub async fn add() {
 
 /// Remove the blackhole routes. Best-effort.
 #[cfg(target_os = "linux")]
-pub async fn remove() {
+pub async fn remove() -> bool {
+    let mut removed = true;
     for dst in BLACKHOLE_DESTINATIONS {
         if let Err(e) = run_ip6(&linux_del_args(dst)).await {
             tracing::warn!(%e, dst, "failed to remove IPv6 blackhole route (continuing)");
+            removed = false;
         }
     }
+    removed
 }
 
 #[cfg(target_os = "linux")]
@@ -83,21 +86,26 @@ pub async fn add() {
 
 /// Remove the blackhole routes. Best-effort.
 #[cfg(target_os = "macos")]
-pub async fn remove() {
+pub async fn remove() -> bool {
+    let mut removed = true;
     for dst in BLACKHOLE_DESTINATIONS {
         let mut cmd = Command::new("route");
         cmd.args(macos_delete_args(dst));
         if let Err(e) = cmd.run(Logs::Suppress).await {
             tracing::warn!(%e, dst, "failed to remove IPv6 blackhole route (continuing)");
+            removed = false;
         }
     }
+    removed
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub async fn add() {}
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub async fn remove() {}
+pub async fn remove() -> bool {
+    true
+}
 
 #[cfg(test)]
 mod tests {

@@ -43,13 +43,16 @@ pub async fn set(interface: &str, servers: &str) -> Option<Mechanism> {
 
 /// Restore the resolver configuration that was in effect before [`set`], scoped to
 /// the tunnel interface, reversing the recorded mechanism.
-pub async fn restore(interface: &str, mechanism: Mechanism) {
+pub async fn restore(interface: &str, mechanism: Mechanism) -> bool {
     #[cfg(target_os = "linux")]
-    restore_linux(interface, mechanism).await;
+    return restore_linux(interface, mechanism).await;
     #[cfg(target_os = "macos")]
-    restore_macos(interface, mechanism).await;
+    return restore_macos(interface, mechanism).await;
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    let _ = (interface, mechanism);
+    {
+        let _ = (interface, mechanism);
+        true
+    }
 }
 
 /// Split the comma-separated server list, trimming whitespace and dropping blanks.
@@ -187,21 +190,22 @@ async fn run_resolvconf_add(interface: &str, servers: &[&str]) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-async fn restore_linux(interface: &str, mechanism: Mechanism) {
+async fn restore_linux(interface: &str, mechanism: Mechanism) -> bool {
     match mechanism {
         Mechanism::Resolvectl => {
             // `revert` drops the per-interface DNS + domain settings applied above.
             let mut cmd = Command::new("resolvectl");
             cmd.args(resolvectl_revert_args(interface));
-            run("resolvectl revert", cmd).await;
+            run("resolvectl revert", cmd).await
         }
         Mechanism::Resolvconf => {
             let mut cmd = Command::new("resolvconf");
             cmd.args(resolvconf_del_args(interface));
-            run("resolvconf -d", cmd).await;
+            run("resolvconf -d", cmd).await
         }
         Mechanism::Scutil => {
             tracing::warn!("recorded DNS mechanism scutil does not apply on Linux (skipping restore)");
+            false
         }
     }
 }
@@ -218,16 +222,15 @@ async fn set_macos(interface: &str, servers: &[&str]) -> Option<Mechanism> {
 }
 
 #[cfg(target_os = "macos")]
-async fn restore_macos(interface: &str, mechanism: Mechanism) {
+async fn restore_macos(interface: &str, mechanism: Mechanism) -> bool {
     match mechanism {
-        Mechanism::Scutil => {
-            run_scutil(&scutil_remove_script(interface)).await;
-        }
+        Mechanism::Scutil => run_scutil(&scutil_remove_script(interface)).await,
         Mechanism::Resolvectl | Mechanism::Resolvconf => {
             tracing::warn!(
                 ?mechanism,
                 "recorded DNS mechanism does not apply on macOS (skipping restore)"
             );
+            false
         }
     }
 }
