@@ -19,7 +19,7 @@
 #![deny(unsafe_code)]
 
 use std::io;
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 
 use unix_ancillary::UnixStreamExt;
@@ -99,6 +99,81 @@ pub fn recv_latest_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
         );
     }
     Ok(fd)
+}
+
+/// Forensic snapshot of the two descriptors involved in an fd pass, for logging
+/// when a send fails.
+///
+/// `sendmsg` with `SCM_RIGHTS` can only fail with `EINVAL` when one of the two
+/// descriptors no longer refers to what the caller believes: the payload fd is
+/// not of a kernel-sendable type, or the sending socket has no live unix pcb.
+/// This report tells those cases apart: it states, for each descriptor, the raw
+/// fd number, the `fstat` file type, the socket type, whether a connected peer
+/// is present, and the descriptor flags. Every probe is best-effort - a probe
+/// error becomes part of the report, never a panic or an early return.
+pub fn diagnose(sock: &impl AsFd, payload: &impl AsFd) -> String {
+    format!(
+        "{} {}",
+        describe_fd("sock", sock.as_fd()),
+        describe_fd("payload", payload.as_fd())
+    )
+}
+
+fn describe_fd(label: &str, fd: BorrowedFd<'_>) -> String {
+    let stat = match rustix::fs::fstat(fd) {
+        Ok(stat) => file_type_name(rustix::fs::FileType::from_raw_mode(stat.st_mode as _)).to_string(),
+        Err(e) => format!("err({e})"),
+    };
+    let so_type = match rustix::net::sockopt::socket_type(fd) {
+        Ok(t) => socket_type_name(t).to_string(),
+        Err(e) => format!("err({e})"),
+    };
+    // A successful getpeername proves the socket still has a connected peer pcb;
+    // socketpair peers are unnamed, so the returned address itself carries no
+    // information and is discarded.
+    let peer = match rustix::net::getpeername(fd) {
+        Ok(_) => "ok".to_string(),
+        Err(e) => format!("err({e})"),
+    };
+    let cloexec = match rustix::io::fcntl_getfd(fd) {
+        Ok(flags) => flags.contains(rustix::io::FdFlags::CLOEXEC).to_string(),
+        Err(e) => format!("err({e})"),
+    };
+    let fl = match rustix::fs::fcntl_getfl(fd) {
+        Ok(flags) => format!("{flags:?}"),
+        Err(e) => format!("err({e})"),
+    };
+    format!(
+        "{label}[fd={} type={stat} so_type={so_type} peer={peer} cloexec={cloexec} fl={fl}]",
+        fd.as_raw_fd()
+    )
+}
+
+fn file_type_name(file_type: rustix::fs::FileType) -> &'static str {
+    match file_type {
+        rustix::fs::FileType::Socket => "socket",
+        rustix::fs::FileType::Fifo => "fifo",
+        rustix::fs::FileType::RegularFile => "regular",
+        rustix::fs::FileType::CharacterDevice => "chardev",
+        rustix::fs::FileType::BlockDevice => "blockdev",
+        rustix::fs::FileType::Directory => "directory",
+        rustix::fs::FileType::Symlink => "symlink",
+        _ => "unknown",
+    }
+}
+
+fn socket_type_name(socket_type: rustix::net::SocketType) -> &'static str {
+    if socket_type == rustix::net::SocketType::STREAM {
+        "stream"
+    } else if socket_type == rustix::net::SocketType::DGRAM {
+        "dgram"
+    } else if socket_type == rustix::net::SocketType::RAW {
+        "raw"
+    } else if socket_type == rustix::net::SocketType::SEQPACKET {
+        "seqpacket"
+    } else {
+        "other"
+    }
 }
 
 /// Core `recvmsg` for one `SCM_RIGHTS` descriptor.
@@ -312,6 +387,39 @@ mod tests {
         writer.write_all(b"newest").unwrap();
         drop(writer);
         assert_eq!(read_all(received), "newest");
+    }
+
+    #[test]
+    fn diagnose_reports_healthy_socket_and_pipe_payload() {
+        let (a, _b) = UnixStream::pair().unwrap();
+        let (pipe_r, _pipe_w) = make_pipe();
+        let report = diagnose(&a, &pipe_r);
+        // The sending socket is a live, connected unix stream socket.
+        assert!(
+            report.contains(&format!("sock[fd={}", std::os::fd::AsRawFd::as_raw_fd(&a))),
+            "{report}"
+        );
+        assert!(report.contains("type=socket"), "{report}");
+        assert!(report.contains("so_type=stream"), "{report}");
+        assert!(report.contains("peer=ok"), "{report}");
+        // The payload is a pipe: fstat identifies it, socket probes fail on it.
+        assert!(
+            report.contains(&format!("payload[fd={}", std::os::fd::AsRawFd::as_raw_fd(&pipe_r))),
+            "{report}"
+        );
+        assert!(report.contains("type=fifo"), "{report}");
+        assert!(report.contains("so_type=err("), "{report}");
+    }
+
+    #[test]
+    fn diagnose_probes_are_best_effort_on_every_fd_kind() {
+        // A regular file fails every socket probe but must still produce a
+        // report instead of an error or panic.
+        let file = std::fs::File::open("/dev/null").unwrap();
+        let (a, _b) = UnixStream::pair().unwrap();
+        let report = diagnose(&a, &file);
+        assert!(report.contains("payload[fd="), "{report}");
+        assert!(report.contains("cloexec="), "{report}");
     }
 
     #[test]

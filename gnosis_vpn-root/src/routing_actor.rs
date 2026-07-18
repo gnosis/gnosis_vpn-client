@@ -237,6 +237,10 @@ impl Actor {
             Ok(interface_name) => match tun_fd {
                 Ok(Some(fd)) => {
                     self.wg_interface_name = Some(interface_name.clone());
+                    tracing::debug!(
+                        fd = std::os::fd::AsRawFd::as_raw_fd(&fd),
+                        "duplicated TUN fd for worker handoff"
+                    );
                     tracing::info!("static routing setup successfully");
                     Ok((interface_name, fd))
                 }
