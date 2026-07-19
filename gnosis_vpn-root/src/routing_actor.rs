@@ -427,6 +427,7 @@ async fn run(
     let mut debounce_pending = false;
     let mut debounce_started: Option<time::Instant> = None;
     let mut removed_link: Option<String> = None;
+    let mut burst_affects_firewall = false;
 
     loop {
         tokio::select! {
@@ -457,6 +458,7 @@ async fn run(
                                 debounce_pending = false;
                                 debounce_started = None;
                                 removed_link = None;
+                                burst_affects_firewall = false;
                             }
                             None => {}
                         }
@@ -473,6 +475,7 @@ async fn run(
                     if let NetworkEvent::LinkRemoved { name, .. } | NetworkEvent::AddressRemoved { name, .. } = &event {
                         removed_link = Some(name.clone());
                     }
+                    burst_affects_firewall |= event_affects_firewall(&event);
                     let burst_started = *debounce_started.get_or_insert_with(time::Instant::now);
                     let deadline = burst_started + DEBOUNCE_MAX;
                     let settle = time::Instant::now() + DEBOUNCE_SETTLE;
@@ -483,8 +486,11 @@ async fn run(
             _ = debounce.as_mut(), if debounce_pending => {
                 debounce_pending = false;
                 debounce_started = None;
-                tracing::debug!(removed_link = ?removed_link, "network burst settled");
-                actor.reapply_policy();
+                tracing::debug!(removed_link = ?removed_link, burst_affects_firewall, "network burst settled");
+                if burst_affects_firewall {
+                    actor.reapply_policy();
+                }
+                burst_affects_firewall = false;
                 if actor.should_reconnect(removed_link.take()).await {
                     tracing::info!("network changed — notifying daemon to reconnect");
                     let _ = reconnect_tx.send(()).await;
@@ -507,9 +513,62 @@ fn log_network_event(event: &NetworkEvent) {
         NetworkEvent::LinkRemoved { index, name } => tracing::info!(index, name, "network link removed"),
         NetworkEvent::AddressAdded { index, name } => tracing::info!(index, name, "network address added"),
         NetworkEvent::AddressRemoved { index, name } => tracing::info!(index, name, "network address removed"),
-        NetworkEvent::RouteAdded => tracing::info!("route added"),
-        NetworkEvent::RouteRemoved => tracing::info!("route removed"),
+        // Route events are logged with pid + destination detail at the platform
+        // monitor where the raw message is available; only debug-trace them here.
+        NetworkEvent::RouteAdded => tracing::debug!("route added"),
+        NetworkEvent::RouteRemoved => tracing::debug!("route removed"),
         #[cfg(target_os = "macos")]
-        NetworkEvent::RouteChanged => tracing::info!("route changed"),
+        NetworkEvent::RouteChanged => tracing::debug!("route changed"),
+    }
+}
+
+/// Whether an event can invalidate the applied killswitch rules.
+///
+/// The PF/nft killswitch references only the loopback, the tunnel interface, and
+/// the allowed IP list - never the routing table - so route add/remove/change
+/// events cannot affect it. Link and address events can (interfaces vanish or
+/// renumber under the rules). Reapplying on route events would re-run the
+/// firewall front-end for every kernel route-cache flap, which on macOS showed
+/// up as a permanent 1Hz pfctl loop while connected.
+fn event_affects_firewall(event: &NetworkEvent) -> bool {
+    match event {
+        NetworkEvent::LinkChanged { .. }
+        | NetworkEvent::LinkRemoved { .. }
+        | NetworkEvent::AddressAdded { .. }
+        | NetworkEvent::AddressRemoved { .. } => true,
+        NetworkEvent::RouteAdded | NetworkEvent::RouteRemoved => false,
+        #[cfg(target_os = "macos")]
+        NetworkEvent::RouteChanged => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_events_do_not_trigger_a_killswitch_reapply() {
+        assert!(!event_affects_firewall(&NetworkEvent::RouteAdded));
+        assert!(!event_affects_firewall(&NetworkEvent::RouteRemoved));
+        #[cfg(target_os = "macos")]
+        assert!(!event_affects_firewall(&NetworkEvent::RouteChanged));
+    }
+
+    #[test]
+    fn link_and_address_events_trigger_a_killswitch_reapply() {
+        let name = "en0".to_string();
+        assert!(event_affects_firewall(&NetworkEvent::LinkChanged {
+            index: 1,
+            name: name.clone()
+        }));
+        assert!(event_affects_firewall(&NetworkEvent::LinkRemoved {
+            index: 1,
+            name: name.clone()
+        }));
+        assert!(event_affects_firewall(&NetworkEvent::AddressAdded {
+            index: 1,
+            name: name.clone()
+        }));
+        assert!(event_affects_firewall(&NetworkEvent::AddressRemoved { index: 1, name }));
     }
 }
