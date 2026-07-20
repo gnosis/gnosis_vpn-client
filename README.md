@@ -45,9 +45,21 @@ connections.
 1. Create an extra user on your system (e.g. `gnosisvpn`) with normal
    privileges. This user will be used to run the worker process.
 
-2. Build binaries via: `cargo build` or `nix build .#gnosis_vpn-dev`.
+2. _**Only for: Ubuntu 26.04 LTS**_ (TODO: remove once userspace wireguard is
+   merged)
 
-3. Copy worker binary into user's home directory and make it owned by the user:
+```
+sudo tee /etc/apparmor.d/local/wg-quick >/dev/null <<'EOF'
+# Local build: allow wg-quick to read the dev user's managed config.
+/home/<VPN_USER>/.cache/wg0_gnosisvpn.conf r, # VPN_USER: e.g. gnosisvpn, gnosisvpnrotsee, gnosisvpnjura
+EOF
+
+sudo apparmor_parser -r /etc/apparmor.d/wg-quick`
+```
+
+3. Build binaries via: `cargo build` or `nix build .#gnosis_vpn-dev`.
+
+4. Copy worker binary into user's home directory and make it owned by the user:
 
 ```bash
 > sudo cp target/debug/gnosis_vpn-worker /home/gnosisvpn/
@@ -56,7 +68,7 @@ connections.
 > sudo chown gnosisvpn:gnosisvpn /home/gnosisvpn/gnosis_vpn-worker
 ```
 
-4. Run the root binary with sudo and provide the path to the worker binary:
+5. Run the root binary with sudo and provide the path to the worker binary:
 
 ```bash
 > sudo RUST_LOG="debug" GNOSISVPN_HOME=/home/gnosisvpn ./target/debug/gnosis_vpn-root -c <config.toml> \
