@@ -23,9 +23,8 @@
       flake = false;
     };
 
-    # HOPR Nix Library (provides reusable Rust build functions and treefmt config)
     nix-lib = {
-      url = "github:hoprnet/nix-lib";
+      url = "github:hoprnet/nix-lib/c1c9abb1c1884b3211fd2af53f4ac1b8c15d78b5";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.crane.follows = "crane";
       inputs.rust-overlay.follows = "rust-overlay";
