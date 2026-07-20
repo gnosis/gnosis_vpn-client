@@ -21,6 +21,15 @@ version = 6
 # meta = { location = <location> }
 # session path: number of intermediate hops (0–3)
 # path = { hops = 1 }
+# override the bridge session's exit-side address for this destination only
+# (defaults to 172.30.0.1:8000)
+# bridge_target = "172.30.0.1:8000"
+# override the wg session's exit-side address for this destination only
+# (defaults to 172.30.0.1:51820)
+# wg_target = "172.30.0.1:51820"
+# override the tunnel health-check ping address for this destination only
+# (defaults to the host part of this destination's wg_target)
+# ping_address = "172.30.0.1"
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
@@ -62,18 +71,23 @@ path    = { hops = 1 }
 # path_planner_min_ack_rate = 0.1
 
 # determine specific connection parameters for ephemeral bridge connection
+# (the session target itself is configured per destination — see
+# destinations.<id>.bridge_target above)
+# valid capabilities: "segmentation", "retransmission", "retransmission_ack_only",
+# "no_delay", "no_rate_control"
+# avoid retransmission capabilities on the bridge session — they require additional SURBs
 # [connection.bridge]
-# capabilities = [ "segmentation", "retransmission", "retransmission_ack_only", "no_rate_control" ]
-# target = "172.30.0.1:8000"
+# capabilities = [ "segmentation", "no_rate_control" ]
 
 # determine specific connection parameters for persistent main connection
+# (the session target itself is configured per destination — see
+# destinations.<id>.wg_target above)
 # [connection.wg]
 # capabilities = [ "segmentation", "no_delay" ]
-# target = "172.30.0.1:51820"
 
-# adjust internal session validation ping settings
+# adjust internal session validation ping settings (the ping address itself is
+# configured per destination — see destinations.<id>.ping_address above)
 # [connection.ping]
-# address = "10.128.0.1"
 # timeout = "15s"
 # ttl = 6
 # seq_count = 3
@@ -121,7 +135,7 @@ path    = { hops = 1 }
 ## wireguard section - specific VPN-related settings
 
 # [wireguard]
-# interface listen port for incoming connections; defaults to 51820
+# interface listen port for incoming connections; when unset, WireGuard picks a random port
 # listen_port = 51820
 # manually overwrite derived allowed_ips for the WireGuard interface
 # allowed_ips = "0.0.0.0/0"
@@ -134,7 +148,7 @@ path    = { hops = 1 }
 ###
 ## chain provider section - query blockchain settings
 
-# see https://github.com/hoprnet/hoprnet/blob/6525d753fde70b5026d19d7a647b8143352b26df/chain/connector/src/connector/mod.rs#L46 for documentation
+# see https://github.com/hoprnet/hoprnet/blob/d601edc/impls/connector/src/connector/mod.rs#L79 for documentation
 # [blokli]
 # connection_sync_timeout = "30s"
 # sync_tolerance = 50

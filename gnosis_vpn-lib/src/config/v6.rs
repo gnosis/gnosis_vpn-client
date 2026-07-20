@@ -60,15 +60,15 @@ pub(super) enum Capability {
     NoRateControl,
 }
 
+// Session targets are configured per destination (`destinations.<id>.bridge_target`/`wg_target`);
+// only the capabilities remain global.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct ConnectionProtocol {
     pub(super) capabilities: Option<Vec<Capability>>,
-    pub(super) target: Option<SocketAddr>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct PingOptions {
-    pub(super) address: Option<IpAddr>,
     #[serde(default, with = "humantime_serde::option")]
     pub(super) timeout: Option<Duration>,
     pub(super) ttl: Option<u32>,
@@ -215,20 +215,6 @@ impl Connection {
         vec![Capability::Segmentation, Capability::NoDelay]
     }
 
-    pub fn default_bridge_target() -> SessionTarget {
-        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-            [172, 30, 0, 1],
-            8000,
-        )))))
-    }
-
-    pub fn default_wg_target() -> SessionTarget {
-        SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-            [172, 30, 0, 1],
-            51820,
-        )))))
-    }
-
     pub fn default_http_timeout() -> Duration {
         Duration::from_secs(60)
     }
@@ -252,38 +238,26 @@ fn apply_session_surb(cfg: Option<SessionSurbConfig>, def: options::SessionSurbO
 impl From<Option<Connection>> for options::Options {
     fn from(conn: Option<Connection>) -> Self {
         let connection = conn.as_ref();
-        let bridge_target = connection
-            .and_then(|c| c.bridge.as_ref())
-            .and_then(|b| b.target)
-            .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
-            .unwrap_or(Connection::default_bridge_target());
         let bridge_caps = connection
             .and_then(|c| c.bridge.as_ref())
             .and_then(|b| b.capabilities.clone())
             .unwrap_or(Connection::default_bridge_capabilities());
-        let params_bridge = options::SessionParameters::new(bridge_target, to_flags(bridge_caps));
-
-        let wg_target = connection
-            .and_then(|c| c.wg.as_ref())
-            .and_then(|w| w.target)
-            .map(|socket| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
-            .unwrap_or(Connection::default_wg_target());
         let wg_caps = connection
             .and_then(|c| c.wg.as_ref())
             .and_then(|w| w.capabilities.clone())
             .unwrap_or(Connection::default_wg_capabilities());
-        let params_wg = options::SessionParameters::new(wg_target, to_flags(wg_caps));
-
         let sessions = options::Sessions {
-            bridge: params_bridge,
-            wg: params_wg,
+            bridge_capabilities: to_flags(bridge_caps),
+            wg_capabilities: to_flags(wg_caps),
         };
 
         let def_opts = ping::Options::default();
+        // `address` is a placeholder here — every real ping is issued with
+        // `destination.ping_address` substituted in at the call site.
         let ping_opts = connection
             .and_then(|c| c.ping.as_ref())
             .map(|p| ping::Options {
-                address: p.address.unwrap_or(def_opts.address),
+                address: def_opts.address,
                 timeout: p.timeout.unwrap_or(def_opts.timeout),
                 ttl: p.ttl.unwrap_or(def_opts.ttl),
                 seq_count: p.seq_count.unwrap_or(def_opts.seq_count),
@@ -431,7 +405,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "bridge" || k == "wg" {
                         if let Some(prot) = v.as_table() {
                             for (k2, _) in prot.iter() {
-                                if k2 == "capabilities" || k2 == "target" {
+                                if k2 == "capabilities" {
                                     continue;
                                 }
                                 wrong.push(format!("connection.{k}.{k2}"));
@@ -442,7 +416,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "ping" {
                         if let Some(ping) = v.as_table() {
                             for (k2, _) in ping.iter() {
-                                if k2 == "address" || k2 == "timeout" || k2 == "ttl" || k2 == "seq_count" {
+                                if k2 == "timeout" || k2 == "ttl" || k2 == "seq_count" {
                                     continue;
                                 }
                                 wrong.push(format!("connection.ping.{k2}"));
@@ -499,7 +473,13 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                 for (id, v) in destinations.iter() {
                     if let Some(dest) = v.as_table() {
                         for (k, _) in dest.iter() {
-                            if k == "address" || k == "meta" || k == "path" {
+                            if k == "address"
+                                || k == "meta"
+                                || k == "path"
+                                || k == "bridge_target"
+                                || k == "wg_target"
+                                || k == "ping_address"
+                            {
                                 continue;
                             }
                             wrong.push(format!("destinations.{id}.{k}"));
@@ -596,6 +576,13 @@ pub(super) struct Destination {
     pub(super) address: Address,
     pub(super) meta: Option<HashMap<String, String>>,
     pub(super) path: Option<DestinationPath>,
+    /// Overrides the exit-side address the bridge session connects to for this destination only.
+    pub(super) bridge_target: Option<SocketAddr>,
+    /// Overrides the exit-side address the wg session connects to for this destination only.
+    pub(super) wg_target: Option<SocketAddr>,
+    /// Overrides the tunnel health-check ping address for this destination only.
+    /// Defaults to the host part of this destination's `wg_target` when absent.
+    pub(super) ping_address: Option<IpAddr>,
 }
 
 /// Routing path for v6 — only hop-count routing is supported.
@@ -647,7 +634,27 @@ pub fn convert_destinations(
         };
 
         let meta = dest.meta.clone().unwrap_or_default();
-        let dest = ConnDestination::new(id.to_string(), dest.address, path, meta);
+        let bridge_target = dest
+            .bridge_target
+            .map(|addr| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(addr))))
+            .unwrap_or_else(options::default_bridge_target);
+        let wg_target = dest
+            .wg_target
+            .map(|addr| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(addr))))
+            .unwrap_or_else(options::default_wg_target);
+        let ping_address = dest
+            .ping_address
+            .or_else(|| dest.wg_target.map(|addr| addr.ip()))
+            .unwrap_or_else(options::default_wg_ip);
+        let dest = ConnDestination::new(
+            id.to_string(),
+            dest.address,
+            path,
+            meta,
+            bridge_target,
+            wg_target,
+            ping_address,
+        );
         result.insert(id.to_string(), dest);
     }
     Ok(result)
@@ -656,12 +663,20 @@ pub fn convert_destinations(
 #[cfg(test)]
 mod tests {
     use super::{ChannelAllowlistConfig, Config, Strategy, convert_destinations};
+    use crate::connection::options;
     use crate::hopr::strategy_config::StrategyConfig;
     use edgli::hopr_lib::HopRouting;
     use edgli::hopr_lib::api::types::primitive::prelude::Address;
 
     fn parse(toml: &str) -> Config {
         toml::from_str(toml).expect("valid TOML")
+    }
+
+    fn convert(
+        cfg: &Config,
+    ) -> Result<std::collections::HashMap<String, crate::connection::destination::Destination>, crate::config::Error>
+    {
+        convert_destinations(cfg.destinations.clone())
     }
 
     #[test]
@@ -675,7 +690,7 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 path = { hops = 2 }
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert(&cfg).expect("should succeed");
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
     }
@@ -690,7 +705,7 @@ version = 6
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert(&cfg).expect("should succeed");
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
     }
@@ -705,6 +720,91 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
     fn convert_destinations_none_errors() {
         let result = convert_destinations(None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn convert_destinations_target_overrides_are_applied() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+bridge_target = "10.0.0.5:8000"
+wg_target = "10.0.0.5:51820"
+ping_address = "10.0.0.9"
+"#####,
+        );
+        let result = convert(&cfg).expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(
+            d.bridge_target,
+            edgli::hopr_lib::exports::transport::SessionTarget::TcpStream(
+                edgli::hopr_lib::exports::network::types::types::SealedHost::Plain(
+                    edgli::hopr_lib::exports::network::types::types::IpOrHost::Ip("10.0.0.5:8000".parse().unwrap())
+                )
+            )
+        );
+        assert_eq!(
+            d.wg_target,
+            edgli::hopr_lib::exports::transport::SessionTarget::UdpStream(
+                edgli::hopr_lib::exports::network::types::types::SealedHost::Plain(
+                    edgli::hopr_lib::exports::network::types::types::IpOrHost::Ip("10.0.0.5:51820".parse().unwrap())
+                )
+            )
+        );
+        assert_eq!(d.ping_address, "10.0.0.9".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn convert_destinations_ping_address_defaults_to_overridden_wg_target_ip() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+wg_target = "10.0.0.5:51820"
+"#####,
+        );
+        let result = convert(&cfg).expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(d.ping_address, "10.0.0.5".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn wrong_keys_flags_global_connection_targets() {
+        let table: toml::Table = toml::from_str(
+            r#####"
+version = 6
+
+[connection.bridge]
+target = "10.0.0.5:8000"
+
+[connection.wg]
+target = "10.0.0.5:51820"
+"#####,
+        )
+        .expect("valid TOML");
+        let mut wrong = super::wrong_keys(&table);
+        wrong.sort();
+        assert_eq!(wrong, vec!["connection.bridge.target", "connection.wg.target"]);
+    }
+
+    #[test]
+    fn convert_destinations_falls_back_to_default_targets() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result = convert(&cfg).expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(d.bridge_target, options::default_bridge_target());
+        assert_eq!(d.wg_target, options::default_wg_target());
     }
 
     #[test]
@@ -799,7 +899,7 @@ path_planner_min_ack_rate = {bad}
             target_open_channels: None,
             channel_allowlist: Some(ChannelAllowlistConfig {
                 enabled: true,
-                peers: vec![addr.clone()],
+                peers: vec![addr],
             }),
         });
         let cfg: StrategyConfig = strategy.into();

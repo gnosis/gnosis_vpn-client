@@ -163,8 +163,18 @@ impl TryFrom<Config> for config::Config {
     type Error = config::Error;
 
     fn try_from(value: Config) -> Result<Self, Self::Error> {
-        let connection = value.connection.into();
-        let destinations = v4::convert_destinations(value.destinations)?;
+        let legacy_ping_address = value
+            .connection
+            .as_ref()
+            .and_then(|c| c.ping.as_ref())
+            .and_then(|p| p.address);
+        let destinations = v4::convert_destinations(
+            value.destinations,
+            &v5::legacy_bridge_target(value.connection.as_ref()),
+            &v5::legacy_wg_target(value.connection.as_ref()),
+            legacy_ping_address,
+        )?;
+        let connection: crate::connection::options::Options = value.connection.into();
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
         Ok(config::Config {
@@ -206,6 +216,26 @@ address = "10.128.0.1"
 
 "#####;
         toml::from_str::<Config>(config)?;
+        Ok(())
+    }
+
+    #[test]
+    fn connection_ping_address_is_parsed_and_forwarded_end_to_end() -> anyhow::Result<()> {
+        let config = r#####"
+version = 3
+[hoprd_node]
+endpoint = "http://127.0.0.1:3001"
+api_token = "1234567890"
+
+[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
+
+[connection.ping]
+address = "10.128.0.1"
+"#####;
+        let cfg = toml::from_str::<Config>(config)?;
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let d = result.destinations.values().next().unwrap();
+        assert_eq!(d.ping_address, "10.128.0.1".parse::<std::net::IpAddr>().unwrap());
         Ok(())
     }
 

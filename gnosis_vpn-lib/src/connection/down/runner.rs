@@ -88,7 +88,7 @@ async fn open_bridge_session(
     surb: SurbParams,
 ) -> Result<SessionClientMetadata, HoprError> {
     let cfg = HoprSessionClientConfig {
-        capabilities: options.sessions.bridge.capabilities,
+        capabilities: options.sessions.bridge_capabilities,
         forward_path: down.destination.routing,
         return_path: down.destination.routing,
         always_max_out_surbs: surb.always_max_out_surbs,
@@ -97,7 +97,7 @@ async fn open_bridge_session(
     };
     hopr.open_session(
         down.destination.address,
-        options.sessions.bridge.target.clone(),
+        down.destination.bridge_target.clone(),
         Some(1),
         Some(1),
         cfg.clone(),

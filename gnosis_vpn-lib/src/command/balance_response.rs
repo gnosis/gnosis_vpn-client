@@ -120,6 +120,7 @@ impl Display for ChannelBalance {
 mod tests {
     use super::*;
     use crate::connection::destination::{Destination, HopRouting};
+    use crate::connection::options;
 
     fn address(byte: u8) -> Address {
         Address::from([byte; 20])
@@ -131,6 +132,9 @@ mod tests {
             addr,
             HopRouting::try_from(1).expect("conversion cannot fail"),
             HashMap::new(),
+            options::default_bridge_target(),
+            options::default_wg_target(),
+            std::net::IpAddr::from([172, 30, 0, 1]),
         )
     }
 

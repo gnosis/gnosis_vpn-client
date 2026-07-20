@@ -883,7 +883,7 @@ impl Core {
                     );
                     log_output::print_session_established(route.as_str());
                     self.spawn_session_monitoring(session, results_sender);
-                    self.spawn_tunnel_ping_probe(results_sender);
+                    self.spawn_tunnel_ping_probe(conn.destination.ping_address, results_sender);
                     self.cancel_announced_peers.cancel();
                     self.cancel_announced_peers = self.cancel_on_shutdown.child_token();
                     self.spawn_announced_peers(results_sender, Duration::from_secs(10));
@@ -1642,14 +1642,14 @@ impl Core {
         }
     }
 
-    fn spawn_tunnel_ping_probe(&self, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_tunnel_ping_probe(&self, ping_address: std::net::IpAddr, results_sender: &mpsc::Sender<Results>) {
         let interval = self.config.connection.health_check_intervals.tunnel_ping;
         let cancel = self.cancel_connection.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
-                    runner::tunnel_ping_loop(interval, results_sender).await;
+                    runner::tunnel_ping_loop(interval, ping_address, results_sender).await;
                 })
                 .await
         });

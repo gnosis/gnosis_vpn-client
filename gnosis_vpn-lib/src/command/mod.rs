@@ -230,7 +230,7 @@ pub enum ConnectResponse {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum DisconnectResponse {
-    Disconnecting(Destination),
+    Disconnecting(Box<Destination>),
     NotConnected,
 }
 
@@ -387,7 +387,7 @@ impl ConnectResponse {
 
 impl DisconnectResponse {
     pub fn new(destination: Destination) -> Self {
-        DisconnectResponse::Disconnecting(destination)
+        DisconnectResponse::Disconnecting(Box::new(destination))
     }
 
     pub fn not_connected() -> Self {
@@ -671,6 +671,7 @@ impl Display for RouteHealthView {
 mod tests {
     use super::*;
     use crate::connection::destination::HopRouting;
+    use crate::connection::options;
     use crate::gvpn_client;
     use crate::route_health::ExitHealth;
     use std::collections::HashMap;
@@ -685,6 +686,9 @@ mod tests {
             address(1),
             HopRouting::try_from(1).expect("conversion cannot fail"),
             HashMap::new(),
+            options::default_bridge_target(),
+            options::default_wg_target(),
+            std::net::IpAddr::from([172, 30, 0, 1]),
         )
     }
 

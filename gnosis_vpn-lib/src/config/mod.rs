@@ -99,3 +99,17 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
         _ => Err(Error::VersionMismatch(version as u8)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    // Keeps the shipped example config in sync with the schema: it must parse as the
+    // current version without any ignored keys.
+    #[test]
+    fn documented_config_matches_current_schema() {
+        let content = include_str!("../../../documented-config.toml");
+        let table = content.parse::<toml::Table>().expect("valid TOML");
+        assert_eq!(super::v6::wrong_keys(&table), Vec::<String>::new());
+        let cfg = toml::from_str::<super::v6::Config>(content).expect("deserializes as v6");
+        let _: super::Config = cfg.try_into().expect("converts to runtime config");
+    }
+}

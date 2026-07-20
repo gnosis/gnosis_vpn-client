@@ -1,14 +1,35 @@
 pub const DEFAULT_PATH_PLANNER_MIN_ACK_RATE: f64 = 0.1;
 
 use bytesize::ByteSize;
+use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
 use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionTarget, SurbBalancerConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use crate::ping;
+
+// Fallback targets for destinations that don't set `bridge_target`/`wg_target`.
+pub fn default_bridge_target() -> SessionTarget {
+    SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
+        [172, 30, 0, 1],
+        8000,
+    )))))
+}
+
+pub fn default_wg_target() -> SessionTarget {
+    SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
+        default_wg_ip(),
+        51820,
+    )))))
+}
+
+pub fn default_wg_ip() -> IpAddr {
+    IpAddr::from(Ipv4Addr::new(172, 30, 0, 1))
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Options {
@@ -45,19 +66,13 @@ pub struct HealthCheckIntervals {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Sessions {
-    pub bridge: SessionParameters,
-    pub wg: SessionParameters,
+    pub bridge_capabilities: SessionCapabilities,
+    pub wg_capabilities: SessionCapabilities,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Timeouts {
     pub http: Duration,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SessionParameters {
-    pub target: SessionTarget,
-    pub capabilities: SessionCapabilities,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -75,12 +90,6 @@ pub struct SurbBalancing {
     pub main: SessionSurbOptions,
     pub bridge: SessionSurbOptions,
     pub health_check: SessionSurbOptions,
-}
-
-impl SessionParameters {
-    pub fn new(target: SessionTarget, capabilities: SessionCapabilities) -> Self {
-        Self { target, capabilities }
-    }
 }
 
 impl SessionSurbOptions {

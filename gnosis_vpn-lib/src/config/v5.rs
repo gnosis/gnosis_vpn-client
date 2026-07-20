@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 use std::vec::Vec;
 
@@ -16,12 +16,10 @@ use crate::config;
 use crate::connection::{destination::Destination as ConnDestination, options};
 use crate::ping;
 
-// Types from v6 that are schema-identical in v5 are re-used directly.
-// Connection, BufferOptions, and MaxSurbUpstreamOptions are defined below because
-// v5 uses separate `buffer` and `max_surb_upstream` sections instead of `surb_balancing`.
-pub(super) use super::v6::{
-    BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, PingOptions, WireGuard, to_flags,
-};
+// Types from v6 that are schema-identical in v5 are re-used directly. Types that
+// diverge (Connection, PingOptions, BufferOptions, MaxSurbUpstreamOptions) are
+// defined below, each with the reason it differs.
+pub(super) use super::v6::{BlokliConfig, Capability, HealthCheckIntervalOptions, WireGuard, to_flags};
 use super::v6::{MAX_HOPS, validate_hops};
 
 // v5 defines its own Connection to carry the separate `buffer` and `max_surb_upstream`
@@ -37,6 +35,25 @@ pub(super) struct Connection {
     pub(super) max_surb_upstream: Option<MaxSurbUpstreamOptions>,
     pub(super) announced_peer_minimum_score: Option<f64>,
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
+}
+
+// Unlike v6, v5 still accepts the deprecated global `target` field; its value is
+// forward-converted into every destination's `bridge_target`/`wg_target`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct ConnectionProtocol {
+    pub(super) capabilities: Option<Vec<Capability>>,
+    pub(super) target: Option<SocketAddr>,
+}
+
+// Unlike v6, v5 still accepts the deprecated `address` field; its value is
+// forward-converted into every destination's `ping_address`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct PingOptions {
+    pub(super) address: Option<IpAddr>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) timeout: Option<Duration>,
+    pub(super) ttl: Option<u32>,
+    pub(super) seq_count: Option<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -63,20 +80,6 @@ impl Connection {
 
     pub fn default_wg_capabilities() -> Vec<Capability> {
         vec![Capability::Segmentation, Capability::NoDelay]
-    }
-
-    pub fn default_bridge_target() -> SessionTarget {
-        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-            [172, 30, 0, 1],
-            8000,
-        )))))
-    }
-
-    pub fn default_wg_target() -> SessionTarget {
-        SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-            [172, 30, 0, 1],
-            51820,
-        )))))
     }
 
     pub fn default_http_timeout() -> Duration {
@@ -116,41 +119,46 @@ fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstrea
     }
 }
 
+// Effective global session targets of legacy configs (v3–v5): the deprecated
+// `connection.{bridge,wg}.target`, falling back to the built-in defaults. Used to
+// forward-convert into every destination's `bridge_target`/`wg_target`.
+pub(super) fn legacy_bridge_target(conn: Option<&Connection>) -> SessionTarget {
+    conn.and_then(|c| c.bridge.as_ref())
+        .and_then(|b| b.target)
+        .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
+        .unwrap_or_else(options::default_bridge_target)
+}
+
+pub(super) fn legacy_wg_target(conn: Option<&Connection>) -> SessionTarget {
+    conn.and_then(|c| c.wg.as_ref())
+        .and_then(|w| w.target)
+        .map(|socket| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
+        .unwrap_or_else(options::default_wg_target)
+}
+
 impl From<Option<Connection>> for options::Options {
     fn from(conn: Option<Connection>) -> Self {
         let connection = conn.as_ref();
-        let bridge_target = connection
-            .and_then(|c| c.bridge.as_ref())
-            .and_then(|b| b.target)
-            .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
-            .unwrap_or(Connection::default_bridge_target());
         let bridge_caps = connection
             .and_then(|c| c.bridge.as_ref())
             .and_then(|b| b.capabilities.clone())
             .unwrap_or(Connection::default_bridge_capabilities());
-        let params_bridge = options::SessionParameters::new(bridge_target, to_flags(bridge_caps));
-
-        let wg_target = connection
-            .and_then(|c| c.wg.as_ref())
-            .and_then(|w| w.target)
-            .map(|socket| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
-            .unwrap_or(Connection::default_wg_target());
         let wg_caps = connection
             .and_then(|c| c.wg.as_ref())
             .and_then(|w| w.capabilities.clone())
             .unwrap_or(Connection::default_wg_capabilities());
-        let params_wg = options::SessionParameters::new(wg_target, to_flags(wg_caps));
-
         let sessions = options::Sessions {
-            bridge: params_bridge,
-            wg: params_wg,
+            bridge_capabilities: to_flags(bridge_caps),
+            wg_capabilities: to_flags(wg_caps),
         };
 
         let def_opts = ping::Options::default();
+        // `address` is a placeholder here — every real ping is issued with
+        // `destination.ping_address` substituted in at the call site.
         let ping_opts = connection
             .and_then(|c| c.ping.as_ref())
             .map(|p| ping::Options {
-                address: p.address.unwrap_or(def_opts.address),
+                address: def_opts.address,
                 timeout: p.timeout.unwrap_or(def_opts.timeout),
                 ttl: p.ttl.unwrap_or(def_opts.ttl),
                 seq_count: p.seq_count.unwrap_or(def_opts.seq_count),
@@ -360,8 +368,18 @@ impl TryFrom<Config> for config::Config {
     type Error = config::Error;
 
     fn try_from(value: Config) -> Result<Self, Self::Error> {
-        let connection = value.connection.into();
-        let destinations = convert_destinations(value.destinations)?;
+        let legacy_ping_address = value
+            .connection
+            .as_ref()
+            .and_then(|c| c.ping.as_ref())
+            .and_then(|p| p.address);
+        let destinations = convert_destinations(
+            value.destinations,
+            &legacy_bridge_target(value.connection.as_ref()),
+            &legacy_wg_target(value.connection.as_ref()),
+            legacy_ping_address,
+        )?;
+        let connection: options::Options = value.connection.into();
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
         Ok(config::Config {
@@ -376,11 +394,18 @@ impl TryFrom<Config> for config::Config {
 
 pub fn convert_destinations(
     value: Option<HashMap<String, Destination>>,
+    default_bridge_target: &SessionTarget,
+    default_wg_target: &SessionTarget,
+    legacy_ping_address: Option<IpAddr>,
 ) -> Result<HashMap<String, ConnDestination>, config::Error> {
     let config_dests = value.ok_or(config::Error::NoDestinations)?;
     if config_dests.is_empty() {
         return Err(config::Error::NoDestinations);
     }
+
+    // v5 has no per-destination overrides: every destination gets the global targets,
+    // and the deprecated `connection.ping.address` (when set) as its ping address.
+    let ping_address = legacy_ping_address.unwrap_or_else(options::default_wg_ip);
 
     let mut result = HashMap::new();
     for (id, dest) in config_dests.iter() {
@@ -400,7 +425,15 @@ pub fn convert_destinations(
 
         let meta = dest.meta.clone().unwrap_or_default();
 
-        let dest = ConnDestination::new(id.to_string(), dest.address, path, meta);
+        let dest = ConnDestination::new(
+            id.to_string(),
+            dest.address,
+            path,
+            meta,
+            default_bridge_target.clone(),
+            default_wg_target.clone(),
+            ping_address,
+        );
         result.insert(id.to_string(), dest);
     }
     Ok(result)
@@ -409,6 +442,7 @@ pub fn convert_destinations(
 #[cfg(test)]
 mod tests {
     use super::{Config, convert_destinations};
+    use crate::connection::options;
     use edgli::hopr_lib::HopRouting;
 
     fn parse(toml: &str) -> Config {
@@ -426,7 +460,13 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 path = { hops = 2 }
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert_destinations(
+            cfg.destinations,
+            &options::default_bridge_target(),
+            &options::default_wg_target(),
+            None,
+        )
+        .expect("should succeed");
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
     }
@@ -441,21 +481,128 @@ version = 5
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert_destinations(
+            cfg.destinations,
+            &options::default_bridge_target(),
+            &options::default_wg_target(),
+            None,
+        )
+        .expect("should succeed");
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
     }
 
     #[test]
     fn convert_destinations_empty_map_errors() {
-        let result = convert_destinations(Some(std::collections::HashMap::new()));
+        let result = convert_destinations(
+            Some(std::collections::HashMap::new()),
+            &options::default_bridge_target(),
+            &options::default_wg_target(),
+            None,
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn convert_destinations_none_errors() {
-        let result = convert_destinations(None);
+        let result = convert_destinations(
+            None,
+            &options::default_bridge_target(),
+            &options::default_wg_target(),
+            None,
+        );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn convert_destinations_ping_address_defaults_to_wg_target_ip() {
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result = convert_destinations(
+            cfg.destinations,
+            &options::default_bridge_target(),
+            &options::default_wg_target(),
+            None,
+        )
+        .expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(d.ping_address, options::default_wg_ip());
+    }
+
+    #[test]
+    fn convert_destinations_forwards_legacy_connection_ping_address() {
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let legacy_ping_address = "10.128.0.1".parse().unwrap();
+        let result = convert_destinations(
+            cfg.destinations,
+            &options::default_bridge_target(),
+            &options::default_wg_target(),
+            Some(legacy_ping_address),
+        )
+        .expect("should succeed");
+        let d = result.values().next().unwrap();
+        assert_eq!(d.ping_address, legacy_ping_address);
+    }
+
+    #[test]
+    fn connection_ping_address_is_parsed_and_forwarded_end_to_end() {
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.ping]
+address = "10.128.0.1"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let d = result.destinations.values().next().unwrap();
+        assert_eq!(d.ping_address, "10.128.0.1".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn connection_targets_are_parsed_and_forwarded_end_to_end() {
+        use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
+        use edgli::hopr_lib::exports::transport::SessionTarget;
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.bridge]
+target = "10.0.0.5:8000"
+
+[connection.wg]
+target = "10.0.0.5:51820"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let d = result.destinations.values().next().unwrap();
+        assert_eq!(
+            d.bridge_target,
+            SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip("10.0.0.5:8000".parse().unwrap())))
+        );
+        assert_eq!(
+            d.wg_target,
+            SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip("10.0.0.5:51820".parse().unwrap())))
+        );
     }
 
     #[test]
