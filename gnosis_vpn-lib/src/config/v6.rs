@@ -108,7 +108,6 @@ pub(super) struct SurbBalancingConfig {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct WireGuard {
-    pub(super) listen_port: Option<u16>,
     pub(super) allowed_ips: Option<String>,
     pub(super) force_private_key: Option<String>,
     pub(super) dns: Option<WireGuardDNS>,
@@ -340,7 +339,6 @@ impl From<Option<Connection>> for options::Options {
 
 impl From<Option<WireGuard>> for WireGuardConfig {
     fn from(value: Option<WireGuard>) -> Self {
-        let listen_port = value.as_ref().and_then(|wg| wg.listen_port);
         let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
         let force_private_key = value.as_ref().and_then(|wg| wg.force_private_key.clone());
         let dns = value
@@ -355,7 +353,7 @@ impl From<Option<WireGuard>> for WireGuardConfig {
                 })
             })
             .unwrap_or(Some(WireGuardDNS::default_server()));
-        WireGuardConfig::new(listen_port, allowed_ips, force_private_key, dns)
+        WireGuardConfig::new(allowed_ips, force_private_key, dns)
     }
 }
 
@@ -387,7 +385,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
                 for (k, v) in wg.iter() {
-                    if k == "listen_port" || k == "allowed_ips" || k == "force_private_key" {
+                    if k == "allowed_ips" || k == "force_private_key" {
                         continue;
                     }
                     if k == "dns" {
@@ -655,7 +653,7 @@ pub fn convert_destinations(
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelAllowlistConfig, Config, Strategy, convert_destinations};
+    use super::{ChannelAllowlistConfig, Config, Strategy, WireGuardConfig, convert_destinations};
     use crate::hopr::strategy_config::StrategyConfig;
     use edgli::hopr_lib::HopRouting;
     use edgli::hopr_lib::api::types::primitive::prelude::Address;
@@ -738,6 +736,51 @@ path = { hops = 4 }
     }
 
     #[test]
+    fn wireguard_listen_port_is_reported_as_a_wrong_key() {
+        // `listen_port` is not part of the schema: WireGuard runs in-process
+        // without a listening socket, so the key is flagged like any other
+        // unknown key instead of being special-cased.
+        let table: toml::Table = r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[wireguard]
+listen_port = 51820
+allowed_ips = "10.0.0.0/8"
+"#####
+            .parse()
+            .expect("valid TOML");
+        assert_eq!(super::wrong_keys(&table), vec!["wireguard.listen_port".to_string()]);
+    }
+
+    #[test]
+    fn wireguard_section_converts_to_config() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[wireguard]
+allowed_ips = "10.0.0.0/8"
+"#####,
+        );
+        let wg = cfg.wireguard.expect("wireguard section parsed");
+        let converted: WireGuardConfig = Some(wg).into();
+        assert_eq!(
+            converted,
+            WireGuardConfig::new(
+                Some("10.0.0.0/8".to_string()),
+                None,
+                Some("1.1.1.1,8.8.8.8".to_string())
+            )
+        );
+    }
+
+    #[test]
     fn path_planner_min_ack_rate_defaults_to_point_one() {
         let cfg = parse(
             r#####"
@@ -799,7 +842,7 @@ path_planner_min_ack_rate = {bad}
             target_open_channels: None,
             channel_allowlist: Some(ChannelAllowlistConfig {
                 enabled: true,
-                peers: vec![addr.clone()],
+                peers: vec![addr],
             }),
         });
         let cfg: StrategyConfig = strategy.into();

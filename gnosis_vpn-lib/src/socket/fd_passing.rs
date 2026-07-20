@@ -1,0 +1,437 @@
+//! Passing a single file descriptor between the root and worker processes over a
+//! dedicated `AF_UNIX` socket using `SCM_RIGHTS` ancillary data.
+//!
+//! The NepTUN data plane lives in the unprivileged worker, but only root may
+//! create the TUN device. Root opens the TUN, then hands the raw fd to the worker
+//! so the worker can drive it with `Tunn`. This must travel on a socket *separate*
+//! from the newline-JSON worker<->root channel: that channel is read through a
+//! `BufReader`, which buffers bytes past a newline that a raw `recvmsg` for the
+//! ancillary data would then miss. A dedicated socket only ever does
+//! `sendmsg`/`recvmsg`, so there is no framing hazard - ordering reduces to a
+//! simple happens-before: root sends the fd first, then reports `TunnelReady` on the
+//! JSON channel; the worker waits for `TunnelReady` before `recv_fd`ing here.
+//!
+//! `recv_fd` returns an [`OwnedFd`] so a decode error or an early drop never leaks
+//! the descriptor, and it forces close-on-exec (via `MSG_CMSG_CLOEXEC` on Linux, a
+//! post-receipt `fcntl` on platforms without the flag) so a received TUN fd is
+//! never inherited by an unrelated spawned child.
+
+#![deny(unsafe_code)]
+
+use std::io;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::os::unix::net::UnixStream;
+
+use unix_ancillary::UnixStreamExt;
+
+/// Send a single open file descriptor to the connected peer over `sock`.
+///
+/// A one-byte regular payload accompanies the ancillary data: `SCM_RIGHTS`
+/// requires at least one byte of ordinary data for the control message to be
+/// transmitted. The caller retains ownership of `fd`; the kernel duplicates it
+/// into the receiver, so `fd` remains valid here and should be closed by the
+/// caller as usual.
+pub fn send_fd(sock: &UnixStream, fd: &impl AsFd) -> io::Result<()> {
+    let payload = [0];
+    let sent = sock.send_fds(&payload, std::slice::from_ref(fd))?;
+    if sent != payload.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::WriteZero,
+            "fd-passing socket did not send its complete payload",
+        ));
+    }
+    Ok(())
+}
+
+/// Receive a single file descriptor from the connected peer over `sock`, blocking
+/// until one arrives.
+///
+/// Returns an [`OwnedFd`] that closes on drop, so any error decoding the control
+/// message - or an early return by the caller - cannot leak the descriptor. The
+/// returned fd is close-on-exec.
+pub fn recv_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
+    recv_one_fd(sock)?.ok_or_else(|| io::Error::new(io::ErrorKind::WouldBlock, "no descriptor available"))
+}
+
+/// Attempt one receive on a nonblocking socket, returning `Ok(None)` when no
+/// descriptor is currently buffered. Used by [`recv_latest_fd`] while it holds
+/// the socket in nonblocking mode to drain descriptors from aborted attempts.
+fn try_recv_fd(sock: &UnixStream) -> io::Result<Option<OwnedFd>> {
+    match recv_one_fd(sock) {
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
+        result => result,
+    }
+}
+
+/// Receive the most recent descriptor buffered on `sock`, discarding (and closing)
+/// any older ones.
+///
+/// The fd-passing socket is long-lived and shared across every in-process
+/// reconnect, and `SCM_RIGHTS` on a stream socket delivers descriptors strictly
+/// FIFO. If a connection attempt is aborted (disconnect, forced reconnect, or the
+/// setup timeout firing) *after* root has sent its TUN fd but *before* the worker
+/// consumed it, that fd stays buffered. Because connection bring-up is sequential -
+/// the next `SetupTunnel` is not requested until this receive completes - no
+/// descriptor for a *later* connection can be queued ahead of the current one. Any
+/// surplus descriptors are therefore strictly older orphans, so we block for the
+/// first, drain the rest non-blocking, and keep only the last. Draining also closes
+/// the orphaned fds, releasing the zombie TUN devices they were keeping alive.
+pub fn recv_latest_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
+    let mut fd = recv_fd(sock)?;
+    let mut discarded = 0u32;
+    sock.set_nonblocking(true)?;
+    // Reassigning `fd` drops the previously held OwnedFd, closing the stale fd it
+    // superseded.
+    let drain_result: io::Result<()> = (|| {
+        while let Some(newer) = try_recv_fd(sock)? {
+            discarded += 1;
+            fd = newer;
+        }
+        Ok(())
+    })();
+    let restore_result = sock.set_nonblocking(false);
+    drain_result?;
+    restore_result?;
+    if discarded > 0 {
+        tracing::warn!(
+            discarded,
+            "discarded stale TUN fd(s) buffered by aborted connection attempt(s); kept the newest"
+        );
+    }
+    Ok(fd)
+}
+
+/// Forensic snapshot of the two descriptors involved in an fd pass, for logging
+/// when a send fails.
+///
+/// `sendmsg` with `SCM_RIGHTS` can only fail with `EINVAL` when one of the two
+/// descriptors no longer refers to what the caller believes: the payload fd is
+/// not of a kernel-sendable type, or the sending socket has no live unix pcb.
+/// This report tells those cases apart: it states, for each descriptor, the raw
+/// fd number, the `fstat` file type, the socket type, whether a connected peer
+/// is present, and the descriptor flags. Every probe is best-effort - a probe
+/// error becomes part of the report, never a panic or an early return.
+pub fn diagnose(sock: &impl AsFd, payload: &impl AsFd) -> String {
+    format!(
+        "{} {}",
+        describe_fd("sock", sock.as_fd()),
+        describe_fd("payload", payload.as_fd())
+    )
+}
+
+fn describe_fd(label: &str, fd: BorrowedFd<'_>) -> String {
+    let stat = match rustix::fs::fstat(fd) {
+        Ok(stat) => file_type_name(rustix::fs::FileType::from_raw_mode(stat.st_mode as _)).to_string(),
+        Err(e) => format!("err({e})"),
+    };
+    let so_type = match rustix::net::sockopt::socket_type(fd) {
+        Ok(t) => socket_type_name(t).to_string(),
+        Err(e) => format!("err({e})"),
+    };
+    // A successful getpeername proves the socket still has a connected peer pcb;
+    // socketpair peers are unnamed, so the returned address itself carries no
+    // information and is discarded.
+    let peer = match rustix::net::getpeername(fd) {
+        Ok(_) => "ok".to_string(),
+        Err(e) => format!("err({e})"),
+    };
+    let cloexec = match rustix::io::fcntl_getfd(fd) {
+        Ok(flags) => flags.contains(rustix::io::FdFlags::CLOEXEC).to_string(),
+        Err(e) => format!("err({e})"),
+    };
+    let fl = match rustix::fs::fcntl_getfl(fd) {
+        Ok(flags) => format!("{flags:?}"),
+        Err(e) => format!("err({e})"),
+    };
+    format!(
+        "{label}[fd={} type={stat} so_type={so_type} peer={peer} cloexec={cloexec} fl={fl}]",
+        fd.as_raw_fd()
+    )
+}
+
+fn file_type_name(file_type: rustix::fs::FileType) -> &'static str {
+    match file_type {
+        rustix::fs::FileType::Socket => "socket",
+        rustix::fs::FileType::Fifo => "fifo",
+        rustix::fs::FileType::RegularFile => "regular",
+        rustix::fs::FileType::CharacterDevice => "chardev",
+        rustix::fs::FileType::BlockDevice => "blockdev",
+        rustix::fs::FileType::Directory => "directory",
+        rustix::fs::FileType::Symlink => "symlink",
+        _ => "unknown",
+    }
+}
+
+fn socket_type_name(socket_type: rustix::net::SocketType) -> &'static str {
+    if socket_type == rustix::net::SocketType::STREAM {
+        "stream"
+    } else if socket_type == rustix::net::SocketType::DGRAM {
+        "dgram"
+    } else if socket_type == rustix::net::SocketType::RAW {
+        "raw"
+    } else if socket_type == rustix::net::SocketType::SEQPACKET {
+        "seqpacket"
+    } else {
+        "other"
+    }
+}
+
+/// Core `recvmsg` for one `SCM_RIGHTS` descriptor.
+fn recv_one_fd(sock: &UnixStream) -> io::Result<Option<OwnedFd>> {
+    let mut byte = [0];
+    // Receive two so a peer sending more than one descriptor is distinguishable
+    // from the valid case. unix-ancillary owns and closes every surplus fd beyond
+    // those two before returning.
+    let (bytes, mut received) = sock.recv_fds_into::<2>(&mut byte)?;
+    if bytes == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "peer closed the fd-passing socket before sending a descriptor",
+        ));
+    }
+    if received.len() != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "expected exactly one SCM_RIGHTS file descriptor",
+        ));
+    }
+    Ok(received.pop())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{IoSlice, Read, Write};
+    use std::mem::MaybeUninit;
+
+    use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags};
+
+    /// A fresh anonymous pipe, as two owned ends. The read end is the fd we send
+    /// across the socket in tests; writing to the write end and reading it back
+    /// through the *received* fd proves the descriptor really was transferred.
+    fn make_pipe() -> (OwnedFd, OwnedFd) {
+        rustix::pipe::pipe().expect("pipe() failed")
+    }
+
+    fn is_cloexec(fd: &OwnedFd) -> bool {
+        rustix::io::fcntl_getfd(fd)
+            .expect("fcntl F_GETFD failed")
+            .contains(rustix::io::FdFlags::CLOEXEC)
+    }
+
+    fn send_fds(sock: &UnixStream, fds: &[&OwnedFd]) {
+        let payload = [0];
+        let iov = [IoSlice::new(&payload)];
+        let fds = fds.iter().map(|fd| fd.as_fd()).collect::<Vec<_>>();
+        let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(16))];
+        let mut control = SendAncillaryBuffer::new(&mut space);
+        assert!(control.push(SendAncillaryMessage::ScmRights(&fds)));
+        assert_eq!(
+            rustix::net::sendmsg(sock, &iov, &mut control, SendFlags::empty()).unwrap(),
+            payload.len()
+        );
+    }
+
+    #[test]
+    fn send_and_recv_transfers_a_working_fd() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let (pipe_r, pipe_w) = make_pipe();
+
+        send_fd(&a, &pipe_r).unwrap();
+        let received = recv_fd(&b).unwrap();
+
+        // The sender may now drop its copy of the read end; the transferred fd is
+        // an independent kernel reference and must keep the pipe readable.
+        drop(pipe_r);
+
+        let mut writer = std::fs::File::from(pipe_w);
+        writer.write_all(b"neptun").unwrap();
+        drop(writer); // EOF after the payload
+
+        let mut reader = std::fs::File::from(received);
+        let mut got = String::new();
+        reader.read_to_string(&mut got).unwrap();
+        assert_eq!(got, "neptun");
+    }
+
+    #[test]
+    fn received_fd_is_close_on_exec() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let (pipe_r, _pipe_w) = make_pipe();
+        send_fd(&a, &pipe_r).unwrap();
+        let received = recv_fd(&b).unwrap();
+        assert!(
+            is_cloexec(&received),
+            "a received fd must be close-on-exec so it is not leaked across a spawn"
+        );
+    }
+
+    #[test]
+    fn recv_fd_leaves_following_stream_bytes_intact() {
+        // The worker bootstrap sends one fd message ahead of newline-JSON traffic
+        // on the same stream: recv_fd must consume exactly the one-byte fd message
+        // and leave every byte that follows for a buffered reader.
+        let (a, b) = UnixStream::pair().unwrap();
+        let (pipe_r, _pipe_w) = make_pipe();
+
+        send_fd(&a, &pipe_r).unwrap();
+        (&a).write_all(b"{\"kind\":\"startup\"}\n").unwrap();
+
+        let _received = recv_fd(&b).unwrap();
+        let mut lines = std::io::BufReader::new(&b);
+        let mut line = String::new();
+        std::io::BufRead::read_line(&mut lines, &mut line).unwrap();
+        assert_eq!(line, "{\"kind\":\"startup\"}\n");
+    }
+
+    #[test]
+    fn recv_fd_without_ancillary_data_errors() {
+        let (a, b) = UnixStream::pair().unwrap();
+        // Send a plain byte with no control message.
+        (&a).write_all(b"x").unwrap();
+        let err = recv_fd(&b).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn recv_fd_rejects_multiple_descriptors() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let (first, _first_writer) = make_pipe();
+        let (second, _second_writer) = make_pipe();
+        send_fds(&a, &[&first, &second]);
+        let err = recv_fd(&b).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(err.to_string(), "expected exactly one SCM_RIGHTS file descriptor");
+    }
+
+    #[test]
+    fn recv_fd_closes_every_descriptor_when_rejecting_a_large_batch() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let pipes = (0..16).map(|_| make_pipe()).collect::<Vec<_>>();
+        let fds = pipes.iter().map(|(reader, _writer)| reader).collect::<Vec<_>>();
+        send_fds(&a, &fds);
+        let err = recv_fd(&b).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+        // Drop every sender-owned read end. Each write must now fail with a
+        // broken pipe; a successful write proves recv_fd leaked its duplicate.
+        drop(fds);
+        for (reader, writer) in pipes {
+            drop(reader);
+            let mut writer = std::fs::File::from(writer);
+            let write_err = writer
+                .write_all(b"leak probe")
+                .expect_err("all received read ends must be closed");
+            assert_eq!(write_err.kind(), io::ErrorKind::BrokenPipe);
+        }
+    }
+
+    #[test]
+    fn recv_fd_on_closed_peer_reports_eof() {
+        let (a, b) = UnixStream::pair().unwrap();
+        drop(a); // peer gone without sending anything
+        let err = recv_fd(&b).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn send_fd_to_closed_peer_errors_without_consuming_the_fd() {
+        let (a, b) = UnixStream::pair().unwrap();
+        drop(b); // no receiver
+        let (pipe_r, _pipe_w) = make_pipe();
+        let err = send_fd(&a, &pipe_r).unwrap_err();
+        assert!(
+            matches!(err.kind(), io::ErrorKind::BrokenPipe),
+            "expected broken pipe, got {:?}",
+            err.kind()
+        );
+        // The caller still owns a valid fd: fcntl on it must succeed.
+        rustix::io::fcntl_getfd(&pipe_r).expect("sender must retain the descriptor");
+    }
+
+    #[test]
+    fn try_recv_fd_returns_none_when_nothing_is_buffered() {
+        // Keep `_a` alive so the peer is open (a closed peer would report EOF, not
+        // would-block). With nothing sent, a non-blocking receive must not block.
+        let (_a, b) = UnixStream::pair().unwrap();
+        b.set_nonblocking(true).unwrap();
+        assert!(try_recv_fd(&b).unwrap().is_none());
+    }
+
+    /// Read the whole contents readable through `fd` (its write end must be closed).
+    fn read_all(fd: OwnedFd) -> String {
+        let mut reader = std::fs::File::from(fd);
+        let mut got = String::new();
+        reader.read_to_string(&mut got).unwrap();
+        got
+    }
+
+    #[test]
+    fn recv_latest_fd_keeps_the_newest_and_drops_older() {
+        let (a, b) = UnixStream::pair().unwrap();
+        // Three independent pipes stand in for three connection attempts' TUN fds;
+        // the first two are orphans left by aborted attempts.
+        let (r1, _w1) = make_pipe();
+        let (r2, _w2) = make_pipe();
+        let (r3, w3) = make_pipe();
+        send_fd(&a, &r1).unwrap();
+        send_fd(&a, &r2).unwrap();
+        send_fd(&a, &r3).unwrap();
+
+        // Only the newest (r3) survives the drain.
+        let received = recv_latest_fd(&b).unwrap();
+
+        // Prove it is r3: data written to w3 is readable through the received fd.
+        drop(r3);
+        let mut writer = std::fs::File::from(w3);
+        writer.write_all(b"newest").unwrap();
+        drop(writer);
+        assert_eq!(read_all(received), "newest");
+    }
+
+    #[test]
+    fn diagnose_reports_healthy_socket_and_pipe_payload() {
+        let (a, _b) = UnixStream::pair().unwrap();
+        let (pipe_r, _pipe_w) = make_pipe();
+        let report = diagnose(&a, &pipe_r);
+        // The sending socket is a live, connected unix stream socket.
+        assert!(
+            report.contains(&format!("sock[fd={}", std::os::fd::AsRawFd::as_raw_fd(&a))),
+            "{report}"
+        );
+        assert!(report.contains("type=socket"), "{report}");
+        assert!(report.contains("so_type=stream"), "{report}");
+        assert!(report.contains("peer=ok"), "{report}");
+        // The payload is a pipe: fstat identifies it, socket probes fail on it.
+        assert!(
+            report.contains(&format!("payload[fd={}", std::os::fd::AsRawFd::as_raw_fd(&pipe_r))),
+            "{report}"
+        );
+        assert!(report.contains("type=fifo"), "{report}");
+        assert!(report.contains("so_type=err("), "{report}");
+    }
+
+    #[test]
+    fn diagnose_probes_are_best_effort_on_every_fd_kind() {
+        // A regular file fails every socket probe but must still produce a
+        // report instead of an error or panic.
+        let file = std::fs::File::open("/dev/null").unwrap();
+        let (a, _b) = UnixStream::pair().unwrap();
+        let report = diagnose(&a, &file);
+        assert!(report.contains("payload[fd="), "{report}");
+        assert!(report.contains("cloexec="), "{report}");
+    }
+
+    #[test]
+    fn recv_latest_fd_returns_the_only_descriptor() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let (r, w) = make_pipe();
+        send_fd(&a, &r).unwrap();
+        let received = recv_latest_fd(&b).unwrap();
+        drop(r);
+        let mut writer = std::fs::File::from(w);
+        writer.write_all(b"solo").unwrap();
+        drop(writer);
+        assert_eq!(read_all(received), "solo");
+    }
+}

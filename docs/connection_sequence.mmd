@@ -9,8 +9,8 @@ sequenceDiagram
     Worker-->>Hoprd: Open TCP session
     Worker-->>Hoprd: Register WG Pubkey
     Worker-->>Hoprd: Close TCP session
-    Worker-->>Hoprd: Open UDP session
-    Worker->>Root: request wg-quick up
-    Root->>Worker: result of routing setup
+    Worker-->>Hoprd: Open WG session (spliced directly into the NepTUN pump)
+    Worker->>Root: SetupTunnel (address, MTU, DNS, peer IPs)
+    Root->>Worker: TunnelReady (interface name, TUN fd via SCM_RIGHTS)
     Worker-->>Hoprd: (run ping on connection)
-    Worker-->>Hoprd: adjust UDP session
+    Worker-->>Hoprd: adjust WG session (via session configurator)

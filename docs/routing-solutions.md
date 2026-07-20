@@ -1,8 +1,10 @@
 # Routing solutions
 
-NOTE: generally wg-quick needs to be executed before any routing adaptions.
-Otherwise the script is quite clever and injusts it's rules with higher
-priority.
+NOTE: historically, when the client still used wg-quick, it had to be executed
+before any routing adaptations - otherwise the script was quite clever and
+injected its rules with higher priority. The client now provisions the TUN
+device itself (NepTUN data plane), so routing adaptations simply happen after the
+TUN interface exists.
 
 ## Linux potential solution 1: fwmark + ip rule
 

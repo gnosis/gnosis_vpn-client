@@ -2,8 +2,9 @@
 multiple-versions = 'allow'
 
 [sources]
-# Allow git sources for HOPR dependencies
+# Allow git sources for HOPR and NepTUN dependencies
 allow-git = [
+  "https://github.com/NordSecurity/neptun.git",
   "https://github.com/hoprnet/edge-client.git",
   "https://github.com/hoprnet/hoprnet",
 ]

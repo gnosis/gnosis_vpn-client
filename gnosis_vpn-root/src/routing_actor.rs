@@ -15,10 +15,9 @@
 
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
-use std::path::PathBuf;
+use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
 
-use gnosis_vpn_lib::event;
 use gnosis_vpn_lib::killswitch::Firewall;
 use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::wireguard;
@@ -34,10 +33,11 @@ const DEBOUNCE_MAX: Duration = Duration::from_secs(1);
 
 pub enum Msg {
     SetupRouting {
-        state_home: PathBuf,
-        wg_data: Box<event::WireGuardData>,
+        interface_address: String,
+        mtu: u32,
+        dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
-        reply: oneshot::Sender<Result<String, String>>,
+        reply: oneshot::Sender<Result<(String, OwnedFd), String>>,
     },
     TeardownRouting {
         reply: oneshot::Sender<()>,
@@ -110,12 +110,13 @@ impl Actor {
     async fn handle(&mut self, msg: Msg) -> Option<MonitorAction> {
         match msg {
             Msg::SetupRouting {
-                state_home,
-                wg_data,
+                interface_address,
+                mtu,
+                dns,
                 peer_ips,
                 reply,
             } => {
-                let result = self.setup_routing(state_home, *wg_data, peer_ips).await;
+                let result = self.setup_routing(interface_address, mtu, dns, peer_ips).await;
                 let _ = reply.send(result);
                 None
             }
@@ -143,6 +144,8 @@ impl Actor {
                 self.applied_policy = None;
                 if let Err(error) = self.firewall.reset_policy() {
                     tracing::warn!(?error, "failed to disable killswitch on disconnect");
+                } else {
+                    routing::sweep::clear_killswitch();
                 }
                 Some(MonitorAction::Stop)
             }
@@ -181,7 +184,7 @@ impl Actor {
         // if_indextoname already fails, so we emit LinkRemoved with a synthetic
         // "if#N" name. Check whether the resolved WG interface still exists.
         #[cfg(target_os = "macos")]
-        if removed_link.as_ref().map_or(false, |n| n.starts_with("if#")) {
+        if removed_link.as_ref().is_some_and(|n| n.starts_with("if#")) {
             let wg_gone = std::ffi::CString::new(wg_iface.as_str())
                 .map(|name| unsafe { libc::if_nametoindex(name.as_ptr()) } == 0)
                 .unwrap_or(false);
@@ -206,14 +209,15 @@ impl Actor {
 
     async fn setup_routing(
         &mut self,
-        state_home: PathBuf,
-        wg_data: event::WireGuardData,
+        interface_address: String,
+        mtu: u32,
+        dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
-    ) -> Result<String, String> {
+    ) -> Result<(String, OwnedFd), String> {
         // ensure clean slate
         self.teardown_routing().await;
 
-        let mut router = match routing::static_router(state_home, wg_data, peer_ips) {
+        let mut router = match routing::static_router(interface_address, mtu, dns, peer_ips) {
             Ok(router) => router,
             Err(error) => {
                 tracing::error!(?error, "failed to build static router");
@@ -221,14 +225,36 @@ impl Actor {
             }
         };
         let res_setup = router.setup().await;
+        // Duplicate the TUN fd with close-on-exec while the router still owns the
+        // original. The duplicate can then cross the actor channel as an OwnedFd.
+        let tun_fd = router
+            .tun_fd()
+            .map(|fd| rustix::io::fcntl_dupfd_cloexec(fd, 0))
+            .transpose();
         // store the router even on setup error so partial state can be torn down
         self.router = Some(Box::new(router));
         match res_setup {
-            Ok(interface_name) => {
-                self.wg_interface_name = Some(interface_name.clone());
-                tracing::info!("static routing setup successfully");
-                Ok(interface_name)
-            }
+            Ok(interface_name) => match tun_fd {
+                Ok(Some(fd)) => {
+                    self.wg_interface_name = Some(interface_name.clone());
+                    tracing::debug!(
+                        fd = std::os::fd::AsRawFd::as_raw_fd(&fd),
+                        "duplicated TUN fd for worker handoff"
+                    );
+                    tracing::info!("static routing setup successfully");
+                    Ok((interface_name, fd))
+                }
+                Ok(None) => {
+                    tracing::error!("routing setup reported success but produced no TUN fd");
+                    self.teardown_routing().await;
+                    Err("routing setup produced no TUN fd".to_string())
+                }
+                Err(error) => {
+                    tracing::error!(?error, "failed to duplicate TUN fd");
+                    self.teardown_routing().await;
+                    Err(format!("failed to duplicate TUN fd: {error}"))
+                }
+            },
             Err(error) => {
                 tracing::error!(?error, "static routing setup error");
                 self.teardown_routing().await;
@@ -266,20 +292,30 @@ impl Actor {
             return;
         }
 
+        let mut reconciled = self.active_bypass.clone();
         if let Some(ref mut router) = self.router {
-            for ip in alive.difference(&self.active_bypass).copied().collect::<Vec<_>>() {
-                if let Err(e) = router.add_peer_bypass_route(ip).await {
-                    tracing::warn!(error = %e, peer_ip = %ip, "failed to add dynamic peer bypass route");
+            for ip in alive.difference(&self.active_bypass) {
+                match router.add_peer_bypass_route(*ip).await {
+                    Ok(()) => {
+                        reconciled.insert(*ip);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, peer_ip = %ip, "failed to add dynamic peer bypass route");
+                    }
                 }
             }
-            for ip in self.active_bypass.difference(&alive).copied().collect::<Vec<_>>() {
-                if let Err(e) = router.remove_peer_bypass_route(ip).await {
-                    tracing::warn!(error = %e, peer_ip = %ip, "failed to remove dynamic peer bypass route");
+            for ip in self.active_bypass.difference(&alive) {
+                match router.remove_peer_bypass_route(*ip).await {
+                    Ok(()) => {
+                        reconciled.remove(ip);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, peer_ip = %ip, "failed to remove dynamic peer bypass route");
+                    }
                 }
             }
         }
-
-        self.active_bypass = alive.clone();
+        self.active_bypass = reconciled;
 
         // Union the static floor (policy.ips) with the dynamic delta (alive) so blokli
         // and the initial peer snapshot stay allowed even when alive is empty.
@@ -288,13 +324,13 @@ impl Actor {
                 .ips
                 .iter()
                 .copied()
-                .chain(alive.iter().map(|ip| IpAddr::V4(*ip)))
+                .chain(self.active_bypass.iter().map(|ip| IpAddr::V4(*ip)))
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect();
             if let Err(e) = self
                 .firewall
-                .apply_policy(&policy.interface, &combined, policy.lan_lockdown)
+                .reapply_policy(&policy.interface, &combined, policy.lan_lockdown)
             {
                 tracing::warn!(error = %e, interface = %policy.interface, "failed to refresh killswitch after peer allowlist update");
             } else {
@@ -309,6 +345,11 @@ impl Actor {
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
+        let recovery_state = self
+            .firewall
+            .capture_recovery_state()
+            .map_err(|error| error.to_string())?;
+        routing::sweep::record_killswitch(recovery_state);
         let result = self
             .firewall
             .apply_policy(&interface, &ips, lan_lockdown)
@@ -354,6 +395,8 @@ impl Actor {
         self.teardown_routing().await;
         if let Err(error) = self.firewall.reset_policy() {
             tracing::warn!(?error, "failed to reset killswitch policy on shutdown");
+        } else {
+            routing::sweep::clear_killswitch();
         }
     }
 }
@@ -384,6 +427,7 @@ async fn run(
     let mut debounce_pending = false;
     let mut debounce_started: Option<time::Instant> = None;
     let mut removed_link: Option<String> = None;
+    let mut burst_affects_firewall = false;
 
     loop {
         tokio::select! {
@@ -414,6 +458,7 @@ async fn run(
                                 debounce_pending = false;
                                 debounce_started = None;
                                 removed_link = None;
+                                burst_affects_firewall = false;
                             }
                             None => {}
                         }
@@ -430,6 +475,7 @@ async fn run(
                     if let NetworkEvent::LinkRemoved { name, .. } | NetworkEvent::AddressRemoved { name, .. } = &event {
                         removed_link = Some(name.clone());
                     }
+                    burst_affects_firewall |= event_affects_firewall(&event);
                     let burst_started = *debounce_started.get_or_insert_with(time::Instant::now);
                     let deadline = burst_started + DEBOUNCE_MAX;
                     let settle = time::Instant::now() + DEBOUNCE_SETTLE;
@@ -440,8 +486,11 @@ async fn run(
             _ = debounce.as_mut(), if debounce_pending => {
                 debounce_pending = false;
                 debounce_started = None;
-                tracing::debug!(removed_link = ?removed_link, "network burst settled");
-                actor.reapply_policy();
+                tracing::debug!(removed_link = ?removed_link, burst_affects_firewall, "network burst settled");
+                if burst_affects_firewall {
+                    actor.reapply_policy();
+                }
+                burst_affects_firewall = false;
                 if actor.should_reconnect(removed_link.take()).await {
                     tracing::info!("network changed — notifying daemon to reconnect");
                     let _ = reconnect_tx.send(()).await;
@@ -464,9 +513,62 @@ fn log_network_event(event: &NetworkEvent) {
         NetworkEvent::LinkRemoved { index, name } => tracing::info!(index, name, "network link removed"),
         NetworkEvent::AddressAdded { index, name } => tracing::info!(index, name, "network address added"),
         NetworkEvent::AddressRemoved { index, name } => tracing::info!(index, name, "network address removed"),
-        NetworkEvent::RouteAdded => tracing::info!("route added"),
-        NetworkEvent::RouteRemoved => tracing::info!("route removed"),
+        // Route events are logged with pid + destination detail at the platform
+        // monitor where the raw message is available; only debug-trace them here.
+        NetworkEvent::RouteAdded => tracing::debug!("route added"),
+        NetworkEvent::RouteRemoved => tracing::debug!("route removed"),
         #[cfg(target_os = "macos")]
-        NetworkEvent::RouteChanged => tracing::info!("route changed"),
+        NetworkEvent::RouteChanged => tracing::debug!("route changed"),
+    }
+}
+
+/// Whether an event can invalidate the applied killswitch rules.
+///
+/// The PF/nft killswitch references only the loopback, the tunnel interface, and
+/// the allowed IP list - never the routing table - so route add/remove/change
+/// events cannot affect it. Link and address events can (interfaces vanish or
+/// renumber under the rules). Reapplying on route events would re-run the
+/// firewall front-end for every kernel route-cache flap, which on macOS showed
+/// up as a permanent 1Hz pfctl loop while connected.
+fn event_affects_firewall(event: &NetworkEvent) -> bool {
+    match event {
+        NetworkEvent::LinkChanged { .. }
+        | NetworkEvent::LinkRemoved { .. }
+        | NetworkEvent::AddressAdded { .. }
+        | NetworkEvent::AddressRemoved { .. } => true,
+        NetworkEvent::RouteAdded | NetworkEvent::RouteRemoved => false,
+        #[cfg(target_os = "macos")]
+        NetworkEvent::RouteChanged => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_events_do_not_trigger_a_killswitch_reapply() {
+        assert!(!event_affects_firewall(&NetworkEvent::RouteAdded));
+        assert!(!event_affects_firewall(&NetworkEvent::RouteRemoved));
+        #[cfg(target_os = "macos")]
+        assert!(!event_affects_firewall(&NetworkEvent::RouteChanged));
+    }
+
+    #[test]
+    fn link_and_address_events_trigger_a_killswitch_reapply() {
+        let name = "en0".to_string();
+        assert!(event_affects_firewall(&NetworkEvent::LinkChanged {
+            index: 1,
+            name: name.clone()
+        }));
+        assert!(event_affects_firewall(&NetworkEvent::LinkRemoved {
+            index: 1,
+            name: name.clone()
+        }));
+        assert!(event_affects_firewall(&NetworkEvent::AddressAdded {
+            index: 1,
+            name: name.clone()
+        }));
+        assert!(event_affects_firewall(&NetworkEvent::AddressRemoved { index: 1, name }));
     }
 }

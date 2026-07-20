@@ -1,8 +1,9 @@
 [package]
-edition = { workspace = true }
-license = { workspace = true }
-name    = "gnosis_vpn-root"
-version = { workspace = true }
+edition      = { workspace = true }
+license      = { workspace = true }
+name         = "gnosis_vpn-root"
+rust-version = { workspace = true }
+version      = { workspace = true }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -13,7 +14,9 @@ clap.workspace           = true
 exitcode.workspace       = true
 gnosis_vpn-lib.workspace = true
 humantime.workspace      = true
+neptun                   = { workspace = true, features = ["device"] }
 notify.workspace         = true
+serde.workspace          = true
 serde_json.workspace     = true
 thiserror.workspace      = true
 tokio.workspace          = true
@@ -28,7 +31,8 @@ rtnetlink         = { workspace = true }
 tikv-jemallocator = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-libc.workspace = true
+libc.workspace   = true
+rustix.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true

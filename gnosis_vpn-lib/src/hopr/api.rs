@@ -7,21 +7,18 @@ use edgli::{
         api::{
             chain::{AccountSelector, ChainReadAccountOperations},
             node::HasChainApi,
-            types::{
-                internal::channels::ChannelStatus,
-                primitive::{prelude::Address, traits::ToHex},
-            },
+            types::{internal::channels::ChannelStatus, primitive::prelude::Address},
         },
         errors::HoprLibError,
         exports::{
             network::types::types::IpProtocol,
-            transport::{SESSION_MTU, SURB_SIZE, SessionId, SessionTarget, SurbBalancerConfig},
+            transport::{SESSION_MTU, SURB_SIZE, SessionTarget},
         },
     },
 };
 use futures_util::{StreamExt, future::AbortHandle};
 use hopr_utils_session::{
-    HopSessionFactory, ListenerId, ListenerJoinHandles, SessionTargetSpec, create_tcp_client_binding,
+    HopSessionFactory, ListenerId, ListenerJoinHandles, SessionFactory, SessionTargetSpec, create_tcp_client_binding,
     create_udp_client_binding,
 };
 use multiaddr::Protocol;
@@ -36,7 +33,10 @@ use std::{
 use crate::peer::Peer;
 use crate::{
     balance::{self, Balances},
-    hopr::{HoprError, types::SessionClientMetadata},
+    hopr::{
+        HoprError,
+        types::{SessionClientMetadata, SplicedWgSession},
+    },
     info::Info,
 };
 
@@ -184,6 +184,78 @@ impl Hopr {
         })
     }
 
+    /// Open a raw HOPR session for the spliced WireGuard data plane.
+    ///
+    /// Bypasses the local UDP listener bridge that [`Self::open_session`] sets up:
+    /// the returned session is consumed in-process by the NepTUN pump, so no
+    /// loopback socket is bound and no listener is registered. The metadata mirrors
+    /// what `open_session` reports, with a placeholder `bound_host`.
+    #[tracing::instrument(skip(self, cfg), level = "debug", err)]
+    pub async fn open_wg_session(
+        &self,
+        destination: Address,
+        target: SessionTarget,
+        cfg: HoprSessionClientConfig,
+    ) -> Result<SplicedWgSession, HoprError> {
+        tracing::debug!("open spliced hopr wg session");
+        let target_spec = match &target {
+            SessionTarget::UdpStream(addr) => match addr {
+                edgli::hopr_lib::exports::transport::session::SealedHost::Plain(ip_or_host) => {
+                    SessionTargetSpec::Plain(ip_or_host.to_string())
+                }
+                edgli::hopr_lib::exports::transport::session::SealedHost::Sealed(items) => {
+                    SessionTargetSpec::Sealed(items.clone().into())
+                }
+            },
+            _ => {
+                return Err(HoprError::Construction(
+                    "spliced wg session requires a UdpStream target".into(),
+                ));
+            }
+        };
+
+        let factory = HopSessionFactory::new(self.edgli.as_hopr());
+        let (session, configurator) = factory
+            .create_session(destination, target, cfg.clone())
+            .await
+            .map_err(|e| HoprError::Construction(format!("failed to create spliced wg session: {e}")))?;
+
+        let max_surb_upstream = cfg.surb_management.as_ref().map(|v| {
+            human_bandwidth::parse_bandwidth(format!("{} bps", v.max_surbs_per_sec * SURB_SIZE as u64 * 8).as_ref())
+                .expect("config value extract that cannot fail")
+        });
+        let response_buffer: Option<bytesize::ByteSize> = cfg
+            .surb_management
+            .as_ref()
+            .map(|v| ByteSize::b(v.target_surb_buffer_size * SESSION_MTU as u64));
+
+        // No socket is bound for a spliced session; the placeholder keeps the
+        // metadata shape identical for status reporting and the pseudonym cache.
+        let bound_host: SocketAddr = std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0).into();
+
+        let metadata = SessionClientMetadata {
+            protocol: IpProtocol::UDP,
+            bound_host,
+            target: target_spec.to_string(),
+            destination,
+            forward_path: cfg.forward_path,
+            return_path: cfg.return_path,
+            hopr_mtu: SESSION_MTU,
+            surb_len: SURB_SIZE,
+            active_clients: vec![session.id().to_string()],
+            max_client_sessions: 1,
+            max_surb_upstream,
+            response_buffer,
+            session_pool: None,
+        };
+
+        Ok(SplicedWgSession {
+            session,
+            configurator,
+            metadata,
+        })
+    }
+
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn close_session(
         &self,
@@ -225,53 +297,6 @@ impl Hopr {
         }
 
         Ok(())
-    }
-
-    #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub async fn list_sessions(&self, protocol: IpProtocol) -> Vec<SessionClientMetadata> {
-        tracing::debug!("list hopr sessions");
-        self.open_listeners
-            .as_ref()
-            .0
-            .iter()
-            .filter(|content| content.key().0 == protocol)
-            .map(|content| {
-                let key = content.key();
-                let entry = content.value();
-                SessionClientMetadata {
-                    protocol,
-                    bound_host: key.1,
-                    target: entry.target.to_string(),
-                    forward_path: entry.forward_path,
-                    return_path: entry.return_path,
-                    destination: entry.destination,
-                    hopr_mtu: SESSION_MTU,
-                    surb_len: SURB_SIZE,
-                    active_clients: entry.get_clients().iter().map(|e| e.key().to_string()).collect(),
-                    max_client_sessions: entry.max_client_sessions,
-                    max_surb_upstream: entry.max_surb_upstream,
-                    response_buffer: entry.response_buffer,
-                    session_pool: entry.session_pool,
-                }
-            })
-            .collect::<Vec<_>>()
-    }
-
-    #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub async fn adjust_session(&self, balancer_cfg: SurbBalancerConfig, client: String) -> Result<(), HoprError> {
-        tracing::debug!("adjust hopr session");
-        let session_id = SessionId::from_hex(&client).map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
-
-        // NOTE: the live SURB balancer is updated via the configurator below, but the
-        // cached `max_surb_upstream` and `response_buffer` snapshots stored in
-        // `open_listeners` (computed once at session creation) are not refreshed —
-        // so list_sessions continues to report the originally-configured values for
-        // adjusted sessions.
-        self.open_listeners
-            .find_configurator(&session_id)
-            .ok_or(HoprError::SessionNotFound)?
-            .update_surb_balancer_config(balancer_cfg)
-            .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]

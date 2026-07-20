@@ -6,9 +6,7 @@ use edgli::blokli::{IncentiveOperations, make_incentive_operations};
 use edgli::hopr_lib::api::node::HoprState;
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use edgli::hopr_lib::builder::Keypair;
-use edgli::hopr_lib::exports::network::types::types::IpProtocol;
 use edgli::{BlockchainConnectorConfig, EdgliInitState};
-use rand::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
@@ -93,7 +91,11 @@ pub(crate) enum Results {
         wg_public_key: String,
         res: Result<(), connection::down::Error>,
     },
-    SessionMonitorFailed,
+    /// The NepTUN pump task terminated on its own (WG session expired, or an
+    /// endpoint closed/errored) rather than through connection cancellation.
+    WgPumpExited {
+        reason: String,
+    },
     TunnelPingResult {
         rtt: Result<Duration, String>,
     },
@@ -252,15 +254,6 @@ pub(crate) async fn announced_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sende
     tracing::debug!("starting announced peers runner");
     let res = hopr.announced_peers().await.map_err(Error::from);
     let _ = results_sender.send(Results::AnnouncedPeers { res }).await;
-}
-
-pub(crate) async fn monitor_session(
-    hopr: Arc<Hopr>,
-    session: &SessionClientMetadata,
-    results_sender: mpsc::Sender<Results>,
-) {
-    run_monitor_session(hopr, session).await;
-    let _ = results_sender.send(Results::SessionMonitorFailed).await;
 }
 
 pub(crate) async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>) {
@@ -510,21 +503,6 @@ async fn run_hopr(
         .map_err(Error::from)
 }
 
-async fn run_monitor_session(hopr: Arc<Hopr>, session: &SessionClientMetadata) {
-    tracing::debug!(?session, "starting session monitor runner");
-    loop {
-        let delay = rand::rng().random_range(5..10);
-        time::sleep(Duration::from_secs(delay)).await;
-        let sessions = hopr.list_sessions(IpProtocol::UDP).await;
-        let found = sessions.iter().any(|s| s == session);
-        if found {
-            tracing::info!(?session, "session still active");
-        } else {
-            break;
-        }
-    }
-}
-
 async fn run_create_incentive_operations(
     worker_params: &WorkerParams,
     blokli_config: BlockchainConnectorConfig,
@@ -632,7 +610,7 @@ impl Display for Results {
                 Ok(_) => write!(f, "DisconnectionResult ({}): Success", wg_public_key),
                 Err(err) => write!(f, "DisconnectionResult ({}): Error({})", wg_public_key, err),
             },
-            Results::SessionMonitorFailed => write!(f, "SessionMonitorFailed"),
+            Results::WgPumpExited { reason } => write!(f, "WgPumpExited: {}", reason),
             Results::TunnelPingResult { rtt } => match rtt {
                 Ok(d) => write!(f, "TunnelPingResult: {:.1}ms", d.as_secs_f64() * 1000.0),
                 Err(err) => write!(f, "TunnelPingResult: Error({})", err),

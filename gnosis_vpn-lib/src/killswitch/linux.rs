@@ -76,6 +76,12 @@ impl Firewall {
         Ok(Firewall)
     }
 
+    /// Capture platform firewall state that must survive a daemon crash.
+    /// nftables has no global enablement bit to restore.
+    pub fn capture_recovery_state(&mut self) -> Result<Option<bool>, Error> {
+        Ok(None)
+    }
+
     /// Apply killswitch policy: block everything except `allowed_ips` and infrastructure.
     /// `interface` is the resolved WireGuard interface name (e.g. "wg0_gnosisvpn" or "utun8").
     /// When `lan_lockdown` is false, private LAN ranges are also let through.
@@ -100,6 +106,12 @@ impl Firewall {
         batch.add(&table, MsgType::Add);
         batch.add(&table, MsgType::Del);
         send_batch(&batch.finalize())
+    }
+
+    /// Reset policy using state persisted by a previous process. Linux has no
+    /// global firewall enablement bit, so the persisted value is ignored.
+    pub fn reset_policy_with_state(&mut self, _was_enabled: Option<bool>) -> Result<(), Error> {
+        self.reset_policy()
     }
 }
 

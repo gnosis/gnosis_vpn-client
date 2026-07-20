@@ -99,12 +99,8 @@ jobs:
         with:
           cachix_cache_name: gnosis-vpn-client
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Install system test dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wireguard-tools resolvconf
-      - name: Install just
-        uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2
+      - name: Run offline smoke-test suite
+        run: nix develop -c just smoke-test-check
       - name: Build binaries and system test
         run: |
           nix build .#binary-gnosis_vpn-system_tests
@@ -115,4 +111,4 @@ jobs:
           SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
           SYSTEM_TEST_CONFIG: ${{ secrets.SYSTEM_TEST_CONFIG}}
           SYSTEM_TEST_WORKER_BINARY: ${{ github.workspace }}/result/bin/gnosis_vpn-worker
-        run: just system-tests ${{ github.workspace }}/result/bin/gnosis_vpn-system_tests
+        run: nix develop -c just system-tests ${{ github.workspace }}/result/bin/gnosis_vpn-system_tests

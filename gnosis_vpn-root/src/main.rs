@@ -12,18 +12,20 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr};
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::{AsRawFd, IntoRawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{self};
+use std::process::{self, Stdio};
 use std::time::Duration;
 
 use gnosis_vpn_lib::command::{self, Command as LibCommand, Response, WorkerCommand};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::destination::Destination;
-use gnosis_vpn_lib::event::{self, RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
+use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::worker_params::WorkerParams;
 use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
 
@@ -32,7 +34,6 @@ mod device_monitor;
 mod network_info;
 mod routing;
 mod routing_actor;
-mod wg_tooling;
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
@@ -41,6 +42,23 @@ mod wg_tooling;
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
+const DAEMON_LOCK_PATH: &str = "/var/run/gnosisvpn/daemon.lock";
+
+fn try_acquire_daemon_lock_at(path: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .open(path)?;
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).map_err(std::io::Error::from)?;
+    Ok(file)
+}
 
 struct DaemonState {
     worker_user: worker::Worker,
@@ -91,6 +109,17 @@ struct SocketCmd {
 struct WorkerChild {
     socket_writer: BufWriter<WriteHalf<TokioUnixStream>>,
     cancel: CancellationToken,
+    /// Parent end of the dedicated fd-passing socket; used to hand the TUN device
+    /// fd to the worker via `SCM_RIGHTS` (kept blocking for a blocking `sendmsg`).
+    tun_fd_socket: UnixStream,
+    /// The worker's end of the fd-passing socket. Root must keep this open for the
+    /// worker's lifetime: on macOS, closing a socket end while its `SCM_RIGHTS`
+    /// copy is still in flight (the bootstrap message sent before the worker
+    /// spawns) corrupts the kernel's accounting for the socketpair, after which
+    /// every `sendmsg` carrying rights over `tun_fd_socket` fails with `EINVAL`
+    /// (see gnosis_vpn-root/tests/tun_fd_pass.rs). There is no consumption ack to
+    /// close on, so it is held until the worker exits.
+    _child_tun_socket: UnixStream,
 }
 
 #[derive(Debug)]
@@ -451,20 +480,27 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         env!("CARGO_PKG_NAME")
     );
 
+    // This fixed lock guards global recovery and networking state. It must be held
+    // before the startup sweep, including when an alternate socket path is used.
+    let _daemon_lock = try_acquire_daemon_lock_at(Path::new(DAEMON_LOCK_PATH)).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::WouldBlock {
+            tracing::error!("system service is already running - cannot start another instance");
+            exitcode::TEMPFAIL
+        } else {
+            tracing::error!(%error, path = DAEMON_LOCK_PATH, "failed to acquire daemon lock");
+            exitcode::IOERR
+        }
+    })?;
+
     let network_info = network_info::NetworkInfo::gather().await;
     tracing::info!(%network_info, "host network info");
 
+    // Sweep persistent tunnel side effects left behind if a previous root exited
+    // without tearing down its tunnel.
+    routing::sweep::startup_sweep().await;
+
     // Write root pidfile for the newsyslog service to send signals to
     write_pidfile(&args.pid_file).await?;
-
-    // check wireguard tooling
-    wg_tooling::available()
-        .await
-        .and(wg_tooling::executable().await)
-        .map_err(|err| {
-            tracing::error!(error = ?err, "error checking WireGuard tools");
-            exitcode::UNAVAILABLE
-        })?;
 
     // prepare worker resources
     let config_path = match args.config_path.canonicalize() {
@@ -577,6 +613,59 @@ async fn send_to_worker(
         exitcode::IOERR
     })?;
     Ok(())
+}
+
+/// Send to the worker, tolerating failure.
+///
+/// `worker_child` being `Some` does not guarantee a writable peer: the worker
+/// process can die at any moment, and its exit is only observed asynchronously
+/// (`incoming_worker_exit`, which restarts it). A message that races that window
+/// must not take the daemon down with it - the send is logged and reported as
+/// `false`, and recovery is left to the exit handler.
+async fn send_to_worker_lossy(msg: RootToWorker, writer: &mut BufWriter<WriteHalf<TokioUnixStream>>) -> bool {
+    match send_to_worker(msg, writer).await {
+        Ok(()) => true,
+        Err(_) => {
+            tracing::warn!("send to worker failed; leaving recovery to the worker exit handler");
+            false
+        }
+    }
+}
+
+async fn run_blocking_io<T>(operation: impl FnOnce() -> io::Result<T> + Send + 'static) -> io::Result<T>
+where
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(operation).await.map_err(io::Error::other)?
+}
+
+async fn send_fd_async(sock: UnixStream, fd: OwnedFd) -> io::Result<()> {
+    run_blocking_io(move || gnosis_vpn_lib::socket::fd_passing::send_fd(&sock, &fd)).await
+}
+
+/// How long to wait before retrying a failed TUN fd handoff.
+const FD_SEND_RETRY_DELAY: Duration = Duration::from_millis(100);
+
+/// Run `attempt` and, if it fails, run it once more after `delay`.
+///
+/// The TUN fd handoff can fail transiently (observed as a spurious EINVAL from
+/// `sendmsg` on macOS); without a retry a single failed send tears down routing
+/// and restarts the whole worker process. The failure is not masked: the caller's
+/// `attempt` logs its own error with full fd forensics before returning it, and a
+/// failed retry propagates the error into the existing teardown path.
+async fn retry_once<F, Fut>(delay: Duration, mut attempt: F) -> io::Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = io::Result<()>>,
+{
+    match attempt().await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            tracing::warn!(retry_in_ms = delay.as_millis() as u64, %error, "retrying failed operation once");
+            time::sleep(delay).await;
+            attempt().await
+        }
+    }
 }
 
 async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) -> Result<(), exitcode::ExitCode> {
@@ -803,7 +892,16 @@ impl DaemonState {
                         cmd: w_cmd,
                         id: self.pending_response_counter,
                     };
-                    send_to_worker(msg, &mut child.socket_writer).await?;
+                    if !send_to_worker_lossy(msg, &mut child.socket_writer).await {
+                        // The worker died before the command could reach it; answer
+                        // the caller directly instead of leaving the response pending.
+                        if let Some(resp) = self.pending_responses.remove(&self.pending_response_counter) {
+                            let _ = resp.send(Response::WorkerRestarting).map_err(|error| {
+                                tracing::error!(?error, "socket command response channel closed");
+                            });
+                        }
+                        return Ok(());
+                    }
                     let _ = self
                         .keep_alive_instruction_sender
                         .send(KeepAliveInstruction::Restart)
@@ -863,7 +961,8 @@ impl DaemonState {
             && let Some(ref mut child) = self.worker_child
         {
             let msg = RootToWorker::ResponseFromRoot(resp);
-            send_to_worker(msg, &mut child.socket_writer).await
+            send_to_worker_lossy(msg, &mut child.socket_writer).await;
+            Ok(())
         } else {
             tracing::warn!(
                 ?resp,
@@ -1008,7 +1107,7 @@ impl DaemonState {
             exitcode::DATAERR
         })?;
         match cmd {
-            WorkerToRoot::Response { id, resp } => self.incoming_worker_response(id, resp).await,
+            WorkerToRoot::Response { id, resp } => self.incoming_worker_response(id, *resp).await,
             WorkerToRoot::RequestToRoot(request) => self.incoming_worker_request(request).await,
         }
     }
@@ -1066,28 +1165,79 @@ impl DaemonState {
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
-                    send_to_worker(
+                    send_to_worker_lossy(
                         RootToWorker::ResponseFromRoot(ResponseFromRoot::KillswitchLockdown { request_id, res }),
                         &mut child.socket_writer,
                     )
-                    .await?;
+                    .await;
                 }
                 Ok(())
             }
-            RequestToRoot::StaticWgRouting {
+            RequestToRoot::SetupTunnel {
                 request_id,
-                wg_data,
+                interface_address,
+                mtu,
+                dns,
                 peer_ips,
             } => {
-                let res = self.setup_static_routing(wg_data, peer_ips).await;
+                let res = match self.setup_static_routing(interface_address, mtu, dns, peer_ips).await {
+                    Ok((interface, tun_fd)) => match self.worker_child {
+                        // Pass the fd out-of-band first; the worker recv_fd's it only
+                        // after seeing TunnelReady below (a simple happens-before).
+                        Some(ref child) => {
+                            let tun_sock = &child.tun_fd_socket;
+                            let tun_fd = &tun_fd;
+                            let send_result = retry_once(FD_SEND_RETRY_DELAY, || {
+                                // Duplicate both descriptors synchronously so each
+                                // attempt owns its copies; send_fd_async consumes
+                                // them on the blocking thread.
+                                let socket = tun_sock.try_clone();
+                                let fd = tun_fd.try_clone();
+                                async move {
+                                    let socket = socket.inspect_err(|error| {
+                                        tracing::error!(%error, "failed to clone TUN fd socket for handoff");
+                                    })?;
+                                    let fd = fd.inspect_err(|error| {
+                                        tracing::error!(%error, "failed to duplicate TUN fd for handoff");
+                                    })?;
+                                    send_fd_async(socket, fd).await.inspect_err(|error| {
+                                        tracing::error!(
+                                            %error,
+                                            fds = %socket::fd_passing::diagnose(tun_sock, tun_fd),
+                                            "failed to send TUN fd to worker"
+                                        );
+                                    })
+                                }
+                            })
+                            .await;
+                            match send_result {
+                                Ok(()) => Ok(interface),
+                                Err(e) => {
+                                    tracing::error!(error = %e, "failed to pass TUN fd to worker");
+                                    self.teardown_any_routing().await;
+                                    Err(format!("failed to pass TUN fd to worker: {e}"))
+                                }
+                            }
+                        }
+                        None => {
+                            // Routing was set up but the worker vanished before the fd
+                            // could be handed over; tear it back down so we don't leave
+                            // an orphaned TUN + split routes with nothing driving them
+                            // (matches the send_fd-failure arm above).
+                            self.teardown_any_routing().await;
+                            Err("worker gone before TUN fd could be passed".to_string())
+                        }
+                    },
+                    Err(e) => Err(e),
+                };
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
-                    send_to_worker(
-                        RootToWorker::ResponseFromRoot(ResponseFromRoot::StaticWgRouting { request_id, res }),
+                    send_to_worker_lossy(
+                        RootToWorker::ResponseFromRoot(ResponseFromRoot::TunnelReady { request_id, res }),
                         &mut child.socket_writer,
                     )
-                    .await?;
+                    .await;
                 }
                 Ok(())
             }
@@ -1185,26 +1335,38 @@ impl DaemonState {
             tracing::error!(error = ?err, "unable to create socket pair for worker communication");
             exitcode::IOERR
         })?;
+        // Dedicated socket for passing the TUN device fd to the worker via SCM_RIGHTS,
+        // kept separate from the newline-JSON control channel (a BufReader there would
+        // consume bytes past a newline that a raw recvmsg for the ancillary data needs).
+        let (parent_tun_socket, child_tun_socket) = UnixStream::pair().map_err(|err| {
+            tracing::error!(error = ?err, "unable to create socket pair for TUN fd passing");
+            exitcode::IOERR
+        })?;
 
-        // remove the "Close-On-Exec" flag to avoid premature socket closure by root
-        let fd = child_socket.as_raw_fd();
-        unsafe {
-            let flags = libc::fcntl(fd, libc::F_GETFD);
-            if flags < 0 {
-                tracing::warn!(
-                    error = ?std::io::Error::last_os_error(),
-                    "failed to read FD flags on child socket; CLOEXEC may remain set"
-                );
-            } else {
-                libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
-            }
-        }
+        // Hand the worker its end of the TUN-fd socket as the first message on the
+        // control socket (a single SCM_RIGHTS datagram ahead of any JSON traffic).
+        // The kernel dups the fd into the message, so it can be sent before the
+        // worker even spawns. The local end must NOT be closed while that copy is
+        // in flight - on macOS that poisons the socketpair and every later
+        // SCM_RIGHTS send over the parent end fails with EINVAL - so it is
+        // retained in WorkerChild until the worker exits.
+        socket::fd_passing::send_fd(&parent_socket, &child_tun_socket).map_err(|err| {
+            tracing::error!(error = ?err, "unable to send TUN fd socket to worker");
+            exitcode::IOERR
+        })?;
+        tracing::debug!(
+            fd = std::os::fd::AsRawFd::as_raw_fd(&parent_tun_socket),
+            "created TUN fd passing socket (parent end)"
+        );
 
         let mut worker_command = TokioCommand::new(self.worker_user.binary.clone());
 
         worker_command
             .current_dir(self.worker_user.home.clone())
-            .env(socket::worker::ENV_VAR, format!("{}", child_socket.into_raw_fd()))
+            // The control channel arrives as the worker's stdin: spawn dup2s the fd
+            // onto fd 0 in the child, so no fd number crosses the environment and
+            // no CLOEXEC toggling is needed.
+            .stdin(Stdio::from(OwnedFd::from(child_socket)))
             .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
             .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
             .uid(self.worker_user.uid)
@@ -1238,8 +1400,8 @@ impl DaemonState {
         // send initial configuration and resources to worker
         send_to_worker(
             RootToWorker::StartupParams {
-                config: self.config.clone(),
-                worker_params: self.worker_params.clone(),
+                config: Box::new(self.config.clone()),
+                worker_params: Box::new(self.worker_params.clone()),
                 target_dest_id: self.target_dest_id.clone(),
             },
             &mut socket_writer,
@@ -1276,7 +1438,12 @@ impl DaemonState {
             }
         });
 
-        self.worker_child = Some(WorkerChild { cancel, socket_writer });
+        self.worker_child = Some(WorkerChild {
+            cancel,
+            socket_writer,
+            tun_fd_socket: parent_tun_socket,
+            _child_tun_socket: child_tun_socket,
+        });
         Ok(())
     }
 
@@ -1311,15 +1478,18 @@ impl DaemonState {
 
     async fn setup_static_routing(
         &self,
-        wg_data: event::WireGuardData,
+        interface_address: String,
+        mtu: u32,
+        dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
-    ) -> Result<String, String> {
+    ) -> Result<(String, OwnedFd), String> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = self
             .routing_actor_sender
             .send(routing_actor::Msg::SetupRouting {
-                state_home: self.worker_params.state_home(),
-                wg_data: Box::new(wg_data),
+                interface_address,
+                mtu,
+                dns,
                 peer_ips,
                 reply: reply_tx,
             })
@@ -1352,5 +1522,118 @@ impl DaemonState {
             }
             _ => (),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fd_send_does_not_block_the_async_runtime() {
+        let started = Instant::now();
+        let operation = tokio::spawn(run_blocking_io(|| {
+            std::thread::sleep(Duration::from_millis(150));
+            Ok(())
+        }));
+
+        time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "the async runtime was blocked by send_fd"
+        );
+
+        operation.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn lossy_send_survives_a_dead_peer_without_erroring_out() {
+        let (a, b) = UnixStream::pair().expect("socketpair");
+        a.set_nonblocking(true).expect("nonblocking");
+        let stream = TokioUnixStream::from_std(a).expect("tokio stream");
+        let (_read_half, write_half) = io::split(stream);
+        let mut writer = BufWriter::new(write_half);
+        drop(b);
+        // The kernel may accept a first write into the dead socket's buffer;
+        // the broken pipe must surface within a few flushes and be reported as
+        // `false`, never as a daemon-fatal error.
+        for _ in 0..8 {
+            if !send_to_worker_lossy(RootToWorker::Shutdown, &mut writer).await {
+                return;
+            }
+        }
+        panic!("send to a dead peer never failed");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn lossy_send_reports_success_on_a_live_peer() {
+        let (a, b) = UnixStream::pair().expect("socketpair");
+        a.set_nonblocking(true).expect("nonblocking");
+        let stream = TokioUnixStream::from_std(a).expect("tokio stream");
+        let (_read_half, write_half) = io::split(stream);
+        let mut writer = BufWriter::new(write_half);
+        assert!(send_to_worker_lossy(RootToWorker::Shutdown, &mut writer).await);
+        drop(b);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fd_send_retry_succeeds_first_try_without_retrying() {
+        let attempts = std::cell::Cell::new(0u32);
+        let result = retry_once(Duration::ZERO, || {
+            attempts.set(attempts.get() + 1);
+            async { Ok(()) }
+        })
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(attempts.get(), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fd_send_retry_recovers_from_a_single_failure() {
+        let attempts = std::cell::Cell::new(0u32);
+        let result = retry_once(Duration::ZERO, || {
+            attempts.set(attempts.get() + 1);
+            let attempt = attempts.get();
+            async move {
+                if attempt == 1 {
+                    Err(io::Error::from_raw_os_error(libc::EINVAL))
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(attempts.get(), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fd_send_retry_gives_up_after_the_second_failure() {
+        let attempts = std::cell::Cell::new(0u32);
+        let result = retry_once(Duration::ZERO, || {
+            attempts.set(attempts.get() + 1);
+            async { Err(io::Error::from_raw_os_error(libc::EINVAL)) }
+        })
+        .await;
+        assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::EINVAL));
+        assert_eq!(attempts.get(), 2);
+    }
+
+    #[test]
+    fn daemon_lock_excludes_another_instance_until_released() -> anyhow::Result<()> {
+        let path = std::env::temp_dir().join(format!("gvpn-daemon-lock-{}", std::process::id()));
+        let first = try_acquire_daemon_lock_at(&path)?;
+
+        assert_eq!(
+            try_acquire_daemon_lock_at(&path).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+
+        drop(first);
+        let _second = try_acquire_daemon_lock_at(&path)?;
+        std::fs::remove_file(path)?;
+        Ok(())
     }
 }

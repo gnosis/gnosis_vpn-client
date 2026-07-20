@@ -15,6 +15,18 @@ Can you access that site?
 
 - If **no** proceed to the next step.
 
+For a broader automated check (DNS, HTTPS at several sizes, streaming, egress
+IP, and IPv6 leak protection), run the connectivity smoke test after
+connecting:
+
+```
+./scripts/vpn-smoke-test.sh
+```
+
+It needs only `bash`, `curl`, and `ping` (both bundled with Linux and macOS)
+and exits non-zero if any check fails. Run `./scripts/vpn-smoke-test.sh --help`
+for options.
+
 ### Verify Gnosis VPN Connection
 
 - Navigate to the terminal where you launched the Gnosis VPN client.

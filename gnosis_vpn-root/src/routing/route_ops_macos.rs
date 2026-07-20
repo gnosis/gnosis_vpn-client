@@ -247,14 +247,14 @@ default            10.0.0.1           UGSc                en1
     fn netstat_excluding_returns_first_non_excluded_route() {
         // utun5 is the VPN tunnel; en0 should be returned as the WAN default.
         let result = parse_netstat_default_excluding(NETSTAT_OUTPUT, "utun5");
-        assert_eq!(result, Ok(("en0".to_string(), Some("192.168.1.1".to_string()))));
+        assert_eq!(result.unwrap(), ("en0".to_string(), Some("192.168.1.1".to_string())));
     }
 
     #[test]
     fn netstat_excluding_skips_excluded_iface() {
         // Exclude en0; next non-I default is en1.
         let result = parse_netstat_default_excluding(NETSTAT_OUTPUT, "en0");
-        assert_eq!(result, Ok(("en1".to_string(), Some("10.0.0.1".to_string()))));
+        assert_eq!(result.unwrap(), ("en1".to_string(), Some("10.0.0.1".to_string())));
     }
 
     #[test]
@@ -266,14 +266,14 @@ default            link#18            UCSIg               utun5
 default            192.168.1.1        UGScg               en0
 ";
         let result = parse_netstat_default_excluding(output, "en9");
-        assert_eq!(result, Ok(("en0".to_string(), Some("192.168.1.1".to_string()))));
+        assert_eq!(result.unwrap(), ("en0".to_string(), Some("192.168.1.1".to_string())));
     }
 
     #[test]
     fn netstat_excluding_returns_none_gateway_for_link_local() {
         let output = "default            link#5             UCSg                en0\n";
         let result = parse_netstat_default_excluding(output, "utun5");
-        assert_eq!(result, Ok(("en0".to_string(), None)));
+        assert_eq!(result.unwrap(), ("en0".to_string(), None));
     }
 
     #[test]

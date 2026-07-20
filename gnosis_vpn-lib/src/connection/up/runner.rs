@@ -3,7 +3,10 @@
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backon::{FibonacciBuilder, Retryable};
 use edgli::hopr_lib::{HoprSessionClientConfig, api::types::internal::protocol::HoprPseudonym};
+use ipnetwork::IpNetwork;
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use std::fmt::{self, Display};
 use std::net::Ipv4Addr;
@@ -13,13 +16,13 @@ use std::time::Duration;
 use crate::connection::destination::Destination;
 use crate::connection::options::{Options, SurbParams, surb_config_for};
 use crate::core::runner::Results;
-use crate::event::{self, RunnerToRoot};
+use crate::event::RunnerToRoot;
 use crate::gvpn_client::{self, Registration};
-use crate::hopr::types::SessionClientMetadata;
+use crate::hopr::types::{SessionClientMetadata, SplicedWgSession};
 use crate::hopr::{self, Hopr, HoprError};
 use crate::wireguard::{self, WireGuard};
 use crate::worker_params::WorkerParams;
-use crate::{ping, remote_data};
+use crate::{ping, remote_data, wg_tunnel};
 
 use super::{Error, Event, Progress, Setback};
 
@@ -40,9 +43,17 @@ pub(crate) struct Runner {
     wg_config: wireguard::Config,
     worker_params: WorkerParams,
     prev_conn: PreviousConnection,
+    /// Cancelled when the connection is torn down; scopes the lifetime of the
+    /// spawned NepTUN pump so it stops (dropping the TUN fd and its network
+    /// endpoint) on disconnect or reconnect.
+    cancel: CancellationToken,
+    /// Tracks the spawned pump task so core can wait for it to finish (and thus
+    /// for the TUN fd to close) before asking root to tear down routing.
+    pump_tasks: TaskTracker,
 }
 
 impl Runner {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         destination: Destination,
         options: Options,
@@ -50,6 +61,8 @@ impl Runner {
         hopr: Arc<Hopr>,
         worker_params: WorkerParams,
         prev_conn: PreviousConnection,
+        cancel: CancellationToken,
+        pump_tasks: TaskTracker,
     ) -> Self {
         Self {
             destination,
@@ -58,6 +71,8 @@ impl Runner {
             wg_config,
             worker_params,
             prev_conn,
+            cancel,
+            pump_tasks,
         }
     }
 
@@ -114,9 +129,15 @@ impl Runner {
             results_sender.clone(),
         );
 
-        // 6. open ping session
+        // 6. open the wg session (also carries the in-tunnel verification ping). The
+        //    raw session is spliced directly into the pump - no local listener and no
+        //    loopback hop.
         let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
-        let session = open_ping_session(
+        let SplicedWgSession {
+            session: hopr_session,
+            configurator,
+            metadata: session,
+        } = open_spliced_wg_session(
             &self.hopr,
             &self.destination,
             &self.options,
@@ -133,12 +154,20 @@ impl Runner {
         // firewall floor and stays reachable for the duration of the connection.
         peer_ips.extend(blokli_ips);
 
-        // 8. setup static wg tunnel — returns the resolved WireGuard interface name
+        // 8. set up the NepTUN data plane — root provisions the TUN device + routing
+        //    and returns the resolved interface name; the worker then receives the
+        //    TUN fd out-of-band and starts the pump. The pump's network side is the
+        //    spliced session itself, driven directly by the WireGuard engine.
         let _ = results_sender
             .send(progress(Progress::StaticWgTunnel(session.clone())))
             .await;
-        let interface =
-            request_static_wg_tunnel(&wg, &registration, &session, peer_ips.clone(), &results_sender).await?;
+        let allowed_ips = parse_allowed_ips(self.wg_config.allowed_ips.as_deref());
+        let interface = request_setup_tunnel(&registration, &self.wg_config, peer_ips.clone(), &results_sender).await?;
+        let (engine, tun_reader, tun_writer) = prepare_pump(&wg, &registration, allowed_ips).await?;
+        let (read_half, write_half) = tokio::io::split(hopr_session);
+        let net_tx = wg_tunnel::SessionSender::new(write_half);
+        let net_rx = wg_tunnel::SessionReceiver::new(read_half);
+        self.spawn_pump_task(engine, net_tx, net_rx, tun_writer, tun_reader, &results_sender);
 
         // 9. activate killswitch now that the interface name is known
         let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
@@ -154,13 +183,12 @@ impl Runner {
             .await;
         let main_surb = surb_config_for(&self.options.surb_balancing.main)?;
         if let Some(main_config) = main_surb.management {
-            let active_client = match session.active_clients.as_slice() {
-                [] => return Err(HoprError::SessionNotFound.into()),
-                [client] => client.clone(),
-                _ => return Err(HoprError::SessionAmbiguousClient.into()),
-            };
-            tracing::debug!(bound_host = ?session.bound_host, "adjusting to main session");
-            self.hopr.adjust_session(main_config, active_client).await?;
+            // A spliced session is not in the listener registry, so the SURB balancer
+            // is adjusted through its configurator handle directly.
+            tracing::debug!("adjusting spliced wg session to main session");
+            configurator
+                .update_surb_balancer_config(main_config)
+                .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
         }
 
         Ok(session.clone())
@@ -267,14 +295,17 @@ async fn close_bridge_session(hopr: &Hopr, session_client_metadata: &SessionClie
     }
 }
 
-async fn open_ping_session(
+/// Open the raw WireGuard session for the pump: the in-tunnel verification ping's
+/// session, returned whole (with its configurator) for the direct splice instead of
+/// binding a local listener.
+async fn open_spliced_wg_session(
     hopr: &Hopr,
     destination: &Destination,
     options: &Options,
     surb: SurbParams,
     pseudonym: Option<HoprPseudonym>,
     results_sender: &mpsc::Sender<Results>,
-) -> Result<SessionClientMetadata, HoprError> {
+) -> Result<SplicedWgSession, HoprError> {
     let cfg = HoprSessionClientConfig {
         capabilities: options.sessions.wg.capabilities,
         forward_path: destination.routing,
@@ -284,19 +315,13 @@ async fn open_ping_session(
         pseudonym,
     };
     (|| async {
-        tracing::debug!(%destination, "attempting to open ping session");
-        hopr.open_session(
-            destination.address,
-            options.sessions.wg.target.clone(),
-            None,
-            None,
-            cfg.clone(),
-        )
-        .await
+        tracing::debug!(%destination, "attempting to open spliced wg session");
+        hopr.open_wg_session(destination.address, options.sessions.wg.target.clone(), cfg.clone())
+            .await
     })
     .retry(remote_data::backoff_expo_short_delay())
     .notify(|err: &HoprError, dur: Duration| {
-        tracing::warn!(error = ?err, "error opening ping session - will retry after {:?}", dur);
+        tracing::warn!(error = ?err, "error opening spliced wg session - will retry after {:?}", dur);
         let tx = results_sender.clone();
         let payload = setback(Setback::OpenPing(err.to_string()));
         tokio::spawn(async move {
@@ -332,34 +357,21 @@ async fn request_killswitch_lockdown(
     )
 }
 
-async fn request_static_wg_tunnel(
-    wg: &WireGuard,
+/// Ask root to provision the TUN device + split-tunnel routing and return the
+/// resolved interface name. No key material is sent: the WireGuard keys stay in
+/// the worker, where the `WgTunnel` runs.
+async fn request_setup_tunnel(
     registration: &Registration,
-    session: &SessionClientMetadata,
+    wg_config: &wireguard::Config,
     peer_ips: Vec<Ipv4Addr>,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<String, Error> {
     let (tx, rx) = oneshot::channel();
-    let interface_info = wireguard::InterfaceInfo {
-        address: registration.address(),
-    };
-    let peer_info = wireguard::PeerInfo {
-        public_key: registration.server_public_key(),
-        preshared_key: registration.preshared_key(),
-        endpoint: format!(
-            "{host}:{port}",
-            host = session.bound_host.ip(),
-            port = session.bound_host.port()
-        ),
-    };
-    let wg_data = event::WireGuardData {
-        wg: wg.clone(),
-        peer_info,
-        interface_info,
-    };
     let _ = results_sender
-        .send(Results::ConnectionRequestToRoot(RunnerToRoot::StaticWgRouting {
-            wg_data,
+        .send(Results::ConnectionRequestToRoot(RunnerToRoot::SetupTunnel {
+            interface_address: registration.address(),
+            mtu: wireguard::WG_MTU,
+            dns: wg_config.dns.clone(),
             peer_ips,
             resp: tx,
         }))
@@ -375,6 +387,105 @@ async fn request_static_wg_tunnel(
             Err(Error::Runtime("Timed out waiting for response".to_string()))
         }
     )
+}
+
+/// Receive the TUN fd from root and build the pump's engine and TUN endpoints.
+/// The network endpoint is supplied by the caller per the data-plane selection.
+async fn prepare_pump(
+    wg: &WireGuard,
+    registration: &Registration,
+    allowed_ips: Vec<IpNetwork>,
+) -> Result<(wg_tunnel::WgTunnel, wg_tunnel::TunReader, wg_tunnel::TunWriter), Error> {
+    // The TUN fd is delivered out-of-band by root over the dedicated fd-passing
+    // socket; block for it off the async runtime.
+    let tun_fd = tokio::task::spawn_blocking(crate::socket::worker::recv_tun_fd)
+        .await
+        .map_err(|e| Error::Runtime(format!("tun fd receive task failed: {e}")))?
+        .map_err(|e| Error::Runtime(format!("failed to receive tun fd from root: {e}")))?;
+    let (tun_reader, tun_writer) = wg_tunnel::tun_endpoints(tun_fd, wg_tunnel::PLATFORM_TUN_HEADER_LEN)
+        .map_err(|e| Error::Runtime(format!("failed to wrap tun fd: {e}")))?;
+
+    let preshared = registration.preshared_key();
+    let preshared = if preshared.is_empty() { None } else { Some(preshared) };
+    let engine = wg_tunnel::WgTunnel::new(
+        &wg.key_pair.priv_key,
+        &registration.server_public_key(),
+        preshared.as_deref(),
+        &allowed_ips,
+    )
+    .map_err(|e| Error::Runtime(format!("failed to build wg tunnel: {e}")))?;
+
+    Ok((engine, tun_reader, tun_writer))
+}
+
+impl Runner {
+    /// Spawn the NepTUN pump onto the connection's task tracker. The task runs
+    /// until `cancel` fires (disconnect/reconnect), at which point the TUN fd and
+    /// network endpoint are dropped; core waits on the tracker before asking root
+    /// to tear down routing. A pump that exits on its own (WG session expiry, an
+    /// endpoint closing, or a pump error) reports through the results channel so
+    /// core reconnects immediately instead of waiting for a ping failure.
+    fn spawn_pump_task<NS, NR>(
+        &self,
+        engine: wg_tunnel::WgTunnel,
+        net_tx: NS,
+        net_rx: NR,
+        tun_writer: wg_tunnel::TunWriter,
+        tun_reader: wg_tunnel::TunReader,
+        results_sender: &mpsc::Sender<Results>,
+    ) where
+        NS: wg_tunnel::NetworkSender + 'static,
+        NR: wg_tunnel::NetworkReceiver + 'static,
+    {
+        let cancel = self.cancel.clone();
+        let results_sender = results_sender.clone();
+        self.pump_tasks.spawn(async move {
+            let outcome = cancel
+                .run_until_cancelled(wg_tunnel::run(engine, net_tx, net_rx, tun_writer, tun_reader))
+                .await;
+            match pump_exit_reason(outcome) {
+                None => tracing::debug!("wg pump stopped (connection cancelled)"),
+                Some(reason) => {
+                    tracing::warn!(%reason, "wg pump exited - requesting reconnect");
+                    let _ = results_sender.send(Results::WgPumpExited { reason }).await;
+                }
+            }
+        });
+    }
+}
+
+/// Map a pump task outcome to the reconnect reason to report, or `None` when the
+/// pump stopped because the connection was cancelled (a deliberate teardown that
+/// needs no reconnect). Both a clean [`wg_tunnel::PumpExit`] and a pump error ask
+/// core to reconnect via [`Results::WgPumpExited`].
+fn pump_exit_reason(outcome: Option<Result<wg_tunnel::PumpExit, wg_tunnel::Error>>) -> Option<String> {
+    match outcome {
+        None => None,
+        Some(Ok(exit)) => Some(format!("{exit:?}")),
+        Some(Err(e)) => Some(e.to_string()),
+    }
+}
+
+/// Parse the peer's allowed-IPs (comma-separated CIDRs) used for INGRESS filtering
+/// in the `WgTunnel`. Defaults to `0.0.0.0/0` (accept all from the single server
+/// peer), matching the client-side config that was replaced. Unparseable entries
+/// are skipped with a warning; an empty result falls back to the default.
+fn parse_allowed_ips(allowed: Option<&str>) -> Vec<IpNetwork> {
+    let default: IpNetwork = "0.0.0.0/0".parse().expect("valid default cidr");
+    let nets: Vec<IpNetwork> = allowed
+        .unwrap_or("0.0.0.0/0")
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| match s.parse::<IpNetwork>() {
+            Ok(net) => Some(net),
+            Err(e) => {
+                tracing::warn!(entry = %s, %e, "ignoring unparseable allowed-ip");
+                None
+            }
+        })
+        .collect();
+    if nets.is_empty() { vec![default] } else { nets }
 }
 
 async fn gather_peer_ips(hopr: &Hopr) -> Result<Vec<Ipv4Addr>, HoprError> {
@@ -456,4 +567,82 @@ fn setback(setback: Setback) -> Results {
 
 fn progress(progress: Progress) -> Results {
     Results::ConnectionEvent(Event::Progress(Box::new(progress)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pump_exit_reason_none_for_cancellation() {
+        // A cancelled pump (deliberate teardown) reports no reason, so core does not
+        // reconnect.
+        assert!(pump_exit_reason(None).is_none());
+    }
+
+    #[test]
+    fn pump_exit_reason_names_the_exit_variant() {
+        // A clean pump exit reports a reason naming the variant, driving a reconnect.
+        assert_eq!(
+            pump_exit_reason(Some(Ok(wg_tunnel::PumpExit::DecapStalled))),
+            Some("DecapStalled".to_string())
+        );
+        assert_eq!(
+            pump_exit_reason(Some(Ok(wg_tunnel::PumpExit::Expired))),
+            Some("Expired".to_string())
+        );
+    }
+
+    #[test]
+    fn pump_exit_reason_carries_the_error_message() {
+        let reason = pump_exit_reason(Some(Err(wg_tunnel::Error::Unexpected("boom")))).expect("a reason");
+        assert!(reason.contains("boom"), "reason should surface the error: {reason}");
+    }
+
+    fn nets(s: &[&str]) -> Vec<IpNetwork> {
+        s.iter().map(|n| n.parse().expect("valid cidr")).collect()
+    }
+
+    #[test]
+    fn allowed_ips_default_to_accept_all_when_unset() {
+        assert_eq!(parse_allowed_ips(None), nets(&["0.0.0.0/0"]));
+    }
+
+    #[test]
+    fn allowed_ips_parse_a_comma_separated_list() {
+        assert_eq!(
+            parse_allowed_ips(Some("10.128.0.0/9,192.168.0.1/32")),
+            nets(&["10.128.0.0/9", "192.168.0.1/32"])
+        );
+    }
+
+    #[test]
+    fn allowed_ips_tolerate_whitespace_and_empty_entries() {
+        assert_eq!(
+            parse_allowed_ips(Some(" 10.128.0.0/9 , ,192.168.0.1/32 ")),
+            nets(&["10.128.0.0/9", "192.168.0.1/32"])
+        );
+    }
+
+    #[test]
+    fn allowed_ips_skip_unparseable_entries() {
+        assert_eq!(
+            parse_allowed_ips(Some("10.128.0.0/9,not-a-cidr")),
+            nets(&["10.128.0.0/9"])
+        );
+    }
+
+    #[test]
+    fn allowed_ips_fall_back_to_default_when_nothing_parses() {
+        assert_eq!(parse_allowed_ips(Some("not-a-cidr,also/bad")), nets(&["0.0.0.0/0"]));
+        assert_eq!(parse_allowed_ips(Some("")), nets(&["0.0.0.0/0"]));
+    }
+
+    #[test]
+    fn allowed_ips_parse_mixed_ipv4_and_ipv6_cidrs() {
+        assert_eq!(
+            parse_allowed_ips(Some("10.128.0.0/9, fd00::/8 , 2001:db8::1/128")),
+            nets(&["10.128.0.0/9", "fd00::/8", "2001:db8::1/128"])
+        );
+    }
 }

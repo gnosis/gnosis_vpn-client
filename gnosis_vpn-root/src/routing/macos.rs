@@ -1,29 +1,30 @@
 //! macOS routing implementation for split-tunnel VPN behavior.
 //!
 //! Provides a [`StaticRouter`] that:
-//! 1. Adds bypass routes for peer IPs and RFC1918 networks BEFORE bringing up WireGuard
-//!    (avoids race condition for both HOPR traffic and LAN access)
-//! 2. Runs `wg-quick up` with `Table = off` to prevent automatic routing
+//! 1. Adds bypass routes for peer IPs and RFC1918 networks BEFORE creating the TUN
+//!    (avoids a race for both HOPR traffic and LAN access)
+//! 2. Creates a `utun` device and assigns its address + MTU (replaces `wg-quick up`)
 //! 3. Adds VPN split routes (`0.0.0.0/1`, `128.0.0.0/1`) and VPN subnet (`10.128.0.0/9`)
-//!    via the resolved utun interface
-//! 4. On teardown: removes VPN routes, brings down WireGuard, removes bypass routes
+//!    via the resolved utun interface, then blackholes IPv6 and pushes DNS
+//! 4. On teardown: removes VPN routes + IPv6 blackhole, restores DNS, closes the
+//!    TUN fd, removes bypass routes
 //!
 //! ## Route Precedence
 //! Route specificity handles all traffic without extra routing tables:
 //! `/32` (peer) > `/12`–`/16` (RFC1918) > `/9` (VPN subnet) > `/8` (RFC1918) > `/1` (VPN default) > `/0` (WAN)
 
 use async_trait::async_trait;
+use tokio::process::Command;
 
-use gnosis_vpn_lib::shell_command_ext::Logs;
-use gnosis_vpn_lib::{event, wireguard};
+use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
+use gnosis_vpn_lib::wireguard;
 
 use std::net::Ipv4Addr;
-use std::path::PathBuf;
+use std::os::fd::{AsFd, BorrowedFd};
 
 use super::route_ops::{RouteOps, WanRoute};
 use super::route_ops_macos::DarwinRouteOps;
-use super::wg_ops::{RealWgOps, WgOps};
-use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET};
+use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET, dns, ipv6_blackhole, sweep, tun};
 
 /// Public IP used to identify the WAN route and detect DHCP reassignments.
 const PUBLIC_INTERNET_ADDRESS: Ipv4Addr = Ipv4Addr::new(1, 1, 1, 1);
@@ -34,17 +35,21 @@ const VPN_SPLIT_ROUTES: &[(&str, u8)] = &[("0.0.0.0", 1), ("128.0.0.0", 1)];
 
 /// Builds a static macOS router.
 pub fn static_router(
-    state_home: PathBuf,
-    wg_data: event::WireGuardData,
+    interface_address: String,
+    mtu: u32,
+    dns: Option<String>,
     peer_ips: Vec<Ipv4Addr>,
 ) -> Result<impl Routing, Error> {
     Ok(StaticRouter {
-        state_home,
-        wg_data,
+        interface_address,
+        mtu,
+        dns,
+        dns_mechanism: None,
         peer_ips,
         route_ops: DarwinRouteOps,
-        wg: RealWgOps,
         active_bypass_routes: Vec::new(),
+        blackholes_added: false,
+        tun: None,
         wg_interface_name: None,
         wan_info: None,
     })
@@ -52,24 +57,29 @@ pub fn static_router(
 
 /// macOS static router using route operations via the `route` command.
 ///
-/// Uses `Table = off` so wg-quick only creates the WireGuard interface.
 /// All routing is owned explicitly by this struct via `RouteOps`:
-/// - bypass routes (peer IPs + RFC1918) via WAN — added before wg-quick up
+/// - bypass routes (peer IPs + RFC1918) via WAN — added before the TUN is created
 /// - VPN split routes (`0.0.0.0/1`, `128.0.0.0/1`) + VPN subnet via utun — static after setup
 struct StaticRouter {
-    state_home: PathBuf,
-    wg_data: event::WireGuardData,
+    /// The tunnel interface address (e.g. `10.128.0.5/32`) assigned to the utun.
+    interface_address: String,
+    /// Tunnel MTU (1420).
+    mtu: u32,
+    /// DNS servers to push (comma-separated), or `None` to leave DNS unmanaged.
+    dns: Option<String>,
+    /// Resolver mechanism that took effect at setup; teardown reverses exactly this one.
+    dns_mechanism: Option<dns::Mechanism>,
     peer_ips: Vec<Ipv4Addr>,
     route_ops: DarwinRouteOps,
-    wg: RealWgOps,
     /// Bypass routes currently installed: (dest_cidr, wan_device).
-    /// Tracked for explicit cleanup since the wg-quick config has no PreDown scripts.
     active_bypass_routes: Vec<(String, String)>,
-    /// Resolved WireGuard interface name (e.g. "utun8"); populated after wg-quick up.
-    /// Unlike Linux, the interface name is assigned dynamically by the kernel.
+    /// Whether IPv6 blackhole cleanup is still required.
+    blackholes_added: bool,
+    /// The created TUN device; holding it keeps root's fd (and the interface) alive.
+    tun: Option<tun::Tun>,
+    /// Resolved utun interface name (e.g. "utun8"); populated after the TUN is created.
     wg_interface_name: Option<String>,
-    /// WAN route snapshot captured at setup time.
-    /// Used by `wan_changed()` to detect interface switches and DHCP reassignments.
+    /// WAN route snapshot captured at setup time, for `wan_changed()`.
     wan_info: Option<WanRoute>,
 }
 
@@ -78,6 +88,19 @@ impl StaticRouter {
         self.wg_interface_name
             .clone()
             .unwrap_or_else(|| wireguard::WG_INTERFACE.to_string())
+    }
+
+    /// Snapshot the current side effects into the crash-recovery state file. Called
+    /// after setup and after every bypass-route change so the persisted set - which a
+    /// SIGKILLed root is swept against at next start - always reflects reality.
+    fn persist_teardown_state(&self) {
+        sweep::record(&sweep::TeardownState {
+            interface_name: self.wg_interface_name.clone(),
+            dns_mechanism_applied: self.dns_mechanism,
+            blackholes_added: self.blackholes_added,
+            bypass_routes: self.active_bypass_routes.clone(),
+            ..sweep::TeardownState::default()
+        });
     }
 
     async fn setup_vpn_routes(&self, iface: &str) -> Result<(), Error> {
@@ -104,33 +127,49 @@ impl StaticRouter {
     }
 
     async fn rollback_bypass_routes(&mut self) {
-        for (dest, device) in self.active_bypass_routes.drain(..).collect::<Vec<_>>() {
+        let mut failed = Vec::new();
+        for (dest, device) in self.active_bypass_routes.drain(..) {
             if let Err(e) = self.route_ops.route_del(&dest, &device).await {
                 tracing::warn!(%e, dest = %dest, "failed to remove bypass route during rollback");
+                failed.push((dest, device));
             }
         }
+        self.active_bypass_routes = failed;
+        self.persist_teardown_state();
     }
+}
+
+/// Assign the tunnel address + MTU to the utun and bring it up. utun is
+/// point-to-point, so the /32 VPN address is used for both local and peer.
+async fn configure_interface(iface: &str, interface_address: &str, mtu: u32) -> Result<(), Error> {
+    let ip = interface_address.split('/').next().unwrap_or(interface_address);
+    Command::new("ifconfig")
+        .args([iface, "inet", ip, ip, "up"])
+        .run(Logs::Print)
+        .await?;
+    Command::new("ifconfig")
+        .args([iface, "mtu", &mtu.to_string()])
+        .run(Logs::Print)
+        .await?;
+    Ok(())
 }
 
 #[async_trait]
 impl Routing for StaticRouter {
     /// Install split-tunnel routing.
     ///
-    /// Phase 1 (before wg-quick up): add bypass routes via WAN
+    /// Phase 1 (before the TUN): add bypass routes via WAN
     ///   - Peer IP /32 routes (hard-fail: rollback all on error)
     ///   - RFC1918 bypass routes (soft-fail: warn and continue)
     ///
-    /// Phase 2: wg-quick up with Table = off (no automatic routing)
+    /// Phase 2: create the utun and assign its address + MTU
     ///   - On failure: rollback Phase 1 bypass routes
     ///
-    /// Phase 3 (after wg-quick up): add VPN routes via the resolved utun interface
-    ///   - `0.0.0.0/1` and `128.0.0.0/1` override the WAN default for all internet traffic
-    ///   - `10.128.0.0/9` overrides the `10.0.0.0/8` RFC1918 bypass for VPN server traffic
-    ///   - On failure: remove partial VPN routes, wg-quick down, rollback bypass routes
+    /// Phase 3 (after the TUN): add VPN routes via the resolved utun interface
+    ///   - On failure: remove partial VPN routes, drop the TUN, rollback bypass routes
+    ///
+    /// Phase 4: IPv6 blackhole + DNS (best-effort leak protection)
     async fn setup(&mut self) -> Result<String, Error> {
-        // Snapshot the WAN route before any VPN routes are installed.
-        // Including src_ip lets wan_changed() detect DHCP reassignments on the same
-        // interface/gateway (the conference WiFi roaming scenario).
         let wan_route = self
             .route_ops
             .get_wan_route_for(PUBLIC_INTERNET_ADDRESS, wireguard::WG_INTERFACE)
@@ -140,7 +179,7 @@ impl Routing for StaticRouter {
         let gateway = wan_route.gateway.clone();
         tracing::debug!(device = %device, gateway = ?gateway, src_ip = ?wan_route.src_ip, "WAN interface for bypass routes");
 
-        // Phase 1: bypass routes before wg-quick up (avoids race with HOPR p2p connections)
+        // Phase 1: bypass routes before the TUN (avoids race with HOPR p2p connections)
         for ip in self.peer_ips.clone() {
             let dest = ip.to_string();
             let _ = self.route_ops.route_del(&dest, &device).await;
@@ -149,39 +188,54 @@ impl Routing for StaticRouter {
                 return Err(e);
             }
             self.active_bypass_routes.push((dest, device.clone()));
+            self.persist_teardown_state();
         }
         for (net, prefix) in RFC1918_BYPASS_NETS {
             let cidr = format!("{}/{}", net, prefix);
             let _ = self.route_ops.route_del(&cidr, &device).await;
             match self.route_ops.route_add(&cidr, gateway.as_deref(), &device).await {
-                Ok(_) => self.active_bypass_routes.push((cidr, device.clone())),
+                Ok(_) => {
+                    self.active_bypass_routes.push((cidr, device.clone()));
+                    self.persist_teardown_state();
+                }
                 Err(e) => tracing::warn!(%e, cidr = %cidr, "RFC1918 bypass route failed, continuing"),
             }
         }
 
-        // Phase 2: wg-quick up with Table = off
-        let wg_content = self.wg_data.wg.to_file_string(
-            &self.wg_data.interface_info,
-            &self.wg_data.peer_info,
-            vec!["Table = off".to_string()],
-        );
-        let interface_name = match self.wg.wg_quick_up(self.state_home.clone(), wg_content).await {
-            Ok(n) => n,
+        // Phase 2: create and configure the utun (replaces wg-quick up)
+        let tun_device = match tun::Tun::create("utun") {
+            Ok(t) => t,
             Err(e) => {
                 self.rollback_bypass_routes().await;
                 return Err(e);
             }
         };
+        let interface_name = tun_device.name().to_string();
+        if let Err(e) = configure_interface(&interface_name, &self.interface_address, self.mtu).await {
+            self.rollback_bypass_routes().await;
+            return Err(e);
+        }
         self.wg_interface_name = Some(interface_name.clone());
-        tracing::debug!(%interface_name, "wg-quick up");
+        self.tun = Some(tun_device);
+        tracing::debug!(%interface_name, "utun created and configured");
 
         // Phase 3: VPN routes via utun (split defaults + VPN subnet override)
         if let Err(e) = self.setup_vpn_routes(&interface_name).await {
             self.remove_vpn_routes().await;
-            let _ = self.wg.wg_quick_down(self.state_home.clone(), Logs::Suppress).await;
+            self.tun = None;
             self.rollback_bypass_routes().await;
             return Err(e);
         }
+
+        // Phase 4: IPv6 blackhole + DNS (previously handled inside wg-quick)
+        ipv6_blackhole::add().await;
+        self.blackholes_added = true;
+        self.dns_mechanism = match self.dns.clone() {
+            Some(servers) => dns::set(&interface_name, &servers).await,
+            None => None,
+        };
+        // Record what was applied so a SIGKILLed root can be swept at next start.
+        self.persist_teardown_state();
 
         self.wan_info = Some(wan_route);
         tracing::info!("routing is ready (macOS static)");
@@ -191,32 +245,47 @@ impl Routing for StaticRouter {
     /// Teardown split-tunnel routing.
     ///
     /// 1. Remove VPN routes (utun) — warn on error, continue
-    /// 2. wg-quick down
-    /// 3. Remove bypass routes (WAN) — warn on error, continue
-    async fn teardown(&mut self, logs: Logs) {
+    /// 2. Remove the IPv6 blackhole and restore DNS
+    /// 3. Close the TUN fd (root's copy) — after routes are gone
+    /// 4. Remove bypass routes (WAN) — warn on error, continue
+    async fn teardown(&mut self, _logs: Logs) {
         self.remove_vpn_routes().await;
-        match self.wg.wg_quick_down(self.state_home.clone(), logs).await {
-            Ok(_) => tracing::debug!("wg-quick down"),
-            Err(error) => tracing::warn!(?error, "wg-quick down failed during teardown"),
+        if self.blackholes_added && ipv6_blackhole::remove().await {
+            self.blackholes_added = false;
         }
-        for (dest, device) in self.active_bypass_routes.drain(..).collect::<Vec<_>>() {
+        // DNS restore must target the recorded utunN name: the compile-time fallback
+        // from vpn_interface() can never exist as a scutil service key on macOS.
+        match (self.wg_interface_name.clone(), self.dns_mechanism) {
+            (Some(iface), Some(mechanism)) if dns::restore(&iface, mechanism).await => {
+                self.dns_mechanism = None;
+            }
+            (None, Some(_)) => tracing::warn!("skipping DNS restore: utun interface name not recorded"),
+            _ => {}
+        }
+        // Drop root's fd last so routes are removed before the interface can vanish.
+        self.tun = None;
+        let mut failed = Vec::new();
+        for (dest, device) in self.active_bypass_routes.drain(..) {
             if let Err(e) = self.route_ops.route_del(&dest, &device).await {
                 tracing::warn!(%e, dest = %dest, device = %device, "failed to remove bypass route");
+                failed.push((dest, device));
             }
         }
-        self.wg_interface_name = None;
+        self.active_bypass_routes = failed;
         self.wan_info = None;
+        self.persist_teardown_state();
+        self.wg_interface_name = None;
         tracing::info!("routing teardown complete");
+    }
+
+    fn tun_fd(&self) -> Option<BorrowedFd<'_>> {
+        self.tun.as_ref().map(AsFd::as_fd)
     }
 
     async fn wan_changed(&mut self) -> Result<bool, Error> {
         let Some(ref snapshot) = self.wan_info else {
             return Ok(true);
         };
-        // Pin the check to the captured device so that adding a second network
-        // interface (e.g. plugging in cable while WiFi VPN is up) does not
-        // look like a WAN change. We reconnect only when the original interface
-        // loses its route (gone) or its DHCP-assigned IP / gateway changes.
         let current = self
             .route_ops
             .get_route_via_device(PUBLIC_INTERNET_ADDRESS, &snapshot.device)
@@ -237,6 +306,7 @@ impl Routing for StaticRouter {
         let _ = self.route_ops.route_del(&dest, &device).await;
         self.route_ops.route_add(&dest, gateway.as_deref(), &device).await?;
         self.active_bypass_routes.push((dest, device));
+        self.persist_teardown_state();
         Ok(())
     }
 
@@ -246,10 +316,9 @@ impl Routing for StaticRouter {
         };
         let dest = ip.to_string();
         let device = wan.device.clone();
-        if let Err(e) = self.route_ops.route_del(&dest, &device).await {
-            tracing::warn!(%e, %ip, "failed to remove dynamic peer bypass route");
-        }
+        self.route_ops.route_del(&dest, &device).await?;
         self.active_bypass_routes.retain(|(d, _)| d != &dest);
+        self.persist_teardown_state();
         Ok(())
     }
 }
