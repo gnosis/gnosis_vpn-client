@@ -125,6 +125,8 @@ impl From<edgli::strategy::Capacity> for Capacity {
 }
 
 /// Minimum recommended wxHOPR and xDAI balance to open the target number of channels.
+/// The wxHOPR amount also covers the one-time key-binding (announcement) fee, which
+/// on some networks (e.g. rotsee: 0.01 wxHOPR) dwarfs the channel stakes themselves.
 /// Computed once during onboarding and surfaced in the PreparingSafe run mode.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct BalanceRecommendation {

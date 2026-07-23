@@ -70,6 +70,12 @@ objc2-foundation = { version = "~0.3.2", features = [
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
 
+# TEMPORARY: local edgli with key-binding fee included in the minimum balance
+# recommendation. Remove once the edge-client fix is merged and replace with a
+# rev bump of the `edgli` dependency above.
+[patch."https://github.com/hoprnet/edge-client.git"]
+edgli = { path = "../../hoprnet/edge-client" }
+
 # this profile focuses on the best runtime performance and the smallest binary size
 [profile.release]
 codegen-units = 1
