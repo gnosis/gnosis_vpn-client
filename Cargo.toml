@@ -23,7 +23,7 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.1", features = ["derive", "env"] }
 clap_complete = "~4.6.5"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "ee0e1baf76789dfe5ac6bb760832162a82c7eb7d", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "8e3fdb06b3d231b69cf24ce9c967b2b2ab6d7e80", features = [
   "blokli",
   "telemetry",
 ] }
@@ -69,12 +69,6 @@ objc2-foundation = { version = "~0.3.2", features = [
 ] }
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
-
-# TEMPORARY: local edgli with key-binding fee included in the minimum balance
-# recommendation. Remove once the edge-client fix is merged and replace with a
-# rev bump of the `edgli` dependency above.
-[patch."https://github.com/hoprnet/edge-client.git"]
-edgli = { path = "../../hoprnet/edge-client" }
 
 # this profile focuses on the best runtime performance and the smallest binary size
 [profile.release]

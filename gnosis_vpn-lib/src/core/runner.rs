@@ -390,10 +390,7 @@ async fn run_minimum_balance_recommendation(
             let rec = edgli::strategy::minimum_balance_recommendation(&*ops, &cfg)
                 .await
                 .map_err(|e| Error::Chain(e.to_string()))?;
-            Ok(balance::BalanceRecommendation {
-                wxhopr: rec.wxhopr,
-                xdai: rec.xdai,
-            })
+            Ok(rec.into())
         }
     })
     .retry(remote_data::backoff_expo_long_delay())
