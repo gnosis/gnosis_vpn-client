@@ -125,13 +125,45 @@ impl From<edgli::strategy::Capacity> for Capacity {
 }
 
 /// Minimum recommended wxHOPR and xDAI balance to open the target number of channels.
-/// Computed once during onboarding and surfaced in the PreparingSafe run mode.
+/// `wxhopr` is the total to fund: channel stakes plus the one-time key-binding
+/// (announcement) fee, which on some networks (e.g. rotsee: 0.01 wxHOPR) dwarfs the
+/// channel stakes themselves. The breakdown fields mirror
+/// `edgli::strategy::BalanceRecommendation`. Computed once during onboarding and
+/// surfaced in the PreparingSafe run mode.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct BalanceRecommendation {
+    /// Total wxHOPR to fund: channel stakes plus the fee to start.
     #[serde(with = "serde_utils::balance")]
     pub wxhopr: Balance<WxHOPR>,
+    /// Recommended xDai balance for gas (flat, one [`Self::xdai_fee_per_tx`]).
     #[serde(with = "serde_utils::balance")]
     pub xdai: Balance<XDai>,
+    /// wxHOPR needed to stake the missing channels.
+    #[serde(with = "serde_utils::balance")]
+    pub channel_stakes: Balance<WxHOPR>,
+    /// One-time key-binding fee still owed before the node can start;
+    /// zero once the key is bound on-chain.
+    #[serde(with = "serde_utils::balance")]
+    pub fee_to_start: Balance<WxHOPR>,
+    /// Number of on-chain transactions still needed before channel funding can
+    /// begin (Safe deployment, Safe registration, key-binding announcement).
+    pub txs_to_start: u64,
+    /// Maximum xDAI fee per transaction (gas).
+    #[serde(with = "serde_utils::balance")]
+    pub xdai_fee_per_tx: Balance<XDai>,
+}
+
+impl From<edgli::strategy::BalanceRecommendation> for BalanceRecommendation {
+    fn from(rec: edgli::strategy::BalanceRecommendation) -> Self {
+        BalanceRecommendation {
+            wxhopr: rec.total_wxhopr(),
+            xdai: rec.xdai_fee_per_tx,
+            channel_stakes: rec.channel_stakes,
+            fee_to_start: rec.fee_to_start,
+            txs_to_start: rec.txs_to_start,
+            xdai_fee_per_tx: rec.xdai_fee_per_tx,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -225,6 +257,10 @@ mod tests {
         BalanceRecommendation {
             wxhopr: Balance::<WxHOPR>::from(wxhopr),
             xdai: Balance::<XDai>::from(xdai),
+            channel_stakes: Balance::<WxHOPR>::from(wxhopr),
+            fee_to_start: Balance::<WxHOPR>::zero(),
+            txs_to_start: 0,
+            xdai_fee_per_tx: Balance::<XDai>::from(xdai),
         }
     }
 
@@ -329,6 +365,23 @@ mod tests {
         );
         assert!(issues.contains(&FundingIssue::NodeLowOnFunds));
         assert!(!issues.contains(&FundingIssue::NodeUnderfunded));
+    }
+
+    #[test]
+    fn balance_recommendation_from_edgli_totals_stakes_and_fee() {
+        let rec = edgli::strategy::BalanceRecommendation {
+            channel_stakes: Balance::<WxHOPR>::from(800u64),
+            fee_to_start: Balance::<WxHOPR>::from(10_000u64),
+            txs_to_start: 3,
+            xdai_fee_per_tx: Balance::<XDai>::from(100u64),
+        };
+        let mirrored: BalanceRecommendation = rec.into();
+        assert_eq!(mirrored.wxhopr, Balance::<WxHOPR>::from(10_800u64));
+        assert_eq!(mirrored.xdai, Balance::<XDai>::from(100u64));
+        assert_eq!(mirrored.channel_stakes, Balance::<WxHOPR>::from(800u64));
+        assert_eq!(mirrored.fee_to_start, Balance::<WxHOPR>::from(10_000u64));
+        assert_eq!(mirrored.txs_to_start, 3);
+        assert_eq!(mirrored.xdai_fee_per_tx, Balance::<XDai>::from(100u64));
     }
 
     #[test]
