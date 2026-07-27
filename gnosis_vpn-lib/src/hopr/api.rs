@@ -371,10 +371,7 @@ impl Hopr {
             .ideal_balance_recommendation(cfg)
             .await
             .map_err(|e| HoprError::Strategy(e.to_string()))?;
-        Ok(balance::BalanceRecommendation {
-            wxhopr: rec.wxhopr,
-            xdai: rec.xdai,
-        })
+        Ok(rec.into())
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret, err)]

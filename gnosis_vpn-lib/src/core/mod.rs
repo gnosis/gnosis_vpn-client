@@ -669,6 +669,8 @@ impl Core {
                 Ok(rec) => {
                     tracing::info!(?rec, "received minimum balance recommendation");
                     self.minimum_balance_recommendation = Some(rec);
+                    // safe deployment may be waiting on this recommendation
+                    self.trigger_deploy_safe(results_sender);
                 }
                 Err(err) => {
                     tracing::error!(?err, "failed to fetch minimum balance recommendation - retrying");
@@ -1272,8 +1274,17 @@ impl Core {
             funding_tool: _,
         } = self.phase.clone()
         {
-            if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
-                tracing::warn!(balance = %presafe, "insufficient funds to start safe deployment - waiting for funding");
+            let Some(recommendation) = self.minimum_balance_recommendation else {
+                tracing::info!(balance = %presafe, "waiting for minimum balance recommendation before safe deployment");
+                return;
+            };
+            if presafe.node_wxhopr < recommendation.wxhopr || presafe.node_xdai < recommendation.xdai {
+                tracing::warn!(
+                    balance = %presafe,
+                    required_wxhopr = %recommendation.wxhopr,
+                    required_xdai = %recommendation.xdai,
+                    "insufficient funds to start safe deployment - waiting for funding"
+                );
             } else {
                 self.phase = Phase::DeployingSafe {
                     node_balance: Querying::Success(presafe.clone()),
