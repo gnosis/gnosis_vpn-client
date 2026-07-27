@@ -147,7 +147,8 @@ pub enum RunMode {
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: Option<String>,
         error: Option<String>,
-        // boxed to keep the RunMode enum variants similar in size
+        // Boxed to satisfy clippy::large_enum_variant: an enum is as large as its biggest variant,
+        // and this ~170-byte struct would otherwise bloat every RunMode value several-fold.
         balance_recommendation: Option<Box<balance::BalanceRecommendation>>,
     },
     /// Safe deployment ongoing
