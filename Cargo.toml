@@ -30,7 +30,7 @@ edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "8e3fdb06b3d
 exitcode = "~1.1.2"
 futures = "~0.3.32"
 futures-util = "~0.3.32"
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "118c4951f907bae5ca39083404f88357f2fa3722", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "847d1c65167021367fe5b8a164cb707ccf7317d3", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
