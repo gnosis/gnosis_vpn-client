@@ -124,12 +124,14 @@ impl From<edgli::strategy::Capacity> for Capacity {
     }
 }
 
-/// Minimum recommended wxHOPR and xDAI balance to open the target number of channels.
+/// Recommended wxHOPR and xDAI balance to open the target number of channels.
 /// `wxhopr` is the total to fund: channel stakes plus the one-time key-binding
 /// (announcement) fee, which on some networks (e.g. rotsee: 0.01 wxHOPR) dwarfs the
 /// channel stakes themselves. The breakdown fields mirror
-/// `edgli::strategy::BalanceRecommendation`. Computed once during onboarding and
-/// surfaced in the PreparingSafe run mode.
+/// `edgli::strategy::BalanceRecommendation`. Carries both the minimum
+/// recommendation (computed once during onboarding, surfaced in the PreparingSafe
+/// run mode and gating safe deployment) and the ideal recommendation (refreshed
+/// periodically while running, feeding funding-issue checks and balance responses).
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct BalanceRecommendation {
     /// Total wxHOPR to fund: channel stakes plus the fee to start.
