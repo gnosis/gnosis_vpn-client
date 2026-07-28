@@ -143,8 +143,6 @@ path    = { hops = 1 }
 ## strategy section - channel lifecycle and funding parameters
 
 # [strategy]
-# number of forwarded packets the initial channel stake is sized to cover
-# desired_message_count = 1000000
 # minimum number of open outgoing channels to maintain
 # min_open_channels = 5
 # target number of open outgoing channels
