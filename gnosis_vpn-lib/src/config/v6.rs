@@ -514,7 +514,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "strategy" {
             if let Some(strategy) = value.as_table() {
                 for (k, v) in strategy.iter() {
-                    if k == "desired_message_count" || k == "min_open_channels" || k == "target_open_channels" {
+                    if k == "min_open_channels" || k == "target_open_channels" {
                         continue;
                     }
                     if k == "channel_allowlist" {
@@ -548,7 +548,6 @@ pub(super) struct ChannelAllowlistConfig {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct Strategy {
-    pub(super) desired_message_count: Option<u64>,
     pub(super) min_open_channels: Option<usize>,
     pub(super) target_open_channels: Option<usize>,
     pub(super) channel_allowlist: Option<ChannelAllowlistConfig>,
@@ -558,10 +557,6 @@ impl From<Option<Strategy>> for StrategyConfig {
     fn from(v: Option<Strategy>) -> Self {
         let def = StrategyConfig::default();
         Self {
-            desired_message_count: v
-                .as_ref()
-                .and_then(|s| s.desired_message_count)
-                .unwrap_or(def.desired_message_count),
             min_open_channels: v
                 .as_ref()
                 .and_then(|s| s.min_open_channels)
@@ -794,7 +789,6 @@ path_planner_min_ack_rate = {bad}
     fn strategy_channel_allowlist_enabled_produces_some() {
         let addr: Address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739".parse().unwrap();
         let strategy = Some(Strategy {
-            desired_message_count: None,
             min_open_channels: None,
             target_open_channels: None,
             channel_allowlist: Some(ChannelAllowlistConfig {
@@ -810,7 +804,6 @@ path_planner_min_ack_rate = {bad}
     fn strategy_channel_allowlist_disabled_produces_none() {
         let addr: Address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739".parse().unwrap();
         let strategy = Some(Strategy {
-            desired_message_count: None,
             min_open_channels: None,
             target_open_channels: None,
             channel_allowlist: Some(ChannelAllowlistConfig {
