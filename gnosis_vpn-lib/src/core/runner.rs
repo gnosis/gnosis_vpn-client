@@ -494,7 +494,7 @@ async fn run_hopr(
     tracing::debug!("starting hopr runner");
     let cfg = worker_params.to_config(safe_module, path_planner_min_ack_rate).await?;
     let keys = worker_params.calc_keys().await?;
-    let blokli_url = worker_params.blokli_url();
+    let blokli_endpoint = worker_params.blokli_endpoint();
     let sender = results_sender.clone();
     let visitor = move |state| {
         if let Err(err) = sender.try_send(Results::HoprConstruction(state)) {
@@ -502,7 +502,7 @@ async fn run_hopr(
         }
     };
 
-    Hopr::new(cfg, keys, blokli_url, blokli_config.into(), visitor)
+    Hopr::new(cfg, keys, blokli_endpoint, blokli_config.into(), visitor)
         .await
         .map_err(Error::from)
 }
@@ -527,10 +527,10 @@ async fn run_create_incentive_operations(
     blokli_config: BlockchainConnectorConfig,
     results_sender: mpsc::Sender<Results>,
 ) -> Result<Arc<dyn IncentiveOperations>, Error> {
-    let blokli_provider = worker_params.blokli_url();
+    let blokli_endpoint = worker_params.blokli_endpoint();
     let chain_key = worker_params.calc_keys().await?.chain_key;
     (|| async {
-        let ops = make_incentive_operations(blokli_provider.clone(), &chain_key, Some(blokli_config))
+        let ops = make_incentive_operations(blokli_endpoint.clone(), &chain_key, Some(blokli_config))
             .await
             .map_err(|e| Error::IncentiveOperationsCreation(e.to_string()))?;
         Ok(Arc::from(ops))
