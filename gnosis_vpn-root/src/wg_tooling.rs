@@ -25,11 +25,26 @@ pub async fn executable() -> Result<(), wireguard::Error> {
         .map_err(wireguard::Error::from)
 }
 
+/// Path of the WireGuard config handed to `wg-quick`.
+///
+/// Lives in the state home root, not in the cache directory: the cache directory is `0700` and
+/// owned by the worker user, while `wg-quick` runs as root without a DAC-bypass capability
+/// (distro AppArmor profiles deny `dac_override`, and `CAP_DAC_READ_SEARCH` is not in the
+/// service's capability bounding set). It can therefore only reach the config through
+/// traversable directories, reading it as the file's owner.
+fn config_path(state_home: PathBuf) -> PathBuf {
+    state_home.join(wireguard::WG_CONFIG_FILE)
+}
+
 /// Write the WireGuard config to a file and bring up the interface using `wg-quick`.
 /// Returns created interface name on success.
 pub async fn up(state_home: PathBuf, config_content: String) -> Result<String, wireguard::Error> {
-    let conf_file = dirs::cache_dir(state_home, wireguard::WG_CONFIG_FILE);
+    let conf_file = config_path(state_home.clone());
     let content = config_content.as_bytes();
+
+    // The config used to live in the cache directory - drop that copy so the private key it
+    // holds does not linger there.
+    let _ = fs::remove_file(dirs::cache_dir(state_home, wireguard::WG_CONFIG_FILE)).await;
 
     // Remove stale config so mode() applies to a fresh file (O_CREAT only sets mode on creation)
     let _ = fs::remove_file(&conf_file).await;
@@ -81,7 +96,30 @@ pub async fn resolve_interface_name() -> String {
 }
 
 pub async fn down(state_home: PathBuf, logs: Logs) -> Result<(), wireguard::Error> {
-    let conf_file = dirs::cache_dir(state_home, wireguard::WG_CONFIG_FILE);
+    let conf_file = config_path(state_home);
     Command::new("wg-quick").arg("down").arg(conf_file).run(logs).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── config_path ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn config_path_resolves_in_state_home_root() {
+        let path = config_path(PathBuf::from("/var/lib/gnosisvpn"));
+        assert_eq!(path, PathBuf::from("/var/lib/gnosisvpn/wg0_gnosisvpn.conf"));
+    }
+
+    // wg-quick has no DAC-bypass capability, so it cannot traverse the 0700 worker-owned
+    // cache directory.
+    #[test]
+    fn config_path_is_outside_the_cache_directory() {
+        let state_home = PathBuf::from("/var/lib/gnosisvpn");
+        let path = config_path(state_home.clone());
+        assert_ne!(path, dirs::cache_dir(state_home, wireguard::WG_CONFIG_FILE));
+        assert_eq!(path.parent(), Some(PathBuf::from("/var/lib/gnosisvpn").as_path()));
+    }
 }
