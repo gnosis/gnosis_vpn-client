@@ -1,5 +1,5 @@
 use bytesize::ByteSize;
-use edgli::{BlockchainConnectorConfig, EdgeNodeApi, EdgliInitState};
+use edgli::{BlockchainConnectorConfig, BlokliEndpoint, EdgeNodeApi, EdgliInitState};
 use edgli::{
     Edgli,
     hopr_lib::{
@@ -50,7 +50,7 @@ impl Hopr {
     pub async fn new(
         cfg: edgli::hopr_lib::config::HoprLibConfig,
         keys: edgli::hopr_lib::HoprKeys,
-        blokli_url: Option<url::Url>,
+        blokli_endpoint: BlokliEndpoint,
         blokli_config: BlockchainConnectorConfig,
         init_visitor: impl Fn(EdgliInitState) + Send + 'static,
     ) -> Result<Self, HoprError> {
@@ -58,8 +58,7 @@ impl Hopr {
         let edge_node = Edgli::new(
             cfg,
             keys,
-            blokli_url.map(|u| u.to_string()),
-            None, // blokli_dns_override
+            blokli_endpoint,
             Some(blokli_config),
             false, // probe_local_addresses: filter out non-public peer addresses
             init_visitor,

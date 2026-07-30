@@ -428,7 +428,7 @@ async fn keep_alive_timer(
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // ensure worker user exists
-    let worker_params = WorkerParams::from(&args);
+    let mut worker_params = WorkerParams::from(&args);
     let input = worker::Input::new(
         args.worker_user.clone(),
         args.worker_binary.clone(),
@@ -453,6 +453,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     let network_info = network_info::NetworkInfo::gather().await;
     tracing::info!(%network_info, "host network info");
+
+    // Resolve the blokli host while DNS is still reachable - an enabled killswitch blocks DNS
+    // for the rest of the session, including for workers started after that point.
+    worker_params.resolve_blokli_ip().await;
 
     // Write root pidfile for the newsyslog service to send signals to
     write_pidfile(&args.pid_file).await?;
