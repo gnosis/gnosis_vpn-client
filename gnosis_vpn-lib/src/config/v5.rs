@@ -253,7 +253,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "blokli" {
             if let Some(blokli) = value.as_table() {
                 for (k, _v) in blokli.iter() {
-                    if k == "connection_sync_timeout" || k == "sync_tolerance" {
+                    if k == "connection_sync_timeout" || k == "sync_tolerance" || k == "request_timeout" {
                         continue;
                     }
                     wrong_keys.push(format!("blokli.{k}"));
@@ -557,6 +557,7 @@ dns = { overwrite = true, servers = "1.1.1.1,8.8.8.8" }
 [blokli]
 connection_sync_timeout = "30s"
 sync_tolerance = 90
+request_timeout = "10s"
 "#####;
         toml::from_str::<Config>(config)?;
 

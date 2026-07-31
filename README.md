@@ -51,7 +51,7 @@ connections.
 ```
 sudo tee /etc/apparmor.d/local/wg-quick >/dev/null <<'EOF'
 # Local build: allow wg-quick to read the dev user's managed config.
-/home/<VPN_USER>/.cache/wg0_gnosisvpn.conf r, # VPN_USER: e.g. gnosisvpn, gnosisvpnrotsee, gnosisvpnjura
+/home/<VPN_USER>/wg0_gnosisvpn.conf r, # VPN_USER: e.g. gnosisvpn, gnosisvpnrotsee, gnosisvpnjura
 EOF
 
 sudo apparmor_parser -r /etc/apparmor.d/wg-quick`

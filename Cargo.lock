@@ -2772,7 +2772,6 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "3.3.1"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=634a1be5ea81719cdbbdb63046fc9a97c56765e7#634a1be5ea81719cdbbdb63046fc9a97c56765e7"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -3923,8 +3922,7 @@ dependencies = [
 
 [[package]]
 name = "hopr-chain-connector"
-version = "0.22.0"
-source = "git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3#847d1c65167021367fe5b8a164cb707ccf7317d3"
+version = "0.22.1"
 dependencies = [
  "ahash",
  "anyhow",
@@ -3937,7 +3935,7 @@ dependencies = [
  "futures-concurrency",
  "futures-time",
  "hopr-api",
- "hopr-utils",
+ "hopr-utils 0.3.0",
  "moka",
  "parking_lot",
  "petgraph",
@@ -3960,7 +3958,7 @@ dependencies = [
  "const-hex",
  "flagset",
  "hopr-types",
- "hopr-utils",
+ "hopr-utils 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3)",
  "serde",
  "serde_bytes",
  "strum 0.28.0",
@@ -3980,7 +3978,7 @@ dependencies = [
  "futures-time",
  "hopr-api",
  "hopr-network-graph",
- "hopr-utils",
+ "hopr-utils 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3)",
  "smart-default",
  "tracing",
  "validator",
@@ -4003,7 +4001,7 @@ dependencies = [
  "hopr-api",
  "hopr-network-graph",
  "hopr-transport",
- "hopr-utils",
+ "hopr-utils 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3)",
  "humantime-serde",
  "lazy_static",
  "parking_lot",
@@ -4026,7 +4024,7 @@ dependencies = [
  "bimap",
  "futures",
  "hopr-api",
- "hopr-utils",
+ "hopr-utils 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3)",
  "indexmap 2.14.0",
  "lazy_static",
  "parking_lot",
@@ -4065,7 +4063,7 @@ dependencies = [
  "hopr-api",
  "hopr-crypto-packet",
  "hopr-ticket-manager",
- "hopr-utils",
+ "hopr-utils 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3)",
  "humantime-serde",
  "lazy_static",
  "moka",
@@ -4097,7 +4095,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "hopr-crypto-packet",
  "hopr-types",
- "hopr-utils",
+ "hopr-utils 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3)",
  "lazy_static",
  "parking_lot",
  "pin-project",
@@ -4140,7 +4138,7 @@ dependencies = [
  "futures-time",
  "hopr-api",
  "hopr-crypto-packet",
- "hopr-utils",
+ "hopr-utils 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3)",
  "humantime-serde",
  "lazy_static",
  "moka",
@@ -4166,7 +4164,7 @@ dependencies = [
  "futures",
  "hashbrown 0.17.1",
  "hopr-api",
- "hopr-utils",
+ "hopr-utils 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3)",
  "parking_lot",
  "postcard",
  "redb",
@@ -4200,7 +4198,7 @@ dependencies = [
  "hopr-transport-probe",
  "hopr-transport-session",
  "hopr-transport-tag-allocator",
- "hopr-utils",
+ "hopr-utils 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3)",
  "humantime-serde",
  "lazy_static",
  "libp2p",
@@ -4245,7 +4243,7 @@ dependencies = [
  "dashmap",
  "futures",
  "hopr-api",
- "hopr-utils",
+ "hopr-utils 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3)",
  "libp2p",
  "libp2p-stream",
  "multiaddr",
@@ -4269,7 +4267,7 @@ dependencies = [
  "hopr-api",
  "hopr-protocol-app",
  "hopr-transport-tag-allocator",
- "hopr-utils",
+ "hopr-utils 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3)",
  "humantime-serde",
  "moka",
  "rand 0.10.2",
@@ -4297,7 +4295,7 @@ dependencies = [
  "hopr-protocol-app",
  "hopr-protocol-session",
  "hopr-protocol-start",
- "hopr-utils",
+ "hopr-utils 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3)",
  "humantime-serde",
  "lazy_static",
  "moka",
@@ -4388,6 +4386,17 @@ dependencies = [
 [[package]]
 name = "hopr-utils"
 version = "0.3.0"
+dependencies = [
+ "auto_impl",
+ "futures",
+ "indexmap 2.14.0",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "hopr-utils"
+version = "0.3.0"
 source = "git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3#847d1c65167021367fe5b8a164cb707ccf7317d3"
 dependencies = [
  "arrayvec",
@@ -4431,7 +4440,7 @@ dependencies = [
  "hopr-api",
  "hopr-lib",
  "hopr-transport",
- "hopr-utils",
+ "hopr-utils 0.3.0 (git+https://github.com/hoprnet/hoprnet?rev=847d1c65167021367fe5b8a164cb707ccf7317d3)",
  "human-bandwidth",
  "lazy_static",
  "parking_lot",
@@ -4586,7 +4595,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -6791,7 +6800,7 @@ dependencies = [
  "quinn-udp 0.5.14",
  "rustc-hash",
  "rustls",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -6830,7 +6839,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -6843,7 +6852,7 @@ checksum = "76150b617afc75e6e21ac5f39bc196e80b65415ae48d62dbef8e2519d040ce42"
 dependencies = [
  "cfg_aliases",
  "libc",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "windows-sys 0.61.2",
 ]
 
