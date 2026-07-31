@@ -1,3 +1,7 @@
+# list all available targets
+default:
+    @just --list
+
 # build static linux binary (x86_64)
 build:
     nix build -L .#binary-gnosis_vpn-x86_64-linux
