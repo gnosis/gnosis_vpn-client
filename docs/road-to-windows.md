@@ -1,10 +1,5 @@
 # Road to Windows
 
-Findings from a feasibility pass on porting the client to Windows. Not a
-plan — a map of what breaks and what the replacement looks like. Companion
-to [road-to-android.md](./road-to-android.md) and
-[road-to-ios.md](./road-to-ios.md).
-
 ## Current architecture (recap)
 
 Three privilege-separated binaries:
@@ -25,16 +20,11 @@ Three privilege-separated binaries:
 - **`gnosis_vpn-ctl`**/UI — talks to root over a named Unix socket, no
   visibility into the TUN fd or WireGuard state.
 
-Windows is a port of this shape, not a rewrite: a desktop OS with admin
-rights and a service model, closer to today's Linux/macOS split than either
-mobile target. The root/worker privilege separation maps over conceptually
+The root/worker privilege separation maps over conceptually to Windows
 — `gnosis_vpn-root` becomes a Windows Service, `gnosis_vpn-worker` and the
 UI stay unprivileged processes in the user's session.
 
 ## What's already portable
-
-The Linux/macOS split is organized behind real trait boundaries a Windows
-backend slots into without touching the abstraction itself:
 
 - **`Routing`**/**`RouteOps`** (`gnosis_vpn-root/src/routing/`) —
   `NetlinkRouteOps` (`route_ops_linux.rs`, typed netlink) and

@@ -1,10 +1,5 @@
 # Road to Android
 
-Findings from a feasibility pass on porting the client to Android. Not a
-plan — a map of what breaks and what the replacement looks like. Companion
-to [road-to-ios.md](./road-to-ios.md) and
-[road-to-windows.md](./road-to-windows.md).
-
 ## Current architecture (recap)
 
 Three privilege-separated binaries:
@@ -175,4 +170,4 @@ architecture collapses into one Kotlin app + Rust core linked via JNI,
 root's entire routing/DNS/killswitch responsibility moves to
 `VpnService.Builder`, and the manifest/foreground-service/battery-exemption
 plumbing has to be built. A real rewrite of the privileged half of the
-client — not a cross-compile.
+client — not a cross-compilet.

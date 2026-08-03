@@ -1,10 +1,5 @@
 # Road to iOS
 
-Findings from a feasibility pass on porting the client to iOS. Not a plan —
-a map of what breaks and what the replacement looks like. Companion to
-[road-to-android.md](./road-to-android.md) and
-[road-to-windows.md](./road-to-windows.md).
-
 ## Current architecture (recap)
 
 Three privilege-separated binaries:
