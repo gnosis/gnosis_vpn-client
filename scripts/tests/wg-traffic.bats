@@ -70,6 +70,10 @@ setup() {
     [[ $(format_rate 1000 0) == "0 B/s" ]]
 }
 
+@test "format_rate shows a fraction instead of rounding measurable traffic down to zero" {
+    [[ $(format_rate 1 10) == "0.10 B/s" ]]
+}
+
 # ---------------------------------------------------------------------------
 # unit: apply_delta
 # ---------------------------------------------------------------------------
@@ -177,6 +181,23 @@ setup() {
     run "${SCRIPT}" --sysfs-root "${SYSFS}" --output "${BATS_TEST_TMPDIR}/nope/usage.csv"
     [[ ${status} -ne 0 ]]
     [[ ${output} == *"not writable"* ]]
+}
+
+@test "rejects an output path that is already a directory" {
+    make_fake_iface "${SYSFS}" wg0_gnosisvpn 0 0
+    mkdir -p "${CSV}"
+    run "${SCRIPT}" --sysfs-root "${SYSFS}" --output "${CSV}"
+    [[ ${status} -ne 0 ]]
+    [[ ${output} == *"not a writable regular file"* ]]
+}
+
+@test "rejects an output path that is not writable" {
+    make_fake_iface "${SYSFS}" wg0_gnosisvpn 0 0
+    : >"${CSV}"
+    chmod 400 "${CSV}"
+    run "${SCRIPT}" --sysfs-root "${SYSFS}" --output "${CSV}"
+    [[ ${status} -ne 0 ]]
+    [[ ${output} == *"not a writable regular file"* ]]
 }
 
 @test "exits non-zero when the interface is unreadable at startup" {

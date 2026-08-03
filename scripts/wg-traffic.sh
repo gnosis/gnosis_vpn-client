@@ -115,14 +115,29 @@ format_bytes() {
     }'
 }
 
-# Render a throughput for ${1} bytes observed over ${2} seconds.
+# Render a throughput for ${1} bytes observed over ${2} seconds. Division runs through awk
+# rather than bash so traffic smaller than the interval (e.g. 1 byte/10s) shows as a fraction
+# instead of rounding down to a misleading "0 B/s".
 format_rate() {
     local bytes="${1}" secs="${2}"
     if [[ ${secs} -le 0 ]]; then
         echo "0 B/s"
         return 0
     fi
-    echo "$(format_bytes "$((bytes / secs))")/s"
+    awk -v bytes="${bytes}" -v secs="${secs}" 'BEGIN {
+        split("B kB MB GB TB PB", units, " ")
+        i = 1
+        value = bytes / secs
+        while (value >= 1000 && i < 6) {
+            value /= 1000
+            i++
+        }
+        if (i == 1 && value == int(value)) {
+            printf "%d %s/s", value, units[i]
+        } else {
+            printf "%.2f %s/s", value, units[i]
+        }
+    }'
 }
 
 # Reconcile one sample against the previous one, setting DELTA to the bytes to add to the
@@ -340,6 +355,9 @@ parse_args() {
         fi
         if [[ ! -d ${dir} ]] || [[ ! -w ${dir} ]]; then
             die "output directory '${dir}' is not writable"
+        fi
+        if [[ -e ${OUTPUT} ]] && { [[ ! -f ${OUTPUT} ]] || [[ ! -w ${OUTPUT} ]]; }; then
+            die "output path '${OUTPUT}' exists and is not a writable regular file"
         fi
     fi
 }
