@@ -3436,9 +3436,9 @@ checksum = "f70749695b063ecbf6b62949ccccde2e733ec3ecbbd71d467dca4e5c6c97cca0"
 
 [[package]]
 name = "glam"
-version = "0.33.3"
+version = "0.33.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7360bd2cd76e0cd9032d42cf2922155cecea2685b0cfa4630c3246df030bcfd6"
+checksum = "7f22fb22f065b308be0d8724e3706c7fa3fc2a6c7d6899df4cad7860e7a75436"
 
 [[package]]
 name = "glob"
@@ -3923,9 +3923,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-api"
-version = "1.17.0"
+version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fcb5fdc41eecbf93059fe0e96ee0f8680edce2468cfcdf9a48e7a30fc4c6cf4"
+checksum = "2f8c7f28951b250cc61b68d8d06aa2d73fb05f96d19380325fc235924768f579"
 dependencies = [
  "async-trait",
  "atomic_enum",
@@ -5876,7 +5876,7 @@ dependencies = [
  "glam 0.30.10",
  "glam 0.31.1",
  "glam 0.32.1",
- "glam 0.33.3",
+ "glam 0.33.2",
  "matrixmultiply",
  "num-complex",
  "num-rational",
@@ -8020,9 +8020,9 @@ dependencies = [
 
 [[package]]
 name = "simba"
-version = "0.10.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "834a9952211d4a60ff10ac1d20cc01640a75bdc0a0c688d62f359ea7d17459f3"
+checksum = "8f45c644a9f3a386f9288625d9f0c1e999e1acf07a37df35d0516c7f199d9cb2"
 dependencies = [
  "approx",
  "num-complex",
