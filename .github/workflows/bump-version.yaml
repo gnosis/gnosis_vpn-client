@@ -34,6 +34,10 @@ jobs:
           client-id: ${{ secrets.GH_APP_GNOSISVPN_CLIENT_ID }}
           private-key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
           owner: gnosis
+          repositories: ${{ github.event.repository.name }}
+          # Fails at token minting if the app installation lacks these
+          permission-contents: write
+          permission-pull-requests: write
       - name: Checkout repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
