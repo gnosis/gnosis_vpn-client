@@ -23,7 +23,7 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.1", features = ["derive", "env"] }
 clap_complete = "~4.6.5"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "cdc2d76432e490862243967866c11791f7630fe1", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "19348f6854b6e4c14fad602f9309d9b4b8a15583", features = [
   "blokli",
   "telemetry",
 ] }
