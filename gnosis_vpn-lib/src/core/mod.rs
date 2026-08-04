@@ -1306,7 +1306,7 @@ impl Core {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::create_incentive_operations(&worker_params, blokli_config.into(), results_sender).await;
+                    runner::create_incentive_operations(&worker_params, blokli_config, results_sender).await;
                 })
                 .await
         });
