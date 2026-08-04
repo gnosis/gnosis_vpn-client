@@ -131,6 +131,8 @@ pub(super) struct BlokliConfig {
     #[serde(default, with = "humantime_serde::option")]
     pub(super) connection_sync_timeout: Option<Duration>,
     pub(super) sync_tolerance: Option<usize>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) request_timeout: Option<Duration>,
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -369,9 +371,14 @@ impl From<Option<BlokliConfig>> for HoprBlokliConfig {
             .as_ref()
             .and_then(|b| b.sync_tolerance)
             .unwrap_or_else(|| HoprBlokliConfig::default().sync_tolerance);
+        let request_timeout = value
+            .as_ref()
+            .and_then(|b| b.request_timeout)
+            .unwrap_or_else(|| HoprBlokliConfig::default().request_timeout);
         HoprBlokliConfig {
             connection_sync_timeout,
             sync_tolerance,
+            request_timeout,
         }
     }
 }
@@ -409,7 +416,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "blokli" {
             if let Some(blokli) = value.as_table() {
                 for (k, _) in blokli.iter() {
-                    if k == "connection_sync_timeout" || k == "sync_tolerance" {
+                    if k == "connection_sync_timeout" || k == "sync_tolerance" || k == "request_timeout" {
                         continue;
                     }
                     wrong.push(format!("blokli.{k}"));
@@ -650,13 +657,88 @@ pub fn convert_destinations(
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelAllowlistConfig, Config, Strategy, convert_destinations};
+    use super::{ChannelAllowlistConfig, Config, Strategy, convert_destinations, wrong_keys};
+    use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
     use crate::hopr::strategy_config::StrategyConfig;
     use edgli::hopr_lib::HopRouting;
     use edgli::hopr_lib::api::types::primitive::prelude::Address;
+    use std::time::Duration;
 
     fn parse(toml: &str) -> Config {
         toml::from_str(toml).expect("valid TOML")
+    }
+
+    #[test]
+    fn blokli_request_timeout_is_parsed() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[blokli]
+request_timeout = "45s"
+"#####,
+        );
+        let blokli = cfg.blokli.expect("blokli section present");
+        assert_eq!(blokli.request_timeout, Some(Duration::from_secs(45)));
+    }
+
+    #[test]
+    fn blokli_request_timeout_is_optional() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[blokli]
+sync_tolerance = 50
+"#####,
+        );
+        let blokli = cfg.blokli.expect("blokli section present");
+        assert_eq!(blokli.request_timeout, None);
+    }
+
+    #[test]
+    fn absent_blokli_request_timeout_falls_back_to_the_default() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[blokli]
+sync_tolerance = 50
+"#####,
+        );
+        let blokli: HoprBlokliConfig = cfg.blokli.into();
+        assert_eq!(blokli.request_timeout, HoprBlokliConfig::default().request_timeout);
+    }
+
+    #[test]
+    fn configured_blokli_request_timeout_wins_over_the_default() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[blokli]
+request_timeout = "45s"
+"#####,
+        );
+        let blokli: HoprBlokliConfig = cfg.blokli.into();
+        assert_eq!(blokli.request_timeout, Duration::from_secs(45));
+    }
+
+    #[test]
+    fn blokli_request_timeout_is_a_supported_key() {
+        let table = r#####"
+version = 6
+
+[blokli]
+connection_sync_timeout = "30s"
+sync_tolerance = 50
+request_timeout = "10s"
+nonsense = 1
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), vec!["blokli.nonsense".to_string()]);
     }
 
     #[test]
@@ -793,7 +875,7 @@ path_planner_min_ack_rate = {bad}
             target_open_channels: None,
             channel_allowlist: Some(ChannelAllowlistConfig {
                 enabled: true,
-                peers: vec![addr.clone()],
+                peers: vec![addr],
             }),
         });
         let cfg: StrategyConfig = strategy.into();

@@ -11,6 +11,7 @@ use url::Url;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::compat::SafeModule;
 use crate::hopr::blokli_config::BlokliConfig;
@@ -188,7 +189,7 @@ impl WorkerParams {
     ) -> Result<Arc<dyn IncentiveOperations>, Error> {
         let keys = self.calc_keys().await?;
         let private_key = keys.chain_key;
-        let endpoint = self.blokli_endpoint();
+        let endpoint = self.blokli_endpoint(config.request_timeout);
         let ops = make_incentive_operations(endpoint, &private_key, Some(config.into()))
             .await
             .map_err(|e| Error::BlokliCreation(e.to_string()))?;
@@ -235,9 +236,14 @@ impl WorkerParams {
             .or_else(|| self.cached_blokli_ips.first().copied())
     }
 
-    /// The Blokli endpoint to talk to, including how its host is resolved.
-    pub fn blokli_endpoint(&self) -> BlokliEndpoint {
-        let endpoint = BlokliEndpoint::new(hopr::blokli_url(self.blokli_url()));
+    /// The Blokli endpoint to talk to, including how its host is resolved and how long a single
+    /// request to it may take.
+    ///
+    /// `request_timeout` comes from the configuration file, which is read by the worker, while
+    /// [`WorkerParams`] is built from CLI arguments in the root process - hence a parameter
+    /// rather than a stored field.
+    pub fn blokli_endpoint(&self, request_timeout: Duration) -> BlokliEndpoint {
+        let endpoint = BlokliEndpoint::new(hopr::blokli_url(self.blokli_url())).with_request_timeout(request_timeout);
         match self.pinned_blokli_ip() {
             // A `None` port keeps the endpoint URL's port, which is what the IP was resolved for.
             Some(ip) => endpoint.with_dns_override(BlokliDnsOverride::new(IpAddr::V4(ip), None)),
@@ -298,9 +304,13 @@ mod tests {
         Some(raw.parse().unwrap())
     }
 
+    /// Stands in for the configured `[blokli] request_timeout` in tests that do not care
+    /// about its value.
+    const TEST_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
     #[test]
     fn blokli_endpoint_uses_system_dns_until_the_host_is_resolved() {
-        let endpoint = params(None).blokli_endpoint();
+        let endpoint = params(None).blokli_endpoint(TEST_REQUEST_TIMEOUT);
         assert_eq!(endpoint.url, *edgli::DEFAULT_BLOKLI_URL);
         assert_eq!(endpoint.dns_override, None);
     }
@@ -308,8 +318,29 @@ mod tests {
     #[test]
     fn blokli_endpoint_keeps_configured_url() {
         let configured = url("https://blokli.example.com/").unwrap();
-        let endpoint = params(Some(configured.clone())).blokli_endpoint();
+        let endpoint = params(Some(configured.clone())).blokli_endpoint(TEST_REQUEST_TIMEOUT);
         assert_eq!(endpoint.url, configured);
+    }
+
+    #[test]
+    fn blokli_endpoint_carries_the_configured_request_timeout() {
+        let endpoint = params(None).blokli_endpoint(Duration::from_secs(45));
+        assert_eq!(endpoint.request_timeout, Duration::from_secs(45));
+    }
+
+    /// The DNS override is applied by rebuilding the endpoint, so the timeout has to survive
+    /// that hop - the same seam that once dropped the DNS override itself.
+    #[tokio::test]
+    async fn a_pinned_host_keeps_the_configured_request_timeout() {
+        let mut params = params(url("http://localhost:3002"));
+        params.resolve_blokli_ip().await;
+
+        let endpoint = params.blokli_endpoint(Duration::from_secs(45));
+        assert_eq!(
+            endpoint.dns_override,
+            Some(BlokliDnsOverride::new(IpAddr::V4(Ipv4Addr::LOCALHOST), None))
+        );
+        assert_eq!(endpoint.request_timeout, Duration::from_secs(45));
     }
 
     #[tokio::test]
@@ -320,7 +351,7 @@ mod tests {
         assert_eq!(params.pinned_blokli_ip(), Some(Ipv4Addr::LOCALHOST));
         // A `None` port leaves the endpoint URL's port in place.
         assert_eq!(
-            params.blokli_endpoint().dns_override,
+            params.blokli_endpoint(TEST_REQUEST_TIMEOUT).dns_override,
             Some(BlokliDnsOverride::new(IpAddr::V4(Ipv4Addr::LOCALHOST), None))
         );
     }
@@ -333,7 +364,7 @@ mod tests {
         params.resolve_blokli_ip().await;
 
         assert_eq!(params.pinned_blokli_ip(), None);
-        assert_eq!(params.blokli_endpoint().dns_override, None);
+        assert_eq!(params.blokli_endpoint(TEST_REQUEST_TIMEOUT).dns_override, None);
     }
 
     /// A worker restarting while the killswitch blocks DNS gets no startup resolution, so the
