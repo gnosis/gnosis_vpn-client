@@ -2,6 +2,7 @@
 //! It handles state transitions up until wg tunnel initiation and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backon::{FibonacciBuilder, Retryable};
+use edgli::FlowControlConfig;
 use edgli::hopr_lib::{HoprSessionClientConfig, api::types::internal::protocol::HoprPseudonym};
 use tokio::sync::{mpsc, oneshot};
 
@@ -197,6 +198,9 @@ async fn open_bridge_session(
         return_path: destination.routing,
         always_max_out_surbs: surb.always_max_out_surbs,
         surb_management: surb.management,
+        // Robust tail-tolerance profile: the validated flow-control config for the
+        // throttled / multi-hop paths this data session runs over.
+        flow_control: Some(FlowControlConfig::robust()),
         ..Default::default()
     };
     // Each open_session attempt times out after `initiation_timeout_base × (forward_hops + return_hops + 2)`,
@@ -284,6 +288,8 @@ async fn open_ping_session(
         always_max_out_surbs: surb.always_max_out_surbs,
         surb_management: surb.management,
         pseudonym,
+        // Robust tail-tolerance profile for the WireGuard data session.
+        flow_control: Some(FlowControlConfig::robust()),
     };
     (|| async {
         tracing::debug!(%destination, "attempting to open ping session");

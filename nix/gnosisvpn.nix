@@ -15,6 +15,8 @@
   pkgs,
   craneLib,
   advisory-db,
+  # Shell snippet appending `--cfg tokio_unstable` to CARGO_BUILD_RUSTFLAGS.
+  tokioUnstableHook,
 }:
 
 let
@@ -111,6 +113,40 @@ let
       }
     );
 
+  # Flags that activate Tokio's improved cooperative yielding (the config that
+  # produced the validated multi-hop throughput). `--check-cfg` keeps the cfg
+  # from tripping `-D warnings`.
+  tokioUnstableRustflags = "--cfg tokio_unstable --check-cfg cfg(tokio_unstable)";
+
+  # Appends the tokio_unstable flags to CARGO_BUILD_RUSTFLAGS on BOTH the package
+  # and its cargoArtifacts (deps-only cache). nix-lib's rust-builder.nix sets
+  # CARGO_BUILD_RUSTFLAGS as a derivation env var (linker flag / +crt-static),
+  # which *replaces* `.cargo/config.toml`'s `[build] rustflags` — so the tokio
+  # flags must be appended here to reach rustc for nix package builds. Reading
+  # `prev.CARGO_BUILD_RUSTFLAGS` preserves nix-lib's linker/static flags and works
+  # across local, cross-Linux, and Darwin builders. Applied as the innermost
+  # wrapper so deps and final stay consistent regardless of outer wrappers.
+  withTokioUnstable =
+    drv:
+    let
+      append = prev: "${prev.CARGO_BUILD_RUSTFLAGS or ""} ${tokioUnstableRustflags}";
+    in
+    drv.overrideAttrs (
+      prev:
+      {
+        CARGO_BUILD_RUSTFLAGS = append prev;
+      }
+      // {
+        cargoArtifacts =
+          if prev.cargoArtifacts != null then
+            prev.cargoArtifacts.overrideAttrs (depsPrev: {
+              CARGO_BUILD_RUSTFLAGS = append depsPrev;
+            })
+          else
+            null;
+      }
+    );
+
   # CC/CXX are arch-specific: cc-rs uses them to compile C code in build.rs scripts.
   withX86_64LinuxStaticEnv = mkWithStaticEnv (
     mkLinuxStaticEnv x86_64LinuxStaticPkgs
@@ -134,7 +170,12 @@ let
   withDarwinStaticFlags =
     drv:
     drv.overrideAttrs (prev: {
-      CARGO_BUILD_RUSTFLAGS = "-C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv";
+      # Append any flags already on the final derivation (notably the
+      # tokio_unstable cfg stamped by withTokioUnstable) so replacing the base
+      # flags here does not drop them.
+      CARGO_BUILD_RUSTFLAGS =
+        "-C target-feature=+crt-static -C link-arg=-L/usr/lib -C link-arg=-liconv"
+        + lib.optionalString (prev ? CARGO_BUILD_RUSTFLAGS) " ${prev.CARGO_BUILD_RUSTFLAGS}";
 
       postInstall =
         lib.optionalString (prev ? postInstall && prev.postInstall != null) prev.postInstall
@@ -192,119 +233,139 @@ in
 
   # binary-gnosis_vpn (renamed from gnosis_vpn-release)
   binary-gnosis_vpn = withShellCompletions (
-    builders.local.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
+    withTokioUnstable (
+      builders.local.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      })
+    )
   );
 
   # binary-gnosis_vpn-dev (renamed from gnosis_vpn-dev)
   binary-gnosis_vpn-dev = withShellCompletions (
+    withTokioUnstable (
+      builders.local.callPackage nixLib.mkRustPackage (
+        (mkGnosisvpnBuildArgs {
+          src = sources.main;
+          depsSrc = sources.deps;
+        })
+        // {
+          CARGO_PROFILE = "dev";
+        }
+      )
+    )
+  );
+
+  # Cross-compiled — x86_64 Linux
+  binary-gnosis_vpn-x86_64-linux = withX86_64LinuxStaticEnv (
+    withTokioUnstable (
+      builders.x86_64-linux.callPackage nixLib.mkRustPackage (
+        (mkGnosisvpnBuildArgs {
+          src = sources.main;
+          depsSrc = sources.deps;
+        })
+        // {
+          extraBuildInputs = mkLinuxStaticBuildInputs x86_64LinuxStaticPkgs;
+        }
+      )
+    )
+  );
+
+  binary-gnosis_vpn-x86_64-linux-dev = withX86_64LinuxStaticEnv (
+    withTokioUnstable (
+      builders.x86_64-linux.callPackage nixLib.mkRustPackage (
+        (mkGnosisvpnBuildArgs {
+          src = sources.main;
+          depsSrc = sources.deps;
+        })
+        // {
+          CARGO_PROFILE = "dev";
+          extraBuildInputs = mkLinuxStaticBuildInputs x86_64LinuxStaticPkgs;
+        }
+      )
+    )
+  );
+
+  # Cross-compiled — aarch64 Linux
+  binary-gnosis_vpn-aarch64-linux = withAarch64LinuxStaticEnv (
+    withTokioUnstable (
+      builders.aarch64-linux.callPackage nixLib.mkRustPackage (
+        (mkGnosisvpnBuildArgs {
+          src = sources.main;
+          depsSrc = sources.deps;
+        })
+        // {
+          extraBuildInputs = mkLinuxStaticBuildInputs aarch64LinuxStaticPkgs;
+        }
+      )
+    )
+  );
+
+  binary-gnosis_vpn-aarch64-linux-dev = withAarch64LinuxStaticEnv (
+    withTokioUnstable (
+      builders.aarch64-linux.callPackage nixLib.mkRustPackage (
+        (mkGnosisvpnBuildArgs {
+          src = sources.main;
+          depsSrc = sources.deps;
+        })
+        // {
+          CARGO_PROFILE = "dev";
+          extraBuildInputs = mkLinuxStaticBuildInputs aarch64LinuxStaticPkgs;
+        }
+      )
+    )
+  );
+
+  # System test package: all service binaries + the system test runner in one derivation.
+  # Used by CI to run the system test against a live network in a single nix build command.
+  binary-gnosis_vpn-system_tests = withTokioUnstable (
+    builders.local.callPackage nixLib.mkRustPackage (
+      (mkGnosisvpnBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+        extraCargoArgs = "--bin gnosis_vpn-system_tests";
+      })
+      // {
+        CARGO_PROFILE = "dev";
+      }
+    )
+  );
+
+  # Tests / QA
+  gnosis_vpn-test = withTokioUnstable (
+    builders.local.callPackage nixLib.mkRustPackage (
+      (mkGnosisvpnBuildArgs {
+        src = sources.test;
+        depsSrc = sources.deps;
+      })
+      // {
+        runTests = true;
+      }
+    )
+  );
+
+  gnosis_vpn-clippy = withTokioUnstable (
     builders.local.callPackage nixLib.mkRustPackage (
       (mkGnosisvpnBuildArgs {
         src = sources.main;
         depsSrc = sources.deps;
       })
       // {
-        CARGO_PROFILE = "dev";
+        runClippy = true;
       }
     )
   );
 
-  # Cross-compiled — x86_64 Linux
-  binary-gnosis_vpn-x86_64-linux = withX86_64LinuxStaticEnv (
-    builders.x86_64-linux.callPackage nixLib.mkRustPackage (
+  gnosis_vpn-docs = withTokioUnstable (
+    builders.localNightly.callPackage nixLib.mkRustPackage (
       (mkGnosisvpnBuildArgs {
         src = sources.main;
         depsSrc = sources.deps;
       })
       // {
-        extraBuildInputs = mkLinuxStaticBuildInputs x86_64LinuxStaticPkgs;
+        buildDocs = true;
       }
     )
-  );
-
-  binary-gnosis_vpn-x86_64-linux-dev = withX86_64LinuxStaticEnv (
-    builders.x86_64-linux.callPackage nixLib.mkRustPackage (
-      (mkGnosisvpnBuildArgs {
-        src = sources.main;
-        depsSrc = sources.deps;
-      })
-      // {
-        CARGO_PROFILE = "dev";
-        extraBuildInputs = mkLinuxStaticBuildInputs x86_64LinuxStaticPkgs;
-      }
-    )
-  );
-
-  # Cross-compiled — aarch64 Linux
-  binary-gnosis_vpn-aarch64-linux = withAarch64LinuxStaticEnv (
-    builders.aarch64-linux.callPackage nixLib.mkRustPackage (
-      (mkGnosisvpnBuildArgs {
-        src = sources.main;
-        depsSrc = sources.deps;
-      })
-      // {
-        extraBuildInputs = mkLinuxStaticBuildInputs aarch64LinuxStaticPkgs;
-      }
-    )
-  );
-
-  binary-gnosis_vpn-aarch64-linux-dev = withAarch64LinuxStaticEnv (
-    builders.aarch64-linux.callPackage nixLib.mkRustPackage (
-      (mkGnosisvpnBuildArgs {
-        src = sources.main;
-        depsSrc = sources.deps;
-      })
-      // {
-        CARGO_PROFILE = "dev";
-        extraBuildInputs = mkLinuxStaticBuildInputs aarch64LinuxStaticPkgs;
-      }
-    )
-  );
-
-  # System test package: all service binaries + the system test runner in one derivation.
-  # Used by CI to run the system test against a live network in a single nix build command.
-  binary-gnosis_vpn-system_tests = builders.local.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-      extraCargoArgs = "--bin gnosis_vpn-system_tests";
-    })
-    // {
-      CARGO_PROFILE = "dev";
-    }
-  );
-
-  # Tests / QA
-  gnosis_vpn-test = builders.local.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
-      src = sources.test;
-      depsSrc = sources.deps;
-    })
-    // {
-      runTests = true;
-    }
-  );
-
-  gnosis_vpn-clippy = builders.local.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-    // {
-      runClippy = true;
-    }
-  );
-
-  gnosis_vpn-docs = builders.localNightly.callPackage nixLib.mkRustPackage (
-    (mkGnosisvpnBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-    // {
-      buildDocs = true;
-    }
   );
 
   # Audit dependencies
@@ -325,21 +386,25 @@ in
 // lib.optionalAttrs pkgs.stdenv.isDarwin {
   # macOS — aarch64 (only available on Darwin hosts; cctools is Darwin-only)
   binary-gnosis_vpn-aarch64-darwin = withDarwinStaticFlags (
-    builders.aarch64-darwin.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-  );
-
-  binary-gnosis_vpn-aarch64-darwin-dev = withDarwinStaticFlags (
-    builders.aarch64-darwin.callPackage nixLib.mkRustPackage (
-      (mkGnosisvpnBuildArgs {
+    withTokioUnstable (
+      builders.aarch64-darwin.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
         src = sources.main;
         depsSrc = sources.deps;
       })
-      // {
-        CARGO_PROFILE = "dev";
-      }
+    )
+  );
+
+  binary-gnosis_vpn-aarch64-darwin-dev = withDarwinStaticFlags (
+    withTokioUnstable (
+      builders.aarch64-darwin.callPackage nixLib.mkRustPackage (
+        (mkGnosisvpnBuildArgs {
+          src = sources.main;
+          depsSrc = sources.deps;
+        })
+        // {
+          CARGO_PROFILE = "dev";
+        }
+      )
     )
   );
 }

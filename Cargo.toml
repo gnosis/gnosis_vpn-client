@@ -5,7 +5,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "LGPL-3.0-only"
-version = "0.93.1"
+version = "0.94.0"
 
 [workspace.metadata.crane]
 name = "gnosis_vpn"
@@ -14,7 +14,7 @@ name = "gnosis_vpn"
 anyhow = { version = "~1.0.103" }
 async-trait = "~0.1.89"
 backon = { version = "~1.6.0" }
-bytesize = "~2.4.0"
+bytesize = "~2.7.0"
 cfg-if = "~1.0.4"
 chrono = { version = "~0.4.45", default-features = false, features = [
   "clock",
@@ -23,14 +23,14 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.1", features = ["derive", "env"] }
 clap_complete = "~4.6.5"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "634a1be5ea81719cdbbdb63046fc9a97c56765e7", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "40a62c7aeb26c92b5e27531a1ed5ca58b335e5f7", features = [
   "blokli",
   "telemetry",
 ] }
 exitcode = "~1.1.2"
 futures = "~0.3.32"
 futures-util = "~0.3.32"
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "847d1c65167021367fe5b8a164cb707ccf7317d3", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "a511b8a88b297f47a15986573bf6db3ef7b95937", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
@@ -54,7 +54,7 @@ serde_with = "~3.21.0"
 tempfile = "~3.27.0"
 thiserror = "~2.0.18"
 tikv-jemallocator = "~0.7.0"
-tokio = { version = "~1.52.3", features = ["full"] }
+tokio = { version = "~1.53.1", features = ["full"] }
 tokio-util = { version = "~0.7.18", features = ["rt"] }
 toml = "~1.1.2"
 tracing = { version = "~0.1.44", features = ["release_max_level_debug"] }

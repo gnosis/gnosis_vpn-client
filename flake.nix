@@ -76,6 +76,16 @@
             }
           );
 
+          # Build with `--cfg tokio_unstable` so Tokio's improved cooperative
+          # yielding is active (the config that produced the validated throughput).
+          # nix-lib's shells/builds set CARGO_BUILD_RUSTFLAGS (linker flag), which
+          # *replaces* `.cargo/config.toml`'s `[build]` table, so append the tokio
+          # flags there to keep them alongside the linker flag. `--check-cfg` keeps
+          # the flag from tripping `-D warnings`.
+          tokioUnstableHook = ''
+            export CARGO_BUILD_RUSTFLAGS="''${CARGO_BUILD_RUSTFLAGS:-} --cfg tokio_unstable --check-cfg cfg(tokio_unstable)"
+          '';
+
           gnosisvpnPackages = import ./nix/gnosisvpn.nix {
             inherit
               lib
@@ -84,6 +94,7 @@
               pkgs
               craneLib
               advisory-db
+              tokioUnstableHook
               ;
           };
 
@@ -162,6 +173,9 @@
             {
               inherit pre-commit-check;
               checks = self.checks.${system};
+
+              # Keep `--cfg tokio_unstable` on interactive `cargo` invocations too.
+              shellHook = tokioUnstableHook;
 
               packages = [
                 pkgs.cargo-machete

@@ -793,7 +793,7 @@ path_planner_min_ack_rate = {bad}
             target_open_channels: None,
             channel_allowlist: Some(ChannelAllowlistConfig {
                 enabled: true,
-                peers: vec![addr.clone()],
+                peers: vec![addr],
             }),
         });
         let cfg: StrategyConfig = strategy.into();
