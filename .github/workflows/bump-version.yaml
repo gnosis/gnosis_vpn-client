@@ -1,0 +1,105 @@
+name: Bump version
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: Version bump type (ignored when custom_version is set)
+        required: true
+        type: choice
+        default: "patch"
+        options:
+          - patch
+          - minor
+          - major
+      custom_version:
+        description: Explicit version X.Y.Z (overrides release_type)
+        required: false
+        type: string
+concurrency:
+  group: bump-version
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  bump-version:
+    name: Bump version
+    runs-on: depot-ubuntu-22.04-4 # Depot Ubuntu 22.04, 4 CPUs, 16 GB RAM
+    permissions:
+      contents: read
+    steps:
+      - name: Generate GitHub App token
+        id: bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.GH_APP_GNOSISVPN_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
+          owner: gnosis
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          token: ${{ steps.bot-token.outputs.token }}
+      - name: Setup Nix
+        uses: hoprnet/hopr-workflows/actions/setup-nix@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # setup-nix-v2.0.2
+        with:
+          cachix_cache_name: gnosis-vpn-client
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Compute new version
+        id: version
+        shell: bash
+        env:
+          RELEASE_TYPE: ${{ inputs.release_type }}
+          CUSTOM_VERSION: ${{ inputs.custom_version }}
+        run: |
+          current_version=$(grep -E '^version\s*=' Cargo.toml | head -n1 | awk -F\" '{print $2}')
+          if [[ -n "${CUSTOM_VERSION}" ]]; then
+            new_version="${CUSTOM_VERSION#v}"
+            if ! [[ "${new_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Invalid custom_version '${CUSTOM_VERSION}', expected X.Y.Z" >&2
+              exit 1
+            fi
+          else
+            IFS=. read -r major minor patch <<< "${current_version}"
+            case "${RELEASE_TYPE}" in
+              major) new_version="$((major + 1)).0.0" ;;
+              minor) new_version="${major}.$((minor + 1)).0" ;;
+              patch) new_version="${major}.${minor}.$((patch + 1))" ;;
+            esac
+          fi
+          if [[ "${new_version}" == "${current_version}" ]]; then
+            echo "New version equals current version (${current_version})" >&2
+            exit 1
+          fi
+          echo "Bumping ${current_version} -> ${new_version}"
+          echo "current_version=${current_version}" >> "$GITHUB_OUTPUT"
+          echo "new_version=${new_version}" >> "$GITHUB_OUTPUT"
+      - name: Update Cargo.toml and Cargo.lock
+        shell: bash
+        env:
+          CURRENT_VERSION: ${{ steps.version.outputs.current_version }}
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+        run: |
+          sed -i -E "s/^(version\s*=\s*)\"${CURRENT_VERSION}\"/\1\"${NEW_VERSION}\"/" Cargo.toml
+          nix develop --command cargo update --workspace
+          git diff --stat -- Cargo.toml Cargo.lock
+      - name: Create pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.bot-token.outputs.token }}
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+          CURRENT_VERSION: ${{ steps.version.outputs.current_version }}
+          APP_SLUG: ${{ steps.bot-token.outputs.app-slug }}
+        run: |
+          branch="bot/bump-version-v${NEW_VERSION}"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+          git checkout -b "${branch}"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore(version): v${NEW_VERSION}"
+          git push --force origin "${branch}"
+          if [[ -z "$(gh pr list --head "${branch}" --state open --json number --jq '.[].number')" ]]; then
+            gh pr create \
+              --base main \
+              --head "${branch}" \
+              --title "chore(version): v${NEW_VERSION}" \
+              --body "Bumps version ${CURRENT_VERSION} -> ${NEW_VERSION}. Triggered by @${{ github.actor }} via the Bump version workflow."
+          fi
