@@ -318,17 +318,13 @@ in
 
   # System test package: all service binaries + the system test runner in one derivation.
   # Used by CI to run the system test against a live network in a single nix build command.
+  # Builds with the default release profile so CI exercises the same binary users run.
   binary-gnosis_vpn-system_tests = withTokioUnstable (
-    builders.local.callPackage nixLib.mkRustPackage (
-      (mkGnosisvpnBuildArgs {
-        src = sources.main;
-        depsSrc = sources.deps;
-        extraCargoArgs = "--bin gnosis_vpn-system_tests";
-      })
-      // {
-        CARGO_PROFILE = "dev";
-      }
-    )
+    builders.local.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
+      src = sources.main;
+      depsSrc = sources.deps;
+      extraCargoArgs = "--bin gnosis_vpn-system_tests";
+    })
   );
 
   # Tests / QA
