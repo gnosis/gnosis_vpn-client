@@ -141,10 +141,8 @@ impl Firewall {
         };
         for state in states {
             let is_loopback = state.local_address().map(|a| a.ip().is_loopback()).unwrap_or(true); // keep state if we can't parse it
-            if !is_loopback {
-                if let Err(e) = self.pf.kill_state(&state) {
-                    tracing::warn!(?e, "failed to kill PF state");
-                }
+            if !is_loopback && let Err(e) = self.pf.kill_state(&state) {
+                tracing::warn!(?e, "failed to kill PF state");
             }
         }
     }

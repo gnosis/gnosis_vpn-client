@@ -27,13 +27,13 @@ use hopr_utils_session::{
 use multiaddr::Protocol;
 use tracing::instrument;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
 };
 
-use crate::peer::Peer;
+use crate::peer::{Peer, Peers};
 use crate::{
     balance::{self, Balances},
     hopr::{HoprError, types::SessionClientMetadata},
@@ -358,6 +358,26 @@ impl Hopr {
             "announced peers"
         );
         Ok(peers)
+    }
+
+    #[tracing::instrument(skip(self), level = "debug", ret)]
+    pub async fn connected_peers(&self) -> Result<HashSet<Address>, HoprError> {
+        tracing::debug!("query hopr connected peers");
+        let addresses = self.edgli.connected_peer_addresses().await?;
+        Ok(addresses.into_iter().collect())
+    }
+
+    /// Fetches announced (on-chain) and connected (transport-level) peers in
+    /// one combined tick. The two are fundamentally different data sources
+    /// fetched independently, then bundled for a single result.
+    #[tracing::instrument(skip(self), level = "debug", ret)]
+    pub async fn peers(&self) -> Result<Peers, HoprError> {
+        tracing::debug!("query hopr peers");
+        let (announced, connected) = tokio::join!(self.announced_peers(), self.connected_peers());
+        Ok(Peers {
+            announced: announced?,
+            connected: connected?,
+        })
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
