@@ -8,8 +8,9 @@
 //!
 //! * **Network reachability** — do we have the peering/channel relationship
 //!   that the routing option requires? This is driven from outside by Core
-//!   feeding in the current peer set (`RouteHealth::peers`) and channel
-//!   funding results (`RouteHealth::any_channel_available`).
+//!   feeding in the current *connected* (transport-level) peer set
+//!   (`RouteHealth::peers`) and channel funding results
+//!   (`RouteHealth::any_channel_available`).
 //! * **Exit-node health** — once reachable, can we actually reach the exit
 //!   server behind the destination, and is it reporting healthy? This is
 //!   driven internally by a background task that opens a short-lived TCP

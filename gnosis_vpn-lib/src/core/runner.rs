@@ -16,7 +16,6 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use url::Url;
 
-use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -75,8 +74,8 @@ pub(crate) enum Results {
     NodeWxhoprWithdraw {
         res: Result<(), Error>,
     },
-    AnnouncedPeers {
-        res: Result<HashMap<Address, peer::Peer>, Error>,
+    Peers {
+        res: Result<peer::Peers, Error>,
     },
     HoprConstruction(EdgliInitState),
     HoprRunning,
@@ -248,10 +247,10 @@ pub(crate) async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Send
     let _ = results_sender.send(Results::HoprRunning).await;
 }
 
-pub(crate) async fn announced_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
-    tracing::debug!("starting announced peers runner");
-    let res = hopr.announced_peers().await.map_err(Error::from);
-    let _ = results_sender.send(Results::AnnouncedPeers { res }).await;
+pub(crate) async fn peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    tracing::debug!("starting peers runner");
+    let res = hopr.peers().await.map_err(Error::from);
+    let _ = results_sender.send(Results::Peers { res }).await;
 }
 
 pub(crate) async fn monitor_session(
@@ -601,9 +600,14 @@ impl Display for Results {
                 Ok(()) => write!(f, "NodeWxhoprWithdraw: Success"),
                 Err(err) => write!(f, "NodeWxhoprWithdraw: Error({})", err),
             },
-            Results::AnnouncedPeers { res } => match res {
-                Ok(peers) => write!(f, "AnnouncedPeers: {} peers", peers.len()),
-                Err(err) => write!(f, "AnnouncedPeers: Error({})", err),
+            Results::Peers { res } => match res {
+                Ok(peers) => write!(
+                    f,
+                    "Peers: {} announced, {} connected",
+                    peers.announced.len(),
+                    peers.connected.len()
+                ),
+                Err(err) => write!(f, "Peers: Error({})", err),
             },
             Results::IncentiveOperations { res } => match res {
                 Ok(_) => write!(f, "IncentiveOperations: Created Successfully"),
