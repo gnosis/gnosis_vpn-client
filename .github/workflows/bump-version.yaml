@@ -35,9 +35,8 @@ jobs:
           private-key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
           owner: gnosis
           repositories: ${{ github.event.repository.name }}
-          # Fails at token minting if the app installation lacks these
+          # Fails at token minting if the app installation lacks this
           permission-contents: write
-          permission-pull-requests: write
       - name: Checkout repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -85,25 +84,17 @@ jobs:
           sed -i -E "s/^(version\s*=\s*)\"${CURRENT_VERSION}\"/\1\"${NEW_VERSION}\"/" Cargo.toml
           nix develop --command cargo update --workspace
           git diff --stat -- Cargo.toml Cargo.lock
-      - name: Create pull request
+      # Commit directly to the branch with the app token, same as the
+      # bump-version step of the Close release workflow. The app has no
+      # pull-requests permission, so a PR-based flow is not possible.
+      - name: Commit and push version bump
         shell: bash
         env:
-          GH_TOKEN: ${{ steps.bot-token.outputs.token }}
           NEW_VERSION: ${{ steps.version.outputs.new_version }}
-          CURRENT_VERSION: ${{ steps.version.outputs.current_version }}
           APP_SLUG: ${{ steps.bot-token.outputs.app-slug }}
         run: |
-          branch="bot/bump-version-v${NEW_VERSION}"
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
-          git checkout -b "${branch}"
           git add Cargo.toml Cargo.lock
           git commit -m "chore(version): v${NEW_VERSION}"
-          git push --force origin "${branch}"
-          if [[ -z "$(gh pr list --head "${branch}" --state open --json number --jq '.[].number')" ]]; then
-            gh pr create \
-              --base main \
-              --head "${branch}" \
-              --title "chore(version): v${NEW_VERSION}" \
-              --body "Bumps version ${CURRENT_VERSION} -> ${NEW_VERSION}. Triggered by @${{ github.actor }} via the Bump version workflow."
-          fi
+          git push origin "HEAD:${{ github.ref_name }}"
