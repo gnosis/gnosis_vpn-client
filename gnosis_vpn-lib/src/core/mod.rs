@@ -1000,15 +1000,10 @@ impl Core {
                 tracing::info!(%id, ?outcome, "received health check");
                 if let Some(dest) = self.config.destinations.get(&id).cloned()
                     && let Some(rh) = self.route_healths.get_mut(&id)
+                    && let Some(hopr) = self.hopr.as_ref()
                 {
                     let was_ready = rh.is_ready_to_connect();
-                    rh.health_check_result(
-                        outcome,
-                        self.hopr.as_ref().unwrap(),
-                        &dest,
-                        &self.config.connection,
-                        results_sender,
-                    );
+                    rh.health_check_result(outcome, hopr, &dest, &self.config.connection, results_sender);
                     // Trigger connection if we just became ready
                     if !was_ready && rh.is_ready_to_connect() {
                         self.act_on_target(results_sender);
@@ -1584,7 +1579,6 @@ impl Core {
             let conn = connection::up::Up::new(destination.clone());
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
-            let hopr = hopr.clone();
             // Entry is kept until connection is confirmed so retries within the TTL can reuse it.
             let cached_pseudonym = self.pseudonym_cache.get(&destination);
             if let Some(pseudonym) = &cached_pseudonym {
@@ -1599,19 +1593,13 @@ impl Core {
                 conn.destination.clone(),
                 config_connection,
                 config_wireguard,
-                hopr,
+                hopr.clone(),
                 self.worker_params.clone(),
                 prev_conn,
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
-                rh.connecting(
-                    self.hopr.as_ref().unwrap(),
-                    &destination,
-                    exit,
-                    &self.config.connection,
-                    &results_sender,
-                );
+                rh.connecting(&hopr, &destination, exit, &self.config.connection, &results_sender);
             }
             self.phase = Phase::Connecting(conn);
             tokio::spawn(async move {
@@ -1732,13 +1720,9 @@ impl Core {
         self.phase = Phase::HoprRunning;
         if let Some(dest) = self.config.destinations.get(&conn.destination.id).cloned()
             && let Some(rh) = self.route_healths.get_mut(&conn.destination.id)
+            && let Some(hopr) = self.hopr.as_ref()
         {
-            rh.disconnecting(
-                self.hopr.as_ref().unwrap(),
-                &dest,
-                &self.config.connection,
-                results_sender,
-            );
+            rh.disconnecting(hopr, &dest, &self.config.connection, results_sender);
         }
         if let Ok(disconn) = conn.try_into() {
             self.spawn_disconnection_runner(&disconn, results_sender);
