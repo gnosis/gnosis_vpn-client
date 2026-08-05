@@ -772,7 +772,7 @@ impl Core {
             }
 
             Results::Peers { res } => {
-                match res {
+                let delay = match res {
                     Ok(peer::Peers { announced, connected }) => {
                         tracing::info!(
                             num_announced = %announced.len(),
@@ -814,16 +814,21 @@ impl Core {
                                 }
                             }
                         }
-                    }
-                    Err(err) => tracing::error!(?err, "failed to fetch peers"),
-                }
 
-                let delay = if self.target_destination.is_some()
-                    || route_health::any_needs_peers(self.route_healths.values())
-                {
-                    Duration::from_secs(10)
-                } else {
-                    Duration::from_secs(90)
+                        if self.target_destination.is_some()
+                            || route_health::any_needs_peers(self.route_healths.values())
+                        {
+                            Duration::from_secs(10)
+                        } else {
+                            Duration::from_secs(90)
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(?err, "failed to fetch peers");
+                        // Retry quickly on failure so transient HOPR API errors don't
+                        // leave route health stuck waiting for the lazy 90s poll.
+                        Duration::from_secs(10)
+                    }
                 };
                 self.spawn_peers(results_sender, delay);
             }
