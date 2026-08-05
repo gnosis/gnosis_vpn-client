@@ -18,8 +18,7 @@ docker-build: build
     #!/usr/bin/env bash
     set -o errexit -o nounset -o pipefail
 
-    cp result/bin/* docker/
-    chmod 775 docker/gnosis_vpn-worker docker/gnosis_vpn-root docker/gnosis_vpn-ctl
+    cp -f result/bin/gnosis_vpn-root result/bin/gnosis_vpn-worker result/bin/gnosis_vpn-ctl docker/
     docker build --platform linux/x86_64 -t gnosis_vpn-client docker/
 
 # build docker image (ARM64)
@@ -27,27 +26,27 @@ docker-build-arm64: build-arm64
     #!/usr/bin/env bash
     set -o errexit -o nounset -o pipefail
 
-    cp result/bin/* docker/
-    chmod 775 docker/gnosis_vpn-worker docker/gnosis_vpn-root docker/gnosis_vpn-ctl
+    cp -f result/bin/gnosis_vpn-root result/bin/gnosis_vpn-worker result/bin/gnosis_vpn-ctl docker/
     docker build --platform linux/arm64 -t gnosis_vpn-client:arm64 docker/
 
-# run docker container detached
+# run docker container detached; CONFIG_DIR must hold client.toml (+ identity file if used)
+# see gnosis_vpn-testenv's client-start for a full example against a live cluster
 docker-run:
     #!/usr/bin/env bash
     set -o errexit -o nounset -o pipefail
 
     log_level=$(if [ "${RUST_LOG:-}" = "" ]; then echo info; else echo "${RUST_LOG}"; fi)
+    config_dir="${CONFIG_DIR:?CONFIG_DIR must point at a directory containing client.toml}"
 
     docker run --detach --rm \
-        --env DESTINATION_ADDRESS_1=${DESTINATION_ADDRESS_1} \
-        --env DESTINATION_ADDRESS_2=${DESTINATION_ADDRESS_2} \
-        --env API_PORT=${API_PORT} \
-        --env API_TOKEN=${API_TOKEN} \
         --env RUST_LOG=${log_level} \
-        --publish 51822:51820/udp \
+        --env GNOSISVPN_CONFIG_PATH=/config/client.toml \
+        --env GNOSISVPN_HOPR_BLOKLI_URL=${GNOSISVPN_HOPR_BLOKLI_URL:-} \
+        --env GNOSISVPN_HOPR_IDENTITY_FILE=${GNOSISVPN_HOPR_IDENTITY_FILE:-} \
+        --env GNOSISVPN_HOPR_IDENTITY_PASS=${GNOSISVPN_HOPR_IDENTITY_PASS:-} \
+        --volume "${config_dir}:/config:ro" \
         --cap-add=NET_ADMIN \
         --add-host=host.docker.internal:host-gateway \
-        --sysctl net.ipv4.conf.all.src_valid_mark=1 \
         --name gnosis_vpn-client gnosis_vpn-client
 
 # stop docker container
@@ -56,7 +55,7 @@ docker-stop:
 
 # enter docker container interactively
 docker-enter:
-    docker exec --interactive --tty gnosis_vpn-client bash
+    docker exec --interactive --tty gnosis_vpn-client sh
 
 # run the VPN connectivity smoke test against a live tunnel (pass extra flags after --)
 smoke-test *args:
