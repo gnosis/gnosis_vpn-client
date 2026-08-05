@@ -18,7 +18,7 @@ docker-build: build
     #!/usr/bin/env bash
     set -o errexit -o nounset -o pipefail
 
-    cp result/bin/gnosis_vpn-root result/bin/gnosis_vpn-worker docker/
+    cp result/bin/gnosis_vpn-root result/bin/gnosis_vpn-worker result/bin/gnosis_vpn-ctl docker/
     docker build --platform linux/x86_64 -t gnosis_vpn-client docker/
 
 # build docker image (ARM64)
@@ -26,7 +26,7 @@ docker-build-arm64: build-arm64
     #!/usr/bin/env bash
     set -o errexit -o nounset -o pipefail
 
-    cp result/bin/gnosis_vpn-root result/bin/gnosis_vpn-worker docker/
+    cp result/bin/gnosis_vpn-root result/bin/gnosis_vpn-worker result/bin/gnosis_vpn-ctl docker/
     docker build --platform linux/arm64 -t gnosis_vpn-client:arm64 docker/
 
 # run docker container detached; CONFIG_DIR must hold client.toml (+ identity file if used)

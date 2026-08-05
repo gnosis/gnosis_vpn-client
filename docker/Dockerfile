@@ -14,7 +14,11 @@ WORKDIR /app
 
 COPY ./gnosis_vpn-root gnosis_vpn-root
 COPY ./gnosis_vpn-worker gnosis_vpn-worker
+COPY ./gnosis_vpn-ctl gnosis_vpn-ctl
 COPY ./entrypoint.sh entrypoint.sh
-RUN chmod 755 gnosis_vpn-root gnosis_vpn-worker entrypoint.sh
+RUN chmod 755 gnosis_vpn-root gnosis_vpn-worker gnosis_vpn-ctl entrypoint.sh
+
+# ctl talks to root over /var/run/gnosisvpn.sock — put it on PATH for `docker exec ... gnosis_vpn-ctl`
+RUN ln -s /app/gnosis_vpn-ctl /usr/local/bin/gnosis_vpn-ctl
 
 ENTRYPOINT ["./entrypoint.sh"]
