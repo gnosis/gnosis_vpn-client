@@ -1,6 +1,7 @@
 //! The runner module for `core::connection::down` struct.
 //! It handles all state transitions and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
+use edgli::FlowControlConfig;
 use edgli::hopr_lib::HoprSessionClientConfig;
 use tokio::sync::mpsc;
 
@@ -93,6 +94,8 @@ async fn open_bridge_session(
         return_path: down.destination.routing,
         always_max_out_surbs: surb.always_max_out_surbs,
         surb_management: surb.management,
+        // Robust tail-tolerance profile for the down-direction data session.
+        flow_control: Some(FlowControlConfig::robust()),
         ..Default::default()
     };
     hopr.open_session(
