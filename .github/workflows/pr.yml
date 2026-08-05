@@ -118,7 +118,14 @@ jobs:
           docker-images: true
           swap-storage: true
       - name: Checkout repository
+        # Pin to the PR head commit: the default pull_request checkout uses the
+        # auto-generated merge ref, which gives `self.rev` a different value than
+        # build-x86_64-linux (which checks out the head branch directly). That
+        # mismatch changes the derivation hash, causing a cachix miss and a full
+        # rebuild here instead of reusing the binary build-x86_64-linux already pushed.
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Setup Nix
         uses: hoprnet/hopr-workflows/actions/setup-nix@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # setup-nix-v2.0.2
         with:
