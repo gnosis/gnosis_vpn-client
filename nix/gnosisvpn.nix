@@ -316,15 +316,20 @@ in
     )
   );
 
-  # System test package: all service binaries + the system test runner in one derivation.
-  # Used by CI to run the system test against a live network in a single nix build command.
-  # Builds with the default release profile so CI exercises the same binary users run.
+  # System test runner binary only. CI builds this alongside the already-built
+  # binary-gnosis_vpn-x86_64-linux and runs system tests against that release
+  # artifact directly, instead of recompiling root/worker/ctl a second time
+  # here just to have a worker binary to test against.
   binary-gnosis_vpn-system_tests = withTokioUnstable (
-    builders.local.callPackage nixLib.mkRustPackage (mkGnosisvpnBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-      extraCargoArgs = "--bin gnosis_vpn-system_tests";
-    })
+    builders.local.callPackage nixLib.mkRustPackage (
+      (mkGnosisvpnBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      })
+      // {
+        cargoExtraArgs = "--bin gnosis_vpn-system_tests";
+      }
+    )
   );
 
   # Tests / QA

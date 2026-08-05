@@ -15,17 +15,40 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 jobs:
-  build-binaries:
+  # Split out from the arm/darwin matrix below so system-test can depend on
+  # just this leg via `needs:` and reuse its cachix-pushed binary instead of
+  # recompiling root/worker/ctl itself.
+  build-x86_64-linux:
+    name: Binary x86_64-linux
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@45221eb1aadfc5c46751306c5c7d6d291c8a24b3 # build-binaries-v3.1.2
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      version_type: commit
+      architecture: x86_64-linux
+      cachix_cache_name: gnosis-vpn-client
+      build_command: nix build -L .#binary-gnosis_vpn-x86_64-linux
+      build_debug_command: nix build -L .#binary-gnosis_vpn-x86_64-linux-dev
+      binary: gnosis_vpn-client
+      gcp_workload_identity_provider: projects/656686060169/locations/global/workloadIdentityPools/gnosisvpn-gh-pool/providers/github-provider
+      gcp_service_account: download-gnosisvpn-gh-sa@gnosisvpn-production.iam.gserviceaccount.com
+      runner: depot-ubuntu-22.04-4 # Depot Ubuntu 22.04, 4 CPUs, 16 GB RAM
+      timeout_minutes: 240
+    secrets:
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      gpg_private_key: ${{ secrets.GNOSISVPN_GPG_PRIVATE_KEY }}
+      gpg_private_key_password: ${{ secrets.GNOSISVPN_GPG_PRIVATE_KEY_PASSWORD }}
+      apple_certificate: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_P12_BASE64 }}
+      apple_certificate_password: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_PASSWORD }}
+  build-arm-binaries:
     name: Binary ${{ matrix.architecture }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - architecture: x86_64-linux
-            runner: depot-ubuntu-22.04-4 # Depot Ubuntu 22.04, 4 CPUs, 16 GB RAM
-            build_command: nix build -L .#binary-gnosis_vpn-x86_64-linux
-            build_debug_command: nix build -L .#binary-gnosis_vpn-x86_64-linux-dev
-            required_label: ""
           - architecture: aarch64-linux
             runner: depot-ubuntu-22.04-arm-4 # Depot Ubuntu 22.04 ARM, 4 CPUs, 16 GB RAM
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-linux
@@ -79,6 +102,8 @@ jobs:
     # Standard GitHub-hosted runners support passwordless sudo for all commands out of the box.
     runs-on: ubuntu-22.04
     if: ${{ github.event.pull_request.head.repo.fork == false }}
+    needs:
+      - build-x86_64-linux
     permissions:
       contents: read
     steps:
@@ -105,14 +130,19 @@ jobs:
           sudo apt-get install -y wireguard-tools resolvconf
       - name: Install just
         uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2
-      - name: Build binaries and system test
+      - name: Fetch release binaries
+        # Reuses the artifact build-x86_64-linux already built and pushed to
+        # cachix, instead of recompiling root/worker/ctl here a second time.
         run: |
-          nix build .#binary-gnosis_vpn-system_tests
+          nix build -L .#binary-gnosis_vpn-x86_64-linux -o result-release
+      - name: Build system test runner
+        run: |
+          nix build -L .#binary-gnosis_vpn-system_tests -o result-system-tests
       - name: Run the system test
         env:
           SYSTEM_TEST_HOPRD_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
           SYSTEM_TEST_HOPRD_ID_PASSWORD: ${{ secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD }}
           SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
           SYSTEM_TEST_CONFIG: ${{ secrets.SYSTEM_TEST_CONFIG}}
-          SYSTEM_TEST_WORKER_BINARY: ${{ github.workspace }}/result/bin/gnosis_vpn-worker
-        run: just system-tests ${{ github.workspace }}/result/bin/gnosis_vpn-system_tests
+          SYSTEM_TEST_WORKER_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-worker
+        run: just system-tests ${{ github.workspace }}/result-system-tests/bin/gnosis_vpn-system_tests
