@@ -47,7 +47,7 @@ pub async fn ping(opts: &Options) -> Result<Duration, Error> {
         Ok(_) => ping_using_cmd(opts).await,
         Err(error) => {
             tracing::warn!(?error, "Unable to use system ping cmd - fallback to internal ping");
-            ping_using_ping_crate(opts)
+            ping_using_ping_crate(opts).await
         }
     }
 }
@@ -70,7 +70,7 @@ async fn ping_using_cmd(opts: &Options) -> Result<Duration, Error> {
     parse_duration(output)
 }
 
-fn ping_using_ping_crate(opts: &Options) -> Result<Duration, Error> {
+async fn ping_using_ping_crate(opts: &Options) -> Result<Duration, Error> {
     let mut builder = ping::new(opts.address);
     let mut ping = builder.timeout(opts.timeout).ttl(opts.ttl).seq_cnt(opts.seq_count);
     cfg_if::cfg_if! {
@@ -80,7 +80,7 @@ fn ping_using_ping_crate(opts: &Options) -> Result<Duration, Error> {
             ping = ping.socket_type(ping::DGRAM);
         }
     }
-    ping.send().map(|p| p.rtt).map_err(Error::from)
+    ping.send_async().await.map(|p| p.rtt).map_err(Error::from)
 }
 
 pub fn parse_duration(duration: String) -> Result<Duration, Error> {
