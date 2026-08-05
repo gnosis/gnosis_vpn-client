@@ -74,6 +74,7 @@ system-tests test_binary="gnosis_vpn-system_tests":
     : "${SYSTEM_TEST_SAFE:?SYSTEM_TEST_SAFE must be set to run system tests}"
     : "${SYSTEM_TEST_CONFIG:?SYSTEM_TEST_CONFIG must be set to run system tests}"
     : "${SYSTEM_TEST_WORKER_BINARY:?SYSTEM_TEST_WORKER_BINARY must be set to run system tests}"
+    : "${SYSTEM_TEST_ROOT_BINARY:?SYSTEM_TEST_ROOT_BINARY must be set to run system tests}"
 
     # Refresh the sudo credential timestamp to avoid password prompt by expiration during long builds
     sudo -v
@@ -125,7 +126,7 @@ system-tests test_binary="gnosis_vpn-system_tests":
     sudo chmod 0755 "${worker_binary}"
 
     # Run the test binary with the appropriate environment variables
-    sudo CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" GNOSISVPN_HOME="${worker_home}" GNOSISVPN_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" GNOSISVPN_FORCE_STATIC_ROUTING="true" RUST_LOG="debug" {{ test_binary }} --proxy "http://10.128.0.1:3128"
+    sudo CARGO_BIN_EXE_GNOSIS_VPN_ROOT="${SYSTEM_TEST_ROOT_BINARY}" CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" GNOSISVPN_HOME="${worker_home}" GNOSISVPN_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" GNOSISVPN_FORCE_STATIC_ROUTING="true" RUST_LOG="debug" {{ test_binary }} --proxy "http://10.128.0.1:3128"
 
 # run the bats test suite for scripts/
 test-scripts:
