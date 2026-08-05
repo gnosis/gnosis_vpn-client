@@ -6533,6 +6533,7 @@ dependencies = [
  "rand 0.9.4",
  "socket2 0.6.4",
  "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]
