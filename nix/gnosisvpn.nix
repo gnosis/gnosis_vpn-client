@@ -23,6 +23,20 @@ let
   fs = lib.fileset;
   rev = toString (self.shortRev or self.dirtyShortRev);
 
+  # Cargo.lock pins these as bare `?rev=<sha>` git sources (no branch/tag), so
+  # crane's default vendoring can't shallow-fetch them — it has to fetch every
+  # ref (all branches, tags, and PRs) of the whole repo just to locate the sha,
+  # which takes ~10 minutes for the huge hoprnet/hoprnet monorepo. Providing the
+  # output hash up front switches crane to a targeted `fetchgit` of just that
+  # commit instead, which is also substitutable from the cachix cache.
+  # Update these whenever Cargo.lock's rev for the corresponding dependency changes.
+  outputHashes = {
+    "git+https://github.com/hoprnet/hoprnet?rev=a511b8a88b297f47a15986573bf6db3ef7b95937#a511b8a88b297f47a15986573bf6db3ef7b95937" =
+      "sha256-ir25ZsBHxw93aQIOISiUYrX6BOl4t4jdHHKr9dz78Uo=";
+    "git+https://github.com/hoprnet/edge-client.git?rev=d5408a8b3da3d56e3fd7bf3a89f3f915b1804d1a#d5408a8b3da3d56e3fd7bf3a89f3f915b1804d1a" =
+      "sha256-j2qKPal/t24W0B7okAZ2ntTXCp3Ai4Bh8ZCIun0WBG4=";
+  };
+
   builders = nixLib.mkRustBuilders {
     rustToolchainFile = ../rust-toolchain.toml;
   };
@@ -201,7 +215,12 @@ let
       extraCargoArgs ? "",
     }:
     {
-      inherit src depsSrc rev;
+      inherit
+        src
+        depsSrc
+        rev
+        outputHashes
+        ;
       # prependPackageName=false: skip the automatic `-p gnosis_vpn` that nix-lib
       # derives from [workspace.metadata.crane] name — it has no matching package
       # since the workspace uses a wildcard `members = ["gnosis_vpn*"]`.
