@@ -20,7 +20,7 @@ impl Peer {
 /// Peer data from two independent sources: on-chain announcements (used for
 /// killswitch/routing exceptions) and live transport connections (used for
 /// routing health).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Peers {
     pub announced: HashMap<Address, Peer>,
     pub connected: HashSet<Address>,
