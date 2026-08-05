@@ -6,8 +6,11 @@
     flake-parts = {
       url = "github:hercules-ci/flake-parts";
     };
+    # crane's repo history is huge (500k+ objects); the plain github: fetcher
+    # falls back to a full unshallow git clone of it on every job. Fetching
+    # it as a shallow git input instead keeps this to a few MiB.
     crane = {
-      url = "github:ipetkov/crane";
+      url = "git+https://github.com/ipetkov/crane.git?shallow=1";
     };
 
     pre-commit.url = "github:cachix/git-hooks.nix";
@@ -24,7 +27,7 @@
     };
 
     nix-lib = {
-      url = "github:hoprnet/nix-lib/c1c9abb1c1884b3211fd2af53f4ac1b8c15d78b5";
+      url = "github:hoprnet/nix-lib/6e2c9a32399eec2b9dfa898d71150c8aec68cbd6";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.crane.follows = "crane";
       inputs.rust-overlay.follows = "rust-overlay";
