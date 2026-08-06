@@ -55,9 +55,27 @@ pub async fn restore(interface: &str, mechanism: Mechanism) -> bool {
     }
 }
 
-/// Split the comma-separated server list, trimming whitespace and dropping blanks.
+/// Split the comma-separated server list into validated IP address tokens, trimming
+/// whitespace and dropping blank/malformed entries.
+///
+/// Each surviving token is spliced verbatim into the `resolvconf` stdin protocol
+/// (one `nameserver <token>` line) or the `scutil` script (`d.add ServerAddresses *
+/// <token>...`) - both line-oriented formats where an embedded space or newline
+/// would inject an extra directive/command. Requiring a valid IP address rules
+/// that out structurally instead of trying to blocklist bad characters.
 fn split_servers(servers: &str) -> Vec<&str> {
-    servers.split(',').map(str::trim).filter(|s| !s.is_empty()).collect()
+    servers
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter(|s| match s.parse::<std::net::IpAddr>() {
+            Ok(_) => true,
+            Err(_) => {
+                tracing::warn!(server = %s, "dropping non-IP DNS server entry");
+                false
+            }
+        })
+        .collect()
 }
 
 /// Argv for scoping the resolvers to the tunnel interface via systemd-resolved.
@@ -284,6 +302,14 @@ mod tests {
     fn split_of_blank_list_is_empty() {
         assert!(split_servers("").is_empty());
         assert!(split_servers(" , ").is_empty());
+    }
+
+    #[test]
+    fn split_drops_entries_that_are_not_a_bare_ip_address() {
+        // A hostname, and a token smuggling a second resolvconf/scutil directive
+        // via embedded whitespace, must both be dropped rather than passed through.
+        assert_eq!(split_servers("1.1.1.1,example.com,8.8.8.8"), vec!["1.1.1.1", "8.8.8.8"]);
+        assert_eq!(split_servers("1.1.1.1,8.8.8.8 domain evil.example"), vec!["1.1.1.1"]);
     }
 
     #[test]
