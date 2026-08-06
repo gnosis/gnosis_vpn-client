@@ -230,7 +230,7 @@ impl Hopr {
             .map(|v| ByteSize::b(v.target_surb_buffer_size * SESSION_MTU as u64));
 
         // No socket is bound for a spliced session; the placeholder keeps the
-        // metadata shape identical for status reporting and the pseudonym cache.
+        // metadata shape identical for status reporting.
         let bound_host: SocketAddr = std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0).into();
 
         let metadata = SessionClientMetadata {

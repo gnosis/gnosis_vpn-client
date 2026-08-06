@@ -3,7 +3,7 @@
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backon::{FibonacciBuilder, Retryable};
 use edgli::FlowControlConfig;
-use edgli::hopr_lib::{HoprSessionClientConfig, api::types::internal::protocol::HoprPseudonym};
+use edgli::hopr_lib::HoprSessionClientConfig;
 use ipnetwork::IpNetwork;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -31,8 +31,6 @@ use super::{Error, Event, Progress, Setback};
 pub(crate) struct PreviousConnection {
     /// Blokli IPs resolved during the previous connection (reused when killswitch blocks DNS).
     pub blokli_ips: Vec<Ipv4Addr>,
-    /// Session pseudonym from the previous connection (reused to avoid re-registration churn).
-    pub pseudonym: Option<HoprPseudonym>,
     /// WireGuard public key from the previous connection to unregister during bridge cleanup.
     pub wg_public_key: Option<String>,
 }
@@ -140,15 +138,7 @@ impl Runner {
             session: hopr_session,
             configurator,
             metadata: session,
-        } = open_spliced_wg_session(
-            &self.hopr,
-            &self.destination,
-            &self.options,
-            ping_surb,
-            self.prev_conn.pseudonym,
-            &results_sender,
-        )
-        .await?;
+        } = open_spliced_wg_session(&self.hopr, &self.destination, &self.options, ping_surb, &results_sender).await?;
 
         // 7. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
@@ -309,7 +299,6 @@ async fn open_spliced_wg_session(
     destination: &Destination,
     options: &Options,
     surb: SurbParams,
-    pseudonym: Option<HoprPseudonym>,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SplicedWgSession, HoprError> {
     let cfg = HoprSessionClientConfig {
@@ -318,9 +307,9 @@ async fn open_spliced_wg_session(
         return_path: destination.routing,
         always_max_out_surbs: surb.always_max_out_surbs,
         surb_management: surb.management,
-        pseudonym,
         // Robust tail-tolerance profile for the WireGuard data session.
         flow_control: Some(FlowControlConfig::robust()),
+        ..Default::default()
     };
     (|| async {
         tracing::debug!(%destination, "attempting to open spliced wg session");

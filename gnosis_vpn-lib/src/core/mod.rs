@@ -1,8 +1,6 @@
 use edgli::EdgliInitState;
 use edgli::blokli::IncentiveOperations;
-use edgli::hopr_lib::api::types::primitive::traits::ToHex;
 use edgli::hopr_lib::builder::Keypair;
-use edgli::hopr_lib::exports::transport::SessionId;
 use futures_util::future::AbortHandle;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -20,7 +18,6 @@ use crate::compat::SafeModule;
 use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
-use crate::connection::pseudonym_cache::PseudonymCache;
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::route_health::{self, RouteHealth};
@@ -106,7 +103,6 @@ pub struct Core {
     ongoing_disconnections: Vec<connection::down::Down>,
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
     reconnecting_since: Option<SystemTime>,
-    pseudonym_cache: PseudonymCache,
 }
 
 #[derive(Debug, Clone)]
@@ -179,7 +175,6 @@ impl Core {
 
         let (incoming_sender, incoming_receiver) = mpsc::channel(32);
         let cached_resolved_blokli_ips = worker_params.cached_blokli_ips().to_vec();
-        let pseudonym_cache = PseudonymCache::new(config.connection.session_pseudonym_ttl);
         let core = Core {
             // config data
             config,
@@ -217,7 +212,6 @@ impl Core {
             responders: HashMap::new(),
             // needed to keep working during enabled killswitch
             cached_resolved_blokli_ips,
-            pseudonym_cache,
             reconnecting_since: None,
         };
         Ok((core, incoming_sender))
@@ -887,7 +881,6 @@ impl Core {
                     self.reconnecting_since = None;
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
-                    self.pseudonym_cache.remove(&conn.destination);
                     let route = format!(
                         "{}({})",
                         conn.destination.pretty_print_path(),
@@ -1591,14 +1584,8 @@ impl Core {
             let conn = connection::up::Up::new(destination.clone());
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
-            // Entry is kept until connection is confirmed so retries within the TTL can reuse it.
-            let cached_pseudonym = self.pseudonym_cache.get(&destination);
-            if let Some(pseudonym) = &cached_pseudonym {
-                tracing::info!(%destination, %pseudonym, "reusing cached session pseudonym for reconnection");
-            }
             let prev_conn = connection::up::runner::PreviousConnection {
                 blokli_ips: self.cached_resolved_blokli_ips.clone(),
-                pseudonym: cached_pseudonym,
                 wg_public_key: prev_public_key,
             };
             let runner = connection::up::runner::Runner::new(
@@ -1713,13 +1700,6 @@ impl Core {
     }
 
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
-        // Cache the pseudonym so a reconnect within the TTL window can reuse exit node SURBs.
-        if let Some((_, session)) = &conn.ping_session
-            && let Some(client_id) = session.active_clients.first()
-            && let Ok(pseudonym) = SessionId::from_hex(client_id)
-        {
-            self.pseudonym_cache.insert(&conn.destination, pseudonym);
-        }
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());

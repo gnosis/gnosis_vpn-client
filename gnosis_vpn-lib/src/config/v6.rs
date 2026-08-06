@@ -41,8 +41,6 @@ pub(super) struct Connection {
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
     pub(super) lan_lockdown: Option<bool>,
     pub(super) probe_local_addresses: Option<bool>,
-    #[serde(default, with = "humantime_serde::option")]
-    pub(super) session_pseudonym_ttl: Option<Duration>,
     #[serde(default, deserialize_with = "validate_path_planner_min_ack_rate")]
     pub(super) path_planner_min_ack_rate: Option<f64>,
 }
@@ -320,11 +318,6 @@ impl From<Option<Connection>> for options::Options {
             })
             .unwrap_or(def_intervals);
 
-        // 1s effectively disables pseudonym caching; revert once hopr-lib supports PIX
-        let session_pseudonym_ttl = connection
-            .and_then(|c| c.session_pseudonym_ttl)
-            .unwrap_or(Duration::from_secs(1));
-
         options::Options {
             sessions,
             ping_options: ping_opts,
@@ -333,7 +326,6 @@ impl From<Option<Connection>> for options::Options {
             health_check_intervals,
             lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
             probe_local_addresses: connection.and_then(|c| c.probe_local_addresses).unwrap_or(false),
-            session_pseudonym_ttl,
             path_planner_min_ack_rate: connection
                 .and_then(|c| c.path_planner_min_ack_rate)
                 .unwrap_or(options::DEFAULT_PATH_PLANNER_MIN_ACK_RATE),
@@ -431,7 +423,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         || k == "announced_peer_minimum_score"
                         || k == "lan_lockdown"
                         || k == "probe_local_addresses"
-                        || k == "session_pseudonym_ttl"
                         || k == "path_planner_min_ack_rate"
                     {
                         continue;
