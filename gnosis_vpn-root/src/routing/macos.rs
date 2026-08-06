@@ -228,8 +228,14 @@ impl Routing for StaticRouter {
         }
 
         // Phase 4: IPv6 blackhole + DNS (previously handled inside wg-quick)
-        ipv6_blackhole::add().await;
+        // Record the blackhole intent BEFORE installing it: the `::/1`+`8000::/1`
+        // routes are plain kernel routes that outlive the process, but the startup
+        // sweep only removes them when this flag is persisted. Persisting first
+        // guarantees a crash between `add()` and the persist below can still be
+        // swept, instead of leaving IPv6 blackholed with no recorded state.
         self.blackholes_added = true;
+        self.persist_teardown_state();
+        ipv6_blackhole::add().await;
         self.dns_mechanism = match self.dns.clone() {
             Some(servers) => dns::set(&interface_name, &servers).await,
             None => None,
