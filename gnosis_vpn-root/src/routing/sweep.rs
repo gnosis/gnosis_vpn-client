@@ -1,7 +1,12 @@
 //! Crash-recovery sweep for tunnel side effects that survive an unclean root exit.
 //!
-//! Routes bound to the TUN interface vanish with root's fd when the process dies,
-//! but several side effects do not: the IPv6 blackhole routes, the DNS diversion
+//! Routes bound to the TUN interface vanish when the *last* fd on the interface
+//! closes - both root's fd and the worker's `SCM_RIGHTS` dup of it. On root death
+//! the worker's control socket (its stdin) hits EOF, the worker exits, its dup
+//! closes, and the kernel then destroys the interface and its bound split-default
+//! routes automatically - which is why the sweep neither records nor removes them.
+//! Several other side effects are NOT tied to the interface and survive: the IPv6
+//! blackhole routes, the DNS diversion
 //! (resolvectl/resolvconf on Linux, the `State:/Network/Service/<utunN>/DNS` scutil
 //! key on macOS), the WAN-scoped bypass routes (peer `/32` + RFC1918, pinned to the
 //! physical device), and the killswitch firewall lockdown. Tunnel setup records the
@@ -64,12 +69,6 @@ pub fn record(state: &TeardownState) {
     record_routing_at(&candidate_paths(), state);
 }
 
-/// Delete the persisted record after a clean teardown.
-#[allow(dead_code)]
-pub fn clear() {
-    clear_routing_at(&candidate_paths());
-}
-
 /// Persist killswitch recovery without overwriting routing recovery owned by the
 /// static router.
 pub fn record_killswitch(pf_was_enabled: Option<bool>) {
@@ -82,9 +81,11 @@ pub fn clear_killswitch() {
 }
 
 /// Sweep tunnel side effects recorded by a previous root that exited without
-/// tearing down (e.g. SIGKILL). Route table entries bound to the TUN died with its
-/// fd; only the IPv6 blackhole routes and the DNS diversion survive and are
-/// removed here, best-effort.
+/// tearing down (e.g. SIGKILL). Route entries bound to the TUN interface are gone
+/// once its last fd closes (root's and the worker's dup, the worker exiting on
+/// control-socket EOF); only the interface-independent side effects - the IPv6
+/// blackhole routes, the DNS diversion, the WAN-scoped bypass routes, and the
+/// killswitch - survive and are removed here, best-effort.
 pub async fn startup_sweep() {
     let paths = candidate_paths();
     let mut state = load_leftover_at(&paths).unwrap_or_default();
@@ -245,6 +246,10 @@ fn record_routing_at(paths: &[PathBuf], routing: &TeardownState) {
     });
 }
 
+/// Clear only routing recovery, preserving killswitch recovery. Exercised by the
+/// tests; production clean teardown clears routing state implicitly by persisting an
+/// empty snapshot (`mutate_at` -> `is_empty` -> `clear_at`).
+#[cfg(test)]
 fn clear_routing_at(paths: &[PathBuf]) {
     mutate_at(paths, |state| {
         state.interface_name = None;
@@ -288,11 +293,13 @@ fn write_owner_only(path: &std::path::Path, payload: &[u8]) -> std::io::Result<(
         .open(&temporary)?;
     file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     file.write_all(payload)?;
-    file.sync_all()?;
+    // No fsync: this state describes in-memory kernel routes/blackholes that do not
+    // survive a machine reboot, so only process-death recovery (SIGKILL/OOM/panic/
+    // upgrade) matters - and there the page cache is intact without an fsync. The
+    // temp-file + rename below is what guarantees a reader sees old-or-new, never a
+    // torn file. Skipping the fsyncs keeps this off the async routing-actor thread's
+    // critical path (it runs once per bypass route at setup and per reconciliation).
     std::fs::rename(&temporary, path)?;
-    if let Some(parent) = path.parent() {
-        std::fs::File::open(parent)?.sync_all()?;
-    }
     Ok(())
 }
 
