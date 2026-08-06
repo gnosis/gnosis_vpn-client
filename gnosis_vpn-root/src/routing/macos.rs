@@ -262,11 +262,17 @@ impl Routing for StaticRouter {
         // DNS restore must target the recorded utunN name: the compile-time fallback
         // from vpn_interface() can never exist as a scutil service key on macOS.
         match (self.wg_interface_name.clone(), self.dns_mechanism) {
-            (Some(iface), Some(mechanism)) if dns::restore(&iface, mechanism).await => {
-                self.dns_mechanism = None;
+            (Some(iface), Some(mechanism)) => {
+                if dns::restore(&iface, mechanism).await {
+                    self.dns_mechanism = None;
+                } else {
+                    // Keep dns_mechanism recorded so the startup sweep retries; a
+                    // swallowed failure would leave DNS pointed at a dead interface.
+                    tracing::warn!(%iface, "failed to restore DNS on teardown; leaving it recorded for the startup sweep");
+                }
             }
             (None, Some(_)) => tracing::warn!("skipping DNS restore: utun interface name not recorded"),
-            _ => {}
+            (_, None) => {}
         }
         // Drop root's fd last so routes are removed before the interface can vanish.
         self.tun = None;
