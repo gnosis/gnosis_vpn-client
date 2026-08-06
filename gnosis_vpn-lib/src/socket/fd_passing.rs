@@ -80,18 +80,25 @@ pub fn recv_latest_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
     let mut fd = recv_fd(sock)?;
     let mut discarded = 0u32;
     sock.set_nonblocking(true)?;
-    // Reassigning `fd` drops the previously held OwnedFd, closing the stale fd it
-    // superseded.
-    let drain_result: io::Result<()> = (|| {
-        while let Some(newer) = try_recv_fd(sock)? {
-            discarded += 1;
-            fd = newer;
+    // Drain older orphaned fds so only the newest is kept; reassigning `fd` drops
+    // (and closes) the superseded one. A drain error is NOT fatal: we already hold a
+    // valid fd, so a benign teardown-race close (peer EOF) or a stray malformed
+    // message just ends the drain and we return the newest fd received so far -
+    // rather than discarding a good device fd and failing the connection.
+    loop {
+        match try_recv_fd(sock) {
+            Ok(Some(newer)) => {
+                discarded += 1;
+                fd = newer;
+            }
+            Ok(None) => break,
+            Err(error) => {
+                tracing::debug!(%error, "stopped draining stale TUN fds early; keeping the newest received");
+                break;
+            }
         }
-        Ok(())
-    })();
-    let restore_result = sock.set_nonblocking(false);
-    drain_result?;
-    restore_result?;
+    }
+    sock.set_nonblocking(false)?;
     if discarded > 0 {
         tracing::warn!(
             discarded,
@@ -387,6 +394,29 @@ mod tests {
         writer.write_all(b"newest").unwrap();
         drop(writer);
         assert_eq!(read_all(received), "newest");
+    }
+
+    #[test]
+    fn recv_latest_fd_keeps_the_newest_when_the_peer_closes_mid_drain() {
+        let (a, b) = UnixStream::pair().unwrap();
+        // Two attempts' fds are queued, then the sender closes. After draining r2,
+        // the drain's next recv sees EOF, not another fd - a benign teardown race.
+        // The already-received newest fd (r2) must still be returned, not discarded
+        // as a failure that fails the connection.
+        let (r1, _w1) = make_pipe();
+        let (r2, w2) = make_pipe();
+        send_fd(&a, &r1).unwrap();
+        send_fd(&a, &r2).unwrap();
+        drop(a); // peer close: the drain hits EOF where it looks for a third fd
+
+        let received = recv_latest_fd(&b).expect("a peer close mid-drain must not fail the receive");
+
+        // Prove it is r2 (the newest), delivered intact.
+        drop(r2);
+        let mut writer = std::fs::File::from(w2);
+        writer.write_all(b"survivor").unwrap();
+        drop(writer);
+        assert_eq!(read_all(received), "survivor");
     }
 
     #[test]
