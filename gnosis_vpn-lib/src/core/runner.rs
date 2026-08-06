@@ -214,6 +214,7 @@ pub(crate) async fn hopr(
     worker_params: WorkerParams,
     blokli_config: BlokliConfig,
     path_planner_min_ack_rate: f64,
+    probe_local_addresses: bool,
     safe_module: &SafeModule,
     results_sender: mpsc::Sender<Results>,
 ) {
@@ -221,6 +222,7 @@ pub(crate) async fn hopr(
         worker_params,
         blokli_config,
         path_planner_min_ack_rate,
+        probe_local_addresses,
         safe_module,
         &results_sender,
     )
@@ -480,6 +482,7 @@ async fn run_hopr(
     worker_params: WorkerParams,
     blokli_config: BlokliConfig,
     path_planner_min_ack_rate: f64,
+    probe_local_addresses: bool,
     safe_module: &SafeModule,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<Hopr, Error> {
@@ -494,9 +497,16 @@ async fn run_hopr(
         }
     };
 
-    Hopr::new(cfg, keys, blokli_endpoint, blokli_config.into(), visitor)
-        .await
-        .map_err(Error::from)
+    Hopr::new(
+        cfg,
+        keys,
+        blokli_endpoint,
+        blokli_config.into(),
+        probe_local_addresses,
+        visitor,
+    )
+    .await
+    .map_err(Error::from)
 }
 
 async fn run_create_incentive_operations(
