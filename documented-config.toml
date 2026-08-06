@@ -50,6 +50,13 @@ path    = { hops = 1 }
 # internet traffic through the VPN.
 # lan_lockdown = false
 
+# probe_local_addresses - when true, allows probing/trusting announced peer addresses
+# that are private/local IPs (loopback, 192.168.x.x, 10.x.x.x, etc.) instead of filtering
+# them out. Defaults to false. Enable for test/dev clusters whose nodes announce local
+# addresses; leave false in production, where such announcements are almost certainly
+# misconfigured or spoofed.
+# probe_local_addresses = false
+
 # session_pseudonym_ttl - how long to keep a closed session's pseudonym cached for reuse
 # on reconnect. Exit nodes retain session SURBs for ~30s, so reconnecting within this
 # window avoids a cold-start SURB exchange. Currently defaults to 1s (effectively

@@ -40,6 +40,7 @@ pub(super) struct Connection {
     pub(super) surb_balancing: Option<SurbBalancingConfig>,
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
     pub(super) lan_lockdown: Option<bool>,
+    pub(super) probe_local_addresses: Option<bool>,
     #[serde(default, with = "humantime_serde::option")]
     pub(super) session_pseudonym_ttl: Option<Duration>,
     #[serde(default, deserialize_with = "validate_path_planner_min_ack_rate")]
@@ -332,6 +333,7 @@ impl From<Option<Connection>> for options::Options {
             timeouts,
             health_check_intervals,
             lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
+            probe_local_addresses: connection.and_then(|c| c.probe_local_addresses).unwrap_or(false),
             session_pseudonym_ttl,
             path_planner_min_ack_rate: connection
                 .and_then(|c| c.path_planner_min_ack_rate)
@@ -430,6 +432,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "http_timeout"
                         || k == "announced_peer_minimum_score"
                         || k == "lan_lockdown"
+                        || k == "probe_local_addresses"
                         || k == "session_pseudonym_ttl"
                         || k == "path_planner_min_ack_rate"
                     {
@@ -812,6 +815,37 @@ path = { hops = 4 }
 "#####,
         );
         assert!(result.is_err(), "v6 must reject hops > MAX_HOPS");
+    }
+
+    #[test]
+    fn probe_local_addresses_defaults_to_false() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert!(!result.connection.probe_local_addresses);
+    }
+
+    #[test]
+    fn probe_local_addresses_reads_from_connection() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection]
+probe_local_addresses = true
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert!(result.connection.probe_local_addresses);
     }
 
     #[test]
