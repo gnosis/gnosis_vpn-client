@@ -63,15 +63,15 @@ jobs:
       id-token: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # release-version-v5.1.1
+        uses: hoprnet/hopr-workflows/actions/release-version@ac8742a45096e585606bd086678dfabf63d38938 # release-version-v5.1.2
         with:
           source_branch: ${{ github.ref_name }}
           file: Cargo.toml
           release_type: ${{ inputs.release_type }}
           cachix_cache_name: gnosis-vpn-client
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-          zulip_api_key: ${{ secrets.ZULIP_API_KEY }}
-          zulip_email: ${{ secrets.ZULIP_EMAIL }}
+          zulip_api_key: ${{ secrets.GNOSIS_VPN_ZULIP_API_KEY }}
+          zulip_email: ${{ secrets.GNOSIS_VPN_ZULIP_EMAIL }}
           zulip_channel: GnosisVPN
           zulip_topic: Releases
           gcp_workload_identity_provider: projects/656686060169/locations/global/workloadIdentityPools/gnosisvpn-gh-pool/providers/github-provider

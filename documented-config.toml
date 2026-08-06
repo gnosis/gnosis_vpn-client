@@ -139,13 +139,16 @@ path    = { hops = 1 }
 # [blokli]
 # connection_sync_timeout = "30s"
 # sync_tolerance = 50
+# bound on a single request to blokli, covering DNS, TCP, TLS, request and response;
+# raise it on high-latency links where requests time out during startup
+# (distinct from connection_sync_timeout, which bounds the whole initial sync, and from
+# connection.http_timeout, which applies to exit node requests)
+# request_timeout = "10s"
 
 ###
 ## strategy section - channel lifecycle and funding parameters
 
 # [strategy]
-# number of forwarded packets the initial channel stake is sized to cover
-# desired_message_count = 1000000
 # minimum number of open outgoing channels to maintain
 # min_open_channels = 5
 # target number of open outgoing channels

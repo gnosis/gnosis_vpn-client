@@ -6,8 +6,11 @@
     flake-parts = {
       url = "github:hercules-ci/flake-parts";
     };
+    # crane's repo history is huge (500k+ objects); the plain github: fetcher
+    # falls back to a full unshallow git clone of it on every job. Fetching
+    # it as a shallow git input instead keeps this to a few MiB.
     crane = {
-      url = "github:ipetkov/crane";
+      url = "git+https://github.com/ipetkov/crane.git?shallow=1";
     };
 
     pre-commit.url = "github:cachix/git-hooks.nix";
@@ -23,9 +26,8 @@
       flake = false;
     };
 
-    # HOPR Nix Library (provides reusable Rust build functions and treefmt config)
     nix-lib = {
-      url = "github:hoprnet/nix-lib";
+      url = "github:hoprnet/nix-lib/6e2c9a32399eec2b9dfa898d71150c8aec68cbd6";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.crane.follows = "crane";
       inputs.rust-overlay.follows = "rust-overlay";
@@ -77,6 +79,16 @@
             }
           );
 
+          # Build with `--cfg tokio_unstable` so Tokio's improved cooperative
+          # yielding is active (the config that produced the validated throughput).
+          # nix-lib's shells/builds set CARGO_BUILD_RUSTFLAGS (linker flag), which
+          # *replaces* `.cargo/config.toml`'s `[build]` table, so append the tokio
+          # flags there to keep them alongside the linker flag. `--check-cfg` keeps
+          # the flag from tripping `-D warnings`.
+          tokioUnstableHook = ''
+            export CARGO_BUILD_RUSTFLAGS="''${CARGO_BUILD_RUSTFLAGS:-} --cfg tokio_unstable --check-cfg cfg(tokio_unstable)"
+          '';
+
           gnosisvpnPackages = import ./nix/gnosisvpn.nix {
             inherit
               lib
@@ -85,6 +97,7 @@
               pkgs
               craneLib
               advisory-db
+              tokioUnstableHook
               ;
           };
 
@@ -165,6 +178,9 @@
             {
               inherit pre-commit-check;
               checks = self.checks.${system};
+
+              # Keep `--cfg tokio_unstable` on interactive `cargo` invocations too.
+              shellHook = tokioUnstableHook;
 
               packages = [
                 pkgs.bats

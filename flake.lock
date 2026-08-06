@@ -20,15 +20,16 @@
       "locked": {
         "lastModified": 1783203018,
         "narHash": "sha256-G6R9IT/xwFuu+CYBWDUAok6AdC4ERC4ZfPPFtEpxnZE=",
-        "owner": "ipetkov",
-        "repo": "crane",
+        "ref": "refs/heads/master",
         "rev": "80db5bdc391be8a1794f6d8a2d56e3a84ebcede2",
-        "type": "github"
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/ipetkov/crane.git"
       },
       "original": {
-        "owner": "ipetkov",
-        "repo": "crane",
-        "type": "github"
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/ipetkov/crane.git"
       }
     },
     "flake-compat": {
@@ -118,16 +119,17 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1780300650,
-        "narHash": "sha256-fvXTqGYCLL7oV7EQcl1mI+y1FJ5NQGYjErtXI0PWdP0=",
+        "lastModified": 1785952769,
+        "narHash": "sha256-kVGsIRjmByMggTBwMa7anRC7LbBJhrz4hgPYtw4hz9Y=",
         "owner": "hoprnet",
         "repo": "nix-lib",
-        "rev": "07c9c443cc611f81d939e9520508e9faefe528f4",
+        "rev": "6e2c9a32399eec2b9dfa898d71150c8aec68cbd6",
         "type": "github"
       },
       "original": {
         "owner": "hoprnet",
         "repo": "nix-lib",
+        "rev": "6e2c9a32399eec2b9dfa898d71150c8aec68cbd6",
         "type": "github"
       }
     },

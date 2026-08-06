@@ -10,10 +10,29 @@ CFLAGS   = "-O3 -ffunction-sections -fdata-sections -fPIC"
 CPPFLAGS = "-O3 -ffunction-sections -fdata-sections -fPIC"
 LDFLAGS  = "-O3 -ffunction-sections -fdata-sections -fPIC"
 
+# Build the workspace (and the hopr crates pulled via edgli) with
+# `--cfg tokio_unstable` so Tokio's improved cooperative yielding is active on the
+# async hot paths — the build that produced the validated multi-hop throughput.
+# `--check-cfg` keeps the flag from tripping `-D warnings`. NOTE: Cargo does NOT
+# merge `[build]` with target-specific rustflags — a matching `[target.<triple>]`
+# table wins outright — so the flag is repeated in the aarch64 table below. The
+# Nix shells set CARGO_BUILD_RUSTFLAGS (which replaces `[build]`); flake.nix
+# re-appends the tokio flags there so nix/CI builds keep it too.
+# The `=`-joined single-token forms are order-independent so treefmt's
+# `taplo -o reorder_arrays=true` cannot corrupt a flag/value pair by sorting.
+[build]
+rustflags = ["--cfg=tokio_unstable", "--check-cfg=cfg(tokio_unstable)"]
+
 # Enable hardware AES intrinsics on Apple Silicon — selects aes::armv8 backend
 # at compile time instead of aes::soft::fixslice. The aes crate v0.8 requires
 # --cfg aes_armv8 (not just target-feature=+aes) to activate the armv8 module.
 # Restricted to aarch64-apple-darwin: Apple Silicon always has the AES crypto
 # extension; aarch64-unknown-linux-* cannot make that guarantee.
 [target.aarch64-apple-darwin]
-rustflags = ["--cfg=aes_armv8", "-Ctarget-feature=+aes,+neon"]
+# Repeats the tokio_unstable flags because this target table replaces `[build]`.
+rustflags = [
+  "--cfg=aes_armv8",
+  "--cfg=tokio_unstable",
+  "--check-cfg=cfg(tokio_unstable)",
+  "-Ctarget-feature=+aes,+neon",
+]

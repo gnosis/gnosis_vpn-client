@@ -14,7 +14,6 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use url::Url;
 
-use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -73,8 +72,8 @@ pub(crate) enum Results {
     NodeWxhoprWithdraw {
         res: Result<(), Error>,
     },
-    AnnouncedPeers {
-        res: Result<HashMap<Address, peer::Peer>, Error>,
+    Peers {
+        res: Result<peer::Peers, Error>,
     },
     HoprConstruction(EdgliInitState),
     HoprRunning,
@@ -250,10 +249,10 @@ pub(crate) async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Send
     let _ = results_sender.send(Results::HoprRunning).await;
 }
 
-pub(crate) async fn announced_peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
-    tracing::debug!("starting announced peers runner");
-    let res = hopr.announced_peers().await.map_err(Error::from);
-    let _ = results_sender.send(Results::AnnouncedPeers { res }).await;
+pub(crate) async fn peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    tracing::debug!("starting peers runner");
+    let res = hopr.peers().await.map_err(Error::from);
+    let _ = results_sender.send(Results::Peers { res }).await;
 }
 
 pub(crate) async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>) {
@@ -292,7 +291,7 @@ pub(crate) async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Re
 
 pub(crate) async fn create_incentive_operations(
     worker_params: &WorkerParams,
-    blokli_config: BlockchainConnectorConfig,
+    blokli_config: BlokliConfig,
     results_sender: mpsc::Sender<Results>,
 ) {
     let res = run_create_incentive_operations(worker_params, blokli_config, results_sender.clone()).await;
@@ -383,10 +382,7 @@ async fn run_minimum_balance_recommendation(
             let rec = edgli::strategy::minimum_balance_recommendation(&*ops, &cfg)
                 .await
                 .map_err(|e| Error::Chain(e.to_string()))?;
-            Ok(balance::BalanceRecommendation {
-                wxhopr: rec.wxhopr,
-                xdai: rec.xdai,
-            })
+            Ok(rec.into())
         }
     })
     .retry(remote_data::backoff_expo_long_delay())
@@ -490,7 +486,7 @@ async fn run_hopr(
     tracing::debug!("starting hopr runner");
     let cfg = worker_params.to_config(safe_module, path_planner_min_ack_rate).await?;
     let keys = worker_params.calc_keys().await?;
-    let blokli_url = worker_params.blokli_url();
+    let blokli_endpoint = worker_params.blokli_endpoint(blokli_config.request_timeout);
     let sender = results_sender.clone();
     let visitor = move |state| {
         if let Err(err) = sender.try_send(Results::HoprConstruction(state)) {
@@ -498,20 +494,21 @@ async fn run_hopr(
         }
     };
 
-    Hopr::new(cfg, keys, blokli_url, blokli_config.into(), visitor)
+    Hopr::new(cfg, keys, blokli_endpoint, blokli_config.into(), visitor)
         .await
         .map_err(Error::from)
 }
 
 async fn run_create_incentive_operations(
     worker_params: &WorkerParams,
-    blokli_config: BlockchainConnectorConfig,
+    blokli_config: BlokliConfig,
     results_sender: mpsc::Sender<Results>,
 ) -> Result<Arc<dyn IncentiveOperations>, Error> {
-    let blokli_provider = worker_params.blokli_url();
+    let blokli_endpoint = worker_params.blokli_endpoint(blokli_config.request_timeout);
+    let connector_config: BlockchainConnectorConfig = blokli_config.into();
     let chain_key = worker_params.calc_keys().await?.chain_key;
     (|| async {
-        let ops = make_incentive_operations(blokli_provider.clone(), &chain_key, Some(blokli_config))
+        let ops = make_incentive_operations(blokli_endpoint.clone(), &chain_key, Some(connector_config))
             .await
             .map_err(|e| Error::IncentiveOperationsCreation(e.to_string()))?;
         Ok(Arc::from(ops))
@@ -581,9 +578,14 @@ impl Display for Results {
                 Ok(()) => write!(f, "NodeWxhoprWithdraw: Success"),
                 Err(err) => write!(f, "NodeWxhoprWithdraw: Error({})", err),
             },
-            Results::AnnouncedPeers { res } => match res {
-                Ok(peers) => write!(f, "AnnouncedPeers: {} peers", peers.len()),
-                Err(err) => write!(f, "AnnouncedPeers: Error({})", err),
+            Results::Peers { res } => match res {
+                Ok(peers) => write!(
+                    f,
+                    "Peers: {} announced, {} connected",
+                    peers.announced.len(),
+                    peers.connected.len()
+                ),
+                Err(err) => write!(f, "Peers: Error({})", err),
             },
             Results::IncentiveOperations { res } => match res {
                 Ok(_) => write!(f, "IncentiveOperations: Created Successfully"),

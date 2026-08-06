@@ -99,3 +99,61 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
         _ => Err(Error::VersionMismatch(version as u8)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    async fn read_config(contents: &str) -> Config {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("config.toml");
+        fs::write(&path, contents).await.expect("write config");
+        read(&path).await.expect("valid config")
+    }
+
+    fn with_blokli_section(blokli: &str) -> String {
+        format!(
+            r#"version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+{blokli}
+"#
+        )
+    }
+
+    #[tokio::test]
+    async fn blokli_request_timeout_is_read_from_the_config_file() {
+        let config = read_config(&with_blokli_section("[blokli]\nrequest_timeout = \"45s\"")).await;
+
+        assert_eq!(config.blokli.request_timeout, Duration::from_secs(45));
+    }
+
+    #[tokio::test]
+    async fn an_absent_blokli_section_yields_the_default_request_timeout() {
+        let config = read_config(&with_blokli_section("")).await;
+
+        assert_eq!(config.blokli.request_timeout, BlokliConfig::default().request_timeout);
+    }
+
+    /// The `[blokli]` table is shared by every config version, so an older file picks the key
+    /// up without a version bump.
+    #[tokio::test]
+    async fn blokli_request_timeout_is_read_from_a_v5_config_file() {
+        let config = read_config(
+            r#"version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[blokli]
+request_timeout = "45s"
+"#,
+        )
+        .await;
+
+        assert_eq!(config.blokli.request_timeout, Duration::from_secs(45));
+    }
+}

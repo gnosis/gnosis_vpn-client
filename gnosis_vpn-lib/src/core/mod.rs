@@ -10,7 +10,7 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -25,7 +25,7 @@ use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, 
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::route_health::{self, RouteHealth};
 use crate::worker_params::{self, WorkerParams};
-use crate::{balance, log_output, ticket_stats, wireguard};
+use crate::{balance, log_output, peer, ticket_stats, wireguard};
 
 pub(crate) mod runner;
 
@@ -77,7 +77,7 @@ pub struct Core {
     cancel_on_shutdown: CancellationToken,
     cancel_presafe_queries: CancellationToken,
     cancel_balances: CancellationToken,
-    cancel_announced_peers: CancellationToken,
+    cancel_peers: CancellationToken,
     // Tracks the connection's NepTUN pump task so teardown can wait for it to
     // stop (dropping its TUN fd) before asking root to tear down routing;
     // replaced together with cancel_connection.
@@ -196,7 +196,7 @@ impl Core {
             cancel_on_shutdown: cancel_on_shutdown.clone(),
             cancel_presafe_queries: cancel_on_shutdown.child_token(),
             cancel_balances: cancel_on_shutdown.child_token(),
-            cancel_announced_peers: cancel_on_shutdown.child_token(),
+            cancel_peers: cancel_on_shutdown.child_token(),
             wg_pump_tasks: TaskTracker::new(),
 
             // user provided data
@@ -671,6 +671,8 @@ impl Core {
                 Ok(rec) => {
                     tracing::info!(?rec, "received minimum balance recommendation");
                     self.minimum_balance_recommendation = Some(rec);
+                    // safe deployment may be waiting on this recommendation
+                    self.trigger_deploy_safe(results_sender);
                 }
                 Err(err) => {
                     tracing::error!(?err, "failed to fetch minimum balance recommendation - retrying");
@@ -771,59 +773,67 @@ impl Core {
                 self.on_hopr_running(results_sender);
             }
 
-            Results::AnnouncedPeers { res } => match res {
-                Ok(peers) => {
-                    tracing::info!(num_peers = %peers.len(), "fetched announced peers");
-                    let all_peers = HashSet::from_iter(peers.keys().copied());
-                    let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
-                    let channels_already_available = self
-                        .capacity_allocations
-                        .as_ref()
-                        .is_some_and(|map| map.keys().any(|k| matches!(k, balance::CapacityAllocator::Peer(_))));
-                    for (idx, id) in dest_ids.into_iter().enumerate() {
-                        if let Some(dest) = self.config.destinations.get(&id).cloned()
-                            && let Some(rh) = self.route_healths.get_mut(&id)
-                            && let Some(hopr) = self.hopr.clone()
-                        {
-                            let stagger = Duration::from_millis((idx as u64).saturating_mul(500));
-                            rh.peers(
-                                &all_peers,
-                                &hopr,
-                                &dest,
-                                &self.config.connection,
-                                results_sender,
-                                stagger,
-                            );
-                            // If peers just moved this route into NeedsChannel and capacity
-                            // allocations already show open channels, complete the transition
-                            // immediately rather than waiting for the next capacity tick.
-                            if channels_already_available && rh.needs_channel() {
-                                rh.any_channel_available(&hopr, &dest, &self.config.connection, results_sender);
+            Results::Peers { res } => {
+                let delay = match res {
+                    Ok(peer::Peers { announced, connected }) => {
+                        tracing::info!(
+                            num_announced = %announced.len(),
+                            num_connected = %connected.len(),
+                            "fetched peers"
+                        );
+
+                        let peer_ips: Vec<net::Ipv4Addr> =
+                            announced.values().flat_map(|p| p.ipv4_addrs.iter().copied()).collect();
+                        let _ = self
+                            .outgoing_sender
+                            .send(CoreToWorker::RequestToRoot(RequestToRoot::UpdatePeerIps { peer_ips }))
+                            .await;
+
+                        let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
+                        let channels_already_available = self
+                            .capacity_allocations
+                            .as_ref()
+                            .is_some_and(|map| map.keys().any(|k| matches!(k, balance::CapacityAllocator::Peer(_))));
+                        for (idx, id) in dest_ids.into_iter().enumerate() {
+                            if let Some(dest) = self.config.destinations.get(&id).cloned()
+                                && let Some(rh) = self.route_healths.get_mut(&id)
+                                && let Some(hopr) = self.hopr.clone()
+                            {
+                                let stagger = Duration::from_millis((idx as u64).saturating_mul(500));
+                                rh.peers(
+                                    &connected,
+                                    &hopr,
+                                    &dest,
+                                    &self.config.connection,
+                                    results_sender,
+                                    stagger,
+                                );
+                                // If peers just moved this route into NeedsChannel and capacity
+                                // allocations already show open channels, complete the transition
+                                // immediately rather than waiting for the next capacity tick.
+                                if channels_already_available && rh.needs_channel() {
+                                    rh.any_channel_available(&hopr, &dest, &self.config.connection, results_sender);
+                                }
                             }
                         }
+
+                        if self.target_destination.is_some()
+                            || route_health::any_needs_peers(self.route_healths.values())
+                        {
+                            Duration::from_secs(10)
+                        } else {
+                            Duration::from_secs(90)
+                        }
                     }
-
-                    let peer_ips: Vec<net::Ipv4Addr> =
-                        peers.values().flat_map(|p| p.ipv4_addrs.iter().copied()).collect();
-                    let _ = self
-                        .outgoing_sender
-                        .send(CoreToWorker::RequestToRoot(RequestToRoot::UpdatePeerIps { peer_ips }))
-                        .await;
-
-                    let delay = if self.target_destination.is_some()
-                        || route_health::any_needs_peers(self.route_healths.values())
-                    {
+                    Err(err) => {
+                        tracing::error!(?err, "failed to fetch peers");
+                        // Retry quickly on failure so transient HOPR API errors don't
+                        // leave route health stuck waiting for the lazy 90s poll.
                         Duration::from_secs(10)
-                    } else {
-                        Duration::from_secs(90)
-                    };
-                    self.spawn_announced_peers(results_sender, delay);
-                }
-                Err(err) => {
-                    tracing::error!(?err, "failed to fetch announced peers");
-                    self.spawn_announced_peers(results_sender, Duration::from_secs(10));
-                }
-            },
+                    }
+                };
+                self.spawn_peers(results_sender, delay);
+            }
 
             Results::ConnectionEvent(evt) => {
                 tracing::debug!(%evt, "handling connection runner event");
@@ -887,9 +897,9 @@ impl Core {
                     // A spliced session has no local listener to poll; the pump task
                     // reports its own death via WgPumpExited instead of a monitor.
                     self.spawn_tunnel_ping_probe(results_sender);
-                    self.cancel_announced_peers.cancel();
-                    self.cancel_announced_peers = self.cancel_on_shutdown.child_token();
-                    self.spawn_announced_peers(results_sender, Duration::from_secs(10));
+                    self.cancel_peers.cancel();
+                    self.cancel_peers = self.cancel_on_shutdown.child_token();
+                    self.spawn_peers(results_sender, Duration::from_secs(10));
                 }
                 (Ok(_), phase) => {
                     tracing::warn!(?phase, "unawaited connection established successfully");
@@ -1000,15 +1010,10 @@ impl Core {
                 tracing::info!(%id, ?outcome, "received health check");
                 if let Some(dest) = self.config.destinations.get(&id).cloned()
                     && let Some(rh) = self.route_healths.get_mut(&id)
+                    && let Some(hopr) = self.hopr.as_ref()
                 {
                     let was_ready = rh.is_ready_to_connect();
-                    rh.health_check_result(
-                        outcome,
-                        self.hopr.as_ref().unwrap(),
-                        &dest,
-                        &self.config.connection,
-                        results_sender,
-                    );
+                    rh.health_check_result(outcome, hopr, &dest, &self.config.connection, results_sender);
                     // Trigger connection if we just became ready
                     if !was_ready && rh.is_ready_to_connect() {
                         self.act_on_target(results_sender);
@@ -1282,8 +1287,17 @@ impl Core {
             funding_tool: _,
         } = self.phase.clone()
         {
-            if presafe.node_xdai.is_zero() || presafe.node_wxhopr.is_zero() {
-                tracing::warn!(balance = %presafe, "insufficient funds to start safe deployment - waiting for funding");
+            let Some(recommendation) = self.minimum_balance_recommendation else {
+                tracing::info!(balance = %presafe, "waiting for minimum balance recommendation before safe deployment");
+                return;
+            };
+            if presafe.node_wxhopr < recommendation.wxhopr || presafe.node_xdai < recommendation.xdai {
+                tracing::warn!(
+                    balance = %presafe,
+                    required_wxhopr = %recommendation.wxhopr,
+                    required_xdai = %recommendation.xdai,
+                    "insufficient funds to start safe deployment - waiting for funding"
+                );
             } else {
                 self.phase = Phase::DeployingSafe {
                     node_balance: Querying::Success(presafe.clone()),
@@ -1305,7 +1319,7 @@ impl Core {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::create_incentive_operations(&worker_params, blokli_config.into(), results_sender).await;
+                    runner::create_incentive_operations(&worker_params, blokli_config, results_sender).await;
                 })
                 .await
         });
@@ -1548,15 +1562,15 @@ impl Core {
         }
     }
 
-    fn spawn_announced_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+    fn spawn_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_announced_peers.clone();
+            let cancel = self.cancel_peers.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::announced_peers(hopr, results_sender).await;
+                        runner::peers(hopr, results_sender).await;
                     })
                     .await
             });
@@ -1575,7 +1589,6 @@ impl Core {
             let conn = connection::up::Up::new(destination.clone());
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
-            let hopr = hopr.clone();
             // Entry is kept until connection is confirmed so retries within the TTL can reuse it.
             let cached_pseudonym = self.pseudonym_cache.get(&destination);
             if let Some(pseudonym) = &cached_pseudonym {
@@ -1590,7 +1603,7 @@ impl Core {
                 conn.destination.clone(),
                 config_connection,
                 config_wireguard,
-                hopr,
+                hopr.clone(),
                 self.worker_params.clone(),
                 prev_conn,
                 self.cancel_connection.clone(),
@@ -1598,13 +1611,7 @@ impl Core {
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
-                rh.connecting(
-                    self.hopr.as_ref().unwrap(),
-                    &destination,
-                    exit,
-                    &self.config.connection,
-                    &results_sender,
-                );
+                rh.connecting(&hopr, &destination, exit, &self.config.connection, &results_sender);
             }
             self.phase = Phase::Connecting(conn);
             tokio::spawn(async move {
@@ -1718,13 +1725,9 @@ impl Core {
         self.phase = Phase::HoprRunning;
         if let Some(dest) = self.config.destinations.get(&conn.destination.id).cloned()
             && let Some(rh) = self.route_healths.get_mut(&conn.destination.id)
+            && let Some(hopr) = self.hopr.as_ref()
         {
-            rh.disconnecting(
-                self.hopr.as_ref().unwrap(),
-                &dest,
-                &self.config.connection,
-                results_sender,
-            );
+            rh.disconnecting(hopr, &dest, &self.config.connection, results_sender);
         }
         if let Ok(disconn) = conn.try_into() {
             self.spawn_disconnection_runner(&disconn, pump_tasks, results_sender);
@@ -1783,7 +1786,7 @@ impl Core {
         self.spawn_capacity_allocations_runner(results_sender, Duration::ZERO);
         self.spawn_balances_runner(results_sender, Duration::ZERO);
         if route_health::any_needs_peers(self.route_healths.values()) {
-            self.spawn_announced_peers(results_sender, Duration::ZERO);
+            self.spawn_peers(results_sender, Duration::ZERO);
         } else {
             self.act_on_target(results_sender);
         }

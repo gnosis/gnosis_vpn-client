@@ -1,5 +1,5 @@
 use bytesize::ByteSize;
-use edgli::{BlockchainConnectorConfig, EdgeNodeApi, EdgliInitState};
+use edgli::{BlockchainConnectorConfig, BlokliEndpoint, EdgeNodeApi, EdgliInitState};
 use edgli::{
     Edgli,
     hopr_lib::{
@@ -24,13 +24,13 @@ use hopr_utils_session::{
 use multiaddr::Protocol;
 use tracing::instrument;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
 };
 
-use crate::peer::Peer;
+use crate::peer::{Peer, Peers};
 use crate::{
     balance::{self, Balances},
     hopr::{
@@ -50,7 +50,7 @@ impl Hopr {
     pub async fn new(
         cfg: edgli::hopr_lib::config::HoprLibConfig,
         keys: edgli::hopr_lib::HoprKeys,
-        blokli_url: Option<url::Url>,
+        blokli_endpoint: BlokliEndpoint,
         blokli_config: BlockchainConnectorConfig,
         init_visitor: impl Fn(EdgliInitState) + Send + 'static,
     ) -> Result<Self, HoprError> {
@@ -58,8 +58,7 @@ impl Hopr {
         let edge_node = Edgli::new(
             cfg,
             keys,
-            blokli_url.map(|u| u.to_string()),
-            None, // blokli_dns_override
+            blokli_endpoint,
             Some(blokli_config),
             false, // probe_local_addresses: filter out non-public peer addresses
             init_visitor,
@@ -386,6 +385,26 @@ impl Hopr {
         Ok(peers)
     }
 
+    #[tracing::instrument(skip(self), level = "debug", ret)]
+    pub async fn connected_peers(&self) -> Result<HashSet<Address>, HoprError> {
+        tracing::debug!("query hopr connected peers");
+        let addresses = self.edgli.connected_peer_addresses().await?;
+        Ok(addresses.into_iter().collect())
+    }
+
+    /// Fetches announced (on-chain) and connected (transport-level) peers in
+    /// one combined tick. The two are fundamentally different data sources
+    /// fetched independently, then bundled for a single result.
+    #[tracing::instrument(skip(self), level = "debug", ret)]
+    pub async fn peers(&self) -> Result<Peers, HoprError> {
+        tracing::debug!("query hopr peers");
+        let (announced, connected) = tokio::join!(self.announced_peers(), self.connected_peers());
+        Ok(Peers {
+            announced: announced?,
+            connected: connected?,
+        })
+    }
+
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn ideal_balance_recommendation(
         &self,
@@ -396,10 +415,7 @@ impl Hopr {
             .ideal_balance_recommendation(cfg)
             .await
             .map_err(|e| HoprError::Strategy(e.to_string()))?;
-        Ok(balance::BalanceRecommendation {
-            wxhopr: rec.wxhopr,
-            xdai: rec.xdai,
-        })
+        Ok(rec.into())
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret, err)]

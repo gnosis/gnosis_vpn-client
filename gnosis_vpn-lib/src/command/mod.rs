@@ -147,7 +147,9 @@ pub enum RunMode {
         node_wxhopr: Balance<WxHOPR>,
         funding_tool: Option<String>,
         error: Option<String>,
-        balance_recommendation: Option<balance::BalanceRecommendation>,
+        // Boxed to satisfy clippy::large_enum_variant: an enum is as large as its biggest variant,
+        // and this ~170-byte struct would otherwise bloat every RunMode value several-fold.
+        balance_recommendation: Option<Box<balance::BalanceRecommendation>>,
     },
     /// Safe deployment ongoing
     DeployingSafe {
@@ -339,7 +341,7 @@ impl RunMode {
             node_wxhopr: pre_safe.clone().map(|s| s.node_wxhopr).unwrap_or_default(),
             funding_tool,
             error,
-            balance_recommendation,
+            balance_recommendation: balance_recommendation.map(Box::new),
         }
     }
 
@@ -487,7 +489,7 @@ impl Display for RunMode {
                 node_wxhopr,
                 funding_tool,
                 error,
-                balance_recommendation: _,
+                balance_recommendation,
             } => {
                 let wxhopr_sci = balance::wxhopr_scientific(*node_wxhopr)
                     .map(|s| format!(" ({s})"))
@@ -496,6 +498,15 @@ impl Display for RunMode {
                     "Preparing Safe (node: {}, xdai: {node_xdai}, wxHOPR: {node_wxhopr}{wxhopr_sci}",
                     node_address.to_checksum()
                 );
+                if let Some(recommendation) = balance_recommendation {
+                    let required_sci = balance::wxhopr_scientific(recommendation.wxhopr)
+                        .map(|s| format!(" ({s})"))
+                        .unwrap_or_default();
+                    msg.push_str(&format!(
+                        ", required: {}{required_sci} & {}",
+                        recommendation.wxhopr, recommendation.xdai
+                    ));
+                }
                 msg = match (funding_tool, error) {
                     (Some(tool), Some(error)) => {
                         format!("{msg}, funding tool: {tool}, error: {error})")

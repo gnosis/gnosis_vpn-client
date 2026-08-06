@@ -2,6 +2,7 @@
 //! It handles state transitions up until wg tunnel initiation and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backon::{FibonacciBuilder, Retryable};
+use edgli::FlowControlConfig;
 use edgli::hopr_lib::{HoprSessionClientConfig, api::types::internal::protocol::HoprPseudonym};
 use ipnetwork::IpNetwork;
 use tokio::sync::{mpsc, oneshot};
@@ -82,13 +83,15 @@ impl Runner {
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
-        // 1. resolve blokli ips — use cached IPs when killswitch is active (DNS unreachable)
+        // 1. determine the blokli ips to exempt from the killswitch, which blocks DNS while up
         let _ = results_sender.send(progress(Progress::ResolveBlokliIps)).await;
         let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
-        let blokli_ips = if self.prev_conn.blokli_ips.is_empty() {
-            remote_data::resolve_ips(&blokli_url).await?
-        } else {
-            self.prev_conn.blokli_ips.clone()
+        let blokli_ips = match self.worker_params.pinned_blokli_ip() {
+            // The Blokli client talks to the pinned address instead of resolving the host, so the
+            // killswitch has to exempt exactly that address rather than whatever DNS returns now.
+            Some(ip) => vec![ip],
+            None if !self.prev_conn.blokli_ips.is_empty() => self.prev_conn.blokli_ips.clone(),
+            None => remote_data::resolve_ips(&blokli_url).await?,
         };
 
         // 2. generate wg keys
@@ -223,6 +226,9 @@ async fn open_bridge_session(
         return_path: destination.routing,
         always_max_out_surbs: surb.always_max_out_surbs,
         surb_management: surb.management,
+        // Robust tail-tolerance profile: the validated flow-control config for the
+        // throttled / multi-hop paths this data session runs over.
+        flow_control: Some(FlowControlConfig::robust()),
         ..Default::default()
     };
     // Each open_session attempt times out after `initiation_timeout_base × (forward_hops + return_hops + 2)`,
@@ -313,6 +319,8 @@ async fn open_spliced_wg_session(
         always_max_out_surbs: surb.always_max_out_surbs,
         surb_management: surb.management,
         pseudonym,
+        // Robust tail-tolerance profile for the WireGuard data session.
+        flow_control: Some(FlowControlConfig::robust()),
     };
     (|| async {
         tracing::debug!(%destination, "attempting to open spliced wg session");
