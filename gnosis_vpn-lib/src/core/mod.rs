@@ -1419,6 +1419,7 @@ impl Core {
         let worker_params = self.worker_params.clone();
         let blokli_config = self.config.blokli.clone();
         let path_planner_min_ack_rate = self.config.connection.path_planner_min_ack_rate;
+        let probe_local_addresses = self.config.connection.probe_local_addresses;
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
@@ -1428,6 +1429,7 @@ impl Core {
                         worker_params,
                         blokli_config,
                         path_planner_min_ack_rate,
+                        probe_local_addresses,
                         &safe_module,
                         results_sender,
                     )

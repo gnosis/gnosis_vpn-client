@@ -18,6 +18,11 @@ pub struct Options {
     pub surb_balancing: SurbBalancing,
     pub health_check_intervals: HealthCheckIntervals,
     pub lan_lockdown: bool,
+    /// Whether announced peer addresses that are private/local IPs (loopback, RFC1918,
+    /// link-local) are probed/trusted rather than filtered out. Defaults to false since a
+    /// real exit node announcing a private IP is almost certainly misconfigured or spoofed;
+    /// enable for test/dev setups where peers legitimately announce local addresses.
+    pub probe_local_addresses: bool,
     /// How long to keep a closed session's pseudonym cached for potential reuse on reconnect.
     /// Exit nodes retain session SURBs for ~30s, so reconnecting within this window
     /// avoids a cold-start SURB exchange. Currently set to 1s (effectively disabled)
