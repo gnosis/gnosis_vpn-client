@@ -158,6 +158,9 @@ async fn configure_interface(iface: &str, interface_address: &str, mtu: u32) -> 
 impl Routing for StaticRouter {
     /// Install split-tunnel routing.
     ///
+    /// Phase 0 (before anything awaits): install the IPv6 blackhole for leak
+    /// protection while the tunnel is IPv4-only
+    ///
     /// Phase 1 (before the TUN): add bypass routes via WAN
     ///   - Peer IP /32 routes (hard-fail: rollback all on error)
     ///   - RFC1918 bypass routes (soft-fail: warn and continue)
@@ -168,8 +171,20 @@ impl Routing for StaticRouter {
     /// Phase 3 (after the TUN): add VPN routes via the resolved utun interface
     ///   - On failure: remove partial VPN routes, drop the TUN, rollback bypass routes
     ///
-    /// Phase 4: IPv6 blackhole + DNS (best-effort leak protection)
+    /// Phase 4: DNS (best-effort; needs the resolved interface name)
     async fn setup(&mut self) -> Result<String, Error> {
+        // IPv6 leak guard first: the tunnel is IPv4-only, so blackhole all of IPv6
+        // (::/1 + 8000::/1) before anything else can await, shrinking the window in
+        // which v6 could still egress via the physical default. Record the intent
+        // BEFORE installing: these are plain kernel routes that outlive the process,
+        // and the startup sweep only removes them when this flag is persisted, so
+        // persisting first guarantees a crash mid-setup can still be swept. On any
+        // later setup failure the actor stores the router and tears it down, which
+        // removes the blackhole under the `blackholes_added` guard.
+        self.blackholes_added = true;
+        self.persist_teardown_state();
+        ipv6_blackhole::add().await;
+
         let wan_route = self
             .route_ops
             .get_wan_route_for(PUBLIC_INTERNET_ADDRESS, wireguard::WG_INTERFACE)
@@ -227,15 +242,8 @@ impl Routing for StaticRouter {
             return Err(e);
         }
 
-        // Phase 4: IPv6 blackhole + DNS (previously handled inside wg-quick)
-        // Record the blackhole intent BEFORE installing it: the `::/1`+`8000::/1`
-        // routes are plain kernel routes that outlive the process, but the startup
-        // sweep only removes them when this flag is persisted. Persisting first
-        // guarantees a crash between `add()` and the persist below can still be
-        // swept, instead of leaving IPv6 blackholed with no recorded state.
-        self.blackholes_added = true;
-        self.persist_teardown_state();
-        ipv6_blackhole::add().await;
+        // Phase 4: DNS (the IPv6 blackhole was installed up front for leak
+        // protection; DNS waits here because it needs the resolved interface name).
         self.dns_mechanism = match self.dns.clone() {
             Some(servers) => dns::set(&interface_name, &servers).await,
             None => None,

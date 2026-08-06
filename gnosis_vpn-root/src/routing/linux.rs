@@ -221,6 +221,18 @@ impl Routing for StaticRouter {
     /// only Linux difference is netlink address assignment and the fixed interface
     /// name `wg0_gnosisvpn`).
     async fn setup(&mut self) -> Result<String, Error> {
+        // IPv6 leak guard first: the tunnel is IPv4-only, so blackhole all of IPv6
+        // (::/1 + 8000::/1) before anything else can await, shrinking the window in
+        // which v6 could still egress via the physical default. Record the intent
+        // BEFORE installing: these are plain kernel routes that outlive the process,
+        // and the startup sweep only removes them when this flag is persisted, so
+        // persisting first guarantees a crash mid-setup can still be swept. On any
+        // later setup failure the actor stores the router and tears it down, which
+        // removes the blackhole under the `blackholes_added` guard.
+        self.blackholes_added = true;
+        self.persist_teardown_state();
+        ipv6_blackhole::add().await;
+
         let wan_route = self
             .route_ops
             .get_wan_route_for(PUBLIC_INTERNET_ADDRESS, wireguard::WG_INTERFACE)
@@ -278,15 +290,8 @@ impl Routing for StaticRouter {
             return Err(e);
         }
 
-        // Phase 4: IPv6 blackhole + DNS (previously handled inside wg-quick)
-        // Record the blackhole intent BEFORE installing it: the `::/1`+`8000::/1`
-        // routes are plain kernel routes that outlive the process, but the startup
-        // sweep only removes them when this flag is persisted. Persisting first
-        // guarantees a crash between `add()` and the persist below can still be
-        // swept, instead of leaving IPv6 blackholed with no recorded state.
-        self.blackholes_added = true;
-        self.persist_teardown_state();
-        ipv6_blackhole::add().await;
+        // Phase 4: DNS (the IPv6 blackhole was installed up front for leak
+        // protection; DNS waits here because it needs the resolved interface name).
         self.dns_mechanism = match self.dns.clone() {
             Some(servers) => dns::set(&interface_name, &servers).await,
             None => None,
