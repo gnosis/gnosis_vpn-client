@@ -8,18 +8,32 @@
 //! half to [`SessionReceiver`], which the pump then polls independently inside its
 //! `select!`.
 //!
-//! # Frame-boundary assumption (spec risk #1)
+//! # Frame boundaries
 //!
-//! WireGuard datagrams are not self-delimiting, so `recv` returning "one datagram"
-//! holds only if the transport preserves message boundaries: one peer `send` must
-//! surface as one local `recv` of the same length. The gvpn WG session is a
-//! `SessionTarget::UdpStream`, whose datagram semantics are expected to preserve
-//! boundaries, matching what the old loopback-UDP bridge relied on. If a real
-//! session is observed to coalesce two datagrams into one read under load, switch
-//! these adapters to explicit length-prefix framing (write a `u16` length before
-//! each datagram in `send`; read the prefix then exactly that many bytes in
-//! `recv`) or read at the boundary-preserving `Stream<ApplicationDataIn>` layer.
-//! The framing change is local to this file and does not touch the pump.
+//! WireGuard data messages are not self-delimiting, so `recv` returning "one
+//! datagram" requires the transport to preserve message boundaries. It does, by
+//! construction of the HOPR session this splice runs over:
+//!
+//! - The WG session is opened with `Capability::Segmentation`, so `HoprSession`'s
+//!   read side is `into_async_read` over the reassembled-*frame* stream. That
+//!   adapter yields the bytes of at most one frame per `read` — it never merges
+//!   two frames into a single read.
+//! - The session frame MTU is `max(configured, SESSION_MTU)`, and `SESSION_MTU`
+//!   (~1458 B) exceeds a maximum WG data datagram: a 1420-MTU inner packet plus
+//!   WireGuard's 32-byte data-message overhead is 1452 B. So a data datagram maps
+//!   1:1 onto one frame — never split across reads (our buffer is `MAX_FRAME`,
+//!   larger still) — and two full-size data datagrams cannot share one frame
+//!   (2 × 1452 > 1458). Hence one `recv` returns exactly one WG data datagram.
+//!   (Tiny control datagrams — a 32-byte keepalive, a handshake — could in
+//!   principle share a frame; a coalesced trailing keepalive decrypts to nothing
+//!   and a handshake is retransmitted, so neither corrupts data traffic.)
+//!
+//! This matches the production loopback-UDP bridge, which carried the same session
+//! as a byte stream via `copy_duplex`. **Do not add length-prefix framing here:**
+//! the exit node forwards the raw session payload to a stock WireGuard server over
+//! UDP, so any length prefix we inject would be delivered as part of the ciphertext
+//! and corrupt every packet. If a session is ever observed to desync wholesale, the
+//! pump's decapsulation-failure guard tears it down and reconnects (see `pump`).
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -134,12 +148,13 @@ mod tests {
     }
 
     /// Two datagrams written back-to-back before a single `recv` are COALESCED into
-    /// one read: a byte-duplex transport does not preserve datagram boundaries by
-    /// itself. This documents spec risk #1 - the pump's one-datagram-per-recv
-    /// contract holds only because a healthy `HoprSession` delivers one application
-    /// frame per read, not because this adapter enforces it. If a real session ever
-    /// coalesces under load, the pump's decapsulation-failure guard reconnects a
-    /// fresh session rather than corrupting traffic silently.
+    /// one read over a raw `tokio::io::duplex`: a bare byte pipe preserves no
+    /// message boundaries. This is the WORST CASE, not the real transport - the
+    /// adapter itself does not frame. On a real `HoprSession` the segmented
+    /// frame-stream read layer plus the frame-MTU sizing keep one data datagram to
+    /// one read (see the module-level "Frame boundaries" note); this test pins down
+    /// what the adapter does NOT guarantee on its own, and the pump's
+    /// decapsulation-failure guard is the backstop if a session ever desyncs.
     #[tokio::test]
     async fn back_to_back_writes_can_coalesce_into_one_read() {
         let (client, server) = tokio::io::duplex(4096);

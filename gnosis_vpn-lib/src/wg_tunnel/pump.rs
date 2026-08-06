@@ -46,13 +46,12 @@ pub trait NetworkSender: Send {
 /// clean close. Implementations must be cancel-safe (a single read, since this is
 /// polled inside `select!`) and MUST NOT report a length greater than `buf.len()`.
 ///
-/// The "exactly one datagram per `recv`" property is an ASSUMPTION at this layer:
-/// WireGuard packets are not self-delimiting, so it holds only if the underlying
-/// transport preserves message boundaries. Verifying it for a real `HoprSession`
-/// (whether its `AsyncRead` can coalesce two frames under load) is spec risk #1,
-/// resolved by the session adapter in a later phase - falling back to reading at
-/// the boundary-preserving `Stream<ApplicationDataIn>` layer if needed. The
-/// in-memory channel double used in tests preserves boundaries by construction.
+/// The "exactly one datagram per `recv`" property holds because the production
+/// network side - the spliced `HoprSession` - is a segmented frame transport sized
+/// so one WG data datagram maps 1:1 onto one frame, and its read layer never merges
+/// two frames into one read (see `session`'s "Frame boundaries" note for the full
+/// argument). The in-memory channel double used in tests preserves boundaries by
+/// construction.
 #[async_trait::async_trait]
 pub trait NetworkReceiver: Send {
     async fn recv(&mut self, buf: &mut [u8]) -> std::io::Result<Option<usize>>;
@@ -757,12 +756,13 @@ mod tests {
     /// this proves the real adapters carry whole WireGuard datagrams through the
     /// pump loop's `send`/`recv` calls.
     ///
-    /// The exchange is kept strictly lock-step so the byte duplex never coalesces
-    /// two datagrams into one read (the unresolved spec risk #1, which this test
-    /// deliberately does not depend on): the server is driven inline, one datagram
-    /// per read, and the application packet is injected only after the initiator's
+    /// The stand-in here is a bare `tokio::io::duplex`, which (unlike a real
+    /// `HoprSession`) does no framing, so the exchange is kept strictly lock-step to
+    /// keep one datagram per read: the server is driven inline, one datagram per
+    /// read, and the application packet is injected only after the initiator's
     /// post-handshake keepalive confirms the handshake completed with nothing
-    /// queued - so every pump write is a solitary datagram.
+    /// queued - so every pump write is a solitary datagram. The real transport
+    /// preserves these boundaries itself (see `session`'s "Frame boundaries" note).
     #[tokio::test]
     async fn pump_carries_data_over_the_session_splice_adapters() {
         use crate::wg_tunnel::{SessionReceiver, SessionSender};
