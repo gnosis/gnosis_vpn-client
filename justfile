@@ -65,14 +65,6 @@ smoke-test *args:
 smoke-test-check:
     bats scripts/tests/vpn-smoke-test.bats
 
-# run the VPN connectivity smoke test against a live tunnel (pass extra flags after --)
-smoke-test *args:
-    ./scripts/vpn-smoke-test.sh {{ args }}
-
-# run the offline smoke-test bats suite (no network, uses curl/ping fakes)
-smoke-test-check:
-    bats scripts/tests/vpn-smoke-test.bats
-
 system-tests test_binary="gnosis_vpn-system_tests":
     #!/usr/bin/env bash
     set -euo pipefail
