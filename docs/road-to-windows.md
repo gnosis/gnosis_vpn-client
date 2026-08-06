@@ -11,7 +11,7 @@ Three privilege-separated binaries:
   macOS), persists crash-recovery state, and spawns the worker. Root does
   no WireGuard protocol work at all.
 - **`gnosis_vpn-worker`** (unprivileged) — the entry point into the mixnet
-  (`edgli`/hoprd session client) *and* the entire WireGuard data plane: it
+  (`edgli`/hoprd session client) _and_ the entire WireGuard data plane: it
   receives the TUN fd from root over a dedicated Unix socket via
   `SCM_RIGHTS`, builds a `WgTunnel` (`gnosis_vpn-lib/src/wg_tunnel/`,
   wrapping `neptun::noise::Tunn` — NordSecurity's WireGuard-rs fork), and
@@ -47,19 +47,19 @@ None of this needs restructuring for Windows — it needs new arms.
 
 ## What replaces what
 
-| Current (Linux/macOS) | Windows replacement |
-|---|---|
-| `NetlinkRouteOps`/`DarwinRouteOps` (`RouteOps` impls) | `WindowsRouteOps` via the IP Helper API (`GetIpForwardTable2`/`CreateIpForwardEntry2`/`DeleteIpForwardEntry2`, `windows`/`windows-sys` crate) |
-| `killswitch::linux::Firewall` (nftables) / `killswitch::macos::Firewall` (pfctl) | `killswitch::windows::Firewall` via the Windows Filtering Platform (WFP) — the same approach Mullvad and WireGuard-Windows use; matches the existing `new()`/`apply_policy()`/`reset_policy()` shape |
-| `device_monitor/linux/rtnetlink.rs` (netlink) / `device_monitor/macos.rs` (raw `PF_ROUTE` socket) | `NotifyIpInterfaceChange`/`NotifyRouteChange2` (IP Helper API callbacks) feeding the same shared `NetworkEvent` enum |
-| Root's TUN creation (`routing/tun.rs`, `neptun::device::TunSocket`) | `neptun`'s device feature only ships Linux (`tun_linux.rs`) and macOS (`tun_darwin.rs`) backends — Windows needs the separate `wintun` crate (the WireGuard project's signed NDIS driver) instead |
-| Root→worker TUN fd hand-off (`gnosis_vpn-lib/src/socket/fd_passing.rs`, `SCM_RIGHTS`) | No direct equivalent — see below |
-| `routing/dns.rs` (`resolvectl`/`resolvconf`/`scutil`) | IP Helper API (`SetInterfaceDnsSettings`) or `netsh interface ip set dns` |
-| `routing/ipv6_blackhole.rs`, `routing/sweep.rs` (crash-recovery) | Same `WindowsRouteOps` backend for the blackhole routes; sweep needs a Windows-native `TeardownState` (same idea — persist what was applied, reverse it if the service restarts after a crash) |
-| ctl↔root Unix socket (`gnosis_vpn-lib/src/socket/root.rs`) | Named pipe (`\\.\pipe\gnosisvpn`) via `tokio::net::windows::named_pipe` — mechanical swap |
-| Root→worker JSON control channel + privilege drop (`.uid()`/`.gid()`) | No direct equivalent — see below |
-| `app_nap.rs` (macOS-only real impl, Linux no-op) | Add a `#[cfg(target_os = "windows")]` no-op arm — services aren't App-Nap-throttled |
-| `ping.rs` `cfg_if!` arms (Linux/macOS CLI flags + `ping::RAW`/`ping::DGRAM`) | New arm needed — see below |
+| Current (Linux/macOS)                                                                             | Windows replacement                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NetlinkRouteOps`/`DarwinRouteOps` (`RouteOps` impls)                                             | `WindowsRouteOps` via the IP Helper API (`GetIpForwardTable2`/`CreateIpForwardEntry2`/`DeleteIpForwardEntry2`, `windows`/`windows-sys` crate)                                                        |
+| `killswitch::linux::Firewall` (nftables) / `killswitch::macos::Firewall` (pfctl)                  | `killswitch::windows::Firewall` via the Windows Filtering Platform (WFP) — the same approach Mullvad and WireGuard-Windows use; matches the existing `new()`/`apply_policy()`/`reset_policy()` shape |
+| `device_monitor/linux/rtnetlink.rs` (netlink) / `device_monitor/macos.rs` (raw `PF_ROUTE` socket) | `NotifyIpInterfaceChange`/`NotifyRouteChange2` (IP Helper API callbacks) feeding the same shared `NetworkEvent` enum                                                                                 |
+| Root's TUN creation (`routing/tun.rs`, `neptun::device::TunSocket`)                               | `neptun`'s device feature only ships Linux (`tun_linux.rs`) and macOS (`tun_darwin.rs`) backends — Windows needs the separate `wintun` crate (the WireGuard project's signed NDIS driver) instead    |
+| Root→worker TUN fd hand-off (`gnosis_vpn-lib/src/socket/fd_passing.rs`, `SCM_RIGHTS`)             | No direct equivalent — see below                                                                                                                                                                     |
+| `routing/dns.rs` (`resolvectl`/`resolvconf`/`scutil`)                                             | IP Helper API (`SetInterfaceDnsSettings`) or `netsh interface ip set dns`                                                                                                                            |
+| `routing/ipv6_blackhole.rs`, `routing/sweep.rs` (crash-recovery)                                  | Same `WindowsRouteOps` backend for the blackhole routes; sweep needs a Windows-native `TeardownState` (same idea — persist what was applied, reverse it if the service restarts after a crash)       |
+| ctl↔root Unix socket (`gnosis_vpn-lib/src/socket/root.rs`)                                        | Named pipe (`\\.\pipe\gnosisvpn`) via `tokio::net::windows::named_pipe` — mechanical swap                                                                                                            |
+| Root→worker JSON control channel + privilege drop (`.uid()`/`.gid()`)                             | No direct equivalent — see below                                                                                                                                                                     |
+| `app_nap.rs` (macOS-only real impl, Linux no-op)                                                  | Add a `#[cfg(target_os = "windows")]` no-op arm — services aren't App-Nap-throttled                                                                                                                  |
+| `ping.rs` `cfg_if!` arms (Linux/macOS CLI flags + `ping::RAW`/`ping::DGRAM`)                      | New arm needed — see below                                                                                                                                                                           |
 
 ## Getting the TUN handle from root to worker
 
@@ -75,7 +75,7 @@ spawned — but this depends on Wintun's session handle actually being a
 duplicable Win32 `HANDLE` in the first place, which needs verification
 against Wintun's own API before committing to this design. If it isn't,
 the alternative is restructuring so the worker opens the Wintun session
-itself (Wintun adapter *creation* needs admin, but *opening an existing*
+itself (Wintun adapter _creation_ needs admin, but _opening an existing_
 adapter by name may not) — a materially different split than today's
 root-creates/worker-receives model.
 

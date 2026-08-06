@@ -11,7 +11,7 @@ Three privilege-separated binaries:
   crash-recovery state, and spawns the worker. Root does no WireGuard
   protocol work at all.
 - **`gnosis_vpn-worker`** (unprivileged) — the entry point into the mixnet
-  (`edgli`/hoprd session client) *and* the entire WireGuard data plane: it
+  (`edgli`/hoprd session client) _and_ the entire WireGuard data plane: it
   receives the TUN fd from root over a dedicated Unix socket via
   `SCM_RIGHTS`, builds a `WgTunnel` (`gnosis_vpn-lib/src/wg_tunnel/`,
   wrapping `neptun::noise::Tunn` — NordSecurity's WireGuard-rs fork), and
@@ -35,18 +35,18 @@ sanctioned API and process model than Android's.
 
 ## What replaces what
 
-| Current (desktop) | iOS replacement |
-|---|---|
-| Worker's `WgTunnel`/pump (`gnosis_vpn-lib/src/wg_tunnel/`, wraps `neptun::noise::Tunn`) | Runs inside the extension, driven by `packetFlow.readPackets`/`writePackets` instead of a raw fd + `SCM_RIGHTS` |
-| Root's TUN creation + fd hand-off (`gnosis_vpn-root/src/routing/tun.rs`, `gnosis_vpn-lib/src/socket/fd_passing.rs`) | Not needed — the extension gets its tunnel interface implicitly, no manual TUN device creation |
-| Netlink/route setup (`route_ops_linux.rs`'s `NetlinkRouteOps`, behind the `RouteOps` trait) + DNS push (`routing/dns.rs`) | `NEPacketTunnelNetworkSettings` + `NEIPv4Settings`/`NEDNSSettings`, applied via `setTunnelNetworkSettings()` |
-| `nftables`/`pfctl` kill switch (`gnosis_vpn-lib/src/killswitch/`) | Not a separate component — once tunnel network settings are applied, the OS owns the default route through the tunnel interface; if the extension dies, the route is torn down (fail-closed by default) |
-| Crash-recovery sweep (`gnosis_vpn-root/src/routing/sweep.rs`), IPv6 blackhole (`routing/ipv6_blackhole.rs`) | Not needed — no long-lived daemon to leave state behind, and network settings are all-or-nothing per session |
-| Root/worker IPC | Closest analog to what already exists: the extension is a genuinely separate **OS process** from the main app, communicating via `NETunnelProviderSession.sendProviderMessage` or shared state through an **App Group** container — not in-process calls like Android's JNI model |
-| Separate UI app talking over named socket | Main app target bound to the extension through system VPN APIs |
-| `app_nap.rs` (macOS App Nap opt-out) / Android Doze exemption | No equivalent needed or available — the OS manages the extension process lifecycle automatically while the tunnel is active, with no notification requirement and no battery-optimization toggle to request |
-| `device_monitor/linux/rtnetlink.rs` (interface/route watching) | `NEProvider.reasserting` for handling underlying network changes (Wi-Fi ↔ cellular) without full teardown |
-| Android manifest (`BIND_VPN_SERVICE`, `specialUse` foreground type) | Info.plist entitlements — see below; gated by Apple approval rather than a Play Console self-declaration |
+| Current (desktop)                                                                                                         | iOS replacement                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker's `WgTunnel`/pump (`gnosis_vpn-lib/src/wg_tunnel/`, wraps `neptun::noise::Tunn`)                                   | Runs inside the extension, driven by `packetFlow.readPackets`/`writePackets` instead of a raw fd + `SCM_RIGHTS`                                                                                                                                                                   |
+| Root's TUN creation + fd hand-off (`gnosis_vpn-root/src/routing/tun.rs`, `gnosis_vpn-lib/src/socket/fd_passing.rs`)       | Not needed — the extension gets its tunnel interface implicitly, no manual TUN device creation                                                                                                                                                                                    |
+| Netlink/route setup (`route_ops_linux.rs`'s `NetlinkRouteOps`, behind the `RouteOps` trait) + DNS push (`routing/dns.rs`) | `NEPacketTunnelNetworkSettings` + `NEIPv4Settings`/`NEDNSSettings`, applied via `setTunnelNetworkSettings()`                                                                                                                                                                      |
+| `nftables`/`pfctl` kill switch (`gnosis_vpn-lib/src/killswitch/`)                                                         | Not a separate component — once tunnel network settings are applied, the OS owns the default route through the tunnel interface; if the extension dies, the route is torn down (fail-closed by default)                                                                           |
+| Crash-recovery sweep (`gnosis_vpn-root/src/routing/sweep.rs`), IPv6 blackhole (`routing/ipv6_blackhole.rs`)               | Not needed — no long-lived daemon to leave state behind, and network settings are all-or-nothing per session                                                                                                                                                                      |
+| Root/worker IPC                                                                                                           | Closest analog to what already exists: the extension is a genuinely separate **OS process** from the main app, communicating via `NETunnelProviderSession.sendProviderMessage` or shared state through an **App Group** container — not in-process calls like Android's JNI model |
+| Separate UI app talking over named socket                                                                                 | Main app target bound to the extension through system VPN APIs                                                                                                                                                                                                                    |
+| `app_nap.rs` (macOS App Nap opt-out) / Android Doze exemption                                                             | No equivalent needed or available — the OS manages the extension process lifecycle automatically while the tunnel is active, with no notification requirement and no battery-optimization toggle to request                                                                       |
+| `device_monitor/linux/rtnetlink.rs` (interface/route watching)                                                            | `NEProvider.reasserting` for handling underlying network changes (Wi-Fi ↔ cellular) without full teardown                                                                                                                                                                         |
+| Android manifest (`BIND_VPN_SERVICE`, `specialUse` foreground type)                                                       | Info.plist entitlements — see below; gated by Apple approval rather than a Play Console self-declaration                                                                                                                                                                          |
 
 ## The dominant constraint: extension memory ceiling
 

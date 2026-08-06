@@ -11,7 +11,7 @@ Three privilege-separated binaries:
   crash-recovery state, and spawns the worker. Root does no WireGuard
   protocol work at all.
 - **`gnosis_vpn-worker`** (unprivileged) — the entry point into the mixnet
-  (`edgli`/hoprd session client) *and* the entire WireGuard data plane: it
+  (`edgli`/hoprd session client) _and_ the entire WireGuard data plane: it
   receives the TUN fd from root over a dedicated Unix socket via
   `SCM_RIGHTS`, builds a `WgTunnel` (`gnosis_vpn-lib/src/wg_tunnel/`,
   wrapping `neptun::noise::Tunn` — NordSecurity's WireGuard-rs fork), and
@@ -39,18 +39,18 @@ as today's root→worker hand-off, just a different boundary.
 
 ## What replaces what
 
-| Current (desktop) | Android replacement |
-|---|---|
-| Worker's `WgTunnel`/pump (`gnosis_vpn-lib/src/wg_tunnel/`, wraps `neptun::noise::Tunn`) | Reusable close to as-is — just needs the fd from `Builder.establish()` instead of root's `SCM_RIGHTS` hand-off |
-| Root's TUN creation + fd hand-off (`gnosis_vpn-root/src/routing/tun.rs`, `gnosis_vpn-lib/src/socket/fd_passing.rs`) | `VpnService.Builder.establish()` |
-| Netlink route setup (`route_ops_linux.rs`'s `NetlinkRouteOps`, behind the `RouteOps` trait, orchestrated from `routing/linux.rs`) | `VpnService.Builder.addRoute()/addAddress()` |
-| DNS push (`gnosis_vpn-root/src/routing/dns.rs`) | `Builder.addDnsServer()` |
-| `nftables` kill switch (`gnosis_vpn-lib/src/killswitch/linux.rs`) | Android's built-in "Always-on VPN + Block connections without VPN" |
-| Root/worker IPC (JSON control channel + `SCM_RIGHTS` fd channel) | Collapses into one process — direct JNI calls/callbacks, no privilege boundary to bridge |
-| Separate UI app talking over named socket | Native Kotlin/Compose UI bound to the same in-process `Service`, via JNI (likely `uniffi-rs` for the binding layer) |
-| `app_nap.rs` (macOS App Nap opt-out) | Foreground service + `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` (Doze exemption) |
-| `device_monitor/linux/rtnetlink.rs` (interface/route watching) | `ConnectivityManager.NetworkCallback` feeding the existing `route_health.rs` reconnect/backoff logic |
-| Crash-recovery sweep (`gnosis_vpn-root/src/routing/sweep.rs`), IPv6 blackhole (`routing/ipv6_blackhole.rs`) | Not needed — no long-lived daemon to leave state behind, and `Builder` only routes what's explicitly added |
+| Current (desktop)                                                                                                                 | Android replacement                                                                                                 |
+| --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Worker's `WgTunnel`/pump (`gnosis_vpn-lib/src/wg_tunnel/`, wraps `neptun::noise::Tunn`)                                           | Reusable close to as-is — just needs the fd from `Builder.establish()` instead of root's `SCM_RIGHTS` hand-off      |
+| Root's TUN creation + fd hand-off (`gnosis_vpn-root/src/routing/tun.rs`, `gnosis_vpn-lib/src/socket/fd_passing.rs`)               | `VpnService.Builder.establish()`                                                                                    |
+| Netlink route setup (`route_ops_linux.rs`'s `NetlinkRouteOps`, behind the `RouteOps` trait, orchestrated from `routing/linux.rs`) | `VpnService.Builder.addRoute()/addAddress()`                                                                        |
+| DNS push (`gnosis_vpn-root/src/routing/dns.rs`)                                                                                   | `Builder.addDnsServer()`                                                                                            |
+| `nftables` kill switch (`gnosis_vpn-lib/src/killswitch/linux.rs`)                                                                 | Android's built-in "Always-on VPN + Block connections without VPN"                                                  |
+| Root/worker IPC (JSON control channel + `SCM_RIGHTS` fd channel)                                                                  | Collapses into one process — direct JNI calls/callbacks, no privilege boundary to bridge                            |
+| Separate UI app talking over named socket                                                                                         | Native Kotlin/Compose UI bound to the same in-process `Service`, via JNI (likely `uniffi-rs` for the binding layer) |
+| `app_nap.rs` (macOS App Nap opt-out)                                                                                              | Foreground service + `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` (Doze exemption)                                        |
+| `device_monitor/linux/rtnetlink.rs` (interface/route watching)                                                                    | `ConnectivityManager.NetworkCallback` feeding the existing `route_health.rs` reconnect/backoff logic                |
+| Crash-recovery sweep (`gnosis_vpn-root/src/routing/sweep.rs`), IPv6 blackhole (`routing/ipv6_blackhole.rs`)                       | Not needed — no long-lived daemon to leave state behind, and `Builder` only routes what's explicitly added          |
 
 ## Manifest requirements
 
