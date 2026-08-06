@@ -73,7 +73,19 @@ fn require_complete_packet_write(written: usize, expected: usize) -> io::Result<
 /// `header_len` is the per-packet platform header ([`PLATFORM_TUN_HEADER_LEN`]);
 /// pass `0` for a headerless device or `4` for macOS `utun`. Must be called from
 /// within a Tokio runtime (it registers the fd with the reactor).
+///
+/// # Errors
+///
+/// Returns an error if `header_len` is neither `0` nor `4`; `TunWriter::send`
+/// only knows how to omit or prepend a 4-byte `utun` header, so any other
+/// value would silently mis-frame every packet it writes.
 pub fn tun_endpoints(fd: OwnedFd, header_len: usize) -> io::Result<(TunReader, TunWriter)> {
+    if header_len != 0 && header_len != 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported TUN header_len {header_len}: must be 0 or 4"),
+        ));
+    }
     rustix::io::ioctl_fionbio(&fd, true).map_err(io::Error::from)?;
     let shared = Arc::new(AsyncFd::new(fd)?);
     Ok((
@@ -189,6 +201,17 @@ mod tests {
         assert_eq!(utun_header(&ipv4_packet()), AF_INET_BE);
         assert_eq!(utun_header(&[0x60, 0x00, 0x00, 0x00]), AF_INET6_BE);
         assert_eq!(utun_header(&[]), AF_INET_BE, "empty defaults to IPv4");
+    }
+
+    #[tokio::test]
+    async fn tun_endpoints_rejects_an_unsupported_header_len() {
+        let (a, _b) = dgram_pair();
+        let err = match tun_endpoints(a, 2) {
+            Ok(_) => panic!("expected an error for header_len 2"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(err.to_string(), "unsupported TUN header_len 2: must be 0 or 4");
     }
 
     #[tokio::test]
