@@ -23,11 +23,6 @@ pub struct Options {
     /// real exit node announcing a private IP is almost certainly misconfigured or spoofed;
     /// enable for test/dev setups where peers legitimately announce local addresses.
     pub probe_local_addresses: bool,
-    /// How long to keep a closed session's pseudonym cached for potential reuse on reconnect.
-    /// Exit nodes retain session SURBs for ~30s, so reconnecting within this window
-    /// avoids a cold-start SURB exchange. Currently set to 1s (effectively disabled)
-    /// until hopr-lib supports PIX.
-    pub session_pseudonym_ttl: Duration,
     /// Minimum acknowledgement rate [0.0, 1.0] a path must sustain to be considered by
     /// the latency path planner. Paths below this threshold are skipped.
     pub path_planner_min_ack_rate: f64,
