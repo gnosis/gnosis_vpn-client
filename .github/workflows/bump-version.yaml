@@ -26,6 +26,10 @@ jobs:
     runs-on: depot-ubuntu-22.04-4 # Depot Ubuntu 22.04, 4 CPUs, 16 GB RAM
     permissions:
       contents: read
+      # Lets the job open the bump PR with its own GITHUB_TOKEN; the app
+      # installation has no pull-requests scope, and minting an app token
+      # with a permission the installation lacks fails outright.
+      pull-requests: write
     steps:
       - name: Require branch ref
         if: github.ref_type != 'branch'
@@ -36,7 +40,7 @@ jobs:
         run: |
           echo "Dispatched from ${REF_TYPE} '${REF_NAME}', but this workflow must run from a branch" >&2
           exit 1
-      # Fails at token minting if the app installation lacks either permission.
+      # Fails at token minting if the app installation lacks this permission.
       - name: Generate GitHub App token
         id: bot-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -46,7 +50,6 @@ jobs:
           owner: gnosis
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
-          permission-pull-requests: write
       - name: Checkout repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -127,9 +130,10 @@ jobs:
           git push --force origin "HEAD:refs/heads/${branch}"
           echo "branch=${branch}" >> "$GITHUB_OUTPUT"
       - name: Open pull request
+        id: pr
         shell: bash
         env:
-          GH_TOKEN: ${{ steps.bot-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           BASE: ${{ github.ref_name }}
           BRANCH: ${{ steps.push.outputs.branch }}
@@ -139,13 +143,18 @@ jobs:
           # must not be picked up, hence pr list --state open over pr view.
           pr_url=$(gh pr list --head "${BRANCH}" --base "${BASE}" --state open --json url --jq '.[0].url // empty')
           if [[ -z "${pr_url}" ]]; then
-            pr_url=$(gh pr create \
+            if ! pr_url=$(gh pr create \
               --base "${BASE}" \
               --head "${BRANCH}" \
               --title "chore(version): v${NEW_VERSION}" \
-              --body "Automated bump to v${NEW_VERSION} from the Bump version workflow.")
+              --body "Automated bump to v${NEW_VERSION} from the Bump version workflow."); then
+              echo "::error::Branch ${BRANCH} is pushed, but the pull request could not be opened. If the error above says GitHub Actions may not create pull requests, enable 'Allow GitHub Actions to create and approve pull requests' under Settings -> Actions -> General, then re-run this workflow."
+              exit 1
+            fi
+            echo "created=true" >> "$GITHUB_OUTPUT"
           else
             echo "Reusing existing pull request ${pr_url}"
+            echo "created=false" >> "$GITHUB_OUTPUT"
           fi
 
           {
@@ -155,3 +164,18 @@ jobs:
             echo
             echo "Requires one approving review and resolved review threads, then squash-merge."
           } >> "$GITHUB_STEP_SUMMARY"
+      # PRs opened with the workflow's GITHUB_TOKEN emit no pull_request
+      # events (GitHub suppresses them to prevent recursion), so CI would
+      # stay silent on the new PR. Re-push the bump commit with the app
+      # token, whose synchronize event does trigger workflows. Skipped when
+      # an existing PR was reused: the bump push above already delivered a
+      # synchronize event to it.
+      - name: Trigger CI on the pull request
+        if: steps.pr.outputs.created == 'true'
+        shell: bash
+        env:
+          BRANCH: ${{ steps.push.outputs.branch }}
+        run: |
+          sleep 1 # a later committer timestamp guarantees a new commit hash
+          git commit --amend --no-edit
+          git push --force origin "HEAD:refs/heads/${BRANCH}"
