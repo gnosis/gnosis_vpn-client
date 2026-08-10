@@ -35,6 +35,10 @@ pub struct BalanceResponse {
     pub channels_out: Vec<ChannelOut>,
     pub info: Info,
     pub capacity_allocations: Option<Vec<balance::CapacityEntry>>,
+    /// Capacity of wxHOPR sitting on the node EOA (deposited but not yet swept
+    /// into the Safe). Additive optional field so older consumers keep parsing.
+    #[serde(default)]
+    pub node_capacity: Option<balance::Capacity>,
     pub ideal_balance: Option<balance::BalanceRecommendation>,
     pub funding_issues: Option<Vec<balance::FundingIssue>>,
 }
@@ -45,6 +49,7 @@ impl BalanceResponse {
         balances: &balance::Balances,
         destinations: &HashMap<String, Destination>,
         capacity_allocations: Option<&HashMap<balance::CapacityAllocator, balance::Capacity>>,
+        node_capacity: Option<balance::Capacity>,
         ideal_balance: Option<balance::BalanceRecommendation>,
         funding_issues: Option<Vec<balance::FundingIssue>>,
     ) -> Self {
@@ -72,6 +77,7 @@ impl BalanceResponse {
             channels_out,
             info,
             capacity_allocations,
+            node_capacity,
             ideal_balance,
             funding_issues,
         }

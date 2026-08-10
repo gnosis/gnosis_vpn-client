@@ -90,6 +90,8 @@ pub struct Core {
     minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
     ideal_balance_recommendation: Option<balance::BalanceRecommendation>,
     capacity_allocations: Option<HashMap<balance::CapacityAllocator, balance::Capacity>>,
+    // Capacity of wxHOPR sitting on the node EOA, not yet swept into the Safe.
+    node_capacity: Option<balance::Capacity>,
     balances: Option<balance::Balances>,
     strategy_handle: Option<AbortHandle>,
     route_healths: HashMap<String, RouteHealth>,
@@ -207,6 +209,7 @@ impl Core {
             minimum_balance_recommendation: None,
             ideal_balance_recommendation: None,
             capacity_allocations: None,
+            node_capacity: None,
             balances: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
@@ -568,6 +571,7 @@ impl Core {
                                     balances,
                                     &self.config.destinations.clone(),
                                     self.capacity_allocations.as_ref(),
+                                    self.node_capacity,
                                     self.ideal_balance_recommendation,
                                     funding_issues,
                                 ))
@@ -689,12 +693,13 @@ impl Core {
                 }
             },
             Results::CapacityAllocations { res } => match res {
-                Ok(allocations) => {
+                Ok((allocations, node_capacity)) => {
                     tracing::info!(count = allocations.len(), "received capacity allocations");
                     let has_channels = allocations
                         .keys()
                         .any(|k| matches!(k, balance::CapacityAllocator::Peer(_)));
                     self.capacity_allocations = Some(allocations);
+                    self.node_capacity = node_capacity;
                     if has_channels && let Some(hopr) = self.hopr.clone() {
                         let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                         for id in &dest_ids {

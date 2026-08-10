@@ -49,7 +49,13 @@ pub(crate) enum Results {
         res: Result<balance::BalanceRecommendation, Error>,
     },
     CapacityAllocations {
-        res: Result<std::collections::HashMap<balance::CapacityAllocator, balance::Capacity>, Error>,
+        res: Result<
+            (
+                std::collections::HashMap<balance::CapacityAllocator, balance::Capacity>,
+                Option<balance::Capacity>,
+            ),
+            Error,
+        >,
     },
     Balances {
         res: Result<balance::Balances, Error>,
@@ -582,7 +588,12 @@ impl Display for Results {
                 Err(err) => write!(f, "IdealBalanceRecommendation: Error({})", err),
             },
             Results::CapacityAllocations { res } => match res {
-                Ok(map) => write!(f, "CapacityAllocations: {} entries", map.len()),
+                Ok((map, node)) => write!(
+                    f,
+                    "CapacityAllocations: {} entries, node capacity: {}",
+                    map.len(),
+                    node.is_some()
+                ),
                 Err(err) => write!(f, "CapacityAllocations: Error({})", err),
             },
             Results::Balances { res } => match res {

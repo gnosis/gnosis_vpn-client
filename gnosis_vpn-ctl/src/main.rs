@@ -262,6 +262,7 @@ fn pretty_print(resp: &Response) {
             channels_out,
             info,
             capacity_allocations,
+            node_capacity,
             ideal_balance: _,
             funding_issues,
         })) => {
@@ -275,6 +276,16 @@ fn pretty_print(resp: &Response) {
                 .map(|s| format!(" ({s})"))
                 .unwrap_or_default();
             str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\n"));
+            if let Some(nc) = node_capacity.as_ref().filter(|c| !c.stake.is_zero()) {
+                let sci = balance::wxhopr_scientific(nc.stake)
+                    .map(|s| format!(" ({s})"))
+                    .unwrap_or_default();
+                str_resp.push_str(&format!(
+                    "Node wxHOPR (not yet in Safe): {}{sci}{}\n",
+                    nc.stake,
+                    format_capacity(Some(nc))
+                ));
+            }
             if channels_out.is_empty() {
                 str_resp.push_str("---\nNo outgoing channels.\n");
             } else {

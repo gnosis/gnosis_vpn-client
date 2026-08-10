@@ -5,7 +5,7 @@ use edgli::{
     hopr_lib::{
         HoprSessionClientConfig,
         api::{
-            chain::{AccountSelector, ChainReadAccountOperations},
+            chain::{AccountSelector, ChainReadAccountOperations, ChainValues},
             node::HasChainApi,
             types::{
                 internal::channels::ChannelStatus,
@@ -394,16 +394,42 @@ impl Hopr {
         Ok(rec.into())
     }
 
+    /// Capacity allocations (Safe + open channels) plus the capacity of wxHOPR
+    /// sitting on the node EOA. Freshly deposited funds live on the EOA until
+    /// the periodic sweep moves them into the Safe; edgli's allocations don't
+    /// cover them, so they are computed here to let consumers count them
+    /// toward total throughput. `None` when the win probability is invalid.
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn capacity_allocations(
         &self,
-    ) -> Result<HashMap<balance::CapacityAllocator, balance::Capacity>, HoprError> {
+    ) -> Result<
+        (
+            HashMap<balance::CapacityAllocator, balance::Capacity>,
+            Option<balance::Capacity>,
+        ),
+        HoprError,
+    > {
         let raw = self
             .edgli
             .describe_current_capacity_allocations()
             .await
             .map_err(|e| HoprError::Strategy(e.to_string()))?;
-        Ok(raw.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
+        let allocations = raw.into_iter().map(|(k, v)| (k.into(), v.into())).collect();
+
+        let node_wxhopr = self.edgli.balances().await.map_err(HoprError::HoprLib)?.node_wxhopr;
+        let chain = self.edgli.chain_api();
+        let ticket_price = chain
+            .minimum_ticket_price()
+            .await
+            .map_err(|e| HoprError::Strategy(e.to_string()))?;
+        let win_prob = chain
+            .minimum_incoming_ticket_win_prob()
+            .await
+            .map_err(|e| HoprError::Strategy(e.to_string()))?
+            .as_f64();
+        let node_capacity = balance::compute_capacity(node_wxhopr, ticket_price, win_prob);
+
+        Ok((allocations, node_capacity))
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
