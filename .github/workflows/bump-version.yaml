@@ -102,17 +102,21 @@ jobs:
           fi
           nix develop --command cargo update --workspace
           git diff --stat -- Cargo.toml Cargo.lock
-      # main is covered by an active ruleset requiring a pull request with one
-      # approving review, so the bump cannot be pushed to it directly. Land the
-      # commit on a side branch (unprotected) and raise a PR from there.
+      # The dispatching branch may be protected (main's ruleset requires a
+      # pull request with one approving review), so the bump cannot be pushed
+      # to it directly. Land the commit on an unprotected side branch and
+      # raise a PR back into the dispatching branch. The side branch embeds
+      # the base ref so runs from different bases that compute the same
+      # version cannot force-push over each other's PR branch.
       - name: Commit and push version bump
         id: push
         shell: bash
         env:
           NEW_VERSION: ${{ steps.version.outputs.new_version }}
           APP_SLUG: ${{ steps.bot-token.outputs.app-slug }}
+          BASE: ${{ github.ref_name }}
         run: |
-          branch="bump/v${NEW_VERSION}"
+          branch="bump/${BASE}/v${NEW_VERSION}"
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
           git switch -c "${branch}"
