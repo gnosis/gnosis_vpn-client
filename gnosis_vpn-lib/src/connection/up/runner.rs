@@ -196,7 +196,7 @@ async fn open_bridge_session(
         capabilities: options.sessions.bridge.capabilities,
         forward_path: destination.routing,
         return_path: destination.routing,
-        always_max_out_surbs: surb.always_max_out_surbs,
+        max_surbs_per_data_packet: if surb.always_max_out_surbs { usize::MAX } else { 1 },
         surb_management: surb.management,
         // Robust tail-tolerance profile: the validated flow-control config for the
         // throttled / multi-hop paths this data session runs over.
@@ -285,7 +285,7 @@ async fn open_ping_session(
         capabilities: options.sessions.wg.capabilities,
         forward_path: destination.routing,
         return_path: destination.routing,
-        always_max_out_surbs: surb.always_max_out_surbs,
+        max_surbs_per_data_packet: if surb.always_max_out_surbs { usize::MAX } else { 1 },
         surb_management: surb.management,
         pseudonym,
         // Robust tail-tolerance profile for the WireGuard data session.
