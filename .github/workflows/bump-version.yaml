@@ -130,6 +130,7 @@ jobs:
           git push --force origin "HEAD:refs/heads/${branch}"
           echo "branch=${branch}" >> "$GITHUB_OUTPUT"
       - name: Open pull request
+        id: pr
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -150,8 +151,10 @@ jobs:
               echo "::error::Branch ${BRANCH} is pushed, but the pull request could not be opened. If the error above says GitHub Actions may not create pull requests, enable 'Allow GitHub Actions to create and approve pull requests' under Settings -> Actions -> General, then re-run this workflow."
               exit 1
             fi
+            echo "created=true" >> "$GITHUB_OUTPUT"
           else
             echo "Reusing existing pull request ${pr_url}"
+            echo "created=false" >> "$GITHUB_OUTPUT"
           fi
 
           {
@@ -164,8 +167,11 @@ jobs:
       # PRs opened with the workflow's GITHUB_TOKEN emit no pull_request
       # events (GitHub suppresses them to prevent recursion), so CI would
       # stay silent on the new PR. Re-push the bump commit with the app
-      # token, whose synchronize event does trigger workflows.
+      # token, whose synchronize event does trigger workflows. Skipped when
+      # an existing PR was reused: the bump push above already delivered a
+      # synchronize event to it.
       - name: Trigger CI on the pull request
+        if: steps.pr.outputs.created == 'true'
         shell: bash
         env:
           BRANCH: ${{ steps.push.outputs.branch }}
