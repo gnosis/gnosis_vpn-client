@@ -26,13 +26,21 @@ jobs:
     runs-on: depot-ubuntu-22.04-4 # Depot Ubuntu 22.04, 4 CPUs, 16 GB RAM
     permissions:
       contents: read
+      # Lets the job open the bump PR with its own GITHUB_TOKEN; the app
+      # installation has no pull-requests scope, and minting an app token
+      # with a permission the installation lacks fails outright.
+      pull-requests: write
     steps:
       - name: Require branch ref
         if: github.ref_type != 'branch'
         shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          echo "Dispatched from ${{ github.ref_type }} '${{ github.ref_name }}', but this workflow must run from a branch" >&2
+          echo "Dispatched from ${REF_TYPE} '${REF_NAME}', but this workflow must run from a branch" >&2
           exit 1
+      # Fails at token minting if the app installation lacks this permission.
       - name: Generate GitHub App token
         id: bot-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -41,7 +49,6 @@ jobs:
           private-key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
           owner: gnosis
           repositories: ${{ github.event.repository.name }}
-          # Fails at token minting if the app installation lacks this
           permission-contents: write
       - name: Checkout repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -59,7 +66,7 @@ jobs:
           RELEASE_TYPE: ${{ inputs.release_type }}
           CUSTOM_VERSION: ${{ inputs.custom_version }}
         run: |
-          current_version=$(grep -E '^version\s*=' Cargo.toml | head -n1 | awk -F\" '{print $2}')
+          current_version=$(grep -E '^version[[:space:]]*=' Cargo.toml | head -n1 | awk -F\" '{print $2}')
           if [[ -n "${CUSTOM_VERSION}" ]]; then
             new_version="${CUSTOM_VERSION#v}"
             if ! [[ "${new_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -72,6 +79,10 @@ jobs:
               major) new_version="$((major + 1)).0.0" ;;
               minor) new_version="${major}.$((minor + 1)).0" ;;
               patch) new_version="${major}.${minor}.$((patch + 1))" ;;
+              *)
+                echo "Unknown release_type '${RELEASE_TYPE}'" >&2
+                exit 1
+                ;;
             esac
           fi
           if [[ "${new_version}" == "${current_version}" ]]; then
@@ -87,20 +98,84 @@ jobs:
           CURRENT_VERSION: ${{ steps.version.outputs.current_version }}
           NEW_VERSION: ${{ steps.version.outputs.new_version }}
         run: |
-          sed -i -E "s/^(version\s*=\s*)\"${CURRENT_VERSION}\"/\1\"${NEW_VERSION}\"/" Cargo.toml
+          sed -i -E "s/^(version[[:space:]]*=[[:space:]]*)\"${CURRENT_VERSION}\"/\1\"${NEW_VERSION}\"/" Cargo.toml
+          if ! grep -qE "^version[[:space:]]*=[[:space:]]*\"${NEW_VERSION}\"" Cargo.toml; then
+            echo "Cargo.toml still lacks version ${NEW_VERSION} after the substitution" >&2
+            exit 1
+          fi
           nix develop --command cargo update --workspace
           git diff --stat -- Cargo.toml Cargo.lock
-      # Commit directly to the branch with the app token, same as the
-      # bump-version step of the Close release workflow. The app has no
-      # pull-requests permission, so a PR-based flow is not possible.
+      # The dispatching branch may be protected (main's ruleset requires a
+      # pull request with one approving review), so the bump cannot be pushed
+      # to it directly. Land the commit on an unprotected side branch and
+      # raise a PR back into the dispatching branch. The side branch embeds
+      # the base ref so runs from different bases that compute the same
+      # version cannot force-push over each other's PR branch.
       - name: Commit and push version bump
+        id: push
         shell: bash
         env:
           NEW_VERSION: ${{ steps.version.outputs.new_version }}
           APP_SLUG: ${{ steps.bot-token.outputs.app-slug }}
+          BASE: ${{ github.ref_name }}
         run: |
+          branch="bump/${BASE}/v${NEW_VERSION}"
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+          git switch -c "${branch}"
           git add Cargo.toml Cargo.lock
           git commit -m "chore(version): v${NEW_VERSION}"
-          git push origin "HEAD:refs/heads/${{ github.ref_name }}"
+          # Force so a retry after a failed run reuses the same branch and
+          # updates any PR already open from it.
+          git push --force origin "HEAD:refs/heads/${branch}"
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+      - name: Open pull request
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BASE: ${{ github.ref_name }}
+          BRANCH: ${{ steps.push.outputs.branch }}
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+        run: |
+          # Reuse an open PR from a previous run of the same bump; a closed one
+          # must not be picked up, hence pr list --state open over pr view.
+          pr_url=$(gh pr list --head "${BRANCH}" --base "${BASE}" --state open --json url --jq '.[0].url // empty')
+          if [[ -z "${pr_url}" ]]; then
+            if ! pr_url=$(gh pr create \
+              --base "${BASE}" \
+              --head "${BRANCH}" \
+              --title "chore(version): v${NEW_VERSION}" \
+              --body "Automated bump to v${NEW_VERSION} from the Bump version workflow."); then
+              echo "::error::Branch ${BRANCH} is pushed, but the pull request could not be opened. If the error above says GitHub Actions may not create pull requests, enable 'Allow GitHub Actions to create and approve pull requests' under Settings -> Actions -> General, then re-run this workflow."
+              exit 1
+            fi
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Reusing existing pull request ${pr_url}"
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          {
+            echo "### Version bump v${NEW_VERSION}"
+            echo
+            echo "Pull request: ${pr_url}"
+            echo
+            echo "Requires one approving review and resolved review threads, then squash-merge."
+          } >> "$GITHUB_STEP_SUMMARY"
+      # PRs opened with the workflow's GITHUB_TOKEN emit no pull_request
+      # events (GitHub suppresses them to prevent recursion), so CI would
+      # stay silent on the new PR. Re-push the bump commit with the app
+      # token, whose synchronize event does trigger workflows. Skipped when
+      # an existing PR was reused: the bump push above already delivered a
+      # synchronize event to it.
+      - name: Trigger CI on the pull request
+        if: steps.pr.outputs.created == 'true'
+        shell: bash
+        env:
+          BRANCH: ${{ steps.push.outputs.branch }}
+        run: |
+          sleep 1 # a later committer timestamp guarantees a new commit hash
+          git commit --amend --no-edit
+          git push --force origin "HEAD:refs/heads/${BRANCH}"
