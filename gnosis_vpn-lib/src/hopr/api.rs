@@ -52,6 +52,7 @@ impl Hopr {
         keys: edgli::hopr_lib::HoprKeys,
         blokli_endpoint: BlokliEndpoint,
         blokli_config: BlockchainConnectorConfig,
+        probe_local_addresses: bool,
         init_visitor: impl Fn(EdgliInitState) + Send + 'static,
     ) -> Result<Self, HoprError> {
         tracing::debug!("running hopr edge node");
@@ -60,7 +61,7 @@ impl Hopr {
             keys,
             blokli_endpoint,
             Some(blokli_config),
-            false, // probe_local_addresses: filter out non-public peer addresses
+            probe_local_addresses,
             init_visitor,
         )
         .await
