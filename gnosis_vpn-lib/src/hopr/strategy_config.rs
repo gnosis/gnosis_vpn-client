@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use bytesize::ByteSize;
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +19,13 @@ pub struct StrategyConfig {
 
     /// When `Some`, channels are opened exclusively to these peers; `None` uses quality-score selection.
     pub channel_allowlist: Option<HashSet<Address>>,
+
+    /// Data volume a single channel should be able to carry before it needs a top-up.
+    ///
+    /// The only sizing input we supply; edgli derives the funding capacities, the sizing
+    /// mode, and the resulting stakes from it. `None` leaves edgli's default sizing in
+    /// place. Values below the one-winning-ticket floor have no effect.
+    pub channel_capacity: Option<ByteSize>,
 }
 
 impl Default for StrategyConfig {
@@ -27,6 +35,7 @@ impl Default for StrategyConfig {
             min_open_channels: def.min_open_channels,
             target_open_channels: def.target_open_channels,
             channel_allowlist: def.channel_allowlist,
+            channel_capacity: def.channel_capacity,
         }
     }
 }
@@ -37,6 +46,7 @@ impl From<StrategyConfig> for edgli::strategy::IncentiveConfiguration {
             min_open_channels: c.min_open_channels,
             target_open_channels: c.target_open_channels,
             channel_allowlist: c.channel_allowlist,
+            channel_capacity: c.channel_capacity,
         }
     }
 }
