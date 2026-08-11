@@ -1,0 +1,11 @@
+{
+  "name": "network-baseline",
+  "version": "1.0.0",
+  "description": "Gnosis VPN exit baseline harness (obscura + Cloudflare speedtest)",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cloudflare/speedtest": "^1.13.0",
+    "puppeteer-core": "^25.5.0"
+  }
+}

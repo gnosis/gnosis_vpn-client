@@ -1,0 +1,9 @@
+# runtime binaries + deps — fetched by setup.sh, never committed
+bin/
+node_modules/
+obscura*.tar.gz
+
+# run outputs + logs — regenerated per run
+results/
+run-logs/
+*.log
