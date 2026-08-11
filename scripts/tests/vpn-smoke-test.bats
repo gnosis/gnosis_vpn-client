@@ -125,7 +125,7 @@ setup() {
 }
 
 @test "HTTPS reachability uses GET instead of HEAD" {
-    export FAKE_METHOD_LOG="${BATS_TEST_TMPDIR}/curl-methods.log"
+    export FAKE_METHOD_LOG="${BATS_TEST_TMPDIR:-${BATS_TMPDIR}}/curl-methods.log"
     run "$SCRIPT" --no-color --targets "example.com"
     [ "$status" -eq 0 ]
     methods="$(cat "$FAKE_METHOD_LOG")"
@@ -133,7 +133,7 @@ setup() {
 }
 
 @test "sized downloads request the exact byte counts" {
-    export FAKE_LOG="${BATS_TEST_TMPDIR}/curl.log"
+    export FAKE_LOG="${BATS_TEST_TMPDIR:-${BATS_TMPDIR}}/curl.log"
     run "$SCRIPT" --no-color
     [ "$status" -eq 0 ]
     grep -q "__down?bytes=1024$" "$FAKE_LOG"
