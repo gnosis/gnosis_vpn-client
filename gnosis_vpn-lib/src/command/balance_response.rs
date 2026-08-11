@@ -36,8 +36,7 @@ pub struct BalanceResponse {
     pub info: Info,
     pub capacity_allocations: Option<Vec<balance::CapacityEntry>>,
     /// Capacity of wxHOPR sitting on the node EOA (deposited but not yet swept
-    /// into the Safe). Additive optional field so older consumers keep parsing.
-    #[serde(default)]
+    /// into the Safe).
     pub node_capacity: Option<balance::Capacity>,
     pub ideal_balance: Option<balance::BalanceRecommendation>,
     pub funding_issues: Option<Vec<balance::FundingIssue>>,
