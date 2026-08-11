@@ -10,7 +10,7 @@
 //!   device and a network endpoint.
 //!
 //! The pump's network side is the raw `HoprSession` spliced directly in-process
-//! (see [`session`]): no loopback UDP hop and no local listener. This module is
+//! (see `session`): no loopback UDP hop and no local listener. This module is
 //! pure, unprivileged worker-side code; root only provisions the TUN device.
 
 mod pump;
