@@ -14,6 +14,12 @@ use std::fmt::{self, Display};
 /// notation. `1e-3` here means 0.001 wxHOPR, not wei.
 const WXHOPR_SCI_THRESHOLD: f64 = 1e-3;
 
+/// Required node xDai balance to start (gas for Safe deployment, registration
+/// and key binding). Overrides upstream `SUGGESTED_NATIVE_BALANCE` (0.01 xDai).
+pub fn xdai_to_start() -> Balance<XDai> {
+    Balance::<XDai>::from(5_000_000_000_000_000_u64) // 0.005 xDai in wei
+}
+
 /// Scientific-notation form of a wxHOPR balance (e.g. `7.5e-10`), but only for values
 /// small enough that the decimal form is hard to read. Returns `None` for zero and for
 /// amounts at or above `1e-3` wxHOPR (the token value, already converted from wei),
@@ -525,6 +531,11 @@ mod tests {
         assert_eq!(c.expected_messages, 0);
         assert_eq!(c.min_guaranteed_messages, 0);
         assert_eq!(c.byte_capacity, 0);
+    }
+
+    #[test]
+    fn xdai_to_start_is_0_005_xdai() {
+        assert_eq!(xdai_to_start(), "0.005 xdai".parse().unwrap());
     }
 
     #[test]
