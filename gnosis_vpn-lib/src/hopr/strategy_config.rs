@@ -20,11 +20,11 @@ pub struct StrategyConfig {
     /// When `Some`, channels are opened exclusively to these peers; `None` uses quality-score selection.
     pub channel_allowlist: Option<HashSet<Address>>,
 
-    /// Data volume a single channel should be able to carry before it needs a top-up.
+    /// Data volume a single channel should carry before it needs a top-up.
     ///
-    /// The only sizing input we supply; edgli derives the funding capacities, the sizing
-    /// mode, and the resulting stakes from it. `None` leaves edgli's default sizing in
-    /// place. Values below the one-winning-ticket floor have no effect.
+    /// The only sizing input we supply; edgli derives the capacities, sizing mode and
+    /// stakes from it. `None` leaves edgli's default in place, and values below the
+    /// one-winning-ticket floor have no effect.
     pub channel_capacity: Option<ByteSize>,
 }
 
