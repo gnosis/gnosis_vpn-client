@@ -2789,7 +2789,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "4.0.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=68a215e1ead7457bd1aa34fd0e82c360bf355816#68a215e1ead7457bd1aa34fd0e82c360bf355816"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=c3634f6e81a2adc47716eff41a0eab33a73b5464#c3634f6e81a2adc47716eff41a0eab33a73b5464"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -2814,7 +2814,6 @@ dependencies = [
  "serde_yaml",
  "signal-hook",
  "smart-default",
- "statrs",
  "strum 0.28.0",
  "thiserror 2.0.19",
  "tokio",
@@ -4181,9 +4180,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-strategy"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea1f49bc6a2bec90301732e3fbeee65eb3e67f82341b657e865adf51f0f6a024"
+version = "0.24.0"
+source = "git+https://github.com/hoprnet/hopr-strategy?rev=139b6b2#139b6b2c68e05265a7102adc430ff41116562840"
 dependencies = [
  "anyhow",
  "async-trait",
