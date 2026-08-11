@@ -101,16 +101,19 @@ fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstrea
             true,
             buf.ping.unwrap_or(def.ping.buffer),
             surbs.ping.unwrap_or(def.ping.max_surb_upstream),
+            true,
         ),
         main: options::SessionSurbOptions::new(
             true,
             buf.main.unwrap_or(def.main.buffer),
             surbs.main.unwrap_or(def.main.max_surb_upstream),
+            true,
         ),
         bridge: options::SessionSurbOptions::new(
             false,
             buf.bridge.unwrap_or(def.bridge.buffer),
             surbs.bridge.unwrap_or(def.bridge.max_surb_upstream),
+            false,
         ),
         health_check: def.health_check,
     }

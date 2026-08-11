@@ -89,12 +89,12 @@ impl SessionParameters {
 }
 
 impl SessionSurbOptions {
-    pub fn new(enabled: bool, buffer: ByteSize, max_surb_upstream: Bandwidth) -> Self {
+    pub fn new(enabled: bool, buffer: ByteSize, max_surb_upstream: Bandwidth, always_max_out_surbs: bool) -> Self {
         Self {
             enabled,
             buffer,
             max_surb_upstream,
-            always_max_out_surbs: enabled,
+            always_max_out_surbs,
         }
     }
 }
@@ -114,17 +114,11 @@ impl Default for HealthCheckIntervals {
 impl Default for SurbBalancing {
     fn default() -> Self {
         Self {
-            ping: SessionSurbOptions {
-                always_max_out_surbs: false,
-                ..SessionSurbOptions::new(true, ByteSize::mb(1), Bandwidth::from_kbps(32))
-            },
+            ping: SessionSurbOptions::new(true, ByteSize::mb(1), Bandwidth::from_kbps(32), false),
             // maximum allowed buffer size is 10 MB
-            main: SessionSurbOptions {
-                always_max_out_surbs: false,
-                ..SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(6))
-            },
-            bridge: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(32)),
-            health_check: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(32)),
+            main: SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(6), false),
+            bridge: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(32), false),
+            health_check: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(32), false),
         }
     }
 }
