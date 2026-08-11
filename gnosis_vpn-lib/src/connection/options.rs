@@ -114,11 +114,17 @@ impl Default for HealthCheckIntervals {
 impl Default for SurbBalancing {
     fn default() -> Self {
         Self {
-            ping: SessionSurbOptions::new(true, ByteSize::mb(1), Bandwidth::from_kbps(512)),
+            ping: SessionSurbOptions {
+                always_max_out_surbs: false,
+                ..SessionSurbOptions::new(true, ByteSize::mb(1), Bandwidth::from_kbps(32))
+            },
             // maximum allowed buffer size is 10 MB
-            main: SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(16)),
-            bridge: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
-            health_check: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
+            main: SessionSurbOptions {
+                always_max_out_surbs: false,
+                ..SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(6))
+            },
+            bridge: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(32)),
+            health_check: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(32)),
         }
     }
 }
