@@ -239,18 +239,10 @@ async fn incoming_on_root_socket(
 async fn socket_listener(
     socket_path: &Path,
 ) -> Result<(CancellationToken, mpsc::Receiver<SocketCmd>), exitcode::ExitCode> {
+    // The daemon lock guarantees no other instance is running, so a leftover
+    // socket file is always stale — remove it without pinging.
     match socket_path.try_exists() {
         Ok(true) => {
-            tracing::info!("probing for running instance");
-            match socket::root::process_cmd(socket_path, &LibCommand::Ping).await {
-                Ok(_) => {
-                    tracing::error!(socket_path = %socket_path.display(), "system service is already running - cannot start another instance");
-                    return Err(exitcode::TEMPFAIL);
-                }
-                Err(e) => {
-                    tracing::debug!(warn = ?e, "done probing for running instance");
-                }
-            };
             fs::remove_file(socket_path).await.map_err(|e| {
                 tracing::error!(error = ?e, "error removing stale socket file");
                 exitcode::IOERR
