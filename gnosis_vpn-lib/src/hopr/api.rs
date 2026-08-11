@@ -400,15 +400,7 @@ impl Hopr {
     /// cover them, so they are computed here to let consumers count them
     /// toward total throughput. `None` when the win probability is invalid.
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
-    pub async fn capacity_allocations(
-        &self,
-    ) -> Result<
-        (
-            HashMap<balance::CapacityAllocator, balance::Capacity>,
-            Option<balance::Capacity>,
-        ),
-        HoprError,
-    > {
+    pub async fn capacity_allocations(&self) -> Result<balance::CapacityAllocations, HoprError> {
         let raw = self
             .edgli
             .describe_current_capacity_allocations()
@@ -429,7 +421,10 @@ impl Hopr {
             .as_f64();
         let node_capacity = balance::compute_capacity(node_wxhopr, ticket_price, win_prob);
 
-        Ok((allocations, node_capacity))
+        Ok(balance::CapacityAllocations {
+            allocations,
+            node_capacity,
+        })
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]

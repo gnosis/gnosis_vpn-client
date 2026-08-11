@@ -1,5 +1,5 @@
-pub use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR, XDai};
 use edgli::hopr_lib::api::types::primitive::prelude::UnitaryFloatOps;
+pub use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR, XDai};
 use edgli::hopr_lib::exports::transport::SESSION_MTU;
 use serde::{Deserialize, Serialize};
 
@@ -113,6 +113,14 @@ pub struct Capacity {
 pub struct CapacityEntry {
     pub allocator: CapacityAllocator,
     pub capacity: Capacity,
+}
+
+/// Capacity allocations (Safe + open channels) plus the capacity of wxHOPR
+/// sitting on the node EOA, not yet swept into the Safe.
+#[derive(Clone, Debug)]
+pub struct CapacityAllocations {
+    pub allocations: HashMap<CapacityAllocator, Capacity>,
+    pub node_capacity: Option<Capacity>,
 }
 
 impl From<edgli::strategy::Capacity> for Capacity {
@@ -492,12 +500,8 @@ mod tests {
 
     #[test]
     fn compute_capacity_with_certain_win_prob() {
-        let c = compute_capacity(
-            Balance::<WxHOPR>::from(1_000u64),
-            Balance::<WxHOPR>::from(10u64),
-            1.0,
-        )
-        .expect("valid win_prob");
+        let c = compute_capacity(Balance::<WxHOPR>::from(1_000u64), Balance::<WxHOPR>::from(10u64), 1.0)
+            .expect("valid win_prob");
         assert_eq!(c.stake, Balance::<WxHOPR>::from(1_000u64));
         assert_eq!(c.expected_messages, 100);
         assert_eq!(c.min_guaranteed_messages, 100);
@@ -506,12 +510,8 @@ mod tests {
 
     #[test]
     fn compute_capacity_win_prob_halves_guaranteed_messages() {
-        let c = compute_capacity(
-            Balance::<WxHOPR>::from(1_000u64),
-            Balance::<WxHOPR>::from(10u64),
-            0.5,
-        )
-        .expect("valid win_prob");
+        let c = compute_capacity(Balance::<WxHOPR>::from(1_000u64), Balance::<WxHOPR>::from(10u64), 0.5)
+            .expect("valid win_prob");
         // face_value = 10 / 0.5 = 20 → 1000 / 20 = 50 guaranteed
         assert_eq!(c.expected_messages, 100);
         assert_eq!(c.min_guaranteed_messages, 50);

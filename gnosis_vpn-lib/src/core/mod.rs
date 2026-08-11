@@ -693,13 +693,14 @@ impl Core {
                 }
             },
             Results::CapacityAllocations { res } => match res {
-                Ok((allocations, node_capacity)) => {
-                    tracing::info!(count = allocations.len(), "received capacity allocations");
-                    let has_channels = allocations
+                Ok(caps) => {
+                    tracing::info!(count = caps.allocations.len(), "received capacity allocations");
+                    let has_channels = caps
+                        .allocations
                         .keys()
                         .any(|k| matches!(k, balance::CapacityAllocator::Peer(_)));
-                    self.capacity_allocations = Some(allocations);
-                    self.node_capacity = node_capacity;
+                    self.capacity_allocations = Some(caps.allocations);
+                    self.node_capacity = caps.node_capacity;
                     if has_channels && let Some(hopr) = self.hopr.clone() {
                         let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                         for id in &dest_ids {
