@@ -553,7 +553,30 @@ pub(super) struct Strategy {
     pub(super) min_open_channels: Option<usize>,
     pub(super) target_open_channels: Option<usize>,
     pub(super) channel_allowlist: Option<ChannelAllowlistConfig>,
+    #[serde(default, deserialize_with = "validate_channel_capacity")]
     pub(super) channel_capacity: Option<ByteSize>,
+}
+
+/// Rejects a capacity edgli cannot turn into a funding config.
+///
+/// It derives the safe balance gate by scaling the capacity up, so a value near
+/// `u64::MAX` overflows and fails every reactor start. That failure is retried on a
+/// timer with a generic message, so without this the config loads fine and the node
+/// silently never opens a channel — naming the key here turns it into a load error.
+fn validate_channel_capacity<'de, D>(deserializer: D) -> Result<Option<ByteSize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    /// Headroom edgli needs above the requested capacity to size the safe gate.
+    const MAX_SAFE_SCALING: u64 = 2;
+
+    match Option::<ByteSize>::deserialize(deserializer)? {
+        Some(v) if v.as_u64() > u64::MAX / MAX_SAFE_SCALING => Err(serde::de::Error::custom(format!(
+            "channel_capacity must not exceed {}",
+            ByteSize::b(u64::MAX / MAX_SAFE_SCALING)
+        ))),
+        other => Ok(other),
+    }
 }
 
 impl From<Option<Strategy>> for StrategyConfig {
@@ -572,7 +595,7 @@ impl From<Option<Strategy>> for StrategyConfig {
                 .as_ref()
                 .and_then(|s| s.channel_allowlist.as_ref())
                 .and_then(|c| c.enabled.then(|| c.peers.iter().cloned().collect())),
-            channel_capacity: v.as_ref().and_then(|s| s.channel_capacity).or(def.channel_capacity),
+            channel_capacity: v.as_ref().and_then(|s| s.channel_capacity),
         }
     }
 }
@@ -955,6 +978,25 @@ channel_capacity = "1 GiB"
 
         let converted: StrategyConfig = Some(strategy).into();
         assert_eq!(converted.channel_capacity, Some(bytesize::ByteSize::gib(1)));
+    }
+
+    #[test]
+    fn strategy_channel_capacity_rejects_a_value_that_overflows_the_safe_gate() {
+        // Without the bound this loads fine and then fails every reactor start on a
+        // 10s retry, with nothing naming the offending key.
+        let err = toml::from_str::<Config>(
+            r#####"
+version = 6
+
+[strategy]
+channel_capacity = "16 EiB"
+"#####,
+        )
+        .expect_err("16 EiB must be rejected");
+        assert!(
+            err.to_string().contains("channel_capacity"),
+            "error should name the key, got: {err}"
+        );
     }
 
     #[test]

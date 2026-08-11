@@ -22,9 +22,9 @@ pub struct StrategyConfig {
 
     /// Data volume a single channel should carry before it needs a top-up.
     ///
-    /// The only sizing input we supply; edgli derives the capacities, sizing mode and
-    /// stakes from it. `None` leaves edgli's default in place, and values below the
-    /// one-winning-ticket floor have no effect.
+    /// The only sizing input we supply; edgli derives the sizing mode and stakes from it
+    /// and passes it to the strategy as given. `None` leaves edgli's default in place.
+    /// Raising it also raises the safe balance required before any channel opens.
     pub channel_capacity: Option<ByteSize>,
 }
 
