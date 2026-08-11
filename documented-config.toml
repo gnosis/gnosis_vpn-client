@@ -155,10 +155,8 @@ path    = { hops = 1 }
 # target number of open outgoing channels
 # target_open_channels = 8
 # data volume a single payment channel should be able to carry before it needs a top-up.
-# The stake required to cover it is derived from the live ticket price and winning
-# probability; a top-up is triggered once a quarter of it is left, and the safe must hold
-# a quarter more than this before a channel is opened. Values below the one-winning-ticket
-# floor have no effect, since a channel that cannot cover a single ticket cannot relay.
+# Larger values fund channels further ahead, but require a correspondingly larger safe
+# balance before any channel is opened. Left unset, a sensible default is used.
 # channel_capacity = "1 GiB"
 # channel allowlist: when enabled, restricts channel opening to the listed peers only.
 # When disabled (default), peers are selected by quality score.
