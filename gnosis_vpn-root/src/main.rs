@@ -54,6 +54,7 @@ fn try_acquire_daemon_lock_at(path: &Path) -> std::io::Result<File> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(true)
         .mode(0o600)
         .open(path)?;
     rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).map_err(std::io::Error::from)?;
