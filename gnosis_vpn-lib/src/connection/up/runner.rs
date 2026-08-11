@@ -35,6 +35,24 @@ pub(crate) struct PreviousConnection {
     pub wg_public_key: Option<String>,
 }
 
+/// What to connect to and how to configure it, as supplied by the caller.
+pub(crate) struct ConnectionSpec {
+    pub destination: Destination,
+    pub options: Options,
+    pub wg_config: wireguard::Config,
+}
+
+/// Scopes the spawned NepTUN pump task.
+pub(crate) struct PumpLifecycle {
+    /// Cancelled when the connection is torn down; scopes the lifetime of the
+    /// spawned NepTUN pump so it stops (dropping the TUN fd and its network
+    /// endpoint) on disconnect or reconnect.
+    pub cancel: CancellationToken,
+    /// Tracks the spawned pump task so core can wait for it to finish (and thus
+    /// for the TUN fd to close) before asking root to tear down routing.
+    pub tasks: TaskTracker,
+}
+
 pub(crate) struct Runner {
     destination: Destination,
     hopr: Arc<Hopr>,
@@ -42,27 +60,27 @@ pub(crate) struct Runner {
     wg_config: wireguard::Config,
     worker_params: WorkerParams,
     prev_conn: PreviousConnection,
-    /// Cancelled when the connection is torn down; scopes the lifetime of the
-    /// spawned NepTUN pump so it stops (dropping the TUN fd and its network
-    /// endpoint) on disconnect or reconnect.
     cancel: CancellationToken,
-    /// Tracks the spawned pump task so core can wait for it to finish (and thus
-    /// for the TUN fd to close) before asking root to tear down routing.
     pump_tasks: TaskTracker,
 }
 
 impl Runner {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        destination: Destination,
-        options: Options,
-        wg_config: wireguard::Config,
+        spec: ConnectionSpec,
         hopr: Arc<Hopr>,
         worker_params: WorkerParams,
         prev_conn: PreviousConnection,
-        cancel: CancellationToken,
-        pump_tasks: TaskTracker,
+        pump_lifecycle: PumpLifecycle,
     ) -> Self {
+        let ConnectionSpec {
+            destination,
+            options,
+            wg_config,
+        } = spec;
+        let PumpLifecycle {
+            cancel,
+            tasks: pump_tasks,
+        } = pump_lifecycle;
         Self {
             destination,
             hopr,

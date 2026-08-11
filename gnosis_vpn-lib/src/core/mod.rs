@@ -1588,15 +1588,21 @@ impl Core {
                 blokli_ips: self.cached_resolved_blokli_ips.clone(),
                 wg_public_key: prev_public_key,
             };
+            let spec = connection::up::runner::ConnectionSpec {
+                destination: conn.destination.clone(),
+                options: config_connection,
+                wg_config: config_wireguard,
+            };
+            let pump_lifecycle = connection::up::runner::PumpLifecycle {
+                cancel: self.cancel_connection.clone(),
+                tasks: self.wg_pump_tasks.clone(),
+            };
             let runner = connection::up::runner::Runner::new(
-                conn.destination.clone(),
-                config_connection,
-                config_wireguard,
+                spec,
                 hopr.clone(),
                 self.worker_params.clone(),
                 prev_conn,
-                self.cancel_connection.clone(),
-                self.wg_pump_tasks.clone(),
+                pump_lifecycle,
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
