@@ -33,8 +33,8 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.1#a45a31d28780695cb816d5e245a70bd520bd1293" =
       "sha256-QF8BAe2eHrGsVvZIGD+Gdi6XFMQ8zHkOObSRjTRN4MY=";
-    "git+https://github.com/hoprnet/edge-client.git?rev=a03d06b5f5e3f97c0880225313535826edd24c19#a03d06b5f5e3f97c0880225313535826edd24c19" =
-      "sha256-ybbGs7ZlfM1TggcbCVszC7eYhSiVVhKZxmCw25ggHnw=";
+    "git+https://github.com/hoprnet/edge-client.git?rev=2eccc0ce6fcbf3b37de064c514f0ff1eb37e8049#2eccc0ce6fcbf3b37de064c514f0ff1eb37e8049" =
+      "sha256-P9KIAEpH09YBWzhL93FQgtRcE04LhmDR/vMCc0gr1OM=";
     "git+https://github.com/hoprnet/hoprnet?rev=10f6d80c3cc71dee1c5f98c3074c4021ef7fa54d#10f6d80c3cc71dee1c5f98c3074c4021ef7fa54d" =
       "sha256-k0vvNTgGadrK1RyXwvABBpDWymsMEBXa+4wg9WLjtro=";
   };

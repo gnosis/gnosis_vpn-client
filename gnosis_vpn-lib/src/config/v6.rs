@@ -513,7 +513,10 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "strategy" {
             if let Some(strategy) = value.as_table() {
                 for (k, v) in strategy.iter() {
-                    if k == "min_open_channels" || k == "target_open_channels" || k == "channel_capacity" {
+                    if matches!(
+                        k.as_str(),
+                        "min_open_channels" | "target_open_channels" | "channel_capacity"
+                    ) {
                         continue;
                     }
                     if k == "channel_allowlist" {
