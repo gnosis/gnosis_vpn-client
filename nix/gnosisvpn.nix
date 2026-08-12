@@ -37,8 +37,6 @@ let
       "sha256-j2qKPal/t24W0B7okAZ2ntTXCp3Ai4Bh8ZCIun0WBG4=";
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.1#a45a31d28780695cb816d5e245a70bd520bd1293" =
       "sha256-QF8BAe2eHrGsVvZIGD+Gdi6XFMQ8zHkOObSRjTRN4MY=";
-    "git+https://github.com/NordSecurity/rust-dispatch.git?rev=13447cd7221a74ebcce1277ae0cfc9a421a28ec5#13447cd7221a74ebcce1277ae0cfc9a421a28ec5" =
-      "sha256-nX1+sfLI3H8xz95d04JeO5QY+8BRpitWKKUeGWfVrdI=";
   };
 
   builders = nixLib.mkRustBuilders {
