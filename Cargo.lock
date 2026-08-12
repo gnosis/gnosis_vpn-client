@@ -2668,6 +2668,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags",
+ "block2",
+ "libc",
  "objc2",
 ]
 
@@ -3492,7 +3494,9 @@ name = "gnosis_vpn-lib"
 version = "0.94.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "backon",
+ "base64",
  "bytesize",
  "cfg-if",
  "chrono",
@@ -3506,6 +3510,7 @@ dependencies = [
  "libc",
  "mnl",
  "multiaddr",
+ "neptun",
  "nftnl",
  "objc2",
  "objc2-foundation",
@@ -3513,6 +3518,7 @@ dependencies = [
  "ping",
  "rand 0.10.2",
  "reqwest",
+ "rustix",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -3524,8 +3530,10 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "unix-ancillary",
  "url",
  "uzers",
+ "x25519-dalek",
 ]
 
 [[package]]
@@ -3541,8 +3549,11 @@ dependencies = [
  "gnosis_vpn-lib",
  "humantime",
  "libc",
+ "neptun",
  "notify",
  "rtnetlink 0.21.0",
+ "rustix",
+ "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tikv-jemallocator",
@@ -4969,6 +4980,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8bd11f3a29434026f5ff98c730b668ba74b1033637b8817940b54d040696133c"
 
 [[package]]
+name = "ip_network"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa2f047c0a98b2f299aa5d6d7088443570faae494e9ae1305e48be000c9e0eb1"
+
+[[package]]
+name = "ip_network_table"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4099b7cfc5c5e2fe8c5edf3f6f7adf7a714c9cc697534f63a5a5da30397cb2c0"
+dependencies = [
+ "ip_network",
+ "ip_network_table-deps-treebitmap",
+]
+
+[[package]]
+name = "ip_network_table-deps-treebitmap"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e537132deb99c0eb4b752f0346b6a836200eaaa3516dd7e5514b63930a09e5d"
+
+[[package]]
 name = "ipconfig"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5733,6 +5766,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
+name = "memoffset"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "mimalloc"
 version = "0.1.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5897,6 +5939,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
+name = "neptun"
+version = "2.2.3"
+source = "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.1#a45a31d28780695cb816d5e245a70bd520bd1293"
+dependencies = [
+ "aead",
+ "base64",
+ "blake2",
+ "chacha20poly1305",
+ "crossbeam-channel",
+ "dispatch2",
+ "hex",
+ "hmac 0.12.1",
+ "ip_network",
+ "ip_network_table",
+ "libc",
+ "nix 0.31.3",
+ "num_cpus",
+ "parking_lot",
+ "rand_core 0.6.4",
+ "ring",
+ "socket2 0.6.4",
+ "subtle",
+ "thiserror 2.0.19",
+ "tracing",
+ "untrusted",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
 name = "netlink-packet-core"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5958,9 +6030,9 @@ dependencies = [
 
 [[package]]
 name = "nftnl"
-version = "0.9.2"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39ca472ecf2987c3de5b728d24876eb94724269fff2c526e6beb0c80fe4bbb3b"
+checksum = "6f6d338cb46ff5b5614179474ce3775cf309f241ab512056a24428a13a89c671"
 dependencies = [
  "bitflags",
  "log",
@@ -6002,6 +6074,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -8913,6 +8986,15 @@ checksum = "f4987bdc12753382e0bec4a65c50738ffaabc998b9cdd1f952fb5f39b0048a96"
 dependencies = [
  "crypto-common 0.2.2",
  "ctutils",
+]
+
+[[package]]
+name = "unix-ancillary"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42ac4a37133a344680f0be5a54816fbd0c615e5f910c047962237ae8348ca53a"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

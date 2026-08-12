@@ -192,8 +192,6 @@ impl From<Option<Connection>> for options::Options {
             health_check_intervals,
             lan_lockdown: false,
             probe_local_addresses: false,
-            // 1s effectively disables pseudonym caching; revert once hopr-lib supports PIX
-            session_pseudonym_ttl: Duration::from_secs(1),
             path_planner_min_ack_rate: options::DEFAULT_PATH_PLANNER_MIN_ACK_RATE,
         }
     }

@@ -67,3 +67,15 @@ impl Display for SessionClientMetadata {
         )
     }
 }
+
+/// A raw HOPR session opened for the spliced WireGuard data plane.
+///
+/// Unlike the bridge/registration sessions opened through the local listener
+/// bridge, this session is not tracked in `open_listeners`: it has no bound socket
+/// (`metadata.bound_host` is a vestigial placeholder) and closing it means dropping
+/// `session`. The `configurator` is the direct handle for SURB balancer adjustments.
+pub struct SplicedWgSession {
+    pub session: edgli::hopr_lib::exports::transport::HoprSession,
+    pub configurator: edgli::hopr_lib::exports::transport::HoprSessionConfigurator,
+    pub metadata: SessionClientMetadata,
+}
