@@ -10,6 +10,8 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
+use crate::serde_utils;
+
 /// How many samples to retain. At the pump's sampling cadence this covers
 /// roughly the last 20 minutes.
 const HISTORY_CAPACITY: usize = 300;
@@ -22,10 +24,12 @@ const HISTORY_CAPACITY: usize = 300;
 /// handshake, not "now".
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TunnelStatsSample {
+    #[serde(with = "serde_utils::system_time")]
     pub at: SystemTime,
     pub tx_bytes: u64,
     pub rx_bytes: u64,
     pub rtt_ms: Option<u32>,
+    #[serde(with = "serde_utils::opt_duration_ms")]
     pub time_since_last_handshake: Option<Duration>,
     pub estimated_loss: f32,
 }
