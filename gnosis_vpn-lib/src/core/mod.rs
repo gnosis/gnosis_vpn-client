@@ -1,8 +1,6 @@
 use edgli::EdgliInitState;
 use edgli::blokli::IncentiveOperations;
-use edgli::hopr_lib::api::types::primitive::traits::ToHex;
 use edgli::hopr_lib::builder::Keypair;
-use edgli::hopr_lib::exports::transport::SessionId;
 use futures_util::future::AbortHandle;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -20,9 +18,7 @@ use crate::compat::SafeModule;
 use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
-use crate::connection::pseudonym_cache::PseudonymCache;
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
-use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::route_health::{self, RouteHealth};
 use crate::worker_params::{self, WorkerParams};
@@ -79,6 +75,10 @@ pub struct Core {
     cancel_presafe_queries: CancellationToken,
     cancel_balances: CancellationToken,
     cancel_peers: CancellationToken,
+    // Tracks the connection's NepTUN pump task so teardown can wait for it to
+    // stop (dropping its TUN fd) before asking root to tear down routing;
+    // replaced together with cancel_connection.
+    wg_pump_tasks: TaskTracker,
 
     // user provided data
     target_destination: Option<Destination>,
@@ -103,7 +103,6 @@ pub struct Core {
     ongoing_disconnections: Vec<connection::down::Down>,
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
     reconnecting_since: Option<SystemTime>,
-    pseudonym_cache: PseudonymCache,
 }
 
 #[derive(Debug, Clone)]
@@ -156,8 +155,6 @@ impl Core {
         target_dest_id: Option<String>,
         outgoing_sender: mpsc::Sender<CoreToWorker>,
     ) -> Result<(Core, mpsc::Sender<WorkerToCore>), Error> {
-        wireguard::available().await?;
-        wireguard::executable().await?;
         let keys = worker_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
         let cancel_on_shutdown = CancellationToken::new();
@@ -178,7 +175,6 @@ impl Core {
 
         let (incoming_sender, incoming_receiver) = mpsc::channel(32);
         let cached_resolved_blokli_ips = worker_params.cached_blokli_ips().to_vec();
-        let pseudonym_cache = PseudonymCache::new(config.connection.session_pseudonym_ttl);
         let core = Core {
             // config data
             config,
@@ -196,6 +192,7 @@ impl Core {
             cancel_presafe_queries: cancel_on_shutdown.child_token(),
             cancel_balances: cancel_on_shutdown.child_token(),
             cancel_peers: cancel_on_shutdown.child_token(),
+            wg_pump_tasks: TaskTracker::new(),
 
             // user provided data
             target_destination,
@@ -215,7 +212,6 @@ impl Core {
             responders: HashMap::new(),
             // needed to keep working during enabled killswitch
             cached_resolved_blokli_ips,
-            pseudonym_cache,
             reconnecting_since: None,
         };
         Ok((core, incoming_sender))
@@ -301,16 +297,16 @@ impl Core {
                             );
                         }
                     }
-                    ResponseFromRoot::StaticWgRouting { request_id, res } => {
+                    ResponseFromRoot::TunnelReady { request_id, res } => {
                         if let Some(Responder::Str(tx)) = self.responders.remove(&request_id) {
                             let _ = tx.send(res).map_err(|_| {
-                                tracing::warn!("responder channel closed for static wg routing response");
+                                tracing::warn!("responder channel closed for tunnel ready response");
                             });
                         } else {
                             tracing::debug!(
                                 request_id,
                                 ?res,
-                                "no responder for static wg routing response (evicted or duplicate)"
+                                "no responder for tunnel ready response (evicted or duplicate)"
                             );
                         }
                     }
@@ -880,19 +876,19 @@ impl Core {
             }
 
             Results::ConnectionResult { res } => match (res, self.phase.clone()) {
-                (Ok(session), Phase::Connecting(mut conn)) => {
+                (Ok(_session), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     self.reconnecting_since = None;
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
-                    self.pseudonym_cache.remove(&conn.destination);
                     let route = format!(
                         "{}({})",
                         conn.destination.pretty_print_path(),
                         log_output::address(&conn.destination.address)
                     );
                     log_output::print_session_established(route.as_str());
-                    self.spawn_session_monitoring(session, results_sender);
+                    // A spliced session has no local listener to poll; the pump task
+                    // reports its own death via WgPumpExited instead of a monitor.
                     self.spawn_tunnel_ping_probe(results_sender);
                     self.cancel_peers.cancel();
                     self.cancel_peers = self.cancel_on_shutdown.child_token();
@@ -932,14 +928,17 @@ impl Core {
                 self.act_on_target(results_sender);
             }
 
-            Results::SessionMonitorFailed => match self.phase.clone() {
+            Results::WgPumpExited { reason } => match self.phase.clone() {
                 Phase::Connected(conn) => {
-                    tracing::warn!(%conn, "session monitor failed - reconnecting");
+                    tracing::warn!(%conn, %reason, "wg pump exited - reconnecting");
                     self.reconnecting_since = Some(SystemTime::now());
                     self.disconnect_from_connection(&conn, results_sender);
                 }
                 phase => {
-                    tracing::error!(?phase, "session monitor failed in unexpected phase");
+                    // During Connecting the runner's own tunnel ping verification
+                    // surfaces the failure; in any other phase the connection is
+                    // already being torn down.
+                    tracing::debug!(?phase, %reason, "wg pump exited outside an established connection");
                 }
             },
 
@@ -973,16 +972,20 @@ impl Core {
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
-                RunnerToRoot::StaticWgRouting {
-                    wg_data,
+                RunnerToRoot::SetupTunnel {
+                    interface_address,
+                    mtu,
+                    dns,
                     peer_ips,
                     resp,
                 } => {
                     let request_id = self.next_request_id();
                     self.responders.insert(request_id, Responder::Str(resp));
-                    let request = RequestToRoot::StaticWgRouting {
+                    let request = RequestToRoot::SetupTunnel {
                         request_id,
-                        wg_data,
+                        interface_address,
+                        mtu,
+                        dns,
                         peer_ips,
                     };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
@@ -1581,23 +1584,25 @@ impl Core {
             let conn = connection::up::Up::new(destination.clone());
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
-            // Entry is kept until connection is confirmed so retries within the TTL can reuse it.
-            let cached_pseudonym = self.pseudonym_cache.get(&destination);
-            if let Some(pseudonym) = &cached_pseudonym {
-                tracing::info!(%destination, %pseudonym, "reusing cached session pseudonym for reconnection");
-            }
             let prev_conn = connection::up::runner::PreviousConnection {
                 blokli_ips: self.cached_resolved_blokli_ips.clone(),
-                pseudonym: cached_pseudonym,
                 wg_public_key: prev_public_key,
             };
+            let spec = connection::up::runner::ConnectionSpec {
+                destination: conn.destination.clone(),
+                options: config_connection,
+                wg_config: config_wireguard,
+            };
+            let pump_lifecycle = connection::up::runner::PumpLifecycle {
+                cancel: self.cancel_connection.clone(),
+                tasks: self.wg_pump_tasks.clone(),
+            };
             let runner = connection::up::runner::Runner::new(
-                conn.destination.clone(),
-                config_connection,
-                config_wireguard,
+                spec,
                 hopr.clone(),
                 self.worker_params.clone(),
                 prev_conn,
+                pump_lifecycle,
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
@@ -1614,7 +1619,12 @@ impl Core {
         }
     }
 
-    fn spawn_disconnection_runner(&mut self, disconn: &connection::down::Down, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_disconnection_runner(
+        &mut self,
+        disconn: &connection::down::Down,
+        pump_tasks: TaskTracker,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_on_shutdown.clone();
             let config_connection = self.config.connection.clone();
@@ -1624,6 +1634,7 @@ impl Core {
             self.ongoing_disconnections.push(disconn.clone());
             let outgoing_sender = self.outgoing_sender.clone();
             tokio::spawn(async move {
+                wait_for_pump_stop(pump_tasks).await;
                 // this is a oneshot command and we do not wait for any result
                 let _ = outgoing_sender
                     .send(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
@@ -1633,20 +1644,6 @@ impl Core {
                         runner.start(results_sender).await;
                     })
                     .await;
-            });
-        }
-    }
-
-    fn spawn_session_monitoring(&self, session: SessionClientMetadata, results_sender: &mpsc::Sender<Results>) {
-        if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_connection.clone();
-            let results_sender = results_sender.clone();
-            tokio::spawn(async move {
-                cancel
-                    .run_until_cancelled(async move {
-                        runner::monitor_session(hopr, &session, results_sender).await;
-                    })
-                    .await
             });
         }
     }
@@ -1709,15 +1706,9 @@ impl Core {
     }
 
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
-        // Cache the pseudonym so a reconnect within the TTL window can reuse exit node SURBs.
-        if let Some((_, session)) = &conn.ping_session
-            && let Some(client_id) = session.active_clients.first()
-            && let Ok(pseudonym) = SessionId::from_hex(client_id)
-        {
-            self.pseudonym_cache.insert(&conn.destination, pseudonym);
-        }
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
+        let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
         self.responders.clear();
         self.phase = Phase::HoprRunning;
         if let Some(dest) = self.config.destinations.get(&conn.destination.id).cloned()
@@ -1727,7 +1718,7 @@ impl Core {
             rh.disconnecting(hopr, &dest, &self.config.connection, results_sender);
         }
         if let Ok(disconn) = conn.try_into() {
-            self.spawn_disconnection_runner(&disconn, results_sender);
+            self.spawn_disconnection_runner(&disconn, pump_tasks, results_sender);
         } else {
             // connection did not even generate a wg pub key - so we can immediately try to connect again
             self.act_on_target(results_sender);
@@ -1749,6 +1740,12 @@ impl Core {
 
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
+        let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
+        // The cancelled runner's pending root responders belong to a connection
+        // that no longer exists; clear them so stale entries do not outlive it,
+        // matching disconnect_from_connection.
+        self.responders.clear();
+        wait_for_pump_stop(pump_tasks).await;
 
         // this is a oneshot command and we do not wait for any result
         let _ = self
@@ -1811,5 +1808,16 @@ impl Core {
                 })
                 .await
         });
+    }
+}
+
+/// Wait for the (already cancelled) NepTUN pump task to finish so the worker's
+/// TUN fd is closed before root tears down routing and drops its own fd. On
+/// Linux the TUN is multi-queue: re-provisioning while a stale fd lives would
+/// attach a second queue to the old device instead of creating a fresh one.
+async fn wait_for_pump_stop(pump_tasks: TaskTracker) {
+    pump_tasks.close();
+    if time::timeout(Duration::from_secs(5), pump_tasks.wait()).await.is_err() {
+        tracing::warn!("wg pump did not stop within 5s - proceeding with tunnel teardown");
     }
 }

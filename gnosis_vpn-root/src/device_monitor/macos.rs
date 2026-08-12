@@ -181,13 +181,65 @@ fn to_network_event(buf: &[u8]) -> Option<NetworkEvent> {
                 None // arrival: RTM_IFINFO already covers this
             }
         }
-        libc::RTM_ADD => Some(NetworkEvent::RouteAdded),
-        libc::RTM_DELETE => Some(NetworkEvent::RouteRemoved),
-        libc::RTM_CHANGE => Some(NetworkEvent::RouteChanged),
+        libc::RTM_ADD => {
+            let details = route_details(buf);
+            tracing::info!(pid = details.pid, destination = ?details.destination, "route added");
+            Some(NetworkEvent::RouteAdded)
+        }
+        libc::RTM_DELETE => {
+            let details = route_details(buf);
+            tracing::info!(pid = details.pid, destination = ?details.destination, "route removed");
+            Some(NetworkEvent::RouteRemoved)
+        }
+        libc::RTM_CHANGE => {
+            let details = route_details(buf);
+            tracing::info!(pid = details.pid, destination = ?details.destination, "route changed");
+            Some(NetworkEvent::RouteChanged)
+        }
         _ => {
             tracing::debug!(rtm_type, "device monitor: unhandled RTM type");
             None
         }
+    }
+}
+
+/// Origin and destination of an RTM_ADD/RTM_DELETE/RTM_CHANGE message, for
+/// attributing route churn: `pid` is the process that made the change (0 for
+/// the kernel itself), `destination` the affected route's RTA_DST address.
+struct RouteDetails {
+    pid: i32,
+    destination: Option<std::net::IpAddr>,
+}
+
+fn route_details(buf: &[u8]) -> RouteDetails {
+    // Caller guarantees the full rt_msghdr is present (to_network_event checks).
+    let pid_offset = std::mem::offset_of!(libc::rt_msghdr, rtm_pid);
+    let pid = i32::from_ne_bytes(buf[pid_offset..pid_offset + 4].try_into().unwrap());
+    let addrs_offset = std::mem::offset_of!(libc::rt_msghdr, rtm_addrs);
+    let addrs = i32::from_ne_bytes(buf[addrs_offset..addrs_offset + 4].try_into().unwrap());
+    let destination = if addrs & libc::RTA_DST != 0 {
+        // Sockaddrs follow the header in ascending RTA bit order, so RTA_DST is
+        // always first when present: sa_len at +0, sa_family at +1, then the
+        // family-specific address layout.
+        parse_sockaddr(&buf[std::mem::size_of::<libc::rt_msghdr>()..])
+    } else {
+        None
+    };
+    RouteDetails { pid, destination }
+}
+
+fn parse_sockaddr(buf: &[u8]) -> Option<std::net::IpAddr> {
+    let family = *buf.get(1)? as libc::c_int;
+    match family {
+        libc::AF_INET => {
+            let octets: [u8; 4] = buf.get(4..8)?.try_into().ok()?;
+            Some(std::net::IpAddr::V4(octets.into()))
+        }
+        libc::AF_INET6 => {
+            let octets: [u8; 16] = buf.get(8..24)?.try_into().ok()?;
+            Some(std::net::IpAddr::V6(octets.into()))
+        }
+        _ => None,
     }
 }
 
@@ -200,4 +252,71 @@ fn if_name(index: u32) -> Option<String> {
     std::ffi::CStr::from_bytes_until_nul(&buf)
         .ok()
         .map(|s| s.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    fn synthetic_route_msg(pid: i32, dst: Option<IpAddr>) -> Vec<u8> {
+        let header_len = std::mem::size_of::<libc::rt_msghdr>();
+        let mut buf = vec![0u8; header_len];
+        buf[3] = libc::RTM_ADD as u8;
+        let pid_offset = std::mem::offset_of!(libc::rt_msghdr, rtm_pid);
+        buf[pid_offset..pid_offset + 4].copy_from_slice(&pid.to_ne_bytes());
+        if let Some(dst) = dst {
+            let addrs_offset = std::mem::offset_of!(libc::rt_msghdr, rtm_addrs);
+            buf[addrs_offset..addrs_offset + 4].copy_from_slice(&libc::RTA_DST.to_ne_bytes());
+            match dst {
+                IpAddr::V4(v4) => {
+                    let mut sockaddr = [0u8; 16];
+                    sockaddr[0] = 16; // sin_len
+                    sockaddr[1] = libc::AF_INET as u8;
+                    sockaddr[4..8].copy_from_slice(&v4.octets());
+                    buf.extend_from_slice(&sockaddr);
+                }
+                IpAddr::V6(v6) => {
+                    let mut sockaddr = [0u8; 28];
+                    sockaddr[0] = 28; // sin6_len
+                    sockaddr[1] = libc::AF_INET6 as u8;
+                    sockaddr[8..24].copy_from_slice(&v6.octets());
+                    buf.extend_from_slice(&sockaddr);
+                }
+            }
+        }
+        buf
+    }
+
+    #[test]
+    fn route_details_extracts_pid_and_ipv4_destination() {
+        let dst = IpAddr::V4(Ipv4Addr::new(10, 128, 0, 1));
+        let details = route_details(&synthetic_route_msg(4711, Some(dst)));
+        assert_eq!(details.pid, 4711);
+        assert_eq!(details.destination, Some(dst));
+    }
+
+    #[test]
+    fn route_details_extracts_ipv6_destination() {
+        let dst = IpAddr::V6(Ipv6Addr::LOCALHOST);
+        let details = route_details(&synthetic_route_msg(0, Some(dst)));
+        assert_eq!(details.pid, 0);
+        assert_eq!(details.destination, Some(dst));
+    }
+
+    #[test]
+    fn route_details_without_destination_sockaddr() {
+        let details = route_details(&synthetic_route_msg(99, None));
+        assert_eq!(details.pid, 99);
+        assert_eq!(details.destination, None);
+    }
+
+    #[test]
+    fn route_details_tolerates_a_truncated_sockaddr() {
+        let mut buf = synthetic_route_msg(7, Some(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4))));
+        buf.truncate(std::mem::size_of::<libc::rt_msghdr>() + 3);
+        let details = route_details(&buf);
+        assert_eq!(details.pid, 7);
+        assert_eq!(details.destination, None);
+    }
 }

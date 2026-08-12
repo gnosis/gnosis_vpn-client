@@ -41,8 +41,6 @@ pub(super) struct Connection {
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
     pub(super) lan_lockdown: Option<bool>,
     pub(super) probe_local_addresses: Option<bool>,
-    #[serde(default, with = "humantime_serde::option")]
-    pub(super) session_pseudonym_ttl: Option<Duration>,
     #[serde(default, deserialize_with = "validate_path_planner_min_ack_rate")]
     pub(super) path_planner_min_ack_rate: Option<f64>,
 }
@@ -109,7 +107,6 @@ pub(super) struct SurbBalancingConfig {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct WireGuard {
-    pub(super) listen_port: Option<u16>,
     pub(super) allowed_ips: Option<String>,
     pub(super) force_private_key: Option<String>,
     pub(super) dns: Option<WireGuardDNS>,
@@ -321,11 +318,6 @@ impl From<Option<Connection>> for options::Options {
             })
             .unwrap_or(def_intervals);
 
-        // 1s effectively disables pseudonym caching; revert once hopr-lib supports PIX
-        let session_pseudonym_ttl = connection
-            .and_then(|c| c.session_pseudonym_ttl)
-            .unwrap_or(Duration::from_secs(1));
-
         options::Options {
             sessions,
             ping_options: ping_opts,
@@ -334,7 +326,6 @@ impl From<Option<Connection>> for options::Options {
             health_check_intervals,
             lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
             probe_local_addresses: connection.and_then(|c| c.probe_local_addresses).unwrap_or(false),
-            session_pseudonym_ttl,
             path_planner_min_ack_rate: connection
                 .and_then(|c| c.path_planner_min_ack_rate)
                 .unwrap_or(options::DEFAULT_PATH_PLANNER_MIN_ACK_RATE),
@@ -344,7 +335,6 @@ impl From<Option<Connection>> for options::Options {
 
 impl From<Option<WireGuard>> for WireGuardConfig {
     fn from(value: Option<WireGuard>) -> Self {
-        let listen_port = value.as_ref().and_then(|wg| wg.listen_port);
         let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
         let force_private_key = value.as_ref().and_then(|wg| wg.force_private_key.clone());
         let dns = value
@@ -359,7 +349,7 @@ impl From<Option<WireGuard>> for WireGuardConfig {
                 })
             })
             .unwrap_or(Some(WireGuardDNS::default_server()));
-        WireGuardConfig::new(listen_port, allowed_ips, force_private_key, dns)
+        WireGuardConfig::new(allowed_ips, force_private_key, dns)
     }
 }
 
@@ -396,7 +386,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
                 for (k, v) in wg.iter() {
-                    if k == "listen_port" || k == "allowed_ips" || k == "force_private_key" {
+                    if k == "allowed_ips" || k == "force_private_key" {
                         continue;
                     }
                     if k == "dns" {
@@ -433,7 +423,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         || k == "announced_peer_minimum_score"
                         || k == "lan_lockdown"
                         || k == "probe_local_addresses"
-                        || k == "session_pseudonym_ttl"
                         || k == "path_planner_min_ack_rate"
                     {
                         continue;
@@ -660,7 +649,7 @@ pub fn convert_destinations(
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelAllowlistConfig, Config, Strategy, convert_destinations, wrong_keys};
+    use super::{ChannelAllowlistConfig, Config, Strategy, WireGuardConfig, convert_destinations, wrong_keys};
     use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
     use crate::hopr::strategy_config::StrategyConfig;
     use edgli::hopr_lib::HopRouting;
@@ -815,6 +804,51 @@ path = { hops = 4 }
 "#####,
         );
         assert!(result.is_err(), "v6 must reject hops > MAX_HOPS");
+    }
+
+    #[test]
+    fn wireguard_listen_port_is_reported_as_a_wrong_key() {
+        // `listen_port` is not part of the schema: WireGuard runs in-process
+        // without a listening socket, so the key is flagged like any other
+        // unknown key instead of being special-cased.
+        let table: toml::Table = r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[wireguard]
+listen_port = 51820
+allowed_ips = "10.0.0.0/8"
+"#####
+            .parse()
+            .expect("valid TOML");
+        assert_eq!(super::wrong_keys(&table), vec!["wireguard.listen_port".to_string()]);
+    }
+
+    #[test]
+    fn wireguard_section_converts_to_config() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[wireguard]
+allowed_ips = "10.0.0.0/8"
+"#####,
+        );
+        let wg = cfg.wireguard.expect("wireguard section parsed");
+        let converted: WireGuardConfig = Some(wg).into();
+        assert_eq!(
+            converted,
+            WireGuardConfig::new(
+                Some("10.0.0.0/8".to_string()),
+                None,
+                Some("1.1.1.1,8.8.8.8".to_string())
+            )
+        );
     }
 
     #[test]

@@ -39,12 +39,37 @@ pub struct Firewall {
     pf_was_enabled: Option<bool>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PfRestoreAction {
+    Enable,
+    Disable,
+}
+
+fn pf_restore_action(was_enabled: Option<bool>) -> Option<PfRestoreAction> {
+    was_enabled.map(|enabled| {
+        if enabled {
+            PfRestoreAction::Enable
+        } else {
+            PfRestoreAction::Disable
+        }
+    })
+}
+
 impl Firewall {
     pub fn new() -> Result<Self, Error> {
         Ok(Firewall {
             pf: pfctl::PfCtl::new()?,
             pf_was_enabled: None,
         })
+    }
+
+    /// Capture PF's original global enablement before the killswitch changes it.
+    /// The returned bit is persisted by root for crash recovery.
+    pub fn capture_recovery_state(&mut self) -> Result<Option<bool>, Error> {
+        if self.pf_was_enabled.is_none() {
+            self.pf_was_enabled = Some(self.pf.is_enabled()?);
+        }
+        Ok(self.pf_was_enabled)
     }
 
     /// Apply killswitch policy: block everything except `allowed_ips` and infrastructure.
@@ -76,10 +101,17 @@ impl Firewall {
         rules_result.and(anchor_result).and(state_result)
     }
 
-    fn enable(&mut self) -> Result<(), Error> {
+    /// Reset a policy created by this or a previous process, restoring PF's
+    /// original global enablement when that state was persisted.
+    pub fn reset_policy_with_state(&mut self, was_enabled: Option<bool>) -> Result<(), Error> {
         if self.pf_was_enabled.is_none() {
-            self.pf_was_enabled = Some(self.pf.is_enabled().unwrap_or(false));
+            self.pf_was_enabled = was_enabled;
         }
+        self.reset_policy()
+    }
+
+    fn enable(&mut self) -> Result<(), Error> {
+        self.capture_recovery_state()?;
         Ok(self.pf.try_enable()?)
     }
 
@@ -123,9 +155,9 @@ impl Firewall {
     }
 
     fn restore_state(&mut self) -> Result<(), Error> {
-        match self.pf_was_enabled.take() {
-            Some(true) => Ok(self.pf.try_enable()?),
-            Some(false) => Ok(self.pf.try_disable()?),
+        match pf_restore_action(self.pf_was_enabled.take()) {
+            Some(PfRestoreAction::Enable) => Ok(self.pf.try_enable()?),
+            Some(PfRestoreAction::Disable) => Ok(self.pf.try_disable()?),
             None => Ok(()),
         }
     }
@@ -145,6 +177,21 @@ impl Firewall {
                 tracing::warn!(?e, "failed to kill PF state");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    #[test]
+    fn persisted_disabled_pf_state_requests_disable_after_anchor_cleanup() {
+        assert_eq!(pf_restore_action(Some(false)), Some(PfRestoreAction::Disable));
+    }
+
+    #[test]
+    fn legacy_state_does_not_change_pf_enablement() {
+        assert_eq!(pf_restore_action(None), None);
     }
 }
 

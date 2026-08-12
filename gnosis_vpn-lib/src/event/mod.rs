@@ -9,7 +9,6 @@ use std::time::Duration;
 use crate::command::{Response, WorkerCommand};
 use crate::config::Config;
 use crate::ping;
-use crate::wireguard::{self, WireGuard};
 use crate::worker_params::WorkerParams;
 
 /// Messages sent from worker to core application logic
@@ -33,8 +32,6 @@ pub enum CoreToWorker {
 }
 
 /// Messages sent from root to worker
-/// Allowing large variant as this is sent between processes
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RootToWorker {
     /// Wrap up and tear down any resources before worker process exits
@@ -43,8 +40,8 @@ pub enum RootToWorker {
     RotateLogs,
     /// Startup parameters
     StartupParams {
-        config: Config,
-        worker_params: WorkerParams,
+        config: Box<Config>,
+        worker_params: Box<WorkerParams>,
         target_dest_id: Option<String>,
     },
     /// Socket command received by root
@@ -57,7 +54,7 @@ pub enum RootToWorker {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum WorkerToRoot {
     /// Response to a socket command
-    Response { resp: Response, id: u64 },
+    Response { resp: Box<Response>, id: u64 },
     /// Request to root execution
     RequestToRoot(RequestToRoot),
 }
@@ -70,8 +67,13 @@ pub(crate) enum RunnerToRoot {
         interface: String,
         resp: oneshot::Sender<Result<(), String>>,
     },
-    StaticWgRouting {
-        wg_data: WireGuardData,
+    /// Ask root to provision the TUN device and split-tunnel routing for the
+    /// NepTUN data plane. No key material crosses the process boundary: the
+    /// WireGuard keys stay in the worker where the `WgTunnel` lives.
+    SetupTunnel {
+        interface_address: String,
+        mtu: u32,
+        dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
         resp: oneshot::Sender<Result<String, String>>,
     },
@@ -79,14 +81,6 @@ pub(crate) enum RunnerToRoot {
         options: ping::Options,
         resp: oneshot::Sender<Result<Duration, String>>,
     },
-}
-
-/// Data required for WireGuard operations
-#[derive(Debug, Serialize, Deserialize)]
-pub struct WireGuardData {
-    pub wg: WireGuard,
-    pub interface_info: wireguard::InterfaceInfo,
-    pub peer_info: wireguard::PeerInfo,
 }
 
 impl AsRef<RootToWorker> for RootToWorker {
@@ -104,9 +98,11 @@ pub enum RequestToRoot {
         peer_ips: Vec<Ipv4Addr>,
         interface: String,
     },
-    StaticWgRouting {
+    SetupTunnel {
         request_id: u64,
-        wg_data: WireGuardData,
+        interface_address: String,
+        mtu: u32,
+        dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
     },
     TearDownWg,
@@ -132,8 +128,8 @@ pub enum ResponseFromRoot {
         request_id: u64,
         res: Result<(), String>,
     },
-    /// On success, the String is the resolved WireGuard interface name.
-    StaticWgRouting {
+    /// On success, the String is the resolved TUN interface name.
+    TunnelReady {
         request_id: u64,
         res: Result<String, String>,
     },
@@ -141,4 +137,105 @@ pub enum ResponseFromRoot {
         request_id: u64,
         res: Result<Duration, String>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_to_worker_stays_below_large_enum_threshold() {
+        let size = std::mem::size_of::<RootToWorker>();
+        assert!(size <= 128, "RootToWorker is {size} bytes");
+    }
+
+    #[test]
+    fn worker_to_root_stays_below_large_enum_threshold() {
+        let size = std::mem::size_of::<WorkerToRoot>();
+        assert!(size <= 128, "WorkerToRoot is {size} bytes");
+    }
+
+    #[test]
+    fn boxed_worker_response_preserves_json_representation() {
+        let response = WorkerToRoot::Response {
+            resp: Box::new(Response::Pong),
+            id: 42,
+        };
+        let value = serde_json::to_value(response).expect("serialize worker response");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "Response": {
+                    "resp": "Pong",
+                    "id": 42
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn setup_tunnel_request_survives_serde_round_trip() {
+        let request = RequestToRoot::SetupTunnel {
+            request_id: 7,
+            interface_address: "10.128.0.5/9".to_string(),
+            mtu: 1420,
+            dns: Some("1.1.1.1,8.8.8.8".to_string()),
+            peer_ips: vec![Ipv4Addr::new(192, 0, 2, 1), Ipv4Addr::new(198, 51, 100, 42)],
+        };
+        let json = serde_json::to_string(&request).expect("serialize");
+        let decoded: RequestToRoot = serde_json::from_str(&json).expect("deserialize");
+        match decoded {
+            RequestToRoot::SetupTunnel {
+                request_id,
+                interface_address,
+                mtu,
+                dns,
+                peer_ips,
+            } => {
+                assert_eq!(request_id, 7);
+                assert_eq!(interface_address, "10.128.0.5/9");
+                assert_eq!(mtu, 1420);
+                assert_eq!(dns.as_deref(), Some("1.1.1.1,8.8.8.8"));
+                assert_eq!(
+                    peer_ips,
+                    vec![Ipv4Addr::new(192, 0, 2, 1), Ipv4Addr::new(198, 51, 100, 42)]
+                );
+            }
+            other => panic!("expected SetupTunnel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tunnel_ready_success_survives_serde_round_trip() {
+        let response = ResponseFromRoot::TunnelReady {
+            request_id: 7,
+            res: Ok("utun7".to_string()),
+        };
+        let json = serde_json::to_string(&response).expect("serialize");
+        let decoded: ResponseFromRoot = serde_json::from_str(&json).expect("deserialize");
+        match decoded {
+            ResponseFromRoot::TunnelReady { request_id, res } => {
+                assert_eq!(request_id, 7);
+                assert_eq!(res.as_deref(), Ok("utun7"));
+            }
+            other => panic!("expected TunnelReady, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tunnel_ready_failure_survives_serde_round_trip() {
+        let response = ResponseFromRoot::TunnelReady {
+            request_id: 8,
+            res: Err("routing setup failed".to_string()),
+        };
+        let json = serde_json::to_string(&response).expect("serialize");
+        let decoded: ResponseFromRoot = serde_json::from_str(&json).expect("deserialize");
+        match decoded {
+            ResponseFromRoot::TunnelReady { request_id, res } => {
+                assert_eq!(request_id, 8);
+                assert_eq!(res, Err("routing setup failed".to_string()));
+            }
+            other => panic!("expected TunnelReady, got {other:?}"),
+        }
+    }
 }
