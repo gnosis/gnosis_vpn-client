@@ -1,0 +1,80 @@
+name: Sync Nix git hashes
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+    paths:
+      - Cargo.lock
+concurrency:
+  group: renovate-nix-hashes-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  sync-hashes:
+    name: Sync outputHashes
+    runs-on: depot-ubuntu-22.04-4 # Depot Ubuntu 22.04, 4 CPUs, 16 GB RAM
+    # Only Renovate moves git-pinned Cargo deps on its own branches; anyone
+    # else's Cargo.lock edits go through the normal PR review + CI path.
+    if: |
+      github.event.pull_request.head.repo.fork == false &&
+      github.event.pull_request.user.login == 'renovate[bot]'
+    steps:
+      - name: Generate GitHub App token
+        id: bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.GH_APP_GNOSISVPN_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
+          owner: gnosis
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Checkout PR branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ steps.bot-token.outputs.token }}
+      # nix/gnosisvpn.nix's outputHashes only needs a refresh when a git
+      # dependency's `?rev=`/`?tag=` pin actually moved, not for every
+      # registry-crate version bump Renovate might bundle into the same PR.
+      - name: Check whether a git-pinned dependency moved
+        id: filter
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          git fetch --depth=1 origin "${BASE_REF}"
+          if git diff --unified=0 "origin/${BASE_REF}" -- Cargo.lock \
+              | grep -qE '^[+-]source = "git\+'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Setup Nix
+        if: steps.filter.outputs.changed == 'true'
+        uses: hoprnet/hopr-workflows/actions/setup-nix@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # setup-nix-v2.0.2
+        with:
+          cachix_cache_name: gnosis-vpn-client
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Recompute outputHashes
+        if: steps.filter.outputs.changed == 'true'
+        run: nix shell nixpkgs#nix-prefetch-git nixpkgs#jq --command ./scripts/update-nix-git-hashes.sh
+      - name: Commit and push if changed
+        if: steps.filter.outputs.changed == 'true'
+        env:
+          APP_SLUG: ${{ steps.bot-token.outputs.app-slug }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if git diff --quiet -- nix/gnosisvpn.nix; then
+            echo "outputHashes already up to date"
+            exit 0
+          fi
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+          git add nix/gnosisvpn.nix
+          git commit -m "chore(nix): sync outputHashes with Cargo.lock"
+          # App-token push delivers a synchronize event, re-running CI against
+          # the corrected hashes (see bump-version.yaml for the same pattern).
+          git push origin "HEAD:refs/heads/${BRANCH}"
