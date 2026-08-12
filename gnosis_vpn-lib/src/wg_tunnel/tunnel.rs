@@ -9,6 +9,7 @@
 //! plumbing involved.
 
 use std::net::IpAddr;
+use std::time::SystemTime;
 
 use ipnetwork::IpNetwork;
 use neptun::noise::errors::WireGuardError;
@@ -16,6 +17,7 @@ use neptun::noise::{Tunn, TunnResult};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use super::Error;
+use super::stats::TunnelStatsSample;
 use crate::wireguard;
 
 /// WireGuard's per-datagram overhead over the plaintext: a 16-byte data-message
@@ -67,6 +69,9 @@ pub trait TunnelEngine {
     fn decapsulate(&mut self, datagram: &[u8]) -> Result<Outputs, Error>;
     /// Advance WireGuard's timers, emitting any due datagrams.
     fn update_timers(&mut self) -> Result<TimerTick, Error>;
+    /// Snapshot NepTUN's own tunnel counters and timers (bytes, handshake age,
+    /// rtt, loss estimate).
+    fn stats(&self) -> TunnelStatsSample;
 }
 
 /// One decapsulate step, decoupled from the scratch buffer's borrow so the drain
@@ -208,6 +213,18 @@ impl TunnelEngine for WgTunnel {
             }),
             TunnResult::Err(e) => Err(Error::WireGuard(e)),
             TunnResult::WriteToTunnel(..) => Err(Error::Unexpected("update_timers wrote to tunnel")),
+        }
+    }
+
+    fn stats(&self) -> TunnelStatsSample {
+        let (time_since_last_handshake, tx_bytes, rx_bytes, estimated_loss, rtt_ms) = self.tunn.stats();
+        TunnelStatsSample {
+            at: SystemTime::now(),
+            tx_bytes,
+            rx_bytes,
+            rtt_ms,
+            time_since_last_handshake,
+            estimated_loss,
         }
     }
 }

@@ -9,13 +9,21 @@
 //! Writes are awaited inline, so a slow session applies real backpressure to the
 //! TUN reader - replacing the old UDP bridge's silent-drop ingress queue.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::Error;
+use super::stats::WgTunnelStatsHandle;
 use super::tunnel::TunnelEngine;
 
 /// Cadence of NepTUN's timer processing, matching its own device loop.
 const TIMER_PERIOD: Duration = Duration::from_millis(250);
+
+/// Sample tunnel stats every Nth timer tick rather than every tick: `rtt_ms`
+/// and handshake age barely change between WireGuard handshakes (~2 min
+/// apart), so sampling every 250ms would mostly record duplicates. Every 16th
+/// tick is ~4s.
+const STATS_SAMPLE_EVERY_N_TICKS: u32 = 16;
 
 /// Longest a single session/TUN write may block before the pump treats the
 /// endpoint as wedged and tears down so the connection can be re-established.
@@ -138,6 +146,7 @@ pub async fn run<E, NS, NR, TS, TR>(
     mut net_rx: NR,
     mut tun_tx: TS,
     mut tun_rx: TR,
+    stats: Arc<WgTunnelStatsHandle>,
 ) -> Result<PumpExit, Error>
 where
     E: TunnelEngine + Send + 'static,
@@ -162,6 +171,7 @@ where
     // replay), so tear down for a fresh session rather than degrade silently.
     let mut decap_window_total: u32 = 0;
     let mut decap_window_failures: u32 = 0;
+    let mut timer_ticks: u32 = 0;
 
     loop {
         tokio::select! {
@@ -227,6 +237,10 @@ where
                     if let Sent::Closed = send_network(&mut net_tx, &datagram).await? {
                         return Ok(PumpExit::NetworkClosed);
                     }
+                }
+                timer_ticks += 1;
+                if timer_ticks.is_multiple_of(STATS_SAMPLE_EVERY_N_TICKS) {
+                    stats.record(engine.stats());
                 }
             }
         }
@@ -343,6 +357,9 @@ mod tests {
         fn update_timers(&mut self) -> Result<TimerTick, Error> {
             Ok(self.ticks.pop_front().unwrap_or_default())
         }
+        fn stats(&self) -> crate::wg_tunnel::TunnelStatsSample {
+            crate::wg_tunnel::TunnelStatsSample::default()
+        }
     }
 
     fn ipv4_packet(src: [u8; 4], dst: [u8; 4]) -> Vec<u8> {
@@ -369,6 +386,7 @@ mod tests {
             ChannelRx(net_in),
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in),
+            Arc::new(WgTunnelStatsHandle::new()),
         ));
         assert_eq!(net_out.recv().await, Some(vec![0xaa, 0xbb, 0xcc]));
         handle.abort();
@@ -397,6 +415,7 @@ mod tests {
             ChannelRx(net_in),
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in),
+            Arc::new(WgTunnelStatsHandle::new()),
         ));
         net_in_tx.send(vec![0x01, 0x02]).await.unwrap();
         assert_eq!(tun_out.recv().await, Some(packet));
@@ -420,6 +439,7 @@ mod tests {
             ChannelRx(net_in),
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in),
+            Arc::new(WgTunnelStatsHandle::new()),
         ));
         // First datagram out is the handshake init; then our echoed packet.
         assert_eq!(net_out.recv().await, Some(vec![0xff]));
@@ -449,6 +469,7 @@ mod tests {
             ChannelRx(net_in),
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in),
+            Arc::new(WgTunnelStatsHandle::new()),
         ));
         assert_eq!(net_out.recv().await, Some(vec![1])); // handshake init
         net_in_tx.send(vec![0xde, 0xad]).await.unwrap(); // dropped datagram
@@ -482,6 +503,7 @@ mod tests {
             ChannelRx(net_in),
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in),
+            Arc::new(WgTunnelStatsHandle::new()),
         ));
         // Feed more than a full window; every datagram fails, so the guard fires.
         for _ in 0..(super::DECAP_FAILURE_WINDOW + 16) {
@@ -515,6 +537,7 @@ mod tests {
                 ChannelRx(net_in),
                 ChannelTx(tun_out_tx),
                 ChannelRx(tun_in),
+                Arc::new(WgTunnelStatsHandle::new()),
             ),
         )
         .await
@@ -543,6 +566,7 @@ mod tests {
             ChannelRx(net_in),
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in),
+            Arc::new(WgTunnelStatsHandle::new()),
         )
         .await
         .expect_err("a wedged write must be fatal");
@@ -573,6 +597,7 @@ mod tests {
                 ChannelRx(net_in),
                 ChannelTx(tun_out_tx),
                 ChannelRx(tun_in),
+                Arc::new(WgTunnelStatsHandle::new()),
             ),
         )
         .await
@@ -607,6 +632,7 @@ mod tests {
                 ChannelRx(net_in),
                 ChannelTx(tun_out_tx),
                 ChannelRx(tun_in),
+                Arc::new(WgTunnelStatsHandle::new()),
             ),
         )
         .await
@@ -635,6 +661,7 @@ mod tests {
                 ChannelRx(net_in),
                 ChannelTx(tun_out_tx),
                 ChannelRx(tun_in),
+                Arc::new(WgTunnelStatsHandle::new()),
             ),
         )
         .await
@@ -663,6 +690,7 @@ mod tests {
                 ChannelRx(net_in),
                 ChannelTx(tun_out_tx),
                 ChannelRx(tun_in),
+                Arc::new(WgTunnelStatsHandle::new()),
             ),
         )
         .await
@@ -727,6 +755,7 @@ mod tests {
             ChannelRx(to_client_rx),
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in_rx),
+            Arc::new(WgTunnelStatsHandle::new()),
         ));
 
         // Inject an outbound packet from the "applications" side of the TUN.
@@ -787,7 +816,14 @@ mod tests {
         let (tun_in_tx, tun_in_rx) = channel::<Vec<u8>>(16);
         let (tun_out_tx, mut tun_out_rx) = channel::<Vec<u8>>(16);
 
-        let pump = tokio::spawn(run(client, net_tx, net_rx, ChannelTx(tun_out_tx), ChannelRx(tun_in_rx)));
+        let pump = tokio::spawn(run(
+            client,
+            net_tx,
+            net_rx,
+            ChannelTx(tun_out_tx),
+            ChannelRx(tun_in_rx),
+            Arc::new(WgTunnelStatsHandle::new()),
+        ));
 
         // Drive the server inline over the raw session bytes so ordering is fully
         // controlled and each `recv` returns exactly one datagram.

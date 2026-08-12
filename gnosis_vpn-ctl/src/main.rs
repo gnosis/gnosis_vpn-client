@@ -529,6 +529,7 @@ fn print_connecting_stats(stats: &command::ConnStats) {
         )
         .as_str(),
     );
+    str_resp.push_str(&print_wg_tunnel_stats(stats));
     println!("{str_resp}");
 }
 
@@ -548,7 +549,29 @@ fn print_connected_stats(stats: &command::ConnStats) {
     if let Some(ref wg_pubkey) = stats.wg_server_pubkey {
         str_resp.push_str(format!("---\nExit WireGuard Public Key: {}\n", wg_pubkey).as_str());
     }
+    str_resp.push_str(&print_wg_tunnel_stats(stats));
     println!("{str_resp}");
+}
+
+/// Render the last WireGuard tunnel stats sample, if the pump has started and
+/// recorded one. `rtt`/handshake age are labeled "as of last handshake", not
+/// "current" - WireGuard only updates them on a handshake, which recurs every
+/// ~120s on an active tunnel, so they can be meaningfully stale.
+fn print_wg_tunnel_stats(stats: &command::ConnStats) -> String {
+    let Some(current) = stats.wg_stats.as_ref().and_then(|s| s.current.as_ref()) else {
+        return String::new();
+    };
+    let rtt = current.rtt_ms.map(|ms| format!("{ms}ms")).unwrap_or("--".to_string());
+    let handshake_age = current
+        .time_since_last_handshake
+        .map(|d| format!("{:.0}s ago", d.as_secs_f64()))
+        .unwrap_or("--".to_string());
+    format!(
+        "---\nTunnel RTT (as of last handshake): {rtt}\nLast handshake: {handshake_age}\nTx bytes: {}\nRx bytes: {}\nEstimated loss: {:.1}%\n",
+        current.tx_bytes,
+        current.rx_bytes,
+        current.estimated_loss * 100.0,
+    )
 }
 
 fn print_session(session: &command::ActiveSession) -> String {

@@ -174,11 +174,21 @@ impl Runner {
             .await;
         let allowed_ips = parse_allowed_ips(self.wg_config.allowed_ips.as_deref());
         let interface = request_setup_tunnel(&registration, &self.wg_config, peer_ips.clone(), &results_sender).await?;
-        let (engine, tun_reader, tun_writer) = prepare_pump(&wg, &registration, allowed_ips).await?;
+        let (engine, tun_reader, tun_writer, wg_stats) = prepare_pump(&wg, &registration, allowed_ips).await?;
         let (read_half, write_half) = tokio::io::split(hopr_session);
         let net_tx = wg_tunnel::SessionSender::new(write_half);
         let net_rx = wg_tunnel::SessionReceiver::new(read_half);
-        self.spawn_pump_task(engine, net_tx, net_rx, tun_writer, tun_reader, &results_sender);
+        let _ = results_sender
+            .send(progress(Progress::WgPumpStarted(wg_stats.clone())))
+            .await;
+        self.spawn_pump_task(
+            engine,
+            net_tx,
+            net_rx,
+            (tun_writer, tun_reader),
+            wg_stats,
+            &results_sender,
+        );
 
         // 9. activate killswitch now that the interface name is known
         let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
@@ -404,13 +414,22 @@ async fn request_setup_tunnel(
     )
 }
 
-/// Receive the TUN fd from root and build the pump's engine and TUN endpoints.
+/// Receive the TUN fd from root and build the pump's engine, TUN endpoints, and
+/// the tunnel stats handle the pump will record into as it runs.
 /// The network endpoint is supplied by the caller per the data-plane selection.
 async fn prepare_pump(
     wg: &WireGuard,
     registration: &Registration,
     allowed_ips: Vec<IpNetwork>,
-) -> Result<(wg_tunnel::WgTunnel, wg_tunnel::TunReader, wg_tunnel::TunWriter), Error> {
+) -> Result<
+    (
+        wg_tunnel::WgTunnel,
+        wg_tunnel::TunReader,
+        wg_tunnel::TunWriter,
+        Arc<wg_tunnel::WgTunnelStatsHandle>,
+    ),
+    Error,
+> {
     // The TUN fd is delivered out-of-band by root over the dedicated fd-passing
     // socket; block for it off the async runtime.
     let tun_fd = tokio::task::spawn_blocking(crate::socket::worker::recv_tun_fd)
@@ -429,8 +448,9 @@ async fn prepare_pump(
         &allowed_ips,
     )
     .map_err(|e| Error::Runtime(format!("failed to build wg tunnel: {e}")))?;
+    let stats = Arc::new(wg_tunnel::WgTunnelStatsHandle::new());
 
-    Ok((engine, tun_reader, tun_writer))
+    Ok((engine, tun_reader, tun_writer, stats))
 }
 
 impl Runner {
@@ -445,18 +465,19 @@ impl Runner {
         engine: wg_tunnel::WgTunnel,
         net_tx: NS,
         net_rx: NR,
-        tun_writer: wg_tunnel::TunWriter,
-        tun_reader: wg_tunnel::TunReader,
+        tun: (wg_tunnel::TunWriter, wg_tunnel::TunReader),
+        stats: Arc<wg_tunnel::WgTunnelStatsHandle>,
         results_sender: &mpsc::Sender<Results>,
     ) where
         NS: wg_tunnel::NetworkSender + 'static,
         NR: wg_tunnel::NetworkReceiver + 'static,
     {
+        let (tun_writer, tun_reader) = tun;
         let cancel = self.cancel.clone();
         let results_sender = results_sender.clone();
         self.pump_tasks.spawn(async move {
             let outcome = cancel
-                .run_until_cancelled(wg_tunnel::run(engine, net_tx, net_rx, tun_writer, tun_reader))
+                .run_until_cancelled(wg_tunnel::run(engine, net_tx, net_rx, tun_writer, tun_reader, stats))
                 .await;
             match pump_exit_reason(outcome) {
                 None => tracing::debug!("wg pump stopped (connection cancelled)"),
