@@ -9,6 +9,9 @@
 # git source in Cargo.lock and rewrites the outputHashes block to match.
 #
 # Required commands: nix-prefetch-git, jq, nix (for `nix hash`).
+#
+# Linux/CI-oriented: relies on GNU grep (`-oP`) and bash `mapfile`; BSD userland
+# (stock macOS) lacks both. Run it via `nix shell` / in the workflow, not raw.
 
 set -euo pipefail
 
@@ -23,7 +26,9 @@ for cmd in nix-prefetch-git jq nix; do
     fi
 done
 
-mapfile -t sources < <(grep -oP '^source = "\Kgit\+[^"]+' "$cargo_lock" | sort -u)
+# LC_ALL=C keeps the emitted order byte-stable across runner locales, matching
+# the entry order committed in nix/gnosisvpn.nix so re-runs produce clean diffs.
+mapfile -t sources < <(grep -oP '^source = "\Kgit\+[^"]+' "$cargo_lock" | LC_ALL=C sort -u)
 
 if [ "${#sources[@]}" -eq 0 ]; then
     echo "error: no git dependencies found in $cargo_lock" >&2
