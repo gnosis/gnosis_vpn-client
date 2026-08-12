@@ -9,11 +9,12 @@
 //! Writes are awaited inline, so a slow session applies real backpressure to the
 //! TUN reader - replacing the old UDP bridge's silent-drop ingress queue.
 
-use std::sync::Arc;
+use tokio::sync::mpsc;
+
 use std::time::Duration;
 
 use super::Error;
-use super::stats::WgTunnelStatsHandle;
+use super::stats::TunnelStatsSample;
 use super::tunnel::TunnelEngine;
 
 /// Cadence of NepTUN's timer processing, matching its own device loop.
@@ -146,7 +147,7 @@ pub async fn run<E, NS, NR, TS, TR>(
     mut net_rx: NR,
     mut tun_tx: TS,
     mut tun_rx: TR,
-    stats: Arc<WgTunnelStatsHandle>,
+    sample_sender: mpsc::Sender<TunnelStatsSample>,
 ) -> Result<PumpExit, Error>
 where
     E: TunnelEngine + Send + 'static,
@@ -240,7 +241,9 @@ where
                 }
                 timer_ticks += 1;
                 if timer_ticks.is_multiple_of(STATS_SAMPLE_EVERY_N_TICKS) {
-                    stats.record(engine.stats());
+                    // Best-effort: a full channel or closed receiver must never stall
+                    // this loop, so drop the sample rather than await capacity.
+                    let _ = sample_sender.try_send(engine.stats());
                 }
             }
         }
@@ -369,6 +372,11 @@ mod tests {
         p
     }
 
+    /// A throwaway stats sample sender; these tests don't inspect telemetry.
+    fn stats_sender() -> Sender<crate::wg_tunnel::TunnelStatsSample> {
+        channel(1).0
+    }
+
     #[tokio::test]
     async fn pump_sends_handshake_initiation_before_anything_else() {
         let engine = ScriptedEngine {
@@ -386,7 +394,7 @@ mod tests {
             ChannelRx(net_in),
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in),
-            Arc::new(WgTunnelStatsHandle::new()),
+            stats_sender(),
         ));
         assert_eq!(net_out.recv().await, Some(vec![0xaa, 0xbb, 0xcc]));
         handle.abort();
@@ -415,7 +423,7 @@ mod tests {
             ChannelRx(net_in),
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in),
-            Arc::new(WgTunnelStatsHandle::new()),
+            stats_sender(),
         ));
         net_in_tx.send(vec![0x01, 0x02]).await.unwrap();
         assert_eq!(tun_out.recv().await, Some(packet));
@@ -439,7 +447,7 @@ mod tests {
             ChannelRx(net_in),
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in),
-            Arc::new(WgTunnelStatsHandle::new()),
+            stats_sender(),
         ));
         // First datagram out is the handshake init; then our echoed packet.
         assert_eq!(net_out.recv().await, Some(vec![0xff]));
@@ -469,7 +477,7 @@ mod tests {
             ChannelRx(net_in),
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in),
-            Arc::new(WgTunnelStatsHandle::new()),
+            stats_sender(),
         ));
         assert_eq!(net_out.recv().await, Some(vec![1])); // handshake init
         net_in_tx.send(vec![0xde, 0xad]).await.unwrap(); // dropped datagram
@@ -503,7 +511,7 @@ mod tests {
             ChannelRx(net_in),
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in),
-            Arc::new(WgTunnelStatsHandle::new()),
+            stats_sender(),
         ));
         // Feed more than a full window; every datagram fails, so the guard fires.
         for _ in 0..(super::DECAP_FAILURE_WINDOW + 16) {
@@ -537,7 +545,7 @@ mod tests {
                 ChannelRx(net_in),
                 ChannelTx(tun_out_tx),
                 ChannelRx(tun_in),
-                Arc::new(WgTunnelStatsHandle::new()),
+                stats_sender(),
             ),
         )
         .await
@@ -566,7 +574,7 @@ mod tests {
             ChannelRx(net_in),
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in),
-            Arc::new(WgTunnelStatsHandle::new()),
+            stats_sender(),
         )
         .await
         .expect_err("a wedged write must be fatal");
@@ -597,7 +605,7 @@ mod tests {
                 ChannelRx(net_in),
                 ChannelTx(tun_out_tx),
                 ChannelRx(tun_in),
-                Arc::new(WgTunnelStatsHandle::new()),
+                stats_sender(),
             ),
         )
         .await
@@ -632,7 +640,7 @@ mod tests {
                 ChannelRx(net_in),
                 ChannelTx(tun_out_tx),
                 ChannelRx(tun_in),
-                Arc::new(WgTunnelStatsHandle::new()),
+                stats_sender(),
             ),
         )
         .await
@@ -661,7 +669,7 @@ mod tests {
                 ChannelRx(net_in),
                 ChannelTx(tun_out_tx),
                 ChannelRx(tun_in),
-                Arc::new(WgTunnelStatsHandle::new()),
+                stats_sender(),
             ),
         )
         .await
@@ -690,7 +698,7 @@ mod tests {
                 ChannelRx(net_in),
                 ChannelTx(tun_out_tx),
                 ChannelRx(tun_in),
-                Arc::new(WgTunnelStatsHandle::new()),
+                stats_sender(),
             ),
         )
         .await
@@ -755,7 +763,7 @@ mod tests {
             ChannelRx(to_client_rx),
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in_rx),
-            Arc::new(WgTunnelStatsHandle::new()),
+            stats_sender(),
         ));
 
         // Inject an outbound packet from the "applications" side of the TUN.
@@ -822,7 +830,7 @@ mod tests {
             net_rx,
             ChannelTx(tun_out_tx),
             ChannelRx(tun_in_rx),
-            Arc::new(WgTunnelStatsHandle::new()),
+            stats_sender(),
         ));
 
         // Drive the server inline over the raw session bytes so ordering is fully

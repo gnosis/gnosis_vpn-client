@@ -24,7 +24,8 @@ use neptun::noise::errors::WireGuardError;
 
 pub use pump::{NetworkReceiver, NetworkSender, PumpExit, TunReceiver, TunSender, run};
 pub use session::{SessionReceiver, SessionSender};
-pub use stats::{TunnelStatsSample, WgTunnelStats, WgTunnelStatsHandle};
+pub(crate) use stats::HISTORY_CAPACITY;
+pub use stats::{TunnelStatsSample, WgTunnelStats};
 #[cfg(unix)]
 pub use tun::{PLATFORM_TUN_HEADER_LEN, TunReader, TunWriter, tun_endpoints};
 pub use tunnel::{Outputs, TimerTick, TunnelEngine, WgTunnel};

@@ -1,9 +1,10 @@
+use edgli::hopr_lib::exports::transport::HoprSessionConfigurator;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use std::collections::VecDeque;
 use std::fmt::{self, Display};
 use std::net;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use crate::connection::destination::Destination;
@@ -11,7 +12,7 @@ use crate::connection::options::SurbConfigError;
 use crate::gvpn_client::Registration;
 use crate::hopr::HoprError;
 use crate::hopr::types::SessionClientMetadata;
-use crate::wg_tunnel::WgTunnelStatsHandle;
+use crate::wg_tunnel::{self, TunnelStatsSample};
 use crate::wireguard::WireGuard;
 use crate::{gvpn_client, log_output, remote_data, wireguard};
 
@@ -41,7 +42,9 @@ pub enum Progress {
     PeerIps,
     KillswitchLockdown,
     StaticWgTunnel(SessionClientMetadata),
-    WgPumpStarted(Arc<WgTunnelStatsHandle>),
+    /// Handle to adjust the active session's SURB balancer, retained on `Up`
+    /// so `core` can reconfigure it from live telemetry, not just once here.
+    SessionConfigurator(HoprSessionConfigurator),
     Ping,
     AdjustToMain(Duration),
 }
@@ -88,8 +91,13 @@ pub struct Up {
     pub bridge_session: Option<SessionClientMetadata>,
     /// The ping session while connecting, promoted to Main once connected.
     pub ping_session: Option<(SessionKind, SessionClientMetadata)>,
-    /// Handle to the running pump's tunnel stats, set once the pump starts.
-    pub wg_stats: Option<Arc<WgTunnelStatsHandle>>,
+    /// Bounded rolling window of tunnel telemetry, oldest first. Owned directly
+    /// by `core` (a single-threaded actor), so no lock is needed. Reset per
+    /// connection attempt since `Up` itself is freshly constructed per attempt.
+    pub wg_stats: VecDeque<TunnelStatsSample>,
+    /// Handle to adjust the active session's SURB balancer from telemetry.
+    /// Retained past the initial ping->main adjustment so it can be reused.
+    pub session_configurator: Option<HoprSessionConfigurator>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -123,8 +131,18 @@ impl Up {
             registration: None,
             bridge_session: None,
             ping_session: None,
-            wg_stats: None,
+            wg_stats: VecDeque::new(),
+            session_configurator: None,
         }
+    }
+
+    /// Record a new WireGuard telemetry sample, evicting the oldest once at
+    /// the retention bound.
+    pub fn record_wg_stats(&mut self, sample: TunnelStatsSample) {
+        if self.wg_stats.len() >= wg_tunnel::HISTORY_CAPACITY {
+            self.wg_stats.pop_front();
+        }
+        self.wg_stats.push_back(sample);
     }
 
     pub fn connect_progress(&mut self, evt: Box<Progress>) {
@@ -153,8 +171,8 @@ impl Up {
                 self.phase = (now, Phase::EstablishWgTunnel);
                 self.ping_session = Some((SessionKind::Ping, session));
             }
-            Progress::WgPumpStarted(handle) => {
-                self.wg_stats = Some(handle);
+            Progress::SessionConfigurator(configurator) => {
+                self.session_configurator = Some(configurator);
             }
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
             Progress::AdjustToMain(_round_trip_time) => self.phase = (now, Phase::AdjustToMain),
@@ -223,7 +241,7 @@ impl Display for Progress {
             Progress::PeerIps => write!(f, "Retrieving peer IPs"),
             Progress::KillswitchLockdown => write!(f, "Activating killswitch"),
             Progress::StaticWgTunnel(_) => write!(f, "Establishing static WireGuard tunnel"),
-            Progress::WgPumpStarted(_) => write!(f, "WireGuard pump started"),
+            Progress::SessionConfigurator(_) => write!(f, "Session configurator retained"),
             Progress::Ping => write!(f, "Verifying established connection"),
             Progress::AdjustToMain(round_trip_time) => {
                 write!(f, "Adjusting to main connection with RTT of {:?}", round_trip_time)

@@ -327,7 +327,10 @@ impl ConnStats {
             wg_ip: conn.registration.as_ref().map(|reg| reg.address().to_string()),
             bridge_session,
             main_session,
-            wg_stats: conn.wg_stats.as_ref().map(|handle| handle.snapshot()),
+            wg_stats: (!conn.wg_stats.is_empty()).then(|| crate::wg_tunnel::WgTunnelStats {
+                current: conn.wg_stats.back().cloned(),
+                history: conn.wg_stats.iter().cloned().collect(),
+            }),
         }
     }
 }
