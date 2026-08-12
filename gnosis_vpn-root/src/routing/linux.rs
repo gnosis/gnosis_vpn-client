@@ -415,4 +415,31 @@ mod tests {
         assert!(parse_cidr("10.0.0.1/128").is_err());
         assert!(parse_cidr("2001:db8::25/129").is_err());
     }
+
+    #[test]
+    fn zero_prefix_is_accepted_for_each_family() {
+        assert_eq!(parse_cidr("0.0.0.0/0").unwrap(), ("0.0.0.0".parse().unwrap(), 0));
+        assert_eq!(parse_cidr("::/0").unwrap(), ("::".parse().unwrap(), 0));
+    }
+
+    #[test]
+    fn malformed_address_is_rejected() {
+        assert!(parse_cidr("not-an-ip").is_err());
+        assert!(parse_cidr("999.1.1.1/24").is_err());
+        assert!(parse_cidr("").is_err());
+    }
+
+    #[test]
+    fn malformed_prefix_is_rejected() {
+        assert!(parse_cidr("10.0.0.1/abc").is_err());
+        assert!(parse_cidr("10.0.0.1/-1").is_err());
+        assert!(parse_cidr("10.0.0.1/").is_err());
+    }
+
+    #[test]
+    fn error_message_names_offending_prefix_and_family_maximum() {
+        let err = parse_cidr("10.0.0.1/128").unwrap_err().to_string();
+        assert!(err.contains("/128"), "error should name the offending prefix: {err}");
+        assert!(err.contains("/32"), "error should name the family maximum: {err}");
+    }
 }
