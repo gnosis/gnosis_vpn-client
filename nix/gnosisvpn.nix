@@ -35,8 +35,8 @@ let
       "sha256-ir25ZsBHxw93aQIOISiUYrX6BOl4t4jdHHKr9dz78Uo=";
     "git+https://github.com/hoprnet/edge-client.git?rev=d5408a8b3da3d56e3fd7bf3a89f3f915b1804d1a#d5408a8b3da3d56e3fd7bf3a89f3f915b1804d1a" =
       "sha256-j2qKPal/t24W0B7okAZ2ntTXCp3Ai4Bh8ZCIun0WBG4=";
-    "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.0#2d739150cff117c781c1a6b31c0ffc742084d227" =
-      "sha256-s/1I7kUPyqexICNVw8WbRqbzgXP/zVtwMfyHajp3Crw=";
+    "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.1#a45a31d28780695cb816d5e245a70bd520bd1293" =
+      "sha256-QF8BAe2eHrGsVvZIGD+Gdi6XFMQ8zHkOObSRjTRN4MY=";
     "git+https://github.com/NordSecurity/rust-dispatch.git?rev=13447cd7221a74ebcce1277ae0cfc9a421a28ec5#13447cd7221a74ebcce1277ae0cfc9a421a28ec5" =
       "sha256-nX1+sfLI3H8xz95d04JeO5QY+8BRpitWKKUeGWfVrdI=";
   };
