@@ -2789,7 +2789,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "4.0.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=0060a2a0a7953228a1ae99a1ce5059136ff1edf9#0060a2a0a7953228a1ae99a1ce5059136ff1edf9"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=f87db85bec811efe4df96e3a626720d646871773#f87db85bec811efe4df96e3a626720d646871773"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -4180,9 +4180,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-strategy"
-version = "0.24.1"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62774a0f288bc2e99ec1c4c9cc36eecec0cb5ef641c94b671a320372bb3d66f4"
+checksum = "777c6a3d4148f0bab96ce9ddc8d627d9e5c1249d63cf6618c2a896d9c3e1d032"
 dependencies = [
  "anyhow",
  "async-trait",
