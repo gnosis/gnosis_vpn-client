@@ -513,7 +513,10 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "strategy" {
             if let Some(strategy) = value.as_table() {
                 for (k, v) in strategy.iter() {
-                    if k == "min_open_channels" || k == "target_open_channels" {
+                    if matches!(
+                        k.as_str(),
+                        "min_open_channels" | "target_open_channels" | "channel_capacity"
+                    ) {
                         continue;
                     }
                     if k == "channel_allowlist" {
@@ -550,6 +553,30 @@ pub(super) struct Strategy {
     pub(super) min_open_channels: Option<usize>,
     pub(super) target_open_channels: Option<usize>,
     pub(super) channel_allowlist: Option<ChannelAllowlistConfig>,
+    #[serde(default, deserialize_with = "validate_channel_capacity")]
+    pub(super) channel_capacity: Option<ByteSize>,
+}
+
+/// Rejects a capacity edgli cannot turn into a funding config.
+///
+/// It derives the safe balance gate by scaling the capacity up, so a value near
+/// `u64::MAX` overflows and fails every reactor start. That failure is retried on a
+/// timer with a generic message, so without this the config loads fine and the node
+/// silently never opens a channel — naming the key here turns it into a load error.
+fn validate_channel_capacity<'de, D>(deserializer: D) -> Result<Option<ByteSize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    /// Headroom edgli needs above the requested capacity to size the safe gate.
+    const MAX_SAFE_SCALING: u64 = 2;
+
+    match Option::<ByteSize>::deserialize(deserializer)? {
+        Some(v) if v.as_u64() > u64::MAX / MAX_SAFE_SCALING => Err(serde::de::Error::custom(format!(
+            "channel_capacity must not exceed {}",
+            ByteSize::b(u64::MAX / MAX_SAFE_SCALING)
+        ))),
+        other => Ok(other),
+    }
 }
 
 impl From<Option<Strategy>> for StrategyConfig {
@@ -568,6 +595,7 @@ impl From<Option<Strategy>> for StrategyConfig {
                 .as_ref()
                 .and_then(|s| s.channel_allowlist.as_ref())
                 .and_then(|c| c.enabled.then(|| c.peers.iter().cloned().collect())),
+            channel_capacity: v.as_ref().and_then(|s| s.channel_capacity),
         }
     }
 }
@@ -936,6 +964,76 @@ path_planner_min_ack_rate = {bad}
     }
 
     #[test]
+    fn strategy_channel_capacity_is_parsed() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[strategy]
+channel_capacity = "1 GiB"
+"#####,
+        );
+        let strategy = cfg.strategy.expect("strategy section present");
+        assert_eq!(strategy.channel_capacity, Some(bytesize::ByteSize::gib(1)));
+
+        let converted: StrategyConfig = Some(strategy).into();
+        assert_eq!(converted.channel_capacity, Some(bytesize::ByteSize::gib(1)));
+    }
+
+    #[test]
+    fn strategy_channel_capacity_rejects_a_value_that_overflows_the_safe_gate() {
+        // Without the bound this loads fine and then fails every reactor start on a
+        // 10s retry, with nothing naming the offending key.
+        let err = toml::from_str::<Config>(
+            r#####"
+version = 6
+
+[strategy]
+channel_capacity = "16 EiB"
+"#####,
+        )
+        .expect_err("16 EiB must be rejected");
+        assert!(
+            err.to_string().contains("channel_capacity"),
+            "error should name the key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn strategy_channel_capacity_is_optional() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[strategy]
+target_open_channels = 8
+"#####,
+        );
+        let strategy = cfg.strategy.expect("strategy section present");
+        assert!(strategy.channel_capacity.is_none());
+
+        // Left unset so edgli applies its own sizing rather than a local value.
+        let converted: StrategyConfig = Some(strategy).into();
+        assert!(converted.channel_capacity.is_none());
+    }
+
+    #[test]
+    fn strategy_channel_capacity_is_a_known_key() {
+        // An unlisted key still loads, but `wrong_keys` makes the daemon log it as
+        // unsupported — a misleading warning for a key that is honoured.
+        let table = r#####"
+version = 6
+
+[strategy]
+channel_capacity = "1 GiB"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
     fn strategy_channel_allowlist_enabled_produces_some() {
         let addr: Address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739".parse().unwrap();
         let strategy = Some(Strategy {
@@ -945,6 +1043,7 @@ path_planner_min_ack_rate = {bad}
                 enabled: true,
                 peers: vec![addr],
             }),
+            channel_capacity: None,
         });
         let cfg: StrategyConfig = strategy.into();
         assert_eq!(cfg.channel_allowlist, Some(std::collections::HashSet::from([addr])));
@@ -960,6 +1059,7 @@ path_planner_min_ack_rate = {bad}
                 enabled: false,
                 peers: vec![addr],
             }),
+            channel_capacity: None,
         });
         let cfg: StrategyConfig = strategy.into();
         assert!(cfg.channel_allowlist.is_none());

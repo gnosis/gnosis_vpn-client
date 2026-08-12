@@ -345,8 +345,7 @@ impl Hopr {
         &self,
         sizing: edgli::strategy::IncentiveConfiguration,
     ) -> Result<AbortHandle, HoprError> {
-        let mut cfg = edgli::strategy::default_strategy_cfg(&self.edgli, &sizing)
-            .await
+        let mut cfg = edgli::strategy::default_strategy_cfg(&sizing)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
         match cfg.strategies.first_mut() {
             Some(edgli::strategy::EdgeStrategyKind::ChannelLifecycle(lc)) => {
