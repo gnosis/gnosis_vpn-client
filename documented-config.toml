@@ -154,10 +154,6 @@ path    = { hops = 1 }
 # min_open_channels = 5
 # target number of open outgoing channels
 # target_open_channels = 8
-# data volume a single payment channel should be able to carry before it needs a top-up.
-# Larger values fund channels further ahead, but require a correspondingly larger safe
-# balance before any channel is opened. Left unset, a sensible default is used.
-# channel_capacity = "1 GiB"
 # channel allowlist: when enabled, restricts channel opening to the listed peers only.
 # When disabled (default), peers are selected by quality score.
 # [strategy.channel_allowlist]
