@@ -63,7 +63,7 @@ jobs:
       id-token: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@ac8742a45096e585606bd086678dfabf63d38938 # release-version-v5.1.2
+        uses: hoprnet/hopr-workflows/actions/release-version@711c81d05909e2482d74289084502fb70fecc97b # release-version-v5.3.0
         with:
           source_branch: ${{ github.ref_name }}
           file: Cargo.toml
