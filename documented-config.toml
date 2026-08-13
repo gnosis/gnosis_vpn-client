@@ -6,10 +6,15 @@
 ###
 
 # general config file version
-version = 6
+version = 7
 
 ###
 ## destinations section - configure available target destinations
+#
+# This whole section is optional as of version 7: gnosis_vpn-lib can discover exit nodes
+# registered on-chain instead, so a config with no [destinations] at all is valid. Configuring a
+# destination here still works exactly as before, and is the right place to pin a specific,
+# trusted exit node.
 
 [destinations]
 
@@ -21,6 +26,11 @@ version = 6
 # meta = { location = <location> }
 # session path: number of intermediate hops (0–3)
 # path = { hops = 1 }
+# override the exit node's own gvpn-server/WireGuard endpoints for this destination instead of
+# the global [connection.bridge]/[connection.wg] target defaults below. Optional — omit to use
+# the global defaults, same as before version 7.
+# gnosis_vpn_server = "172.30.0.1:8000"
+# wireguard_server = "172.30.0.1:51820"
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"

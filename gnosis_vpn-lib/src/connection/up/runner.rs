@@ -253,7 +253,7 @@ async fn open_bridge_session(
         tracing::debug!(%destination, "attempting to open bridge session");
         hopr.open_session(
             destination.address,
-            options.sessions.bridge.target.clone(),
+            destination.bridge_target(&options.sessions.bridge.target),
             Some(1),
             Some(1),
             cfg.clone(),
@@ -336,8 +336,12 @@ async fn open_spliced_wg_session(
     };
     (|| async {
         tracing::debug!(%destination, "attempting to open spliced wg session");
-        hopr.open_wg_session(destination.address, options.sessions.wg.target.clone(), cfg.clone())
-            .await
+        hopr.open_wg_session(
+            destination.address,
+            destination.wg_target(&options.sessions.wg.target),
+            cfg.clone(),
+        )
+        .await
     })
     .retry(remote_data::backoff_expo_short_delay())
     .notify(|err: &HoprError, dur: Duration| {
