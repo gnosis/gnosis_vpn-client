@@ -3474,7 +3474,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-ctl"
-version = "0.94.1"
+version = "0.94.2"
 dependencies = [
  "clap",
  "clap_complete",
@@ -3491,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-lib"
-version = "0.94.1"
+version = "0.94.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3538,7 +3538,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-root"
-version = "0.94.1"
+version = "0.94.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3565,7 +3565,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-system_tests"
-version = "0.94.1"
+version = "0.94.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -3581,7 +3581,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-worker"
-version = "0.94.1"
+version = "0.94.2"
 dependencies = [
  "clap",
  "exitcode",
