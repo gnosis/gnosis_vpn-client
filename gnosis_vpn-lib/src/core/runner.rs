@@ -98,6 +98,8 @@ pub(crate) enum Results {
     TunnelPingResult {
         rtt: Result<Duration, String>,
     },
+    /// A new WireGuard telemetry sample from the running pump.
+    WgStatsSample(crate::wg_tunnel::TunnelStatsSample),
     HealthCheck {
         id: String,
         outcome: HealthCheckOutcome,
@@ -627,6 +629,9 @@ impl Display for Results {
                 Ok(d) => write!(f, "TunnelPingResult: {:.1}ms", d.as_secs_f64() * 1000.0),
                 Err(err) => write!(f, "TunnelPingResult: Error({})", err),
             },
+            Results::WgStatsSample(sample) => {
+                write!(f, "WgStatsSample: tx={} rx={}", sample.tx_bytes, sample.rx_bytes)
+            }
             Results::QuerySafe { res } => match res {
                 Ok(Some(_)) => write!(f, "QuerySafe: Safe found"),
                 Ok(None) => write!(f, "QuerySafe: No safe found"),

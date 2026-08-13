@@ -157,6 +157,11 @@ impl Runner {
             configurator,
             metadata: session,
         } = open_spliced_wg_session(&self.hopr, &self.destination, &self.options, ping_surb, &results_sender).await?;
+        // Retain the configurator on `Up` (not just used once below) so core can
+        // reconfigure the SURB balancer later from live telemetry.
+        let _ = results_sender
+            .send(progress(Progress::SessionConfigurator(configurator.clone())))
+            .await;
 
         // 7. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
@@ -178,7 +183,7 @@ impl Runner {
         let (read_half, write_half) = tokio::io::split(hopr_session);
         let net_tx = wg_tunnel::SessionSender::new(write_half);
         let net_rx = wg_tunnel::SessionReceiver::new(read_half);
-        self.spawn_pump_task(engine, net_tx, net_rx, tun_writer, tun_reader, &results_sender);
+        self.spawn_pump_task(engine, net_tx, net_rx, (tun_writer, tun_reader), &results_sender);
 
         // 9. activate killswitch now that the interface name is known
         let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
@@ -445,18 +450,39 @@ impl Runner {
         engine: wg_tunnel::WgTunnel,
         net_tx: NS,
         net_rx: NR,
-        tun_writer: wg_tunnel::TunWriter,
-        tun_reader: wg_tunnel::TunReader,
+        tun: (wg_tunnel::TunWriter, wg_tunnel::TunReader),
         results_sender: &mpsc::Sender<Results>,
     ) where
         NS: wg_tunnel::NetworkSender + 'static,
         NR: wg_tunnel::NetworkReceiver + 'static,
     {
+        let (tun_writer, tun_reader) = tun;
         let cancel = self.cancel.clone();
         let results_sender = results_sender.clone();
+
+        // Forward each stats sample into core's Results channel on a small
+        // dedicated task, so `wg_tunnel` stays unaware of core's Results enum.
+        // The forwarder exits on its own once the pump task below drops
+        // `sample_tx`, so it needs no separate cancellation wiring.
+        let (sample_tx, mut sample_rx) = mpsc::channel(4);
+        let forward_results_sender = results_sender.clone();
+        self.pump_tasks.spawn(async move {
+            while let Some(sample) = sample_rx.recv().await {
+                if forward_results_sender
+                    .send(Results::WgStatsSample(sample))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
         self.pump_tasks.spawn(async move {
             let outcome = cancel
-                .run_until_cancelled(wg_tunnel::run(engine, net_tx, net_rx, tun_writer, tun_reader))
+                .run_until_cancelled(wg_tunnel::run(
+                    engine, net_tx, net_rx, tun_writer, tun_reader, sample_tx,
+                ))
                 .await;
             match pump_exit_reason(outcome) {
                 None => tracing::debug!("wg pump stopped (connection cancelled)"),
