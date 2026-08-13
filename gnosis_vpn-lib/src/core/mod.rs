@@ -8,7 +8,7 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -226,6 +226,7 @@ impl Core {
     pub async fn start(mut self) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.spawn_initial_runner(&results_sender, Duration::ZERO);
+        self.spawn_exit_node_discovery_runner(&results_sender, Duration::ZERO);
         loop {
             tokio::select! {
                 // React to an incoming worker events
@@ -650,6 +651,13 @@ impl Core {
                         last_error: Some(error),
                     };
                 }
+            }
+            Results::ExitNodesUpdated { nodes } => {
+                self.merge_discovered_destinations(nodes);
+            }
+            Results::ExitNodesRetry { error } => {
+                tracing::warn!(%error, "exit node discovery failed - retrying");
+                self.spawn_exit_node_discovery_runner(results_sender, Duration::from_secs(30));
             }
             Results::HoprConstruction(edgli_state) => {
                 if matches!(self.phase, Phase::Starting { .. }) {
@@ -1332,6 +1340,55 @@ impl Core {
                 })
                 .await
         });
+    }
+
+    /// Discovery doesn't need a chain key or `connect()` — only a `BlokliEndpoint` — so it runs
+    /// independently of the chain-key/Safe/HOPR startup phases, alongside `spawn_initial_runner`.
+    fn spawn_exit_node_discovery_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_on_shutdown.clone();
+        let worker_params = self.worker_params.clone();
+        let blokli_config = self.config.blokli.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    runner::watch_exit_nodes(&worker_params, blokli_config, results_sender).await;
+                })
+                .await
+        });
+    }
+
+    /// Merges a fresh discovery snapshot into `config.destinations`, then keeps
+    /// `route_healths` in sync — inserting a tracker for every id the merge added, removing one
+    /// for every id it dropped. Mirrors the seeding loop in `Core::init`, the only other place
+    /// that constructs a `RouteHealth`.
+    ///
+    /// Deliberately does not touch the connection state machine: if the active/target
+    /// destination's id disappears here, the live connection (which holds its own cloned
+    /// `Destination`) is left running; a later reconnect attempt to that id just hits the
+    /// existing "not configured" branch in `WorkerCommand::Connect`.
+    fn merge_discovered_destinations(&mut self, nodes: HashMap<Address, edgli::ExitNodeInfo>) {
+        let before: HashSet<String> = self.config.destinations.keys().cloned().collect();
+        connection::destination::merge_discovered(&mut self.config.destinations, &nodes);
+        let after: HashSet<String> = self.config.destinations.keys().cloned().collect();
+
+        for removed_id in before.difference(&after) {
+            self.route_healths.remove(removed_id);
+        }
+        for added_id in after.difference(&before) {
+            if let Some(dest) = self.config.destinations.get(added_id) {
+                self.route_healths.insert(
+                    added_id.clone(),
+                    RouteHealth::new(
+                        dest,
+                        self.worker_params.allow_insecure(),
+                        self.worker_params.allow_experimental(),
+                        self.cancel_on_shutdown.clone(),
+                    ),
+                );
+            }
+        }
     }
 
     async fn determine_next_phase_from_safe_disk_query(&mut self, results_sender: &mpsc::Sender<Results>) {

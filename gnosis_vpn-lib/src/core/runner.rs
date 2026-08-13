@@ -69,6 +69,12 @@ pub(crate) enum Results {
     IncentiveOperationsRetry {
         error: String,
     },
+    ExitNodesUpdated {
+        nodes: std::collections::HashMap<Address, edgli::ExitNodeInfo>,
+    },
+    ExitNodesRetry {
+        error: String,
+    },
     NodeWxhoprWithdraw {
         res: Result<(), Error>,
     },
@@ -300,6 +306,48 @@ pub(crate) async fn create_incentive_operations(
 ) {
     let res = run_create_incentive_operations(worker_params, blokli_config, results_sender.clone()).await;
     let _ = results_sender.send(Results::IncentiveOperations { res }).await;
+}
+
+/// Watches registered `gvpn:exit` nodes for as long as `Core` keeps re-spawning this task.
+///
+/// Unlike [`create_incentive_operations`], a failure here must never end `Core` — configured
+/// destinations have to keep working even with no Blokli reachable at all — so this reports
+/// failure and returns rather than retrying with a bounded backoff; `Core` re-spawns it on a
+/// fixed delay, the same way it does for every other transient runner failure.
+pub(crate) async fn watch_exit_nodes(
+    worker_params: &WorkerParams,
+    blokli_config: BlokliConfig,
+    results_sender: mpsc::Sender<Results>,
+) {
+    let blokli_endpoint = worker_params.blokli_endpoint(blokli_config.request_timeout);
+    let mut registry = match edgli::watch_exit_nodes(blokli_endpoint).await {
+        Ok(registry) => registry,
+        Err(err) => {
+            let _ = results_sender
+                .send(Results::ExitNodesRetry { error: err.to_string() })
+                .await;
+            return;
+        }
+    };
+    loop {
+        if results_sender
+            .send(Results::ExitNodesUpdated {
+                nodes: registry.nodes(),
+            })
+            .await
+            .is_err()
+        {
+            return; // Core is gone
+        }
+        if registry.changed().await.is_err() {
+            let _ = results_sender
+                .send(Results::ExitNodesRetry {
+                    error: "exit node registry task ended unexpectedly".to_string(),
+                })
+                .await;
+            return;
+        }
+    }
 }
 
 async fn run_node_wxhopr_withdraw(
@@ -605,6 +653,12 @@ impl Display for Results {
             },
             Results::IncentiveOperationsRetry { error } => {
                 write!(f, "IncentiveOperationsRetry: Error({})", error)
+            }
+            Results::ExitNodesUpdated { nodes } => {
+                write!(f, "ExitNodesUpdated: {} node(s)", nodes.len())
+            }
+            Results::ExitNodesRetry { error } => {
+                write!(f, "ExitNodesRetry: Error({})", error)
             }
             Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
             Results::ConnectionEvent(evt) => {

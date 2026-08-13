@@ -704,8 +704,8 @@ mod tests {
             address(1),
             HopRouting::try_from(1).expect("conversion cannot fail"),
             HashMap::new(),
-            None,
-            None,
+            "172.30.0.1:8000".parse().unwrap(),
+            "172.30.0.1:51820".parse().unwrap(),
             DestinationSource::Configured,
         )
     }

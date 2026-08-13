@@ -910,13 +910,7 @@ impl HealthSession {
         };
         tracing::debug!(%destination, "opening TCP session for health check");
         let meta = hopr
-            .open_session(
-                destination.address,
-                destination.bridge_target(&options.sessions.bridge.target),
-                None,
-                None,
-                cfg,
-            )
+            .open_session(destination.address, destination.bridge_target(), None, None, cfg)
             .await?;
         Ok(Self {
             hopr,
@@ -1200,8 +1194,8 @@ mod tests {
             addr(1),
             HopRouting::try_from(1).unwrap(),
             Default::default(),
-            None,
-            None,
+            "172.30.0.1:8000".parse().unwrap(),
+            "172.30.0.1:51820".parse().unwrap(),
             DestinationSource::Configured,
         );
         let mut rh = RouteHealth::new(&dest, false, false, CancellationToken::new());

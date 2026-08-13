@@ -217,18 +217,20 @@ impl Connection {
         vec![Capability::Segmentation, Capability::NoDelay]
     }
 
+    pub fn default_bridge_socket() -> SocketAddr {
+        SocketAddr::from(([172, 30, 0, 1], 8000))
+    }
+
     pub fn default_bridge_target() -> SessionTarget {
-        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-            [172, 30, 0, 1],
-            8000,
-        )))))
+        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(Self::default_bridge_socket())))
+    }
+
+    pub fn default_wg_socket() -> SocketAddr {
+        SocketAddr::from(([172, 30, 0, 1], 51820))
     }
 
     pub fn default_wg_target() -> SessionTarget {
-        SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-            [172, 30, 0, 1],
-            51820,
-        )))))
+        SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(Self::default_wg_socket())))
     }
 
     pub fn default_http_timeout() -> Duration {
@@ -648,11 +650,24 @@ impl TryFrom<Config> for config::Config {
     type Error = config::Error;
 
     fn try_from(value: Config) -> Result<Self, Self::Error> {
+        let default_gnosis_vpn_server = value
+            .connection
+            .as_ref()
+            .and_then(|c| c.bridge.as_ref())
+            .and_then(|b| b.target)
+            .unwrap_or_else(Connection::default_bridge_socket);
+        let default_wireguard_server = value
+            .connection
+            .as_ref()
+            .and_then(|c| c.wg.as_ref())
+            .and_then(|w| w.target)
+            .unwrap_or_else(Connection::default_wg_socket);
         let connection: options::Options = value.connection.into();
         if connection.surb_balancing.ping.enabled != connection.surb_balancing.main.enabled {
             return Err(config::Error::SurbBalancingMismatch);
         }
-        let destinations = convert_destinations(value.destinations)?;
+        let destinations =
+            convert_destinations(value.destinations, default_gnosis_vpn_server, default_wireguard_server)?;
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
         let strategy = value.strategy.into();
@@ -671,6 +686,8 @@ impl TryFrom<Config> for config::Config {
 /// config that configures none.
 pub fn convert_destinations(
     value: Option<HashMap<String, Destination>>,
+    default_gnosis_vpn_server: SocketAddr,
+    default_wireguard_server: SocketAddr,
 ) -> Result<HashMap<String, ConnDestination>, config::Error> {
     let config_dests = value.unwrap_or_default();
 
@@ -687,8 +704,8 @@ pub fn convert_destinations(
             dest.address,
             path,
             meta,
-            dest.gnosis_vpn_server,
-            dest.wireguard_server,
+            dest.gnosis_vpn_server.unwrap_or(default_gnosis_vpn_server),
+            dest.wireguard_server.unwrap_or(default_wireguard_server),
             DestinationSource::Configured,
         );
         result.insert(id.to_string(), dest);
@@ -699,17 +716,30 @@ pub fn convert_destinations(
 #[cfg(test)]
 mod tests {
     use super::{
-        ChannelAllowlistConfig, Config, DestinationSource, Strategy, WireGuardConfig, convert_destinations, wrong_keys,
+        ChannelAllowlistConfig, Config, Connection, DestinationSource, Strategy, WireGuardConfig, convert_destinations,
+        wrong_keys,
     };
     use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
     use crate::hopr::strategy_config::StrategyConfig;
     use edgli::hopr_lib::HopRouting;
     use edgli::hopr_lib::api::types::primitive::prelude::Address;
+    use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::time::Duration;
 
     fn parse(toml: &str) -> Config {
         toml::from_str(toml).expect("valid TOML")
+    }
+
+    fn convert_with_defaults(
+        value: Option<HashMap<String, super::Destination>>,
+    ) -> HashMap<String, super::ConnDestination> {
+        convert_destinations(
+            value,
+            Connection::default_bridge_socket(),
+            Connection::default_wg_socket(),
+        )
+        .expect("should succeed")
     }
 
     #[test]
@@ -774,7 +804,7 @@ nonsense = 1
     #[test]
     fn absent_destinations_table_converts_to_empty_map() {
         let cfg = parse("version = 7\n");
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert_with_defaults(cfg.destinations);
         assert!(result.is_empty());
     }
 
@@ -787,7 +817,7 @@ version = 7
 [destinations]
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert_with_defaults(cfg.destinations);
         assert!(result.is_empty());
     }
 
@@ -802,7 +832,7 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 path = { hops = 2 }
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert_with_defaults(cfg.destinations);
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
     }
@@ -817,13 +847,13 @@ version = 7
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert_with_defaults(cfg.destinations);
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
     }
 
     #[test]
-    fn configured_destination_has_configured_source_and_no_targets_by_default() {
+    fn configured_destination_has_configured_source_and_default_targets_by_default() {
         let cfg = parse(
             r#####"
 version = 7
@@ -832,15 +862,15 @@ version = 7
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert_with_defaults(cfg.destinations);
         let d = result.values().next().unwrap();
         assert_eq!(d.source, DestinationSource::Configured);
-        assert_eq!(d.gnosis_vpn_server, None);
-        assert_eq!(d.wireguard_server, None);
+        assert_eq!(d.gnosis_vpn_server, Connection::default_bridge_socket());
+        assert_eq!(d.wireguard_server, Connection::default_wg_socket());
     }
 
     #[test]
-    fn configured_destination_target_overrides_are_parsed() {
+    fn configured_destination_target_overrides_win_over_the_default() {
         let cfg = parse(
             r#####"
 version = 7
@@ -851,16 +881,32 @@ gnosis_vpn_server = "172.30.0.1:8000"
 wireguard_server = "172.30.0.1:51820"
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert_with_defaults(cfg.destinations);
         let d = result.values().next().unwrap();
-        assert_eq!(
-            d.gnosis_vpn_server,
-            Some("172.30.0.1:8000".parse::<SocketAddr>().unwrap())
+        assert_eq!(d.gnosis_vpn_server, "172.30.0.1:8000".parse::<SocketAddr>().unwrap());
+        assert_eq!(d.wireguard_server, "172.30.0.1:51820".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn destination_without_override_uses_the_configured_global_bridge_and_wg_target() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[connection.bridge]
+target = "10.0.0.5:9999"
+
+[connection.wg]
+target = "10.0.0.5:8888"
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
         );
-        assert_eq!(
-            d.wireguard_server,
-            Some("172.30.0.1:51820".parse::<SocketAddr>().unwrap())
-        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let d = result.destinations.values().next().unwrap();
+        assert_eq!(d.gnosis_vpn_server, "10.0.0.5:9999".parse::<SocketAddr>().unwrap());
+        assert_eq!(d.wireguard_server, "10.0.0.5:8888".parse::<SocketAddr>().unwrap());
     }
 
     #[test]

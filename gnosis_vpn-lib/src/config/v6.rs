@@ -257,8 +257,11 @@ path = { hops = 2 }
 
         let dest = result.destinations.get("Germany").expect("destination present");
         assert_eq!(dest.routing, edgli::hopr_lib::HopRouting::try_from(2).unwrap());
-        assert_eq!(dest.gnosis_vpn_server, None);
-        assert_eq!(dest.wireguard_server, None);
+        assert_eq!(
+            dest.gnosis_vpn_server,
+            super::super::v7::Connection::default_bridge_socket()
+        );
+        assert_eq!(dest.wireguard_server, super::super::v7::Connection::default_wg_socket());
     }
 
     #[test]
