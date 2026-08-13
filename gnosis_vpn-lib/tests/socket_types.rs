@@ -15,6 +15,7 @@ use gnosis_vpn_lib::connection::{DownPhase, UpPhase};
 use gnosis_vpn_lib::route_health::{
     ExitHealth, Health, LoadAvg, RouteHealthState, Slots, UnrecoverableReason, Versions,
 };
+use gnosis_vpn_lib::wg_tunnel::{TunnelStatsSample, WgTunnelStats};
 
 // This function exists only to force the compiler to verify that every type in
 // the socket API surface is reachable from outside the crate. It is never called.
@@ -43,6 +44,8 @@ fn assert_types_are_accessible() {
     let _: TicketStats;
     let _: NerdStatsResponse;
     let _: ConnStats;
+    let _: WgTunnelStats;
+    let _: TunnelStatsSample;
     let _: ActiveSession;
     let _: BalanceResponse;
     let _: ChannelOut;

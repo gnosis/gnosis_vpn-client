@@ -297,6 +297,10 @@ pub struct ConnStats {
     pub wg_ip: Option<String>,
     pub bridge_session: Option<ActiveSession>,
     pub main_session: Option<ActiveSession>,
+    /// WireGuard tunnel counters/timers as of the last stats sample, if the
+    /// pump has started. See [`crate::wg_tunnel::TunnelStatsSample`] for why
+    /// `rtt_ms`/`time_since_last_handshake` reflect the last handshake, not "now".
+    pub wg_stats: Option<crate::wg_tunnel::WgTunnelStats>,
 }
 
 impl ConnStats {
@@ -323,6 +327,10 @@ impl ConnStats {
             wg_ip: conn.registration.as_ref().map(|reg| reg.address().to_string()),
             bridge_session,
             main_session,
+            wg_stats: (!conn.wg_stats.is_empty()).then(|| crate::wg_tunnel::WgTunnelStats {
+                current: conn.wg_stats.back().cloned(),
+                history: conn.wg_stats.iter().cloned().collect(),
+            }),
         }
     }
 }
@@ -846,5 +854,60 @@ mod tests {
 
         let with_error: RunMode = serde_json::from_str(r#"{"Init":{"last_error":"connection refused"}}"#).unwrap();
         assert!(matches!(with_error, RunMode::Init { last_error: Some(ref e) } if e == "connection refused"));
+    }
+
+    #[test]
+    fn wg_tunnel_stats_serializes_to_expected_json_shape() {
+        use crate::wg_tunnel::{TunnelStatsSample, WgTunnelStats};
+
+        let empty = serde_json::to_string(&WgTunnelStats::default()).unwrap();
+        assert_eq!(empty, r#"{"current":null,"history":[]}"#);
+
+        // SystemTime::UNIX_EPOCH keeps the fixture deterministic (no wall-clock read).
+        let sample = TunnelStatsSample {
+            at: SystemTime::UNIX_EPOCH,
+            tx_bytes: 100,
+            rx_bytes: 200,
+            rtt_ms: Some(42),
+            time_since_last_handshake: Some(Duration::from_secs(5)),
+            estimated_loss: 0.1,
+        };
+        let populated = serde_json::to_string(&WgTunnelStats {
+            current: Some(sample.clone()),
+            history: vec![sample],
+        })
+        .unwrap();
+        let sample_json = concat!(
+            r#"{"at":{"secs_since_epoch":0,"nanos_since_epoch":0},"#,
+            r#""tx_bytes":100,"rx_bytes":200,"rtt_ms":42,"#,
+            r#""time_since_last_handshake":{"secs":5,"nanos":0},"estimated_loss":0.1}"#
+        );
+        assert_eq!(
+            populated,
+            format!(r#"{{"current":{sample_json},"history":[{sample_json}]}}"#)
+        );
+    }
+
+    #[test]
+    fn wg_tunnel_stats_deserializes_from_json_fixture() {
+        use crate::wg_tunnel::WgTunnelStats;
+
+        let empty: WgTunnelStats = serde_json::from_str(r#"{"current":null,"history":[]}"#).unwrap();
+        assert!(empty.current.is_none());
+        assert!(empty.history.is_empty());
+
+        let sample_json = concat!(
+            r#"{"at":{"secs_since_epoch":0,"nanos_since_epoch":0},"#,
+            r#""tx_bytes":100,"rx_bytes":200,"rtt_ms":42,"#,
+            r#""time_since_last_handshake":{"secs":5,"nanos":0},"estimated_loss":0.1}"#
+        );
+        let populated: WgTunnelStats =
+            serde_json::from_str(&format!(r#"{{"current":{sample_json},"history":[{sample_json}]}}"#)).unwrap();
+        let current = populated.current.expect("current sample present");
+        assert_eq!(current.tx_bytes, 100);
+        assert_eq!(current.rx_bytes, 200);
+        assert_eq!(current.rtt_ms, Some(42));
+        assert_eq!(current.time_since_last_handshake, Some(Duration::from_secs(5)));
+        assert_eq!(populated.history.len(), 1);
     }
 }
