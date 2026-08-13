@@ -55,7 +55,7 @@ jobs:
             build_debug_command: nix build -L .#binary-gnosis_vpn-aarch64-linux-dev
             required_label: "binary:aarch64-linux"
           - architecture: aarch64-darwin
-            runner: ${{ vars.MACOS_RUNNER }} # Posible values are: `macos-15` or `depot-macos-15`
+            runner: ${{ vars.MACOS_RUNNER }} # Posible values are: `macos-26-xlarge` or `depot-macos-26`
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
             build_debug_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin-dev
             required_label: "binary:aarch64-darwin"
