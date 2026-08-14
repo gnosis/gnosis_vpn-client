@@ -86,7 +86,8 @@ pub struct Cli {
     pub allow_experimental: bool,
 
     /// Allow re-running the funding tool even after a Safe has been deployed and the node is
-    /// running (only for support/testing purposes)
+    /// running, subject to a cooldown after each successful run (only for support/testing
+    /// purposes)
     #[arg(long)]
     pub allow_funding_tool_rerun: bool,
 

@@ -5,6 +5,7 @@ use crate::serde_utils;
 
 use std::collections::HashMap;
 use std::fmt::{self, Display};
+use std::time::{Duration, SystemTime};
 
 /// wxHOPR amounts (in whole tokens, i.e. the value returned by
 /// `Balance::amount_in_base_units` after the wei→token conversion) below this are
@@ -48,8 +49,26 @@ pub enum FundingIssue {
 pub enum FundingTool {
     NotStarted,
     InProgress,
-    CompletedSuccess,
+    CompletedSuccess(#[serde(with = "serde_utils::system_time")] SystemTime),
     CompletedError(String),
+}
+
+impl FundingTool {
+    /// Successful runs are only restartable once this much time has passed, so a
+    /// misclick can't immediately re-trigger an on-chain funding transaction.
+    const RERUN_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+
+    /// Time left before a successful run may be restarted, or `None` if it's not
+    /// cooling down (still in progress, never run, errored, or cooldown elapsed).
+    pub fn cooldown_remaining(&self) -> Option<Duration> {
+        let FundingTool::CompletedSuccess(completed_at) = self else {
+            return None;
+        };
+        let elapsed = completed_at.elapsed().unwrap_or_default();
+        Self::RERUN_COOLDOWN
+            .checked_sub(elapsed)
+            .filter(|remaining| !remaining.is_zero())
+    }
 }
 
 impl Display for FundingIssue {

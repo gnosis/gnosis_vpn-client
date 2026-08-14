@@ -242,6 +242,7 @@ pub enum FundingToolResponse {
     Started,
     InProgress,
     Done,
+    Cooldown(#[serde(with = "serde_utils::duration_ms")] Duration),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

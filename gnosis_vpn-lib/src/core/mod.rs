@@ -388,7 +388,7 @@ impl Core {
                                 let funding_tool = match self.funding_tool.clone() {
                                     balance::FundingTool::NotStarted => None,
                                     balance::FundingTool::InProgress => Some("Funding tool running".to_string()),
-                                    balance::FundingTool::CompletedSuccess => {
+                                    balance::FundingTool::CompletedSuccess(_) => {
                                         Some("Funding tool ran successfully".to_string())
                                     }
                                     balance::FundingTool::CompletedError(error) => {
@@ -602,23 +602,31 @@ impl Core {
 
                     WorkerCommand::FundingTool(secret) => {
                         let in_presafe_phase = matches!(self.phase, Phase::CheckingSafe { .. });
-                        if in_presafe_phase || self.worker_params.allow_funding_tool_rerun() {
-                            match self.funding_tool {
-                                balance::FundingTool::NotStarted | balance::FundingTool::CompletedError(_) => {
+                        let rerun_allowed = self.worker_params.allow_funding_tool_rerun();
+                        // cooldown only gates reruns; without the flag, a completed run stays Done forever
+                        let cooldown_remaining =
+                            rerun_allowed.then(|| self.funding_tool.cooldown_remaining()).flatten();
+
+                        let response = if !(in_presafe_phase || rerun_allowed) {
+                            command::FundingToolResponse::WrongPhase
+                        } else if let Some(remaining) = cooldown_remaining {
+                            command::FundingToolResponse::Cooldown(remaining)
+                        } else {
+                            match &self.funding_tool {
+                                balance::FundingTool::InProgress => command::FundingToolResponse::InProgress,
+                                balance::FundingTool::CompletedSuccess(_) if !rerun_allowed => {
+                                    command::FundingToolResponse::Done
+                                }
+                                balance::FundingTool::NotStarted
+                                | balance::FundingTool::CompletedError(_)
+                                | balance::FundingTool::CompletedSuccess(_) => {
                                     self.funding_tool = balance::FundingTool::InProgress;
                                     self.spawn_funding_runner(secret, results_sender);
-                                    let _ = resp.send(Response::funding_tool(command::FundingToolResponse::Started));
-                                }
-                                balance::FundingTool::InProgress => {
-                                    let _ = resp.send(Response::funding_tool(command::FundingToolResponse::InProgress));
-                                }
-                                balance::FundingTool::CompletedSuccess => {
-                                    let _ = resp.send(Response::funding_tool(command::FundingToolResponse::Done));
+                                    command::FundingToolResponse::Started
                                 }
                             }
-                        } else {
-                            let _ = resp.send(Response::funding_tool(command::FundingToolResponse::WrongPhase));
-                        }
+                        };
+                        let _ = resp.send(Response::funding_tool(response));
                     }
                 }
                 true
@@ -1216,7 +1224,7 @@ impl Core {
 
     fn on_results_funding_tool(&mut self, res: Result<Option<String>, runner::Error>) {
         self.funding_tool = match res {
-            Ok(None) => balance::FundingTool::CompletedSuccess,
+            Ok(None) => balance::FundingTool::CompletedSuccess(SystemTime::now()),
             Ok(Some(reason)) => balance::FundingTool::CompletedError(reason),
             Err(err) => balance::FundingTool::CompletedError(err.to_string()),
         };
