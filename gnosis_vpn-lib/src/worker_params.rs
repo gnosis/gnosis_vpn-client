@@ -39,6 +39,7 @@ pub struct WorkerParams {
     config_mode: ConfigFileMode,
     allow_insecure: bool,
     allow_experimental: bool,
+    allow_deployed_funding_tool: bool,
     blokli_url: Option<Url>,
     /// Address the Blokli host resolved to at service startup, see [`WorkerParams::resolve_blokli_ip`].
     resolved_blokli_ip: Option<Ipv4Addr>,
@@ -52,13 +53,20 @@ pub enum ConfigFileMode {
     Generated,
 }
 
+/// Opt-in behaviors that are otherwise off by default (testing/support use only).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AllowFlags {
+    pub insecure: bool,
+    pub experimental: bool,
+    pub deployed_funding_tool: bool,
+}
+
 impl WorkerParams {
     pub fn new(
         identity_file: Option<PathBuf>,
         identity_pass: Option<String>,
         config_mode: ConfigFileMode,
-        allow_insecure: bool,
-        allow_experimental: bool,
+        allow: AllowFlags,
         blokli_url: Option<Url>,
         state_home: PathBuf,
     ) -> Self {
@@ -66,8 +74,9 @@ impl WorkerParams {
             identity_file,
             identity_pass,
             config_mode,
-            allow_insecure,
-            allow_experimental,
+            allow_insecure: allow.insecure,
+            allow_experimental: allow.experimental,
+            allow_deployed_funding_tool: allow.deployed_funding_tool,
             blokli_url,
             resolved_blokli_ip: None,
             state_home,
@@ -204,6 +213,10 @@ impl WorkerParams {
         self.allow_experimental
     }
 
+    pub fn allow_deployed_funding_tool(&self) -> bool {
+        self.allow_deployed_funding_tool
+    }
+
     pub fn blokli_url(&self) -> Option<Url> {
         self.blokli_url.clone()
     }
@@ -293,8 +306,7 @@ mod tests {
             None,
             None,
             ConfigFileMode::Generated,
-            false,
-            false,
+            AllowFlags::default(),
             blokli_url,
             PathBuf::from("/tmp/gnosisvpn"),
         )

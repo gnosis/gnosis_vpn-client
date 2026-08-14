@@ -85,6 +85,11 @@ pub struct Cli {
     #[arg(long)]
     pub allow_experimental: bool,
 
+    /// Allow running the funding tool even after a Safe has been deployed and the node is
+    /// running (only for support/testing purposes)
+    #[arg(long)]
+    pub allow_deployed_funding_tool: bool,
+
     /// Autostart client after service startup and shut it down after being idle for this duration.
     /// The idle countdown is suspended while a VPN connection is active and resumes on disconnect.
     #[arg(long, env = worker::ENV_VAR_CLIENT_AUTOSTART, default_value = None,
@@ -103,16 +108,18 @@ impl From<&Cli> for WorkerParams {
             Some(path) => worker_params::ConfigFileMode::Manual(path),
             None => worker_params::ConfigFileMode::Generated,
         };
-        let allow_insecure = cli.allow_insecure;
-        let allow_experimental = cli.allow_experimental;
+        let allow = worker_params::AllowFlags {
+            insecure: cli.allow_insecure,
+            experimental: cli.allow_experimental,
+            deployed_funding_tool: cli.allow_deployed_funding_tool,
+        };
         let state_home = cli.state_home.clone();
 
         WorkerParams::new(
             cli.hopr_identity_file.clone(),
             cli.hopr_identity_pass.clone(),
             config_mode,
-            allow_insecure,
-            allow_experimental,
+            allow,
             cli.hopr_blokli_url.clone(),
             state_home,
         )
