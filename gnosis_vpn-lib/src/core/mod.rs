@@ -602,7 +602,7 @@ impl Core {
 
                     WorkerCommand::FundingTool(secret) => {
                         let in_presafe_phase = matches!(self.phase, Phase::CheckingSafe { .. });
-                        if in_presafe_phase || self.worker_params.allow_deployed_funding_tool() {
+                        if in_presafe_phase || self.worker_params.allow_funding_tool_rerun() {
                             match self.funding_tool {
                                 balance::FundingTool::NotStarted | balance::FundingTool::CompletedError(_) => {
                                     self.funding_tool = balance::FundingTool::InProgress;

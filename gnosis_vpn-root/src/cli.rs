@@ -85,10 +85,10 @@ pub struct Cli {
     #[arg(long)]
     pub allow_experimental: bool,
 
-    /// Allow running the funding tool even after a Safe has been deployed and the node is
+    /// Allow re-running the funding tool even after a Safe has been deployed and the node is
     /// running (only for support/testing purposes)
     #[arg(long)]
-    pub allow_deployed_funding_tool: bool,
+    pub allow_funding_tool_rerun: bool,
 
     /// Autostart client after service startup and shut it down after being idle for this duration.
     /// The idle countdown is suspended while a VPN connection is active and resumes on disconnect.
@@ -111,7 +111,7 @@ impl From<&Cli> for WorkerParams {
         let allow = worker_params::AllowFlags {
             insecure: cli.allow_insecure,
             experimental: cli.allow_experimental,
-            deployed_funding_tool: cli.allow_deployed_funding_tool,
+            funding_tool_rerun: cli.allow_funding_tool_rerun,
         };
         let state_home = cli.state_home.clone();
 

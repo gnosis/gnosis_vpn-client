@@ -39,7 +39,7 @@ pub struct WorkerParams {
     config_mode: ConfigFileMode,
     allow_insecure: bool,
     allow_experimental: bool,
-    allow_deployed_funding_tool: bool,
+    allow_funding_tool_rerun: bool,
     blokli_url: Option<Url>,
     /// Address the Blokli host resolved to at service startup, see [`WorkerParams::resolve_blokli_ip`].
     resolved_blokli_ip: Option<Ipv4Addr>,
@@ -58,7 +58,7 @@ pub enum ConfigFileMode {
 pub struct AllowFlags {
     pub insecure: bool,
     pub experimental: bool,
-    pub deployed_funding_tool: bool,
+    pub funding_tool_rerun: bool,
 }
 
 impl WorkerParams {
@@ -76,7 +76,7 @@ impl WorkerParams {
             config_mode,
             allow_insecure: allow.insecure,
             allow_experimental: allow.experimental,
-            allow_deployed_funding_tool: allow.deployed_funding_tool,
+            allow_funding_tool_rerun: allow.funding_tool_rerun,
             blokli_url,
             resolved_blokli_ip: None,
             state_home,
@@ -213,8 +213,8 @@ impl WorkerParams {
         self.allow_experimental
     }
 
-    pub fn allow_deployed_funding_tool(&self) -> bool {
-        self.allow_deployed_funding_tool
+    pub fn allow_funding_tool_rerun(&self) -> bool {
+        self.allow_funding_tool_rerun
     }
 
     pub fn blokli_url(&self) -> Option<Url> {
