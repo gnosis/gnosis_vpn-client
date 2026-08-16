@@ -85,6 +85,7 @@ pub struct Core {
 
     // runtime data
     phase: Phase,
+    funding_tool: balance::FundingTool,
     incentive_operations: Option<Arc<dyn IncentiveOperations>>,
     hopr: Option<Arc<Hopr>>,
     minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
@@ -116,7 +117,6 @@ enum Phase {
     CheckingSafe {
         node_balance: Querying<balance::PreSafe>,
         query_safe: Querying<Option<SafeModule>>,
-        funding_tool: balance::FundingTool,
         deploy_safe_error: Option<String>,
     },
     /// enough funds and no deployed safe - run safe deployment
@@ -199,6 +199,7 @@ impl Core {
 
             // runtime data
             phase: Phase::Initial { last_error: None },
+            funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
             incentive_operations: None,
             minimum_balance_recommendation: None,
@@ -368,7 +369,6 @@ impl Core {
                             Phase::CheckingSafe {
                                 node_balance,
                                 query_safe,
-                                funding_tool,
                                 deploy_safe_error,
                             } => {
                                 let balance = match node_balance {
@@ -385,10 +385,10 @@ impl Core {
                                 if let Some(deploy_err) = deploy_safe_error {
                                     errors = format!("{} {}", errors, deploy_err);
                                 }
-                                let funding_tool = match funding_tool {
+                                let funding_tool = match self.funding_tool.clone() {
                                     balance::FundingTool::NotStarted => None,
                                     balance::FundingTool::InProgress => Some("Funding tool running".to_string()),
-                                    balance::FundingTool::CompletedSuccess => {
+                                    balance::FundingTool::CompletedSuccess(_) => {
                                         Some("Funding tool ran successfully".to_string())
                                     }
                                     balance::FundingTool::CompletedError(error) => {
@@ -600,34 +600,34 @@ impl Core {
                         let _ = resp.send(Response::ForceReconnectAcknowledged);
                     }
 
-                    WorkerCommand::FundingTool(secret) => match self.phase.clone() {
-                        Phase::CheckingSafe {
-                            node_balance,
-                            query_safe,
-                            funding_tool,
-                            deploy_safe_error,
-                        } => match funding_tool {
-                            balance::FundingTool::NotStarted | balance::FundingTool::CompletedError(_) => {
-                                self.phase = Phase::CheckingSafe {
-                                    node_balance,
-                                    query_safe,
-                                    funding_tool: balance::FundingTool::InProgress,
-                                    deploy_safe_error,
-                                };
-                                self.spawn_funding_runner(secret, results_sender);
-                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::Started));
+                    WorkerCommand::FundingTool(secret) => {
+                        let in_presafe_phase = matches!(self.phase, Phase::CheckingSafe { .. });
+                        let rerun_allowed = self.worker_params.allow_funding_tool_rerun();
+                        // cooldown only gates reruns; without the flag, a completed run stays Done forever
+                        let cooldown_remaining =
+                            rerun_allowed.then(|| self.funding_tool.cooldown_remaining()).flatten();
+
+                        let response = if !(in_presafe_phase || rerun_allowed) {
+                            command::FundingToolResponse::WrongPhase
+                        } else if let Some(remaining) = cooldown_remaining {
+                            command::FundingToolResponse::Cooldown(remaining)
+                        } else {
+                            match &self.funding_tool {
+                                balance::FundingTool::InProgress => command::FundingToolResponse::InProgress,
+                                balance::FundingTool::CompletedSuccess(_) if !rerun_allowed => {
+                                    command::FundingToolResponse::Done
+                                }
+                                balance::FundingTool::NotStarted
+                                | balance::FundingTool::CompletedError(_)
+                                | balance::FundingTool::CompletedSuccess(_) => {
+                                    self.funding_tool = balance::FundingTool::InProgress;
+                                    self.spawn_funding_runner(secret, results_sender);
+                                    command::FundingToolResponse::Started
+                                }
                             }
-                            balance::FundingTool::InProgress => {
-                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::InProgress));
-                            }
-                            balance::FundingTool::CompletedSuccess => {
-                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::Done));
-                            }
-                        },
-                        _ => {
-                            let _ = resp.send(Response::funding_tool(command::FundingToolResponse::WrongPhase));
-                        }
-                    },
+                        };
+                        let _ = resp.send(Response::funding_tool(response));
+                    }
                 }
                 true
             }
@@ -1098,7 +1098,6 @@ impl Core {
                     node_balance: _,
                     query_safe,
                     deploy_safe_error,
-                    funding_tool,
                 },
             ) => {
                 tracing::info!(%presafe, "on presafe node balance");
@@ -1106,7 +1105,6 @@ impl Core {
                     node_balance: Querying::Success(presafe.clone()),
                     query_safe,
                     deploy_safe_error,
-                    funding_tool,
                 };
                 // trigger retry - will be canceled if safe deployment starts
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
@@ -1118,7 +1116,6 @@ impl Core {
                     node_balance: _,
                     query_safe,
                     deploy_safe_error,
-                    funding_tool,
                 },
             ) => {
                 tracing::error!(?err, "failed to fetch presafe node balance - retrying");
@@ -1126,7 +1123,6 @@ impl Core {
                     node_balance: Querying::Error(err.to_string()),
                     query_safe,
                     deploy_safe_error,
-                    funding_tool,
                 };
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
             }
@@ -1157,7 +1153,6 @@ impl Core {
                     node_balance,
                     query_safe: _,
                     deploy_safe_error,
-                    funding_tool,
                 },
             ) => {
                 tracing::info!("found no deployed safe module");
@@ -1165,7 +1160,6 @@ impl Core {
                     node_balance,
                     query_safe: Querying::Success(None),
                     deploy_safe_error,
-                    funding_tool,
                 };
                 // trigger retry - will be canceled if safe deployment starts
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
@@ -1177,7 +1171,6 @@ impl Core {
                     node_balance,
                     query_safe: _,
                     deploy_safe_error,
-                    funding_tool,
                 },
             ) => {
                 tracing::error!(?err, "failed to query safe module - retrying");
@@ -1185,7 +1178,6 @@ impl Core {
                     node_balance,
                     query_safe: Querying::Error(err.to_string()),
                     deploy_safe_error,
-                    funding_tool,
                 };
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
             }
@@ -1220,7 +1212,6 @@ impl Core {
                     node_balance,
                     query_safe,
                     deploy_safe_error: Some(err.to_string()),
-                    funding_tool: balance::FundingTool::NotStarted,
                 };
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
@@ -1232,60 +1223,11 @@ impl Core {
     }
 
     fn on_results_funding_tool(&mut self, res: Result<Option<String>, runner::Error>) {
-        match (res, self.phase.clone()) {
-            (
-                Ok(None),
-                Phase::CheckingSafe {
-                    node_balance,
-                    query_safe,
-                    deploy_safe_error,
-                    ..
-                },
-            ) => {
-                self.phase = Phase::CheckingSafe {
-                    node_balance,
-                    query_safe,
-                    deploy_safe_error,
-                    funding_tool: balance::FundingTool::CompletedSuccess,
-                }
-            }
-            (
-                Ok(Some(reason)),
-                Phase::CheckingSafe {
-                    node_balance,
-                    query_safe,
-                    deploy_safe_error,
-                    ..
-                },
-            ) => {
-                self.phase = Phase::CheckingSafe {
-                    node_balance,
-                    query_safe,
-                    deploy_safe_error,
-                    funding_tool: balance::FundingTool::CompletedError(reason),
-                }
-            }
-            (
-                Err(err),
-                Phase::CheckingSafe {
-                    node_balance,
-                    query_safe,
-                    deploy_safe_error,
-                    ..
-                },
-            ) => {
-                self.phase = Phase::CheckingSafe {
-                    node_balance,
-                    query_safe,
-                    deploy_safe_error,
-                    funding_tool: balance::FundingTool::CompletedError(err.to_string()),
-                }
-            }
-
-            (res, phase) => {
-                tracing::warn!(?res, ?phase, "unexpected funding tool response in wrong phase");
-            }
-        }
+        self.funding_tool = match res {
+            Ok(None) => balance::FundingTool::CompletedSuccess(SystemTime::now()),
+            Ok(Some(reason)) => balance::FundingTool::CompletedError(reason),
+            Err(err) => balance::FundingTool::CompletedError(err.to_string()),
+        };
     }
 
     fn trigger_deploy_safe(&mut self, results_sender: &mpsc::Sender<Results>) {
@@ -1293,7 +1235,6 @@ impl Core {
             node_balance: Querying::Success(presafe),
             query_safe: Querying::Success(None),
             deploy_safe_error: _,
-            funding_tool: _,
         } = self.phase.clone()
         {
             let Some(recommendation) = self.minimum_balance_recommendation else {
@@ -1355,7 +1296,6 @@ impl Core {
                     node_balance: Querying::Init,
                     query_safe: Querying::Init,
                     deploy_safe_error: None,
-                    funding_tool: balance::FundingTool::NotStarted,
                 };
                 self.spawn_query_safe_runner(results_sender, Duration::ZERO);
                 self.spawn_node_balance_runner(results_sender, Duration::ZERO);
