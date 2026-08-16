@@ -322,6 +322,12 @@ fn pretty_print(resp: &Response) {
         Response::FundingTool(command::FundingToolResponse::Done) => {
             println!("Funding complete");
         }
+        Response::FundingTool(command::FundingToolResponse::Cooldown(remaining)) => {
+            println!(
+                "Funding tool already ran successfully, still in cooldown - try again in {}",
+                humantime::format_duration(Duration::from_secs(remaining.as_secs()))
+            );
+        }
         Response::Info(info) => {
             println!(
                 "Gnosis VPN: client service version: {}, package version: {}{}",
@@ -443,6 +449,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::FundingTool(command::FundingToolResponse::Started) => exitcode::OK,
         Response::FundingTool(command::FundingToolResponse::InProgress) => exitcode::OK,
         Response::FundingTool(command::FundingToolResponse::Done) => exitcode::OK,
+        Response::FundingTool(command::FundingToolResponse::Cooldown(..)) => exitcode::UNAVAILABLE,
         Response::Info(..) => exitcode::OK,
         Response::StartClient(command::StartClientResponse::Started) => exitcode::OK,
         Response::StartClient(command::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,
