@@ -33,10 +33,18 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.1#a45a31d28780695cb816d5e245a70bd520bd1293" =
       "sha256-QF8BAe2eHrGsVvZIGD+Gdi6XFMQ8zHkOObSRjTRN4MY=";
-    "git+https://github.com/hoprnet/edge-client.git?rev=f87db85bec811efe4df96e3a626720d646871773#f87db85bec811efe4df96e3a626720d646871773" =
-      "sha256-uOEGGMG0N7t6O4oUQbMcU3nPyb+XbO4Xth/uc6CmEv4=";
-    "git+https://github.com/hoprnet/hoprnet?rev=10f6d80c3cc71dee1c5f98c3074c4021ef7fa54d#10f6d80c3cc71dee1c5f98c3074c4021ef7fa54d" =
-      "sha256-k0vvNTgGadrK1RyXwvABBpDWymsMEBXa+4wg9WLjtro=";
+    "git+https://github.com/hoprnet/edge-client.git?rev=81ec6d62c48f17bff7ad15f4fba804715db758c1#81ec6d62c48f17bff7ad15f4fba804715db758c1" =
+      "sha256-z7LPv/LHtdFUCimU+fVwGRySkX2gHy2YphqXjWjSJ28=";
+    "git+https://github.com/hoprnet/hopr-api?rev=ee65b340cf09fd6031735477cc1171d7610694a3#ee65b340cf09fd6031735477cc1171d7610694a3" =
+      "sha256-Tevhabmz4XfQTBXGLbUmW3uV+7kpbPVnWgFdsYstJl8=";
+    "git+https://github.com/hoprnet/hopr-impls?rev=ad0fd7e4b35ac462846011ec7446fd404f5bcf44#ad0fd7e4b35ac462846011ec7446fd404f5bcf44" =
+      "sha256-LoMm1ZjhSWu/UPTHMfrPOKQy2XrHadOhbmKwtF9bOlI=";
+    "git+https://github.com/hoprnet/hopr-strategy?rev=272f41000cd6e1bec9e2d08e2cd85f37aa804ea9#272f41000cd6e1bec9e2d08e2cd85f37aa804ea9" =
+      "sha256-K4Jtm3TJmNh5rlPlrT0ye66UEQ78OqtwDw2wOs8lb5A=";
+    "git+https://github.com/hoprnet/hopr-utilities?rev=68e648be4aa9f1442c75df4006a53db414932f7e#68e648be4aa9f1442c75df4006a53db414932f7e" =
+      "sha256-1hYv2N2HjE7sTLbw5DXOQLOvae9dYR0iwSl6OsCUQhE=";
+    "git+https://github.com/hoprnet/hoprnet?branch=kauki/fix/session/unreliable-frame-head-of-line#70448b900f03069cd24a077f046df8603166b4eb" =
+      "sha256-bYqbhhL/NkwPtOgktAveNNKyUn7jXfeIR8xGdOI/iDE=";
   };
 
   builders = nixLib.mkRustBuilders {
