@@ -15,12 +15,6 @@ use std::time::{Duration, SystemTime};
 /// notation. `1e-3` here means 0.001 wxHOPR, not wei.
 const WXHOPR_SCI_THRESHOLD: f64 = 1e-3;
 
-/// Required node xDai balance to start (gas for Safe deployment, registration
-/// and key binding). Overrides upstream `SUGGESTED_NATIVE_BALANCE` (0.01 xDai).
-pub fn xdai_to_start() -> Balance<XDai> {
-    Balance::<XDai>::from(5_000_000_000_000_000_u64) // 0.005 xDai in wei
-}
-
 /// Scientific-notation form of a wxHOPR balance (e.g. `7.5e-10`), but only for values
 /// small enough that the decimal form is hard to read. Returns `None` for zero and for
 /// amounts at or above `1e-3` wxHOPR (the token value, already converted from wei),
@@ -204,7 +198,9 @@ pub struct BalanceRecommendation {
     /// Total wxHOPR to fund: channel stakes plus the fee to start.
     #[serde(with = "serde_utils::balance")]
     pub wxhopr: Balance<WxHOPR>,
-    /// Recommended xDai balance for gas (flat, one [`Self::xdai_fee_per_tx`]).
+    /// Total xDai to fund the node with for gas, carried from edgli's
+    /// `suggested_xdai_fund_amount` (0.005 xDai) — a funding target, distinct
+    /// from the per-transaction ceiling in [`Self::xdai_fee_per_tx`].
     #[serde(with = "serde_utils::balance")]
     pub xdai: Balance<XDai>,
     /// wxHOPR needed to stake the missing channels.
@@ -226,7 +222,7 @@ impl From<edgli::strategy::BalanceRecommendation> for BalanceRecommendation {
     fn from(rec: edgli::strategy::BalanceRecommendation) -> Self {
         BalanceRecommendation {
             wxhopr: rec.total_wxhopr(),
-            xdai: rec.xdai_fee_per_tx,
+            xdai: rec.xdai_fund_amount,
             channel_stakes: rec.channel_stakes,
             fee_to_start: rec.fee_to_start,
             txs_to_start: rec.txs_to_start,
@@ -443,10 +439,11 @@ mod tests {
             fee_to_start: Balance::<WxHOPR>::from(10_000u64),
             txs_to_start: 3,
             xdai_fee_per_tx: Balance::<XDai>::from(100u64),
+            xdai_fund_amount: Balance::<XDai>::from(42u64),
         };
         let mirrored: BalanceRecommendation = rec.into();
         assert_eq!(mirrored.wxhopr, Balance::<WxHOPR>::from(10_800u64));
-        assert_eq!(mirrored.xdai, Balance::<XDai>::from(100u64));
+        assert_eq!(mirrored.xdai, Balance::<XDai>::from(42u64));
         assert_eq!(mirrored.channel_stakes, Balance::<WxHOPR>::from(800u64));
         assert_eq!(mirrored.fee_to_start, Balance::<WxHOPR>::from(10_000u64));
         assert_eq!(mirrored.txs_to_start, 3);
@@ -550,11 +547,6 @@ mod tests {
         assert_eq!(c.expected_messages, 0);
         assert_eq!(c.min_guaranteed_messages, 0);
         assert_eq!(c.byte_capacity, 0);
-    }
-
-    #[test]
-    fn xdai_to_start_is_0_005_xdai() {
-        assert_eq!(xdai_to_start(), "0.005 xdai".parse().unwrap());
     }
 
     #[test]
