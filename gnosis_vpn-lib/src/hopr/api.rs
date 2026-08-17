@@ -435,11 +435,9 @@ impl Hopr {
         // TODO(edgli): the node-EOA capacity should come from edgli itself.
         // https://github.com/hoprnet/edge-client/issues/141
         // `describe_current_capacity_allocations` already fetches ticket price
-        // and win prob internally but omits the node EOA, and its
-        // `strategy::compute_capacity` is pub(crate) — so we re-read both
-        // chain values here and mirror the math in `balance::compute_capacity`.
-        // Once edgli returns it, drop the chain_api()/balances() calls below
-        // and delete balance::compute_capacity.
+        // and win prob internally but omits the node EOA, so we re-read both
+        // chain values here to feed `edgli::strategy::compute_capacity`. Once
+        // edgli returns it, drop the chain_api()/balances() calls below.
         let node_wxhopr = self.edgli.balances().await.map_err(HoprError::HoprLib)?.node_wxhopr;
         let chain = self.edgli.chain_api();
         let ticket_price = chain
@@ -451,7 +449,10 @@ impl Hopr {
             .await
             .map_err(|e| HoprError::Strategy(e.to_string()))?
             .as_f64();
-        let node_capacity = balance::compute_capacity(node_wxhopr, ticket_price, win_prob);
+        let node_capacity = edgli::strategy::compute_capacity(node_wxhopr, ticket_price, win_prob)
+            .inspect_err(|err| tracing::warn!(%err, "node EOA capacity unavailable"))
+            .ok()
+            .map(balance::Capacity::from);
 
         Ok(balance::CapacityAllocations {
             allocations,

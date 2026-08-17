@@ -1,6 +1,4 @@
-use edgli::hopr_lib::api::types::primitive::prelude::UnitaryFloatOps;
 pub use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR, XDai};
-use edgli::hopr_lib::exports::transport::SESSION_MTU;
 use serde::{Deserialize, Serialize};
 
 use crate::serde_utils;
@@ -151,38 +149,6 @@ impl From<edgli::strategy::Capacity> for Capacity {
             byte_capacity: c.byte_capacity,
         }
     }
-}
-
-/// Data-throughput capacity for `stake` at the current ticket price and win
-/// probability. Mirrors `edgli::strategy::compute_capacity`, which is
-/// `pub(crate)` there and not callable from here — keep the math in sync.
-/// Returns `None` when `win_prob` is outside `(0, 1]`.
-pub fn compute_capacity(stake: Balance<WxHOPR>, ticket_price: Balance<WxHOPR>, win_prob: f64) -> Option<Capacity> {
-    if !win_prob.is_finite() || win_prob <= 0.0 || win_prob > 1.0 {
-        return None;
-    }
-    let expected_messages = if ticket_price.is_zero() {
-        0u64
-    } else {
-        // Clamp to u64::MAX before converting so astronomically large quotients
-        // saturate rather than truncate via low_u64().
-        let quotient = stake.amount() / ticket_price.amount();
-        quotient.min(u64::MAX.into()).low_u64()
-    };
-    // face_value = ticket_price / win_prob — minimum balance locked per outstanding ticket.
-    let face_value = ticket_price.div_f64(win_prob).ok()?;
-    let min_guaranteed_messages = if face_value.is_zero() {
-        0u64
-    } else {
-        let quotient = stake.amount() / face_value.amount();
-        quotient.min(u64::MAX.into()).low_u64()
-    };
-    Some(Capacity {
-        stake,
-        expected_messages,
-        min_guaranteed_messages,
-        byte_capacity: expected_messages.saturating_mul(SESSION_MTU as u64),
-    })
 }
 
 /// Recommended wxHOPR and xDAI balance to open the target number of channels.
@@ -518,44 +484,5 @@ mod tests {
     #[test]
     fn wxhopr_scientific_above_threshold_is_none() {
         assert_eq!(wxhopr_scientific(Balance::<WxHOPR>::from(SCI_THRESHOLD_WEI + 1)), None);
-    }
-
-    #[test]
-    fn compute_capacity_with_certain_win_prob() {
-        let c = compute_capacity(Balance::<WxHOPR>::from(1_000u64), Balance::<WxHOPR>::from(10u64), 1.0)
-            .expect("valid win_prob");
-        assert_eq!(c.stake, Balance::<WxHOPR>::from(1_000u64));
-        assert_eq!(c.expected_messages, 100);
-        assert_eq!(c.min_guaranteed_messages, 100);
-        assert_eq!(c.byte_capacity, 100 * SESSION_MTU as u64);
-    }
-
-    #[test]
-    fn compute_capacity_win_prob_halves_guaranteed_messages() {
-        let c = compute_capacity(Balance::<WxHOPR>::from(1_000u64), Balance::<WxHOPR>::from(10u64), 0.5)
-            .expect("valid win_prob");
-        // face_value = 10 / 0.5 = 20 → 1000 / 20 = 50 guaranteed
-        assert_eq!(c.expected_messages, 100);
-        assert_eq!(c.min_guaranteed_messages, 50);
-        assert_eq!(c.byte_capacity, 100 * SESSION_MTU as u64);
-    }
-
-    #[test]
-    fn compute_capacity_zero_ticket_price_yields_zero_messages() {
-        let c = compute_capacity(Balance::<WxHOPR>::from(1_000u64), Balance::<WxHOPR>::zero(), 1.0)
-            .expect("valid win_prob");
-        assert_eq!(c.expected_messages, 0);
-        assert_eq!(c.min_guaranteed_messages, 0);
-        assert_eq!(c.byte_capacity, 0);
-    }
-
-    #[test]
-    fn compute_capacity_invalid_win_prob_is_none() {
-        let stake = Balance::<WxHOPR>::from(1_000u64);
-        let price = Balance::<WxHOPR>::from(10u64);
-        assert!(compute_capacity(stake, price, 0.0).is_none());
-        assert!(compute_capacity(stake, price, -0.1).is_none());
-        assert!(compute_capacity(stake, price, 1.1).is_none());
-        assert!(compute_capacity(stake, price, f64::NAN).is_none());
     }
 }

@@ -2909,7 +2909,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "4.1.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=b55f950c8758476b0be0b4b053c37f751c9b59ec#b55f950c8758476b0be0b4b053c37f751c9b59ec"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=ead23a35071277d601636daf1f18836f98c2af6a#ead23a35071277d601636daf1f18836f98c2af6a"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -6763,7 +6763,7 @@ checksum = "7704264c7d31443a8dc10dcb3301457980be49b9e5bffef7a41fd0e7c0f4e823"
 dependencies = [
  "rand 0.9.4",
  "socket2 0.6.4",
- "thiserror 1.0.69",
+ "thiserror 2.0.20",
  "tokio",
 ]
 
