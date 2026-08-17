@@ -1,3 +1,4 @@
+use bytesize::ByteSize;
 use exitcode::{self, ExitCode};
 
 use std::fmt;
@@ -571,12 +572,12 @@ fn print_wg_tunnel_stats(stats: &command::ConnStats) -> String {
     let rtt = current.rtt_ms.map(|ms| format!("{ms}ms")).unwrap_or("--".to_string());
     let handshake_age = current
         .time_since_last_handshake
-        .map(|d| format!("{:.0}s ago", d.as_secs_f64()))
+        .map(|d| format!("{} ago", humantime::format_duration(Duration::from_secs(d.as_secs()))))
         .unwrap_or("--".to_string());
     format!(
         "---\nTunnel RTT (as of last handshake): {rtt}\nLast handshake: {handshake_age}\nTx bytes: {}\nRx bytes: {}\nEstimated loss: {:.1}%\n",
-        current.tx_bytes,
-        current.rx_bytes,
+        ByteSize(current.tx_bytes),
+        ByteSize(current.rx_bytes),
         current.estimated_loss * 100.0,
     )
 }
