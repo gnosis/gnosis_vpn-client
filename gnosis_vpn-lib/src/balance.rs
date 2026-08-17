@@ -98,16 +98,6 @@ pub enum CapacityAllocator {
     NodeEoa,
 }
 
-impl From<edgli::strategy::CapacityAllocator> for CapacityAllocator {
-    fn from(a: edgli::strategy::CapacityAllocator) -> Self {
-        match a {
-            edgli::strategy::CapacityAllocator::Peer(addr) => CapacityAllocator::Peer(addr),
-            edgli::strategy::CapacityAllocator::Safe => CapacityAllocator::Safe,
-            edgli::strategy::CapacityAllocator::NodeEoa => CapacityAllocator::NodeEoa,
-        }
-    }
-}
-
 impl Display for CapacityAllocator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {

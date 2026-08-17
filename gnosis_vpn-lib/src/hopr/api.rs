@@ -430,7 +430,14 @@ impl Hopr {
             .describe_current_capacity_allocations()
             .await
             .map_err(|e| HoprError::Strategy(e.to_string()))?;
-        Ok(raw.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
+        let mut map: HashMap<balance::CapacityAllocator, balance::Capacity> = raw
+            .peer_allocations
+            .into_iter()
+            .map(|(addr, c)| (balance::CapacityAllocator::Peer(addr), c.into()))
+            .collect();
+        map.insert(balance::CapacityAllocator::Safe, raw.safe.into());
+        map.insert(balance::CapacityAllocator::NodeEoa, raw.node.into());
+        Ok(map)
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
