@@ -1,8 +1,6 @@
 use edgli::EdgliInitState;
 use edgli::blokli::IncentiveOperations;
-use edgli::hopr_lib::api::types::primitive::traits::ToHex;
 use edgli::hopr_lib::builder::Keypair;
-use edgli::hopr_lib::exports::transport::SessionId;
 use futures_util::future::AbortHandle;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -20,13 +18,11 @@ use crate::compat::SafeModule;
 use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
-use crate::connection::pseudonym_cache::PseudonymCache;
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
-use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::route_health::{self, RouteHealth};
 use crate::worker_params::{self, WorkerParams};
-use crate::{balance, log_output, peer, ticket_stats, wireguard};
+use crate::{balance, log_output, peer, ticket_stats, wg_tunnel, wireguard};
 
 pub(crate) mod runner;
 
@@ -79,12 +75,17 @@ pub struct Core {
     cancel_presafe_queries: CancellationToken,
     cancel_balances: CancellationToken,
     cancel_peers: CancellationToken,
+    // Tracks the connection's NepTUN pump task so teardown can wait for it to
+    // stop (dropping its TUN fd) before asking root to tear down routing;
+    // replaced together with cancel_connection.
+    wg_pump_tasks: TaskTracker,
 
     // user provided data
     target_destination: Option<Destination>,
 
     // runtime data
     phase: Phase,
+    funding_tool: balance::FundingTool,
     incentive_operations: Option<Arc<dyn IncentiveOperations>>,
     hopr: Option<Arc<Hopr>>,
     minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
@@ -105,7 +106,6 @@ pub struct Core {
     ongoing_disconnections: Vec<connection::down::Down>,
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
     reconnecting_since: Option<SystemTime>,
-    pseudonym_cache: PseudonymCache,
 }
 
 #[derive(Debug, Clone)]
@@ -119,7 +119,6 @@ enum Phase {
     CheckingSafe {
         node_balance: Querying<balance::PreSafe>,
         query_safe: Querying<Option<SafeModule>>,
-        funding_tool: balance::FundingTool,
         deploy_safe_error: Option<String>,
     },
     /// enough funds and no deployed safe - run safe deployment
@@ -158,8 +157,6 @@ impl Core {
         target_dest_id: Option<String>,
         outgoing_sender: mpsc::Sender<CoreToWorker>,
     ) -> Result<(Core, mpsc::Sender<WorkerToCore>), Error> {
-        wireguard::available().await?;
-        wireguard::executable().await?;
         let keys = worker_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
         let cancel_on_shutdown = CancellationToken::new();
@@ -180,7 +177,6 @@ impl Core {
 
         let (incoming_sender, incoming_receiver) = mpsc::channel(32);
         let cached_resolved_blokli_ips = worker_params.cached_blokli_ips().to_vec();
-        let pseudonym_cache = PseudonymCache::new(config.connection.session_pseudonym_ttl);
         let core = Core {
             // config data
             config,
@@ -198,12 +194,14 @@ impl Core {
             cancel_presafe_queries: cancel_on_shutdown.child_token(),
             cancel_balances: cancel_on_shutdown.child_token(),
             cancel_peers: cancel_on_shutdown.child_token(),
+            wg_pump_tasks: TaskTracker::new(),
 
             // user provided data
             target_destination,
 
             // runtime data
             phase: Phase::Initial { last_error: None },
+            funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
             incentive_operations: None,
             minimum_balance_recommendation: None,
@@ -218,7 +216,6 @@ impl Core {
             responders: HashMap::new(),
             // needed to keep working during enabled killswitch
             cached_resolved_blokli_ips,
-            pseudonym_cache,
             reconnecting_since: None,
         };
         Ok((core, incoming_sender))
@@ -304,16 +301,16 @@ impl Core {
                             );
                         }
                     }
-                    ResponseFromRoot::StaticWgRouting { request_id, res } => {
+                    ResponseFromRoot::TunnelReady { request_id, res } => {
                         if let Some(Responder::Str(tx)) = self.responders.remove(&request_id) {
                             let _ = tx.send(res).map_err(|_| {
-                                tracing::warn!("responder channel closed for static wg routing response");
+                                tracing::warn!("responder channel closed for tunnel ready response");
                             });
                         } else {
                             tracing::debug!(
                                 request_id,
                                 ?res,
-                                "no responder for static wg routing response (evicted or duplicate)"
+                                "no responder for tunnel ready response (evicted or duplicate)"
                             );
                         }
                     }
@@ -375,7 +372,6 @@ impl Core {
                             Phase::CheckingSafe {
                                 node_balance,
                                 query_safe,
-                                funding_tool,
                                 deploy_safe_error,
                             } => {
                                 let balance = match node_balance {
@@ -392,10 +388,10 @@ impl Core {
                                 if let Some(deploy_err) = deploy_safe_error {
                                     errors = format!("{} {}", errors, deploy_err);
                                 }
-                                let funding_tool = match funding_tool {
+                                let funding_tool = match self.funding_tool.clone() {
                                     balance::FundingTool::NotStarted => None,
                                     balance::FundingTool::InProgress => Some("Funding tool running".to_string()),
-                                    balance::FundingTool::CompletedSuccess => {
+                                    balance::FundingTool::CompletedSuccess(_) => {
                                         Some("Funding tool ran successfully".to_string())
                                     }
                                     balance::FundingTool::CompletedError(error) => {
@@ -608,34 +604,34 @@ impl Core {
                         let _ = resp.send(Response::ForceReconnectAcknowledged);
                     }
 
-                    WorkerCommand::FundingTool(secret) => match self.phase.clone() {
-                        Phase::CheckingSafe {
-                            node_balance,
-                            query_safe,
-                            funding_tool,
-                            deploy_safe_error,
-                        } => match funding_tool {
-                            balance::FundingTool::NotStarted | balance::FundingTool::CompletedError(_) => {
-                                self.phase = Phase::CheckingSafe {
-                                    node_balance,
-                                    query_safe,
-                                    funding_tool: balance::FundingTool::InProgress,
-                                    deploy_safe_error,
-                                };
-                                self.spawn_funding_runner(secret, results_sender);
-                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::Started));
+                    WorkerCommand::FundingTool(secret) => {
+                        let in_presafe_phase = matches!(self.phase, Phase::CheckingSafe { .. });
+                        let rerun_allowed = self.worker_params.allow_funding_tool_rerun();
+                        // cooldown only gates reruns; without the flag, a completed run stays Done forever
+                        let cooldown_remaining =
+                            rerun_allowed.then(|| self.funding_tool.cooldown_remaining()).flatten();
+
+                        let response = if !(in_presafe_phase || rerun_allowed) {
+                            command::FundingToolResponse::WrongPhase
+                        } else if let Some(remaining) = cooldown_remaining {
+                            command::FundingToolResponse::Cooldown(remaining)
+                        } else {
+                            match &self.funding_tool {
+                                balance::FundingTool::InProgress => command::FundingToolResponse::InProgress,
+                                balance::FundingTool::CompletedSuccess(_) if !rerun_allowed => {
+                                    command::FundingToolResponse::Done
+                                }
+                                balance::FundingTool::NotStarted
+                                | balance::FundingTool::CompletedError(_)
+                                | balance::FundingTool::CompletedSuccess(_) => {
+                                    self.funding_tool = balance::FundingTool::InProgress;
+                                    self.spawn_funding_runner(secret, results_sender);
+                                    command::FundingToolResponse::Started
+                                }
                             }
-                            balance::FundingTool::InProgress => {
-                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::InProgress));
-                            }
-                            balance::FundingTool::CompletedSuccess => {
-                                let _ = resp.send(Response::funding_tool(command::FundingToolResponse::Done));
-                            }
-                        },
-                        _ => {
-                            let _ = resp.send(Response::funding_tool(command::FundingToolResponse::WrongPhase));
-                        }
-                    },
+                        };
+                        let _ = resp.send(Response::funding_tool(response));
+                    }
                 }
                 true
             }
@@ -886,19 +882,19 @@ impl Core {
             }
 
             Results::ConnectionResult { res } => match (res, self.phase.clone()) {
-                (Ok(session), Phase::Connecting(mut conn)) => {
+                (Ok(_session), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     self.reconnecting_since = None;
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
-                    self.pseudonym_cache.remove(&conn.destination);
                     let route = format!(
                         "{}({})",
                         conn.destination.pretty_print_path(),
                         log_output::address(&conn.destination.address)
                     );
                     log_output::print_session_established(route.as_str());
-                    self.spawn_session_monitoring(session, results_sender);
+                    // A spliced session has no local listener to poll; the pump task
+                    // reports its own death via WgPumpExited instead of a monitor.
                     self.spawn_tunnel_ping_probe(results_sender);
                     self.cancel_peers.cancel();
                     self.cancel_peers = self.cancel_on_shutdown.child_token();
@@ -938,14 +934,17 @@ impl Core {
                 self.act_on_target(results_sender);
             }
 
-            Results::SessionMonitorFailed => match self.phase.clone() {
+            Results::WgPumpExited { reason } => match self.phase.clone() {
                 Phase::Connected(conn) => {
-                    tracing::warn!(%conn, "session monitor failed - reconnecting");
+                    tracing::warn!(%conn, %reason, "wg pump exited - reconnecting");
                     self.reconnecting_since = Some(SystemTime::now());
                     self.disconnect_from_connection(&conn, results_sender);
                 }
                 phase => {
-                    tracing::error!(?phase, "session monitor failed in unexpected phase");
+                    // During Connecting the runner's own tunnel ping verification
+                    // surfaces the failure; in any other phase the connection is
+                    // already being torn down.
+                    tracing::debug!(?phase, %reason, "wg pump exited outside an established connection");
                 }
             },
 
@@ -963,6 +962,22 @@ impl Core {
                 }
             }
 
+            Results::WgStatsSample(sample) => match self.phase.clone() {
+                Phase::Connecting(mut conn) => {
+                    conn.record_wg_stats(sample.clone());
+                    self.maybe_adjust_session(&conn, &sample);
+                    self.phase = Phase::Connecting(conn);
+                }
+                Phase::Connected(mut conn) => {
+                    conn.record_wg_stats(sample.clone());
+                    self.maybe_adjust_session(&conn, &sample);
+                    self.phase = Phase::Connected(conn);
+                }
+                phase => {
+                    tracing::debug!(?phase, "received wg stats sample outside an active connection");
+                }
+            },
+
             Results::ConnectionRequestToRoot(respondable_request) => match respondable_request {
                 RunnerToRoot::KillswitchLockdown {
                     peer_ips,
@@ -979,16 +994,20 @@ impl Core {
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
 
-                RunnerToRoot::StaticWgRouting {
-                    wg_data,
+                RunnerToRoot::SetupTunnel {
+                    interface_address,
+                    mtu,
+                    dns,
                     peer_ips,
                     resp,
                 } => {
                     let request_id = self.next_request_id();
                     self.responders.insert(request_id, Responder::Str(resp));
-                    let request = RequestToRoot::StaticWgRouting {
+                    let request = RequestToRoot::SetupTunnel {
                         request_id,
-                        wg_data,
+                        interface_address,
+                        mtu,
+                        dns,
                         peer_ips,
                     };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
@@ -1085,7 +1104,6 @@ impl Core {
                     node_balance: _,
                     query_safe,
                     deploy_safe_error,
-                    funding_tool,
                 },
             ) => {
                 tracing::info!(%presafe, "on presafe node balance");
@@ -1093,7 +1111,6 @@ impl Core {
                     node_balance: Querying::Success(presafe.clone()),
                     query_safe,
                     deploy_safe_error,
-                    funding_tool,
                 };
                 // trigger retry - will be canceled if safe deployment starts
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
@@ -1105,7 +1122,6 @@ impl Core {
                     node_balance: _,
                     query_safe,
                     deploy_safe_error,
-                    funding_tool,
                 },
             ) => {
                 tracing::error!(?err, "failed to fetch presafe node balance - retrying");
@@ -1113,7 +1129,6 @@ impl Core {
                     node_balance: Querying::Error(err.to_string()),
                     query_safe,
                     deploy_safe_error,
-                    funding_tool,
                 };
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
             }
@@ -1144,7 +1159,6 @@ impl Core {
                     node_balance,
                     query_safe: _,
                     deploy_safe_error,
-                    funding_tool,
                 },
             ) => {
                 tracing::info!("found no deployed safe module");
@@ -1152,7 +1166,6 @@ impl Core {
                     node_balance,
                     query_safe: Querying::Success(None),
                     deploy_safe_error,
-                    funding_tool,
                 };
                 // trigger retry - will be canceled if safe deployment starts
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
@@ -1164,7 +1177,6 @@ impl Core {
                     node_balance,
                     query_safe: _,
                     deploy_safe_error,
-                    funding_tool,
                 },
             ) => {
                 tracing::error!(?err, "failed to query safe module - retrying");
@@ -1172,7 +1184,6 @@ impl Core {
                     node_balance,
                     query_safe: Querying::Error(err.to_string()),
                     deploy_safe_error,
-                    funding_tool,
                 };
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
             }
@@ -1207,7 +1218,6 @@ impl Core {
                     node_balance,
                     query_safe,
                     deploy_safe_error: Some(err.to_string()),
-                    funding_tool: balance::FundingTool::NotStarted,
                 };
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
@@ -1219,60 +1229,11 @@ impl Core {
     }
 
     fn on_results_funding_tool(&mut self, res: Result<Option<String>, runner::Error>) {
-        match (res, self.phase.clone()) {
-            (
-                Ok(None),
-                Phase::CheckingSafe {
-                    node_balance,
-                    query_safe,
-                    deploy_safe_error,
-                    ..
-                },
-            ) => {
-                self.phase = Phase::CheckingSafe {
-                    node_balance,
-                    query_safe,
-                    deploy_safe_error,
-                    funding_tool: balance::FundingTool::CompletedSuccess,
-                }
-            }
-            (
-                Ok(Some(reason)),
-                Phase::CheckingSafe {
-                    node_balance,
-                    query_safe,
-                    deploy_safe_error,
-                    ..
-                },
-            ) => {
-                self.phase = Phase::CheckingSafe {
-                    node_balance,
-                    query_safe,
-                    deploy_safe_error,
-                    funding_tool: balance::FundingTool::CompletedError(reason),
-                }
-            }
-            (
-                Err(err),
-                Phase::CheckingSafe {
-                    node_balance,
-                    query_safe,
-                    deploy_safe_error,
-                    ..
-                },
-            ) => {
-                self.phase = Phase::CheckingSafe {
-                    node_balance,
-                    query_safe,
-                    deploy_safe_error,
-                    funding_tool: balance::FundingTool::CompletedError(err.to_string()),
-                }
-            }
-
-            (res, phase) => {
-                tracing::warn!(?res, ?phase, "unexpected funding tool response in wrong phase");
-            }
-        }
+        self.funding_tool = match res {
+            Ok(None) => balance::FundingTool::CompletedSuccess(SystemTime::now()),
+            Ok(Some(reason)) => balance::FundingTool::CompletedError(reason),
+            Err(err) => balance::FundingTool::CompletedError(err.to_string()),
+        };
     }
 
     fn trigger_deploy_safe(&mut self, results_sender: &mpsc::Sender<Results>) {
@@ -1280,7 +1241,6 @@ impl Core {
             node_balance: Querying::Success(presafe),
             query_safe: Querying::Success(None),
             deploy_safe_error: _,
-            funding_tool: _,
         } = self.phase.clone()
         {
             let Some(recommendation) = self.minimum_balance_recommendation else {
@@ -1342,7 +1302,6 @@ impl Core {
                     node_balance: Querying::Init,
                     query_safe: Querying::Init,
                     deploy_safe_error: None,
-                    funding_tool: balance::FundingTool::NotStarted,
                 };
                 self.spawn_query_safe_runner(results_sender, Duration::ZERO);
                 self.spawn_node_balance_runner(results_sender, Duration::ZERO);
@@ -1587,23 +1546,25 @@ impl Core {
             let conn = connection::up::Up::new(destination.clone());
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
-            // Entry is kept until connection is confirmed so retries within the TTL can reuse it.
-            let cached_pseudonym = self.pseudonym_cache.get(&destination);
-            if let Some(pseudonym) = &cached_pseudonym {
-                tracing::info!(%destination, %pseudonym, "reusing cached session pseudonym for reconnection");
-            }
             let prev_conn = connection::up::runner::PreviousConnection {
                 blokli_ips: self.cached_resolved_blokli_ips.clone(),
-                pseudonym: cached_pseudonym,
                 wg_public_key: prev_public_key,
             };
+            let spec = connection::up::runner::ConnectionSpec {
+                destination: conn.destination.clone(),
+                options: config_connection,
+                wg_config: config_wireguard,
+            };
+            let pump_lifecycle = connection::up::runner::PumpLifecycle {
+                cancel: self.cancel_connection.clone(),
+                tasks: self.wg_pump_tasks.clone(),
+            };
             let runner = connection::up::runner::Runner::new(
-                conn.destination.clone(),
-                config_connection,
-                config_wireguard,
+                spec,
                 hopr.clone(),
                 self.worker_params.clone(),
                 prev_conn,
+                pump_lifecycle,
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
@@ -1620,7 +1581,12 @@ impl Core {
         }
     }
 
-    fn spawn_disconnection_runner(&mut self, disconn: &connection::down::Down, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_disconnection_runner(
+        &mut self,
+        disconn: &connection::down::Down,
+        pump_tasks: TaskTracker,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_on_shutdown.clone();
             let config_connection = self.config.connection.clone();
@@ -1630,6 +1596,7 @@ impl Core {
             self.ongoing_disconnections.push(disconn.clone());
             let outgoing_sender = self.outgoing_sender.clone();
             tokio::spawn(async move {
+                wait_for_pump_stop(pump_tasks).await;
                 // this is a oneshot command and we do not wait for any result
                 let _ = outgoing_sender
                     .send(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
@@ -1643,18 +1610,20 @@ impl Core {
         }
     }
 
-    fn spawn_session_monitoring(&self, session: SessionClientMetadata, results_sender: &mpsc::Sender<Results>) {
-        if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_connection.clone();
-            let results_sender = results_sender.clone();
-            tokio::spawn(async move {
-                cancel
-                    .run_until_cancelled(async move {
-                        runner::monitor_session(hopr, &session, results_sender).await;
-                    })
-                    .await
-            });
-        }
+    /// Hook point for reacting to new WireGuard telemetry by adjusting the
+    /// active session's SURB balancer configuration. Policy (thresholds,
+    /// hysteresis/debounce, which `SurbBalancerConfig` field responds to which
+    /// telemetry trend) is intentionally not implemented here - this only wires
+    /// the mechanism (retained configurator + full sample history on `Up`) so
+    /// policy can be added later without further plumbing.
+    fn maybe_adjust_session(&self, conn: &connection::up::Up, _sample: &wg_tunnel::TunnelStatsSample) {
+        let Some(_configurator) = conn.session_configurator.as_ref() else {
+            return;
+        };
+        // TODO: derive an adjusted SurbBalancerConfig from conn.wg_stats (the
+        // retained history) and _sample, then call
+        // _configurator.update_surb_balancer_config(...). That call is safe to
+        // repeat - it fails gracefully if the session/manager is already gone.
     }
 
     fn spawn_tunnel_ping_probe(&self, results_sender: &mpsc::Sender<Results>) {
@@ -1715,15 +1684,9 @@ impl Core {
     }
 
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
-        // Cache the pseudonym so a reconnect within the TTL window can reuse exit node SURBs.
-        if let Some((_, session)) = &conn.ping_session
-            && let Some(client_id) = session.active_clients.first()
-            && let Ok(pseudonym) = SessionId::from_hex(client_id)
-        {
-            self.pseudonym_cache.insert(&conn.destination, pseudonym);
-        }
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
+        let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
         self.responders.clear();
         self.phase = Phase::HoprRunning;
         if let Some(dest) = self.config.destinations.get(&conn.destination.id).cloned()
@@ -1733,7 +1696,7 @@ impl Core {
             rh.disconnecting(hopr, &dest, &self.config.connection, results_sender);
         }
         if let Ok(disconn) = conn.try_into() {
-            self.spawn_disconnection_runner(&disconn, results_sender);
+            self.spawn_disconnection_runner(&disconn, pump_tasks, results_sender);
         } else {
             // connection did not even generate a wg pub key - so we can immediately try to connect again
             self.act_on_target(results_sender);
@@ -1755,6 +1718,12 @@ impl Core {
 
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
+        let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
+        // The cancelled runner's pending root responders belong to a connection
+        // that no longer exists; clear them so stale entries do not outlive it,
+        // matching disconnect_from_connection.
+        self.responders.clear();
+        wait_for_pump_stop(pump_tasks).await;
 
         // this is a oneshot command and we do not wait for any result
         let _ = self
@@ -1817,5 +1786,16 @@ impl Core {
                 })
                 .await
         });
+    }
+}
+
+/// Wait for the (already cancelled) NepTUN pump task to finish so the worker's
+/// TUN fd is closed before root tears down routing and drops its own fd. On
+/// Linux the TUN is multi-queue: re-provisioning while a stale fd lives would
+/// attach a second queue to the old device instead of creating a fresh one.
+async fn wait_for_pump_stop(pump_tasks: TaskTracker) {
+    pump_tasks.close();
+    if time::timeout(Duration::from_secs(5), pump_tasks.wait()).await.is_err() {
+        tracing::warn!("wg pump did not stop within 5s - proceeding with tunnel teardown");
     }
 }

@@ -41,8 +41,6 @@ pub(super) struct Connection {
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
     pub(super) lan_lockdown: Option<bool>,
     pub(super) probe_local_addresses: Option<bool>,
-    #[serde(default, with = "humantime_serde::option")]
-    pub(super) session_pseudonym_ttl: Option<Duration>,
     #[serde(default, deserialize_with = "validate_path_planner_min_ack_rate")]
     pub(super) path_planner_min_ack_rate: Option<f64>,
 }
@@ -109,7 +107,6 @@ pub(super) struct SurbBalancingConfig {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct WireGuard {
-    pub(super) listen_port: Option<u16>,
     pub(super) allowed_ips: Option<String>,
     pub(super) force_private_key: Option<String>,
     pub(super) dns: Option<WireGuardDNS>,
@@ -321,11 +318,6 @@ impl From<Option<Connection>> for options::Options {
             })
             .unwrap_or(def_intervals);
 
-        // 1s effectively disables pseudonym caching; revert once hopr-lib supports PIX
-        let session_pseudonym_ttl = connection
-            .and_then(|c| c.session_pseudonym_ttl)
-            .unwrap_or(Duration::from_secs(1));
-
         options::Options {
             sessions,
             ping_options: ping_opts,
@@ -334,7 +326,6 @@ impl From<Option<Connection>> for options::Options {
             health_check_intervals,
             lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
             probe_local_addresses: connection.and_then(|c| c.probe_local_addresses).unwrap_or(false),
-            session_pseudonym_ttl,
             path_planner_min_ack_rate: connection
                 .and_then(|c| c.path_planner_min_ack_rate)
                 .unwrap_or(options::DEFAULT_PATH_PLANNER_MIN_ACK_RATE),
@@ -344,7 +335,6 @@ impl From<Option<Connection>> for options::Options {
 
 impl From<Option<WireGuard>> for WireGuardConfig {
     fn from(value: Option<WireGuard>) -> Self {
-        let listen_port = value.as_ref().and_then(|wg| wg.listen_port);
         let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
         let force_private_key = value.as_ref().and_then(|wg| wg.force_private_key.clone());
         let dns = value
@@ -359,7 +349,7 @@ impl From<Option<WireGuard>> for WireGuardConfig {
                 })
             })
             .unwrap_or(Some(WireGuardDNS::default_server()));
-        WireGuardConfig::new(listen_port, allowed_ips, force_private_key, dns)
+        WireGuardConfig::new(allowed_ips, force_private_key, dns)
     }
 }
 
@@ -396,7 +386,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
                 for (k, v) in wg.iter() {
-                    if k == "listen_port" || k == "allowed_ips" || k == "force_private_key" {
+                    if k == "allowed_ips" || k == "force_private_key" {
                         continue;
                     }
                     if k == "dns" {
@@ -433,7 +423,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         || k == "announced_peer_minimum_score"
                         || k == "lan_lockdown"
                         || k == "probe_local_addresses"
-                        || k == "session_pseudonym_ttl"
                         || k == "path_planner_min_ack_rate"
                     {
                         continue;
@@ -524,7 +513,10 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "strategy" {
             if let Some(strategy) = value.as_table() {
                 for (k, v) in strategy.iter() {
-                    if k == "min_open_channels" || k == "target_open_channels" {
+                    if matches!(
+                        k.as_str(),
+                        "min_open_channels" | "target_open_channels" | "channel_capacity"
+                    ) {
                         continue;
                     }
                     if k == "channel_allowlist" {
@@ -561,6 +553,30 @@ pub(super) struct Strategy {
     pub(super) min_open_channels: Option<usize>,
     pub(super) target_open_channels: Option<usize>,
     pub(super) channel_allowlist: Option<ChannelAllowlistConfig>,
+    #[serde(default, deserialize_with = "validate_channel_capacity")]
+    pub(super) channel_capacity: Option<ByteSize>,
+}
+
+/// Rejects a capacity edgli cannot turn into a funding config.
+///
+/// It derives the safe balance gate by scaling the capacity up, so a value near
+/// `u64::MAX` overflows and fails every reactor start. That failure is retried on a
+/// timer with a generic message, so without this the config loads fine and the node
+/// silently never opens a channel — naming the key here turns it into a load error.
+fn validate_channel_capacity<'de, D>(deserializer: D) -> Result<Option<ByteSize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    /// Headroom edgli needs above the requested capacity to size the safe gate.
+    const MAX_SAFE_SCALING: u64 = 2;
+
+    match Option::<ByteSize>::deserialize(deserializer)? {
+        Some(v) if v.as_u64() > u64::MAX / MAX_SAFE_SCALING => Err(serde::de::Error::custom(format!(
+            "channel_capacity must not exceed {}",
+            ByteSize::b(u64::MAX / MAX_SAFE_SCALING)
+        ))),
+        other => Ok(other),
+    }
 }
 
 impl From<Option<Strategy>> for StrategyConfig {
@@ -579,6 +595,7 @@ impl From<Option<Strategy>> for StrategyConfig {
                 .as_ref()
                 .and_then(|s| s.channel_allowlist.as_ref())
                 .and_then(|c| c.enabled.then(|| c.peers.iter().cloned().collect())),
+            channel_capacity: v.as_ref().and_then(|s| s.channel_capacity),
         }
     }
 }
@@ -660,7 +677,7 @@ pub fn convert_destinations(
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelAllowlistConfig, Config, Strategy, convert_destinations, wrong_keys};
+    use super::{ChannelAllowlistConfig, Config, Strategy, WireGuardConfig, convert_destinations, wrong_keys};
     use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
     use crate::hopr::strategy_config::StrategyConfig;
     use edgli::hopr_lib::HopRouting;
@@ -818,6 +835,51 @@ path = { hops = 4 }
     }
 
     #[test]
+    fn wireguard_listen_port_is_reported_as_a_wrong_key() {
+        // `listen_port` is not part of the schema: WireGuard runs in-process
+        // without a listening socket, so the key is flagged like any other
+        // unknown key instead of being special-cased.
+        let table: toml::Table = r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[wireguard]
+listen_port = 51820
+allowed_ips = "10.0.0.0/8"
+"#####
+            .parse()
+            .expect("valid TOML");
+        assert_eq!(super::wrong_keys(&table), vec!["wireguard.listen_port".to_string()]);
+    }
+
+    #[test]
+    fn wireguard_section_converts_to_config() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[wireguard]
+allowed_ips = "10.0.0.0/8"
+"#####,
+        );
+        let wg = cfg.wireguard.expect("wireguard section parsed");
+        let converted: WireGuardConfig = Some(wg).into();
+        assert_eq!(
+            converted,
+            WireGuardConfig::new(
+                Some("10.0.0.0/8".to_string()),
+                None,
+                Some("1.1.1.1,8.8.8.8".to_string())
+            )
+        );
+    }
+
+    #[test]
     fn probe_local_addresses_defaults_to_false() {
         let cfg = parse(
             r#####"
@@ -902,6 +964,76 @@ path_planner_min_ack_rate = {bad}
     }
 
     #[test]
+    fn strategy_channel_capacity_is_parsed() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[strategy]
+channel_capacity = "1 GiB"
+"#####,
+        );
+        let strategy = cfg.strategy.expect("strategy section present");
+        assert_eq!(strategy.channel_capacity, Some(bytesize::ByteSize::gib(1)));
+
+        let converted: StrategyConfig = Some(strategy).into();
+        assert_eq!(converted.channel_capacity, Some(bytesize::ByteSize::gib(1)));
+    }
+
+    #[test]
+    fn strategy_channel_capacity_rejects_a_value_that_overflows_the_safe_gate() {
+        // Without the bound this loads fine and then fails every reactor start on a
+        // 10s retry, with nothing naming the offending key.
+        let err = toml::from_str::<Config>(
+            r#####"
+version = 6
+
+[strategy]
+channel_capacity = "16 EiB"
+"#####,
+        )
+        .expect_err("16 EiB must be rejected");
+        assert!(
+            err.to_string().contains("channel_capacity"),
+            "error should name the key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn strategy_channel_capacity_is_optional() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[strategy]
+target_open_channels = 8
+"#####,
+        );
+        let strategy = cfg.strategy.expect("strategy section present");
+        assert!(strategy.channel_capacity.is_none());
+
+        // Left unset so edgli applies its own sizing rather than a local value.
+        let converted: StrategyConfig = Some(strategy).into();
+        assert!(converted.channel_capacity.is_none());
+    }
+
+    #[test]
+    fn strategy_channel_capacity_is_a_known_key() {
+        // An unlisted key still loads, but `wrong_keys` makes the daemon log it as
+        // unsupported — a misleading warning for a key that is honoured.
+        let table = r#####"
+version = 6
+
+[strategy]
+channel_capacity = "1 GiB"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
     fn strategy_channel_allowlist_enabled_produces_some() {
         let addr: Address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739".parse().unwrap();
         let strategy = Some(Strategy {
@@ -911,6 +1043,7 @@ path_planner_min_ack_rate = {bad}
                 enabled: true,
                 peers: vec![addr],
             }),
+            channel_capacity: None,
         });
         let cfg: StrategyConfig = strategy.into();
         assert_eq!(cfg.channel_allowlist, Some(std::collections::HashSet::from([addr])));
@@ -926,6 +1059,7 @@ path_planner_min_ack_rate = {bad}
                 enabled: false,
                 peers: vec![addr],
             }),
+            channel_capacity: None,
         });
         let cfg: StrategyConfig = strategy.into();
         assert!(cfg.channel_allowlist.is_none());

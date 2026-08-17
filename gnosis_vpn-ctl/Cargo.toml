@@ -1,8 +1,9 @@
 [package]
-edition = { workspace = true }
-license = { workspace = true }
-name    = "gnosis_vpn-ctl"
-version = { workspace = true }
+edition      = { workspace = true }
+license      = { workspace = true }
+name         = "gnosis_vpn-ctl"
+rust-version = { workspace = true }
+version      = { workspace = true }
 
 [dependencies]
 clap.workspace           = true

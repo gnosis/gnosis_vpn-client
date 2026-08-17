@@ -1,3 +1,6 @@
+// The worker process keeps all descriptor ownership behind safe APIs.
+#![deny(unsafe_code)]
+
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, WriteHalf};
 use tokio::net::UnixStream as TokioUnixStream;
 use tokio::signal::unix::{SignalKind, signal};
@@ -5,10 +8,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use std::env;
-use std::os::unix::io::FromRawFd;
 use std::os::unix::net::UnixStream;
 use std::process;
+use std::time::Duration;
 
 use gnosis_vpn_lib::core::Core;
 use gnosis_vpn_lib::event::{CoreToWorker, ResponseFromRoot, RootToWorker, WorkerToCore, WorkerToRoot};
@@ -85,7 +87,9 @@ async fn signal_swallower() -> Result<CancellationToken, exitcode::ExitCode> {
     Ok(owned_cancel)
 }
 
-async fn incoming_socket() -> Result<
+async fn incoming_socket(
+    child_socket: UnixStream,
+) -> Result<
     (
         CancellationToken,
         mpsc::Receiver<RootToWorker>,
@@ -93,19 +97,6 @@ async fn incoming_socket() -> Result<
     ),
     exitcode::ExitCode,
 > {
-    // accessing unix socket from fd
-    let fd: i32 = env::var(socket::worker::ENV_VAR)
-        .map_err(|err| {
-            tracing::error!(error = %err, env = %socket::worker::ENV_VAR, "missing worker env var");
-            exitcode::NOINPUT
-        })?
-        .parse()
-        .map_err(|err| {
-            tracing::error!(error = %err, "invalid worker socket fd env var");
-            exitcode::NOINPUT
-        })?;
-
-    let child_socket = unsafe { UnixStream::from_raw_fd(fd) };
     child_socket.set_nonblocking(true).map_err(|err| {
         tracing::error!(error = %err, "failed to set non-blocking mode on worker socket");
         exitcode::IOERR
@@ -153,6 +144,43 @@ async fn incoming_socket() -> Result<
     Ok((owned_cancel, receiver, writer_half))
 }
 
+/// How long to wait for root's TUN-fd socket bootstrap message. Root sends it
+/// before spawning the worker, so it is already buffered on a healthy startup;
+/// the timeout only turns a misbehaving parent into a clean exit instead of a hang.
+const TUN_FD_SOCKET_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Receive the dedicated TUN-fd passing socket from root and register it. The
+/// connection runner pulls the TUN device fd from it once root reports the tunnel
+/// is ready.
+///
+/// Root sends this socket's fd as the first message on the control socket (a
+/// single `SCM_RIGHTS` datagram ahead of any JSON line), so this must run before
+/// the control socket is handed to tokio: `recv_fd` consumes exactly the one-byte
+/// fd message and leaves the JSON stream intact for the buffered reader. The
+/// received socket stays in blocking mode on purpose: the runner receives TUN
+/// device fds from a `spawn_blocking` task, and the underlying `recvmsg` is a
+/// blocking call.
+fn setup_tun_fd_socket(control_socket: &UnixStream) -> Result<(), exitcode::ExitCode> {
+    control_socket
+        .set_read_timeout(Some(TUN_FD_SOCKET_TIMEOUT))
+        .map_err(|err| {
+            tracing::error!(error = %err, "failed to set read timeout on control socket");
+            exitcode::IOERR
+        })?;
+    let tun_fd_socket = socket::fd_passing::recv_fd(control_socket).map_err(|err| {
+        tracing::error!(error = %err, "failed to receive TUN fd socket from root");
+        exitcode::NOINPUT
+    });
+    control_socket.set_read_timeout(None).map_err(|err| {
+        tracing::error!(error = %err, "failed to clear read timeout on control socket");
+        exitcode::IOERR
+    })?;
+    let tun_fd_socket = tun_fd_socket?;
+    socket::worker::set_tun_fd_socket(UnixStream::from(tun_fd_socket));
+    tracing::info!("TUN fd passing socket set up");
+    Ok(())
+}
+
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Set up logging
     let log_handle = setup_logging(&args.log_file)?;
@@ -165,8 +193,18 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // set up signal swallower
     let cancel_signal_swallower = signal_swallower().await?;
 
+    // claim the control socket root passed as stdin
+    let control_socket = socket::worker::claim_stdin_socket().map_err(|err| {
+        tracing::error!(error = %err, "failed to claim control socket from stdin");
+        exitcode::NOINPUT
+    })?;
+
+    // receive the dedicated TUN-fd passing socket sent by root ahead of any
+    // JSON traffic; must happen before the control socket is handed to tokio
+    setup_tun_fd_socket(&control_socket)?;
+
     // setup socket communication with root process
-    let (cancel_socket_reader, socket_receiver, writer_half) = incoming_socket().await?;
+    let (cancel_socket_reader, socket_receiver, writer_half) = incoming_socket(control_socket).await?;
     let writer = BufWriter::new(writer_half);
 
     // enter main loop
@@ -280,8 +318,8 @@ impl State {
                 target_dest_id,
             } => {
                 self.cmd_startup_params(
-                    config,
-                    worker_params,
+                    *config,
+                    *worker_params,
                     target_dest_id,
                     worker_to_core_receiver_wrapper,
                     core_to_worker_sender,
@@ -407,7 +445,14 @@ impl State {
                         let res_recv = resp_recv.await;
                         match res_recv {
                             Ok(resp) => {
-                                send_to_root(Box::new(WorkerToRoot::Response { id, resp }), &mut self.root_socket_writer).await?;
+                                send_to_root(
+                                    Box::new(WorkerToRoot::Response {
+                                        id,
+                                        resp: Box::new(resp),
+                                    }),
+                                    &mut self.root_socket_writer,
+                                )
+                                .await?;
                             }
                             Err(err) => {
                                 tracing::warn!(error = ?err, "core-to-worker receiver unexpectedly closed while awaiting response for command from root");
@@ -444,5 +489,25 @@ impl State {
     async fn teardown(&mut self) {
         // should be already empty from main loop drainage
         self.core_task.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+
+    #[test]
+    fn tun_fd_socket_timeout_is_cleared_when_receiving_the_fd_fails() {
+        let (mut root_socket, worker_socket) = UnixStream::pair().unwrap();
+        worker_socket.set_read_timeout(Some(TUN_FD_SOCKET_TIMEOUT)).unwrap();
+        assert_eq!(worker_socket.read_timeout().unwrap(), Some(TUN_FD_SOCKET_TIMEOUT));
+        worker_socket.set_read_timeout(None).unwrap();
+        root_socket.write_all(&[0]).unwrap();
+        drop(root_socket);
+
+        assert!(setup_tun_fd_socket(&worker_socket).is_err());
+        assert_eq!(worker_socket.read_timeout().unwrap(), None);
     }
 }

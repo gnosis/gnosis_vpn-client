@@ -30,7 +30,7 @@ jobs:
             runner: depot-ubuntu-22.04-arm-4 # Depot Ubuntu 22.04 ARM, 4 CPUs, 16 GB RAM
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-linux
           - architecture: aarch64-darwin
-            runner: depot-macos-15 # Depot Apple Silicon M2, 8 CPUs, 24 GB RAM, 400 GB SSD
+            runner: ${{ vars.MACOS_RUNNER }} # Posible values are: `macos-26-xlarge` or `depot-macos-26`
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@45221eb1aadfc5c46751306c5c7d6d291c8a24b3 # build-binaries-v3.1.2
     permissions:
@@ -63,7 +63,7 @@ jobs:
       id-token: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@ac8742a45096e585606bd086678dfabf63d38938 # release-version-v5.1.2
+        uses: hoprnet/hopr-workflows/actions/release-version@711c81d05909e2482d74289084502fb70fecc97b # release-version-v5.3.0
         with:
           source_branch: ${{ github.ref_name }}
           file: Cargo.toml
