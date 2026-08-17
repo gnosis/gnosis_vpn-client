@@ -572,7 +572,7 @@ fn print_wg_tunnel_stats(stats: &command::ConnStats) -> String {
     let rtt = current.rtt_ms.map(|ms| format!("{ms}ms")).unwrap_or("--".to_string());
     let handshake_age = current
         .time_since_last_handshake
-        .map(|d| format!("{} ago", humantime::format_duration(Duration::from_secs(d.as_secs()))))
+        .map(|d| format!("{} ago", humantime::format_duration(d)))
         .unwrap_or("--".to_string());
     format!(
         "---\nTunnel RTT (as of last handshake): {rtt}\nLast handshake: {handshake_age}\nTx bytes: {}\nRx bytes: {}\nEstimated loss: {:.1}%\n",
