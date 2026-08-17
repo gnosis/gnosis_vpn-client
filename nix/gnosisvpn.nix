@@ -33,10 +33,18 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.1#a45a31d28780695cb816d5e245a70bd520bd1293" =
       "sha256-QF8BAe2eHrGsVvZIGD+Gdi6XFMQ8zHkOObSRjTRN4MY=";
-    "git+https://github.com/hoprnet/edge-client.git?rev=ead23a35071277d601636daf1f18836f98c2af6a#ead23a35071277d601636daf1f18836f98c2af6a" =
-      "sha256-MUvG+EdsOoAbUt5muH9zZDZPNvSpGnJJkTVEmPY1Lcc=";
-    "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#646701cd6f93b1794490ba57da096bda85c798ac" =
-      "sha256-dw88yzubgDpw6kpBuv1V8//MMqn7VeHzQSSN540fS1c=";
+    "git+https://github.com/hoprnet/edge-client.git?rev=efec1c15ca274af0f0d3d4ba10d5b9769b8c7b3c#efec1c15ca274af0f0d3d4ba10d5b9769b8c7b3c" =
+      "sha256-qbYevC+Kvb6uh5dAhRNkyqE768AyC4o2dm052A98anU=";
+    "git+https://github.com/hoprnet/hopr-api?rev=ee65b340cf09fd6031735477cc1171d7610694a3#ee65b340cf09fd6031735477cc1171d7610694a3" =
+      "sha256-Tevhabmz4XfQTBXGLbUmW3uV+7kpbPVnWgFdsYstJl8=";
+    "git+https://github.com/hoprnet/hopr-impls?rev=ad0fd7e4b35ac462846011ec7446fd404f5bcf44#ad0fd7e4b35ac462846011ec7446fd404f5bcf44" =
+      "sha256-LoMm1ZjhSWu/UPTHMfrPOKQy2XrHadOhbmKwtF9bOlI=";
+    "git+https://github.com/hoprnet/hopr-strategy?rev=272f41000cd6e1bec9e2d08e2cd85f37aa804ea9#272f41000cd6e1bec9e2d08e2cd85f37aa804ea9" =
+      "sha256-K4Jtm3TJmNh5rlPlrT0ye66UEQ78OqtwDw2wOs8lb5A=";
+    "git+https://github.com/hoprnet/hopr-utilities?rev=68e648be4aa9f1442c75df4006a53db414932f7e#68e648be4aa9f1442c75df4006a53db414932f7e" =
+      "sha256-1hYv2N2HjE7sTLbw5DXOQLOvae9dYR0iwSl6OsCUQhE=";
+    "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Ftest%2Ftransport%2Freturn-routing-origination-stall#66dc5d19e1c4fc7fd4e9dbfa064004e0060b6fc9" =
+      "sha256-voL5h7BHhvDIHqhVmQ43t8xXtD+PXOWt/aWpcBHLPL8=";
   };
 
   builders = nixLib.mkRustBuilders {

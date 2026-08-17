@@ -25,17 +25,22 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.5", features = ["derive", "env"] }
 clap_complete = "~4.6.8"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "ead23a35071277d601636daf1f18836f98c2af6a", features = [
+# Testing pin: the graph-presence stack head (edge-client#145, what main tracks) merged with
+# edge-client main (#142 xdai_fund_amount) and the public compute_capacity — branch
+# mj/public-compute-capacity-graph-stack. Repoint to edge-client main once both land there.
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "efec1c15ca274af0f0d3d4ba10d5b9769b8c7b3c", features = [
   "blokli",
   "telemetry",
 ] }
 exitcode = "~1.1.2"
 futures = "~0.3.33"
 futures-util = "~0.3.33"
-# Pinned by BRANCH to match the form edgli pins hopr-lib with. Cargo treats `?branch=X#sha`
-# and `?rev=sha` as distinct sources even for the same commit -- mixing the two builds
-# hoprnet twice and its types stop unifying at the edgli boundary.
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "release/4.0", features = [
+# Pinned by BRANCH, not by rev, and the form matters. `edgli` pins `hopr-lib` by branch, and
+# Cargo treats `?branch=X#sha` and `?rev=sha` as distinct sources even for byte-identical
+# commits -- mixing the two builds hoprnet twice and fails with `expected
+# hopr_lib::HoprSessionClientConfig, found HoprSessionClientConfig`. Keep both entries in the
+# same form. Testing pin: repoint to `branch = "release/4.0"` once the upstream stack lands.
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "kauki/test/transport/return-routing-origination-stall", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
