@@ -25,7 +25,7 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.4", features = ["derive", "env"] }
 clap_complete = "~4.6.8"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "81ec6d62c48f17bff7ad15f4fba804715db758c1", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "9e24e8b9177e85f1e752010c43ab792d8ed93c3f", features = [
   "blokli",
   "telemetry",
 ] }
@@ -37,7 +37,7 @@ futures-util = "~0.3.33"
 # commits -- mixing the two builds hoprnet twice and fails with `expected
 # hopr_lib::HoprSessionClientConfig, found HoprSessionClientConfig`. Keep both entries in the
 # same form. Testing pin: repoint to `branch = "release/4.0"` once the upstream stack lands.
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "kauki/fix/session/unreliable-frame-head-of-line", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "kauki/test/transport/return-routing-origination-stall", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
