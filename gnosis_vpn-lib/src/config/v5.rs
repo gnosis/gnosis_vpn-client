@@ -1,31 +1,29 @@
+/// Config v5: like v7 except the `surb_balancing` section is instead two separate `buffer` and
+/// `max_surb_upstream` sections, and destination paths may still use the deprecated
+/// `intermediates` form. Forward-converts into `v7::Config`.
 use bytesize::ByteSize;
-use edgli::hopr_lib::HopRouting;
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
-use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
-use edgli::hopr_lib::exports::transport::SessionTarget;
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::time::Duration;
 use std::vec::Vec;
 
 use crate::config;
-use crate::connection::{destination::Destination as ConnDestination, options};
-use crate::ping;
 
-// Types from v6 that are schema-identical in v5 are re-used directly.
+// Types from v7 that are schema-identical in v5 are re-used directly.
 // Connection, BufferOptions, and MaxSurbUpstreamOptions are defined below because
 // v5 uses separate `buffer` and `max_surb_upstream` sections instead of `surb_balancing`.
-pub(super) use super::v6::{
-    BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, PingOptions, WireGuard, to_flags,
+use super::v7::MAX_HOPS;
+pub(super) use super::v7::{
+    BlokliConfig, ConnectionProtocol, HealthCheckIntervalOptions, PingOptions, SessionSurbConfig, SurbBalancingConfig,
+    WireGuard,
 };
-use super::v6::{MAX_HOPS, validate_hops};
 
 // v5 defines its own Connection to carry the separate `buffer` and `max_surb_upstream`
-// sections which v6 replaced with the unified `surb_balancing` section.
+// sections which v7 (already true as of v6) replaced with the unified `surb_balancing` section.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct Connection {
     #[serde(default, with = "humantime_serde::option")]
@@ -35,6 +33,8 @@ pub(super) struct Connection {
     pub(super) ping: Option<PingOptions>,
     pub(super) buffer: Option<BufferOptions>,
     pub(super) max_surb_upstream: Option<MaxSurbUpstreamOptions>,
+    /// Parsed but never consumed — dropped silently when forward-converting into
+    /// `v7::Connection`, exactly as it was silently unused in the runtime conversion before.
     pub(super) announced_peer_minimum_score: Option<f64>,
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
 }
@@ -56,36 +56,10 @@ pub(super) struct MaxSurbUpstreamOptions {
     main: Option<Bandwidth>,
 }
 
-impl Connection {
-    pub fn default_bridge_capabilities() -> Vec<Capability> {
-        vec![Capability::Segmentation, Capability::NoRateControl]
-    }
-
-    pub fn default_wg_capabilities() -> Vec<Capability> {
-        vec![Capability::Segmentation, Capability::NoDelay]
-    }
-
-    pub fn default_bridge_target() -> SessionTarget {
-        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-            [172, 30, 0, 1],
-            8000,
-        )))))
-    }
-
-    pub fn default_wg_target() -> SessionTarget {
-        SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-            [172, 30, 0, 1],
-            51820,
-        )))))
-    }
-
-    pub fn default_http_timeout() -> Duration {
-        Duration::from_secs(60)
-    }
-}
-
-fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstreamOptions>) -> options::SurbBalancing {
-    let def = options::SurbBalancing::default();
+/// Maps v5's separate `buffer`/`max_surb_upstream` sections onto v7's unified `surb_balancing`
+/// shape. `enabled`/`always_max_out_surbs` are left to v7's own defaults (`ping`/`main` on,
+/// `bridge`/`health_check` off) since v5 never had per-session enable flags.
+fn to_surb_balancing_config(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstreamOptions>) -> SurbBalancingConfig {
     let buf = buf.unwrap_or(BufferOptions {
         bridge: None,
         ping: None,
@@ -96,100 +70,36 @@ fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstrea
         ping: None,
         main: None,
     });
-    options::SurbBalancing {
-        ping: options::SessionSurbOptions::new(
-            true,
-            buf.ping.unwrap_or(def.ping.buffer),
-            surbs.ping.unwrap_or(def.ping.max_surb_upstream),
-        ),
-        main: options::SessionSurbOptions::new(
-            true,
-            buf.main.unwrap_or(def.main.buffer),
-            surbs.main.unwrap_or(def.main.max_surb_upstream),
-        ),
-        bridge: options::SessionSurbOptions::new(
-            false,
-            buf.bridge.unwrap_or(def.bridge.buffer),
-            surbs.bridge.unwrap_or(def.bridge.max_surb_upstream),
-        ),
-        health_check: def.health_check,
+    let session = |buffer: Option<ByteSize>, max_surb_upstream: Option<Bandwidth>| SessionSurbConfig {
+        enabled: None,
+        buffer,
+        max_surb_upstream,
+        always_max_out_surbs: None,
+    };
+    SurbBalancingConfig {
+        ping: Some(session(buf.ping, surbs.ping)),
+        main: Some(session(buf.main, surbs.main)),
+        bridge: Some(session(buf.bridge, surbs.bridge)),
+        health_check: None,
     }
 }
 
-impl From<Option<Connection>> for options::Options {
+impl From<Option<Connection>> for super::v7::Connection {
     fn from(conn: Option<Connection>) -> Self {
-        let connection = conn.as_ref();
-        let bridge_target = connection
-            .and_then(|c| c.bridge.as_ref())
-            .and_then(|b| b.target)
-            .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
-            .unwrap_or(Connection::default_bridge_target());
-        let bridge_caps = connection
-            .and_then(|c| c.bridge.as_ref())
-            .and_then(|b| b.capabilities.clone())
-            .unwrap_or(Connection::default_bridge_capabilities());
-        let params_bridge = options::SessionParameters::new(bridge_target, to_flags(bridge_caps));
-
-        let wg_target = connection
-            .and_then(|c| c.wg.as_ref())
-            .and_then(|w| w.target)
-            .map(|socket| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
-            .unwrap_or(Connection::default_wg_target());
-        let wg_caps = connection
-            .and_then(|c| c.wg.as_ref())
-            .and_then(|w| w.capabilities.clone())
-            .unwrap_or(Connection::default_wg_capabilities());
-        let params_wg = options::SessionParameters::new(wg_target, to_flags(wg_caps));
-
-        let sessions = options::Sessions {
-            bridge: params_bridge,
-            wg: params_wg,
-        };
-
-        let def_opts = ping::Options::default();
-        let ping_opts = connection
-            .and_then(|c| c.ping.as_ref())
-            .map(|p| ping::Options {
-                address: p.address.unwrap_or(def_opts.address),
-                timeout: p.timeout.unwrap_or(def_opts.timeout),
-                ttl: p.ttl.unwrap_or(def_opts.ttl),
-                seq_count: p.seq_count.unwrap_or(def_opts.seq_count),
-            })
-            .unwrap_or(def_opts);
-
-        let surb_balancing = build_surb_balancing(
-            connection.and_then(|c| c.buffer.clone()),
-            connection.and_then(|c| c.max_surb_upstream.clone()),
-        );
-        let http_timeout = connection
-            .and_then(|c| c.http_timeout)
-            .unwrap_or(Connection::default_http_timeout());
-
-        let timeouts = options::Timeouts { http: http_timeout };
-
-        let def_intervals = options::HealthCheckIntervals::default();
-        let health_check_intervals = connection
-            .and_then(|c| c.health_check_intervals.as_ref())
-            .map(|h| options::HealthCheckIntervals {
-                ping: h.ping.unwrap_or(def_intervals.ping),
-                health_every_n_pings: h.health_every_n_pings.unwrap_or(def_intervals.health_every_n_pings),
-                version_every_n_pings: h.version_every_n_pings.unwrap_or(def_intervals.version_every_n_pings),
-                tunnel_ping: h.tunnel_ping.unwrap_or(def_intervals.tunnel_ping),
-                tunnel_ping_max_failures: h
-                    .tunnel_ping_max_failures
-                    .unwrap_or(def_intervals.tunnel_ping_max_failures),
-            })
-            .unwrap_or(def_intervals);
-
-        options::Options {
-            sessions,
-            ping_options: ping_opts,
-            surb_balancing,
-            timeouts,
-            health_check_intervals,
-            lan_lockdown: false,
-            probe_local_addresses: false,
-            path_planner_min_ack_rate: options::DEFAULT_PATH_PLANNER_MIN_ACK_RATE,
+        let conn = conn.as_ref();
+        super::v7::Connection {
+            http_timeout: conn.and_then(|c| c.http_timeout),
+            bridge: conn.and_then(|c| c.bridge.clone()),
+            wg: conn.and_then(|c| c.wg.clone()),
+            ping: conn.and_then(|c| c.ping.clone()),
+            surb_balancing: Some(to_surb_balancing_config(
+                conn.and_then(|c| c.buffer.clone()),
+                conn.and_then(|c| c.max_surb_upstream.clone()),
+            )),
+            health_check_intervals: conn.and_then(|c| c.health_check_intervals.clone()),
+            lan_lockdown: None,
+            probe_local_addresses: None,
+            path_planner_min_ack_rate: None,
         }
     }
 }
@@ -207,9 +117,9 @@ pub struct Config {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct Destination {
     #[serde_as(as = "DisplayFromStr")]
-    address: Address,
-    meta: Option<HashMap<String, String>>,
-    path: Option<DestinationPath>,
+    pub(super) address: Address,
+    pub(super) meta: Option<HashMap<String, String>>,
+    pub(super) path: Option<DestinationPath>,
 }
 
 #[serde_as]
@@ -217,8 +127,26 @@ pub(super) struct Destination {
 pub(super) enum DestinationPath {
     #[serde(alias = "intermediates")]
     Intermediates(#[serde_as(as = "Vec<DisplayFromStr>")] Vec<Address>),
-    #[serde(alias = "hops", deserialize_with = "validate_hops")]
+    #[serde(alias = "hops", deserialize_with = "super::v7::validate_hops")]
     Hops(u8),
+}
+
+/// Resolves a v5/v4 destination path (which may still use the deprecated `intermediates` form)
+/// into v7's hop-count-only shape, logging when the deprecated form is in play.
+pub(super) fn resolve_path(id: &str, path: Option<DestinationPath>) -> super::v7::DestinationPath {
+    match path {
+        Some(DestinationPath::Intermediates(p)) => {
+            let hop_count = p.len().min(MAX_HOPS as usize) as u8;
+            tracing::warn!(
+                id,
+                hop_count,
+                "intermediates routing is deprecated; treating as hop count"
+            );
+            super::v7::DestinationPath::Hops(hop_count)
+        }
+        Some(DestinationPath::Hops(h)) => super::v7::DestinationPath::Hops(h),
+        None => super::v7::DestinationPath::Hops(1),
+    }
 }
 
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
@@ -229,12 +157,12 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         }
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
-                for (k, v) in wg.iter() {
+                for (k, _v) in wg.iter() {
                     if k == "listen_port" || k == "allowed_ips" || k == "force_private_key" {
                         continue;
                     }
                     if k == "dns" {
-                        if let Some(dns) = v.as_table() {
+                        if let Some(dns) = _v.as_table() {
                             for (k2, _v2) in dns.iter() {
                                 if k2 == "overwrite" || k2 == "servers" {
                                     continue;
@@ -279,51 +207,49 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     }
                     if k == "ping" {
                         if let Some(ping) = v.as_table() {
-                            for (k, _v) in ping.iter() {
-                                if k == "address" || k == "timeout" || k == "ttl" || k == "seq_count" {
+                            for (k2, _v) in ping.iter() {
+                                if k2 == "address" || k2 == "timeout" || k2 == "ttl" || k2 == "seq_count" {
                                     continue;
                                 }
-                                wrong_keys.push(format!("connection.ping.{k}"));
+                                wrong_keys.push(format!("connection.ping.{k2}"));
                             }
                         }
                         continue;
                     }
-                    if k == "surb_balancing" {
-                        if let Some(sb) = v.as_table() {
-                            for (session_key, session_val) in sb.iter() {
-                                let is_valid_session =
-                                    matches!(session_key.as_str(), "bridge" | "ping" | "main" | "health_check");
-                                if !is_valid_session {
-                                    wrong_keys.push(format!("connection.surb_balancing.{session_key}"));
+                    if k == "buffer" {
+                        if let Some(buffer) = v.as_table() {
+                            for (k2, _v) in buffer.iter() {
+                                if k2 == "bridge" || k2 == "ping" || k2 == "main" {
                                     continue;
                                 }
-                                if let Some(session) = session_val.as_table() {
-                                    for (k2, _v) in session.iter() {
-                                        let is_valid_field = matches!(
-                                            k2.as_str(),
-                                            "enabled" | "buffer" | "max_surb_upstream" | "always_max_out_surbs"
-                                        );
-                                        if !is_valid_field {
-                                            wrong_keys.push(format!("connection.surb_balancing.{session_key}.{k2}"));
-                                        }
-                                    }
+                                wrong_keys.push(format!("connection.buffer.{k2}"));
+                            }
+                        }
+                        continue;
+                    }
+                    if k == "max_surb_upstream" {
+                        if let Some(surbs) = v.as_table() {
+                            for (k2, _v) in surbs.iter() {
+                                if k2 == "bridge" || k2 == "ping" || k2 == "main" {
+                                    continue;
                                 }
+                                wrong_keys.push(format!("connection.max_surb_upstream.{k2}"));
                             }
                         }
                         continue;
                     }
                     if k == "health_check_intervals" {
                         if let Some(hci) = v.as_table() {
-                            for (k, _v) in hci.iter() {
-                                if k == "ping"
-                                    || k == "health_every_n_pings"
-                                    || k == "version_every_n_pings"
-                                    || k == "tunnel_ping"
-                                    || k == "tunnel_ping_max_failures"
+                            for (k2, _v) in hci.iter() {
+                                if k2 == "ping"
+                                    || k2 == "health_every_n_pings"
+                                    || k2 == "version_every_n_pings"
+                                    || k2 == "tunnel_ping"
+                                    || k2 == "tunnel_ping_max_failures"
                                 {
                                     continue;
                                 }
-                                wrong_keys.push(format!("connection.health_check_intervals.{k}"));
+                                wrong_keys.push(format!("connection.health_check_intervals.{k2}"));
                             }
                         }
                         continue;
@@ -355,67 +281,57 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     wrong_keys
 }
 
-impl TryFrom<Config> for config::Config {
+impl TryFrom<Config> for super::v7::Config {
     type Error = config::Error;
 
     fn try_from(value: Config) -> Result<Self, Self::Error> {
-        let connection = value.connection.into();
-        let destinations = convert_destinations(value.destinations)?;
-        let wireguard = value.wireguard.into();
-        let blokli = value.blokli.into();
-        Ok(config::Config {
-            connection,
+        let destinations = value.destinations.map(convert_destinations);
+        Ok(super::v7::Config {
+            version: value.version,
             destinations,
-            wireguard,
-            blokli,
-            strategy: Default::default(),
+            connection: Some(value.connection.into()),
+            wireguard: value.wireguard,
+            blokli: value.blokli,
+            strategy: None,
         })
     }
 }
 
-pub fn convert_destinations(
-    value: Option<HashMap<String, Destination>>,
-) -> Result<HashMap<String, ConnDestination>, config::Error> {
-    let config_dests = value.ok_or(config::Error::NoDestinations)?;
-    if config_dests.is_empty() {
-        return Err(config::Error::NoDestinations);
-    }
-
-    let mut result = HashMap::new();
-    for (id, dest) in config_dests.iter() {
-        let path = match dest.path.clone() {
-            Some(DestinationPath::Intermediates(p)) => {
-                let hop_count = p.len().min(MAX_HOPS as usize);
-                tracing::warn!(
-                    id,
-                    hop_count,
-                    "intermediates routing is deprecated; treating as hop count"
-                );
-                HopRouting::try_from(hop_count)?
-            }
-            Some(DestinationPath::Hops(h)) => HopRouting::try_from(h as usize)?,
-            None => HopRouting::try_from(1)?,
-        };
-
-        let meta = dest.meta.clone().unwrap_or_default();
-
-        let dest = ConnDestination::new(id.to_string(), dest.address, path, meta);
-        result.insert(id.to_string(), dest);
-    }
-    Ok(result)
+fn convert_destinations(value: HashMap<String, Destination>) -> HashMap<String, super::v7::Destination> {
+    value
+        .into_iter()
+        .map(|(id, dest)| {
+            let path = Some(resolve_path(&id, dest.path));
+            (
+                id,
+                super::v7::Destination {
+                    address: dest.address,
+                    meta: dest.meta,
+                    path,
+                    gnosis_vpn_server: None,
+                    wireguard_server: None,
+                },
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, convert_destinations};
+    use super::Config;
     use edgli::hopr_lib::HopRouting;
 
     fn parse(toml: &str) -> Config {
         toml::from_str(toml).expect("valid TOML")
     }
 
+    fn forward_convert(cfg: Config) -> crate::config::Config {
+        let v7_cfg: super::super::v7::Config = cfg.try_into().expect("should forward-convert");
+        v7_cfg.try_into().expect("should succeed")
+    }
+
     #[test]
-    fn convert_destinations_hops_path_preserved() {
+    fn hops_path_preserved() {
         let cfg = parse(
             r#####"
 version = 5
@@ -425,13 +341,13 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 path = { hops = 2 }
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
-        let d = result.values().next().unwrap();
+        let result = forward_convert(cfg);
+        let d = result.destinations.get("Germany").unwrap();
         assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
     }
 
     #[test]
-    fn convert_destinations_none_path_defaults_to_1_hop() {
+    fn none_path_defaults_to_1_hop() {
         let cfg = parse(
             r#####"
 version = 5
@@ -440,21 +356,48 @@ version = 5
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
-        let d = result.values().next().unwrap();
+        let result = forward_convert(cfg);
+        let d = result.destinations.get("Germany").unwrap();
         assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
     }
 
     #[test]
-    fn convert_destinations_empty_map_errors() {
-        let result = convert_destinations(Some(std::collections::HashMap::new()));
-        assert!(result.is_err());
+    fn intermediates_treated_as_hop_count() {
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA", "0x25865191AdDe377fd85E91566241178070F4797A"] }
+"#####,
+        );
+        let result = forward_convert(cfg);
+        let d = result.destinations.get("Germany").unwrap();
+        assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
     }
 
     #[test]
-    fn convert_destinations_none_errors() {
-        let result = convert_destinations(None);
-        assert!(result.is_err());
+    fn intermediates_clamped_to_max_hops() {
+        let cfg = parse(
+            r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA", "0x25865191AdDe377fd85E91566241178070F4797A", "0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254", "0xa5Ca174Ef94403d6162a969341a61baeA48F57F8"] }
+"#####,
+        );
+        let result = forward_convert(cfg);
+        let d = result.destinations.get("Germany").unwrap();
+        assert_eq!(d.routing, HopRouting::try_from(3).unwrap());
+    }
+
+    #[test]
+    fn no_destinations_no_longer_errors() {
+        let cfg = parse("version = 5\n");
+        let result = forward_convert(cfg);
+        assert!(result.destinations.is_empty());
     }
 
     #[test]
@@ -462,23 +405,6 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
         let config = r#####"
 version = 5
 "#####;
-        toml::from_str::<Config>(config)?;
-        Ok(())
-    }
-
-    #[test]
-    fn config_parse_single_destination_should_succeed() -> anyhow::Result<()> {
-        let config = r#####"
-version = 5
-
-[destinations]
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-meta = { location = "Germany" }
-path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
-"#####;
-
         toml::from_str::<Config>(config)?;
         Ok(())
     }
@@ -494,16 +420,6 @@ version = 5
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 meta = { location = "Germany" }
 path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
-
-[destinations.USA]
-address = "0xa5Ca174Ef94403d6162a969341a61baeA48F57F8"
-meta = { location = "USA" }
-path = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
-
-[destinations.Spain]
-address = "0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254"
-meta = { location = "Spain" }
-path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 [connection]
 http_timeout = "60s"
@@ -522,34 +438,19 @@ timeout = "7s"
 ttl = 6
 seq_count = 1
 
-[connection.surb_balancing.bridge]
-enabled = false
-buffer = "32 kB"
-max_surb_upstream = "512 Kb/s"
-always_max_out_surbs = false
+[connection.buffer]
+bridge = "32 kB"
+ping = "1 MB"
+main = "10 MB"
 
-[connection.surb_balancing.ping]
-enabled = true
-buffer = "1 MB"
-max_surb_upstream = "512 Kb/s"
-always_max_out_surbs = true
-
-[connection.surb_balancing.main]
-enabled = true
-buffer = "10 MB"
-max_surb_upstream = "16 Mb/s"
-always_max_out_surbs = true
-
-[connection.surb_balancing.health_check]
-enabled = false
-buffer = "16 kB"
-max_surb_upstream = "128 Kb/s"
-always_max_out_surbs = false
+[connection.max_surb_upstream]
+bridge = "512 Kb/s"
+ping = "512 Kb/s"
+main = "16 Mb/s"
 
 [wireguard]
 listen_port = 51820
 allowed_ips = "10.128.0.1/9"
-# use if you want to disable key rotation on every connection
 force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
 dns = { overwrite = true, servers = "1.1.1.1,8.8.8.8" }
 

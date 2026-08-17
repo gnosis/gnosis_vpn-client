@@ -25,14 +25,14 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.4", features = ["derive", "env"] }
 clap_complete = "~4.6.8"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "f87db85bec811efe4df96e3a626720d646871773", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "b333ba9dd826271d887e2af66866d3e38b0852b3", features = [
   "blokli",
   "telemetry",
 ] }
 exitcode = "~1.1.2"
 futures = "~0.3.33"
 futures-util = "~0.3.33"
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "10f6d80c3cc71dee1c5f98c3074c4021ef7fa54d", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "5b1cd68806ee33dcfb50dfed3b4a2866825f8f68", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
@@ -78,6 +78,15 @@ objc2-foundation = { version = "~0.3.2", features = [
 ] }
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
+
+[patch.crates-io]
+# Cargo doesn't propagate a git dependency's own [patch] section to consumers, so this mirrors
+# edge-client's own patch exactly: hopr-strategy (crates.io) still depends on the crates.io
+# hopr-types/hopr-api, which duplicate types (Address, Balance<C>, ...) against the git-pinned
+# versions hopr-chain-connector/hopr-lib pull in through edgli. Without this, the workspace ends
+# up with two incompatible copies of each type.
+hopr-api   = { git = "https://github.com/hoprnet/hopr-api", rev = "7c26c0bee697d33529dc9412c271ce6c8d726fc1" }
+hopr-types = { git = "https://github.com/hoprnet/hopr-types", rev = "2a3bb391f1f98475d033b105c69090d050aaff0c" }
 
 # this profile focuses on the best runtime performance and the smallest binary size
 [profile.release]

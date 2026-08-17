@@ -1,3 +1,6 @@
+/// Config v3: the oldest supported format, still carrying the `hoprd_node` section from when
+/// this client talked to a separate hoprd process (now unused — dropped during conversion, as it
+/// always was). Forward-converts into `v7::Config`.
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
@@ -159,20 +162,18 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     wrong_keys
 }
 
-impl TryFrom<Config> for config::Config {
+impl TryFrom<Config> for super::v7::Config {
     type Error = config::Error;
 
     fn try_from(value: Config) -> Result<Self, Self::Error> {
-        let connection = value.connection.into();
-        let destinations = v4::convert_destinations(value.destinations)?;
-        let wireguard = value.wireguard.into();
-        let blokli = value.blokli.into();
-        Ok(config::Config {
-            connection,
+        let destinations = value.destinations.map(v4::convert_destinations);
+        Ok(super::v7::Config {
+            version: value.version,
             destinations,
-            wireguard,
-            blokli,
-            strategy: Default::default(),
+            connection: Some(value.connection.into()),
+            wireguard: value.wireguard,
+            blokli: value.blokli,
+            strategy: None,
         })
     }
 }
@@ -224,14 +225,6 @@ internal_connection_port = 1422
 meta = { location = "Germany" }
 path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
 
-[destinations.0xa5Ca174Ef94403d6162a969341a61baeA48F57F8]
-meta = { location = "USA" }
-path = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
-
-[destinations.0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254]
-meta = { location = "Spain" }
-path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
-
 [connection]
 listen_host = "0.0.0.0:1422"
 http_timeout = "5s"
@@ -275,5 +268,26 @@ force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
 "#####;
         toml::from_str::<Config>(config)?;
         Ok(())
+    }
+
+    #[test]
+    fn v3_file_forward_converts_into_the_runtime_config() {
+        let cfg: Config = toml::from_str(
+            r#####"
+version = 3
+[hoprd_node]
+endpoint = "http://127.0.0.1:3001"
+api_token = "1234567890"
+
+[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
+path = { hops = 2 }
+"#####,
+        )
+        .expect("valid TOML");
+
+        let v7_cfg: super::super::v7::Config = cfg.try_into().expect("should forward-convert");
+        let result: crate::config::Config = v7_cfg.try_into().expect("should succeed");
+        let dest = result.destinations.values().next().expect("destination present");
+        assert_eq!(dest.routing, edgli::hopr_lib::HopRouting::try_from(2).unwrap());
     }
 }

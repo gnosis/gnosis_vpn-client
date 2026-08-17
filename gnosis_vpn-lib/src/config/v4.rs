@@ -1,4 +1,5 @@
-use edgli::hopr_lib::HopRouting;
+/// Config v4: like v5 except destinations are keyed by address directly (no separate `id`) and
+/// carry no `address` field of their own. Forward-converts into `v7::Config`.
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
@@ -9,7 +10,6 @@ use std::vec::Vec;
 
 use crate::config;
 use crate::config::v5;
-use crate::connection::destination::Destination as ConnDestination;
 
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -24,8 +24,8 @@ pub struct Config {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct Destination {
-    meta: Option<HashMap<String, String>>,
-    path: Option<v5::DestinationPath>,
+    pub(super) meta: Option<HashMap<String, String>>,
+    pub(super) path: Option<v5::DestinationPath>,
 }
 
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
@@ -127,63 +127,58 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     wrong_keys
 }
 
-impl TryFrom<Config> for config::Config {
+impl TryFrom<Config> for super::v7::Config {
     type Error = config::Error;
 
     fn try_from(value: Config) -> Result<Self, Self::Error> {
-        let connection = value.connection.into();
-        let destinations = convert_destinations(value.destinations)?;
-        let wireguard = value.wireguard.into();
-        let blokli = value.blokli.into();
-        Ok(config::Config {
-            connection,
+        let destinations = value.destinations.map(convert_destinations);
+        Ok(super::v7::Config {
+            version: value.version,
             destinations,
-            wireguard,
-            blokli,
-            strategy: Default::default(),
+            connection: Some(value.connection.into()),
+            wireguard: value.wireguard,
+            blokli: value.blokli,
+            strategy: None,
         })
     }
 }
 
-pub fn convert_destinations(
-    value: Option<HashMap<Address, Destination>>,
-) -> Result<HashMap<String, ConnDestination>, config::Error> {
-    let config_dests = value.ok_or(config::Error::NoDestinations)?;
-    if config_dests.is_empty() {
-        return Err(config::Error::NoDestinations);
-    }
-
-    let mut result = HashMap::new();
-    for (address, dest) in config_dests.iter() {
-        let path = match dest.path.clone() {
-            Some(v5::DestinationPath::Intermediates(p)) => {
-                let hop_count = p.len().min(3_usize);
-                tracing::warn!(address = %address.to_checksum(), hop_count, "intermediates routing is deprecated; treating as hop count");
-                HopRouting::try_from(hop_count)?
-            }
-            Some(v5::DestinationPath::Hops(h)) => HopRouting::try_from(h as usize)?,
-            None => HopRouting::try_from(1)?,
-        };
-
-        let meta = dest.meta.clone().unwrap_or_default();
-
-        let dest = ConnDestination::new(address.to_string(), *address, path, meta);
-        result.insert(address.to_string(), dest);
-    }
-    Ok(result)
+pub(super) fn convert_destinations(value: HashMap<Address, Destination>) -> HashMap<String, super::v7::Destination> {
+    value
+        .into_iter()
+        .map(|(address, dest)| {
+            let id = address.to_string();
+            let path = Some(v5::resolve_path(&id, dest.path));
+            (
+                id,
+                super::v7::Destination {
+                    address,
+                    meta: dest.meta,
+                    path,
+                    gnosis_vpn_server: None,
+                    wireguard_server: None,
+                },
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, convert_destinations};
+    use super::Config;
     use edgli::hopr_lib::HopRouting;
 
     fn parse(toml: &str) -> Config {
         toml::from_str(toml).expect("valid TOML")
     }
 
+    fn forward_convert(cfg: Config) -> crate::config::Config {
+        let v7_cfg: super::super::v7::Config = cfg.try_into().expect("should forward-convert");
+        v7_cfg.try_into().expect("should succeed")
+    }
+
     #[test]
-    fn convert_destinations_hops_path_preserved() {
+    fn hops_path_preserved() {
         let cfg = parse(
             r#####"
 version = 4
@@ -192,13 +187,13 @@ version = 4
 path = { hops = 2 }
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
-        let d = result.values().next().unwrap();
+        let result = forward_convert(cfg);
+        let d = result.destinations.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
     }
 
     #[test]
-    fn convert_destinations_intermediates_treated_as_hop_count() {
+    fn intermediates_treated_as_hop_count() {
         let cfg = parse(
             r#####"
 version = 4
@@ -207,13 +202,13 @@ version = 4
 path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA", "0x25865191AdDe377fd85E91566241178070F4797A"] }
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
-        let d = result.values().next().unwrap();
+        let result = forward_convert(cfg);
+        let d = result.destinations.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
     }
 
     #[test]
-    fn convert_destinations_intermediates_clamped_to_max_hops() {
+    fn intermediates_clamped_to_max_hops() {
         let cfg = parse(
             r#####"
 version = 4
@@ -222,13 +217,13 @@ version = 4
 path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA", "0x25865191AdDe377fd85E91566241178070F4797A", "0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254", "0xa5Ca174Ef94403d6162a969341a61baeA48F57F8"] }
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
-        let d = result.values().next().unwrap();
+        let result = forward_convert(cfg);
+        let d = result.destinations.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(3).unwrap());
     }
 
     #[test]
-    fn convert_destinations_none_path_defaults_to_1_hop() {
+    fn none_path_defaults_to_1_hop() {
         let cfg = parse(
             r#####"
 version = 4
@@ -236,21 +231,16 @@ version = 4
 [destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
-        let d = result.values().next().unwrap();
+        let result = forward_convert(cfg);
+        let d = result.destinations.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
     }
 
     #[test]
-    fn convert_destinations_empty_map_errors() {
-        let result = convert_destinations(Some(std::collections::HashMap::new()));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn convert_destinations_none_errors() {
-        let result = convert_destinations(None);
-        assert!(result.is_err());
+    fn no_destinations_no_longer_errors() {
+        let cfg = parse("version = 4\n");
+        let result = forward_convert(cfg);
+        assert!(result.destinations.is_empty());
     }
 
     #[test]
@@ -258,22 +248,6 @@ version = 4
         let config = r#####"
 version = 4
 "#####;
-        toml::from_str::<Config>(config)?;
-        Ok(())
-    }
-
-    #[test]
-    fn config_parse_single_destination_should_succeed() -> anyhow::Result<()> {
-        let config = r#####"
-version = 4
-
-[destinations]
-
-[destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
-meta = { location = "Germany" }
-path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
-"#####;
-
         toml::from_str::<Config>(config)?;
         Ok(())
     }
@@ -288,14 +262,6 @@ version = 4
 [destinations.0xD9c11f07BfBC1914877d7395459223aFF9Dc2739]
 meta = { location = "Germany" }
 path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
-
-[destinations.0xa5Ca174Ef94403d6162a969341a61baeA48F57F8]
-meta = { location = "USA" }
-path = { intermediates = ["0x25865191AdDe377fd85E91566241178070F4797A"] }
-
-[destinations.0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254]
-meta = { location = "Spain" }
-path = { intermediates = ["0x2Cf9E5951C9e60e01b579f654dF447087468fc04"] }
 
 [connection]
 http_timeout = "60s"

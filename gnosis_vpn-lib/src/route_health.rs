@@ -910,13 +910,7 @@ impl HealthSession {
         };
         tracing::debug!(%destination, "opening TCP session for health check");
         let meta = hopr
-            .open_session(
-                destination.address,
-                options.sessions.bridge.target.clone(),
-                None,
-                None,
-                cfg,
-            )
+            .open_session(destination.address, destination.bridge_target(), None, None, cfg)
             .await?;
         Ok(Self {
             hopr,
@@ -1193,13 +1187,16 @@ mod tests {
     // --- failure_backoff ---
 
     fn backoff_at(failures: u32) -> Duration {
-        use crate::connection::destination::{Destination, HopRouting};
+        use crate::connection::destination::{Destination, DestinationSource, HopRouting};
         use tokio_util::sync::CancellationToken;
         let dest = Destination::new(
             "test".to_string(),
             addr(1),
             HopRouting::try_from(1).unwrap(),
             Default::default(),
+            "172.30.0.1:8000".parse().unwrap(),
+            "172.30.0.1:51820".parse().unwrap(),
+            DestinationSource::Configured,
         );
         let mut rh = RouteHealth::new(&dest, false, false, CancellationToken::new());
         rh.exit_failures = failures;

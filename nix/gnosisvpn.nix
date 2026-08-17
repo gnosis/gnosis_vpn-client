@@ -33,10 +33,22 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.1#a45a31d28780695cb816d5e245a70bd520bd1293" =
       "sha256-QF8BAe2eHrGsVvZIGD+Gdi6XFMQ8zHkOObSRjTRN4MY=";
-    "git+https://github.com/hoprnet/edge-client.git?rev=f87db85bec811efe4df96e3a626720d646871773#f87db85bec811efe4df96e3a626720d646871773" =
-      "sha256-uOEGGMG0N7t6O4oUQbMcU3nPyb+XbO4Xth/uc6CmEv4=";
-    "git+https://github.com/hoprnet/hoprnet?rev=10f6d80c3cc71dee1c5f98c3074c4021ef7fa54d#10f6d80c3cc71dee1c5f98c3074c4021ef7fa54d" =
-      "sha256-k0vvNTgGadrK1RyXwvABBpDWymsMEBXa+4wg9WLjtro=";
+    "git+https://github.com/hoprnet/blokli-client?rev=2b2d41a387f46d2d7adf4e0e66dd4dff520c0b92#2b2d41a387f46d2d7adf4e0e66dd4dff520c0b92" =
+      "sha256-N8ka4fKIcJQ8RifxZgAlI6PE30DloTA/E2pmudG4b1E=";
+    "git+https://github.com/hoprnet/contracts?rev=6ce45eb5e7d433545d82ea32e27562eb0fc329c3#6ce45eb5e7d433545d82ea32e27562eb0fc329c3" =
+      "sha256-nZyP27znTXXrh5sR2ygdiXqLBTnMsNGC+06xjXYJc0w=";
+    "git+https://github.com/hoprnet/edge-client.git?rev=b333ba9dd826271d887e2af66866d3e38b0852b3#b333ba9dd826271d887e2af66866d3e38b0852b3" =
+      "sha256-1dxctOfT2nsdJhs2dQtTxQqZ1r808iVZSOifQrhexEc=";
+    "git+https://github.com/hoprnet/hopr-api?rev=7c26c0bee697d33529dc9412c271ce6c8d726fc1#7c26c0bee697d33529dc9412c271ce6c8d726fc1" =
+      "sha256-KeTSKUNOJOFgd/LcKM07V5wR+9tosrv6LzyJl8Ylen0=";
+    "git+https://github.com/hoprnet/hopr-impls?rev=f5c44b245f7a52679185acbf244152c5fd5c2199#f5c44b245f7a52679185acbf244152c5fd5c2199" =
+      "sha256-taHXhbOs/Ex6SS+EGMLrGjL6Fry4cRlY9Xe/wKX8ayw=";
+    "git+https://github.com/hoprnet/hopr-types?rev=2a3bb391f1f98475d033b105c69090d050aaff0c#2a3bb391f1f98475d033b105c69090d050aaff0c" =
+      "sha256-u5iFJ+/1f8vP3d1d+gPi9/Mv74p36IrvhBJZZgr+o9k=";
+    "git+https://github.com/hoprnet/hopr-utilities?rev=a43495abdda0d2ee7f5516ccd451021eb0c3f31e#a43495abdda0d2ee7f5516ccd451021eb0c3f31e" =
+      "sha256-zWzlDr1xjicfdVzT6HYTvmMmSZSc0DzshUD6AuCg9dU=";
+    "git+https://github.com/hoprnet/hoprnet?rev=5b1cd68806ee33dcfb50dfed3b4a2866825f8f68#5b1cd68806ee33dcfb50dfed3b4a2866825f8f68" =
+      "sha256-CXPVj4MGlZEbJnTrwoKJ7E5nAzEiQJ9A6qhOR0uEOSc=";
   };
 
   builders = nixLib.mkRustBuilders {

@@ -119,7 +119,7 @@ impl Display for ChannelBalance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::destination::{Destination, HopRouting};
+    use crate::connection::destination::{Destination, DestinationSource, HopRouting};
 
     fn address(byte: u8) -> Address {
         Address::from([byte; 20])
@@ -131,6 +131,9 @@ mod tests {
             addr,
             HopRouting::try_from(1).expect("conversion cannot fail"),
             HashMap::new(),
+            "172.30.0.1:8000".parse().unwrap(),
+            "172.30.0.1:51820".parse().unwrap(),
+            DestinationSource::Configured,
         )
     }
 
