@@ -26,9 +26,9 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 clap = { version = "~4.6.5", features = ["derive", "env"] }
 clap_complete = "~4.6.8"
 # Testing pin: the graph-presence stack head (edge-client#145, what main tracks) merged with
-# edge-client main (#142 xdai_fund_amount) and the public compute_capacity — branch
-# mj/public-compute-capacity-graph-stack. Repoint to edge-client main once both land there.
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "efec1c15ca274af0f0d3d4ba10d5b9769b8c7b3c", features = [
+# edge-client main (#142 xdai_fund_amount) and the NodeEoa capacity entry (edge-client#141) —
+# branch mj/public-compute-capacity-graph-stack. Repoint to edge-client main once both land there.
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "169cb126176762bc3c07418db2cb5337749657fe", features = [
   "blokli",
   "telemetry",
 ] }

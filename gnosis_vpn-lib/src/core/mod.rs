@@ -91,8 +91,6 @@ pub struct Core {
     minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
     ideal_balance_recommendation: Option<balance::BalanceRecommendation>,
     capacity_allocations: Option<HashMap<balance::CapacityAllocator, balance::Capacity>>,
-    // Capacity of wxHOPR sitting on the node EOA, not yet swept into the Safe.
-    node_capacity: Option<balance::Capacity>,
     balances: Option<balance::Balances>,
     strategy_handle: Option<AbortHandle>,
     route_healths: HashMap<String, RouteHealth>,
@@ -207,7 +205,6 @@ impl Core {
             minimum_balance_recommendation: None,
             ideal_balance_recommendation: None,
             capacity_allocations: None,
-            node_capacity: None,
             balances: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
@@ -422,12 +419,9 @@ impl Core {
                                     &self.capacity_allocations,
                                     &self.balances,
                                 ) {
-                                    (Some(ideal), Some(allocs), Some(bals)) => Some(balance::to_funding_issues(
-                                        *ideal,
-                                        allocs,
-                                        self.node_capacity,
-                                        bals.node_xdai,
-                                    )),
+                                    (Some(ideal), Some(allocs), Some(bals)) => {
+                                        Some(balance::to_funding_issues(*ideal, allocs, bals.node_xdai))
+                                    }
                                     _ => None,
                                 };
                                 RunMode::running(self.hopr.as_ref().map(|h| h.status()), funding_issues)
@@ -560,12 +554,9 @@ impl Core {
                             (Some(hopr), Some(balances)) => {
                                 let funding_issues =
                                     match (&self.ideal_balance_recommendation, &self.capacity_allocations) {
-                                        (Some(ideal), Some(allocs)) => Some(balance::to_funding_issues(
-                                            *ideal,
-                                            allocs,
-                                            self.node_capacity,
-                                            balances.node_xdai,
-                                        )),
+                                        (Some(ideal), Some(allocs)) => {
+                                            Some(balance::to_funding_issues(*ideal, allocs, balances.node_xdai))
+                                        }
                                         _ => None,
                                     };
                                 Ok(command::BalanceResponse::build(
@@ -573,7 +564,6 @@ impl Core {
                                     balances,
                                     &self.config.destinations.clone(),
                                     self.capacity_allocations.as_ref(),
-                                    self.node_capacity,
                                     self.ideal_balance_recommendation,
                                     funding_issues,
                                 ))
@@ -696,13 +686,9 @@ impl Core {
             },
             Results::CapacityAllocations { res } => match res {
                 Ok(caps) => {
-                    tracing::info!(count = caps.allocations.len(), "received capacity allocations");
-                    let has_channels = caps
-                        .allocations
-                        .keys()
-                        .any(|k| matches!(k, balance::CapacityAllocator::Peer(_)));
-                    self.capacity_allocations = Some(caps.allocations);
-                    self.node_capacity = caps.node_capacity;
+                    tracing::info!(count = caps.len(), "received capacity allocations");
+                    let has_channels = caps.keys().any(|k| matches!(k, balance::CapacityAllocator::Peer(_)));
+                    self.capacity_allocations = Some(caps);
                     if has_channels && let Some(hopr) = self.hopr.clone() {
                         let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                         for id in &dest_ids {

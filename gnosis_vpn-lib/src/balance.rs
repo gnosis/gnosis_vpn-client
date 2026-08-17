@@ -87,13 +87,15 @@ impl Display for FundingIssue {
     }
 }
 
-/// Which entity holds a wxHOPR stake: either an open outgoing channel to a peer,
-/// or the unallocated balance in the Safe contract.
+/// Which entity holds a wxHOPR stake: an open outgoing channel to a peer, the
+/// unallocated balance in the Safe contract, or the node EOA (deposited funds
+/// not yet swept into the Safe).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(tag = "type", content = "address", rename_all = "snake_case")]
 pub enum CapacityAllocator {
     Safe,
     Peer(#[serde(with = "serde_utils::address")] Address),
+    NodeEoa,
 }
 
 impl From<edgli::strategy::CapacityAllocator> for CapacityAllocator {
@@ -101,6 +103,7 @@ impl From<edgli::strategy::CapacityAllocator> for CapacityAllocator {
         match a {
             edgli::strategy::CapacityAllocator::Peer(addr) => CapacityAllocator::Peer(addr),
             edgli::strategy::CapacityAllocator::Safe => CapacityAllocator::Safe,
+            edgli::strategy::CapacityAllocator::NodeEoa => CapacityAllocator::NodeEoa,
         }
     }
 }
@@ -110,6 +113,7 @@ impl Display for CapacityAllocator {
         match self {
             CapacityAllocator::Peer(addr) => write!(f, "channel({})", addr.to_checksum()),
             CapacityAllocator::Safe => write!(f, "safe"),
+            CapacityAllocator::NodeEoa => write!(f, "node-eoa"),
         }
     }
 }
@@ -130,14 +134,6 @@ pub struct Capacity {
 pub struct CapacityEntry {
     pub allocator: CapacityAllocator,
     pub capacity: Capacity,
-}
-
-/// Capacity allocations (Safe + open channels) plus the capacity of wxHOPR
-/// sitting on the node EOA, not yet swept into the Safe.
-#[derive(Clone, Debug)]
-pub struct CapacityAllocations {
-    pub allocations: HashMap<CapacityAllocator, Capacity>,
-    pub node_capacity: Option<Capacity>,
 }
 
 impl From<edgli::strategy::Capacity> for Capacity {
@@ -240,7 +236,6 @@ impl Display for Balances {
 pub fn to_funding_issues(
     ideal: BalanceRecommendation,
     capacity_allocations: &HashMap<CapacityAllocator, Capacity>,
-    node_capacity: Option<Capacity>,
     node_xdai: Balance<XDai>,
 ) -> Vec<FundingIssue> {
     let mut issues = Vec::new();
@@ -248,10 +243,9 @@ pub fn to_funding_issues(
     // Total wxHOPR that can (eventually) pay for traffic: node EOA (deposited,
     // not yet swept into the Safe), Safe, and open channels. The per-location
     // checks below stay allocation-specific — EOA funds cannot pay for traffic
-    // until swept — but they must count here so a freshly deposited node is not
-    // reported as unfunded.
-    let total_stake = capacity_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>()
-        + node_capacity.map(|c| c.stake).unwrap_or_default();
+    // until swept — but the EOA stake must count here so a freshly deposited
+    // node is not reported as unfunded.
+    let total_stake = capacity_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>();
     if node_xdai.is_zero() && total_stake.is_zero() {
         issues.push(FundingIssue::Unfunded);
         return issues;
@@ -322,7 +316,7 @@ mod tests {
 
     #[test]
     fn unfunded_when_xdai_and_stake_are_zero() {
-        let issues = to_funding_issues(ideal(100, 100), &HashMap::new(), None, Balance::<XDai>::zero());
+        let issues = to_funding_issues(ideal(100, 100), &HashMap::new(), Balance::<XDai>::zero());
         assert_eq!(issues, vec![FundingIssue::Unfunded]);
     }
 
@@ -330,12 +324,9 @@ mod tests {
     fn eoa_stake_prevents_unfunded() {
         // wxHOPR deposited on the node EOA but not yet swept into the Safe:
         // the node is funded, just not ready — never "Unfunded".
-        let issues = to_funding_issues(
-            ideal(100, 100),
-            &HashMap::new(),
-            Some(peer_capacity(100, 0)),
-            Balance::<XDai>::zero(),
-        );
+        let mut allocs = HashMap::new();
+        allocs.insert(CapacityAllocator::NodeEoa, peer_capacity(100, 0));
+        let issues = to_funding_issues(ideal(100, 100), &allocs, Balance::<XDai>::zero());
         assert!(!issues.contains(&FundingIssue::Unfunded));
         assert!(issues.contains(&FundingIssue::ChannelsOutOfFunds));
         assert!(issues.contains(&FundingIssue::SafeOutOfFunds));
@@ -349,7 +340,6 @@ mod tests {
         let issues = to_funding_issues(
             ideal(100, 100),
             &allocs,
-            None,
             Balance::<XDai>::from(1_000_000_000_000_000_u64),
         );
         assert!(issues.contains(&FundingIssue::ChannelsOutOfFunds));
@@ -366,7 +356,6 @@ mod tests {
         let issues = to_funding_issues(
             ideal(100, 100),
             &allocs,
-            None,
             Balance::<XDai>::from(1_000_000_000_000_000_u64),
         );
         assert!(issues.contains(&FundingIssue::SafeOutOfFunds));
@@ -384,7 +373,6 @@ mod tests {
         let issues = to_funding_issues(
             ideal(100, 100),
             &allocs,
-            None,
             Balance::<XDai>::from(1_000_000_000_000_000_u64),
         );
         assert!(issues.contains(&FundingIssue::SafeLowOnFunds));
@@ -401,7 +389,6 @@ mod tests {
         let issues = to_funding_issues(
             ideal(100, 1_000_000_000_000_u64), // ideal xdai = 1000 Gwei
             &allocs,
-            None,
             Balance::<XDai>::from(50_000_000_000_u64), // 50 Gwei < 100 Gwei threshold
         );
         assert!(issues.contains(&FundingIssue::NodeUnderfunded));
@@ -419,7 +406,6 @@ mod tests {
         let issues = to_funding_issues(
             ideal(100, 1_000_000_000_000_u64), // ideal xdai = 1000 Gwei
             &allocs,
-            None,
             Balance::<XDai>::from(500_000_000_000_u64), // 500 Gwei: above threshold, below ideal
         );
         assert!(issues.contains(&FundingIssue::NodeLowOnFunds));
@@ -455,7 +441,6 @@ mod tests {
         let issues = to_funding_issues(
             ideal(100, 100),
             &allocs,
-            None,
             Balance::<XDai>::from(2_000_000_000_000_000_u64),
         );
         assert!(issues.is_empty());

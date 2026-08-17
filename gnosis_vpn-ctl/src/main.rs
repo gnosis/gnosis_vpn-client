@@ -262,7 +262,6 @@ fn pretty_print(resp: &Response) {
             channels_out,
             info,
             capacity_allocations,
-            node_capacity,
             ideal_balance: _,
             funding_issues,
         })) => {
@@ -276,7 +275,10 @@ fn pretty_print(resp: &Response) {
                 .map(|s| format!(" ({s})"))
                 .unwrap_or_default();
             str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\n"));
-            if let Some(nc) = node_capacity.as_ref().filter(|c| !c.stake.is_zero()) {
+            let allocations = capacity_allocations.as_deref().unwrap_or(&[]);
+            if let Some(nc) =
+                find_capacity(allocations, &balance::CapacityAllocator::NodeEoa).filter(|c| !c.stake.is_zero())
+            {
                 let sci = balance::wxhopr_scientific(nc.stake)
                     .map(|s| format!(" ({s})"))
                     .unwrap_or_default();
@@ -289,7 +291,6 @@ fn pretty_print(resp: &Response) {
             if channels_out.is_empty() {
                 str_resp.push_str("---\nNo outgoing channels.\n");
             } else {
-                let allocations = capacity_allocations.as_deref().unwrap_or(&[]);
                 let sci = balance::wxhopr_scientific(*safe)
                     .map(|s| format!(" ({s})"))
                     .unwrap_or_default();

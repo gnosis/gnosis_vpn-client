@@ -5,7 +5,7 @@ use edgli::{
     hopr_lib::{
         HoprSessionClientConfig,
         api::{
-            chain::{AccountSelector, ChainReadAccountOperations, ChainValues},
+            chain::{AccountSelector, ChainReadAccountOperations},
             node::HasChainApi,
             types::{internal::channels::ChannelStatus, primitive::prelude::Address},
         },
@@ -418,46 +418,19 @@ impl Hopr {
         Ok(rec.into())
     }
 
-    /// Capacity allocations (Safe + open channels) plus the capacity of wxHOPR
-    /// sitting on the node EOA. Freshly deposited funds live on the EOA until
-    /// the periodic sweep moves them into the Safe; edgli's allocations don't
-    /// cover them, so they are computed here to let consumers count them
-    /// toward total throughput. `None` when the win probability is invalid.
+    /// Capacity allocations: open outgoing channels, the unallocated Safe
+    /// balance, and wxHOPR sitting on the node EOA (deposited but not yet
+    /// swept into the Safe), each keyed by its [`balance::CapacityAllocator`].
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
-    pub async fn capacity_allocations(&self) -> Result<balance::CapacityAllocations, HoprError> {
+    pub async fn capacity_allocations(
+        &self,
+    ) -> Result<HashMap<balance::CapacityAllocator, balance::Capacity>, HoprError> {
         let raw = self
             .edgli
             .describe_current_capacity_allocations()
             .await
             .map_err(|e| HoprError::Strategy(e.to_string()))?;
-        let allocations = raw.into_iter().map(|(k, v)| (k.into(), v.into())).collect();
-
-        // TODO(edgli): the node-EOA capacity should come from edgli itself.
-        // https://github.com/hoprnet/edge-client/issues/141
-        // `describe_current_capacity_allocations` already fetches ticket price
-        // and win prob internally but omits the node EOA, so we re-read both
-        // chain values here to feed `edgli::strategy::compute_capacity`. Once
-        // edgli returns it, drop the chain_api()/balances() calls below.
-        let node_wxhopr = self.edgli.balances().await.map_err(HoprError::HoprLib)?.node_wxhopr;
-        let chain = self.edgli.chain_api();
-        let ticket_price = chain
-            .minimum_ticket_price()
-            .await
-            .map_err(|e| HoprError::Strategy(e.to_string()))?;
-        let win_prob = chain
-            .minimum_incoming_ticket_win_prob()
-            .await
-            .map_err(|e| HoprError::Strategy(e.to_string()))?
-            .as_f64();
-        let node_capacity = edgli::strategy::compute_capacity(node_wxhopr, ticket_price, win_prob)
-            .inspect_err(|err| tracing::warn!(%err, "node EOA capacity unavailable"))
-            .ok()
-            .map(balance::Capacity::from);
-
-        Ok(balance::CapacityAllocations {
-            allocations,
-            node_capacity,
-        })
+        Ok(raw.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
