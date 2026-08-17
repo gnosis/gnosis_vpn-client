@@ -422,9 +422,12 @@ impl Core {
                                     &self.capacity_allocations,
                                     &self.balances,
                                 ) {
-                                    (Some(ideal), Some(allocs), Some(bals)) => {
-                                        Some(balance::to_funding_issues(*ideal, allocs, bals.node_xdai))
-                                    }
+                                    (Some(ideal), Some(allocs), Some(bals)) => Some(balance::to_funding_issues(
+                                        *ideal,
+                                        allocs,
+                                        self.node_capacity,
+                                        bals.node_xdai,
+                                    )),
                                     _ => None,
                                 };
                                 RunMode::running(self.hopr.as_ref().map(|h| h.status()), funding_issues)
@@ -557,9 +560,12 @@ impl Core {
                             (Some(hopr), Some(balances)) => {
                                 let funding_issues =
                                     match (&self.ideal_balance_recommendation, &self.capacity_allocations) {
-                                        (Some(ideal), Some(allocs)) => {
-                                            Some(balance::to_funding_issues(*ideal, allocs, balances.node_xdai))
-                                        }
+                                        (Some(ideal), Some(allocs)) => Some(balance::to_funding_issues(
+                                            *ideal,
+                                            allocs,
+                                            self.node_capacity,
+                                            balances.node_xdai,
+                                        )),
                                         _ => None,
                                     };
                                 Ok(command::BalanceResponse::build(

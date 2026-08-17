@@ -37,7 +37,7 @@ pub fn wxhopr_scientific(b: Balance<WxHOPR>) -> Option<String> {
 // in order of priority
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum FundingIssue {
-    Unfunded,           // node xdai zero and no funds in safe or channels - initial state
+    Unfunded,           // node xdai zero and no wxhopr on the node EOA, in safe or channels - initial state
     ChannelsOutOfFunds, // less than 1 message available in all channels combined
     SafeOutOfFunds,     // less than 1 message available in safe
     SafeLowOnFunds,     // less than 0.5 of ideal safe balance
@@ -240,11 +240,18 @@ impl Display for Balances {
 pub fn to_funding_issues(
     ideal: BalanceRecommendation,
     capacity_allocations: &HashMap<CapacityAllocator, Capacity>,
+    node_capacity: Option<Capacity>,
     node_xdai: Balance<XDai>,
 ) -> Vec<FundingIssue> {
     let mut issues = Vec::new();
 
-    let total_stake = capacity_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>();
+    // Total wxHOPR that can (eventually) pay for traffic: node EOA (deposited,
+    // not yet swept into the Safe), Safe, and open channels. The per-location
+    // checks below stay allocation-specific — EOA funds cannot pay for traffic
+    // until swept — but they must count here so a freshly deposited node is not
+    // reported as unfunded.
+    let total_stake = capacity_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>()
+        + node_capacity.map(|c| c.stake).unwrap_or_default();
     if node_xdai.is_zero() && total_stake.is_zero() {
         issues.push(FundingIssue::Unfunded);
         return issues;
@@ -315,8 +322,24 @@ mod tests {
 
     #[test]
     fn unfunded_when_xdai_and_stake_are_zero() {
-        let issues = to_funding_issues(ideal(100, 100), &HashMap::new(), Balance::<XDai>::zero());
+        let issues = to_funding_issues(ideal(100, 100), &HashMap::new(), None, Balance::<XDai>::zero());
         assert_eq!(issues, vec![FundingIssue::Unfunded]);
+    }
+
+    #[test]
+    fn eoa_stake_prevents_unfunded() {
+        // wxHOPR deposited on the node EOA but not yet swept into the Safe:
+        // the node is funded, just not ready — never "Unfunded".
+        let issues = to_funding_issues(
+            ideal(100, 100),
+            &HashMap::new(),
+            Some(peer_capacity(100, 0)),
+            Balance::<XDai>::zero(),
+        );
+        assert!(!issues.contains(&FundingIssue::Unfunded));
+        assert!(issues.contains(&FundingIssue::ChannelsOutOfFunds));
+        assert!(issues.contains(&FundingIssue::SafeOutOfFunds));
+        assert!(issues.contains(&FundingIssue::NodeUnderfunded));
     }
 
     #[test]
@@ -326,6 +349,7 @@ mod tests {
         let issues = to_funding_issues(
             ideal(100, 100),
             &allocs,
+            None,
             Balance::<XDai>::from(1_000_000_000_000_000_u64),
         );
         assert!(issues.contains(&FundingIssue::ChannelsOutOfFunds));
@@ -342,6 +366,7 @@ mod tests {
         let issues = to_funding_issues(
             ideal(100, 100),
             &allocs,
+            None,
             Balance::<XDai>::from(1_000_000_000_000_000_u64),
         );
         assert!(issues.contains(&FundingIssue::SafeOutOfFunds));
@@ -359,6 +384,7 @@ mod tests {
         let issues = to_funding_issues(
             ideal(100, 100),
             &allocs,
+            None,
             Balance::<XDai>::from(1_000_000_000_000_000_u64),
         );
         assert!(issues.contains(&FundingIssue::SafeLowOnFunds));
@@ -375,6 +401,7 @@ mod tests {
         let issues = to_funding_issues(
             ideal(100, 1_000_000_000_000_u64), // ideal xdai = 1000 Gwei
             &allocs,
+            None,
             Balance::<XDai>::from(50_000_000_000_u64), // 50 Gwei < 100 Gwei threshold
         );
         assert!(issues.contains(&FundingIssue::NodeUnderfunded));
@@ -392,6 +419,7 @@ mod tests {
         let issues = to_funding_issues(
             ideal(100, 1_000_000_000_000_u64), // ideal xdai = 1000 Gwei
             &allocs,
+            None,
             Balance::<XDai>::from(500_000_000_000_u64), // 500 Gwei: above threshold, below ideal
         );
         assert!(issues.contains(&FundingIssue::NodeLowOnFunds));
@@ -427,6 +455,7 @@ mod tests {
         let issues = to_funding_issues(
             ideal(100, 100),
             &allocs,
+            None,
             Balance::<XDai>::from(2_000_000_000_000_000_u64),
         );
         assert!(issues.is_empty());
