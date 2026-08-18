@@ -33,18 +33,10 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.1#a45a31d28780695cb816d5e245a70bd520bd1293" =
       "sha256-QF8BAe2eHrGsVvZIGD+Gdi6XFMQ8zHkOObSRjTRN4MY=";
-    "git+https://github.com/hoprnet/edge-client.git?rev=c517fccab7ee46c65f1f37dd85ee29407cb3daca#c517fccab7ee46c65f1f37dd85ee29407cb3daca" =
-      "sha256-26bwFsrmpe4y9PjS1rTB74PvMgBNUXRa5nNWdwiZO3U=";
-    "git+https://github.com/hoprnet/hopr-api?rev=ee65b340cf09fd6031735477cc1171d7610694a3#ee65b340cf09fd6031735477cc1171d7610694a3" =
-      "sha256-Tevhabmz4XfQTBXGLbUmW3uV+7kpbPVnWgFdsYstJl8=";
-    "git+https://github.com/hoprnet/hopr-impls?rev=ad0fd7e4b35ac462846011ec7446fd404f5bcf44#ad0fd7e4b35ac462846011ec7446fd404f5bcf44" =
-      "sha256-LoMm1ZjhSWu/UPTHMfrPOKQy2XrHadOhbmKwtF9bOlI=";
-    "git+https://github.com/hoprnet/hopr-strategy?rev=272f41000cd6e1bec9e2d08e2cd85f37aa804ea9#272f41000cd6e1bec9e2d08e2cd85f37aa804ea9" =
-      "sha256-K4Jtm3TJmNh5rlPlrT0ye66UEQ78OqtwDw2wOs8lb5A=";
-    "git+https://github.com/hoprnet/hopr-utilities?rev=68e648be4aa9f1442c75df4006a53db414932f7e#68e648be4aa9f1442c75df4006a53db414932f7e" =
-      "sha256-1hYv2N2HjE7sTLbw5DXOQLOvae9dYR0iwSl6OsCUQhE=";
-    "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Ftest%2Ftransport%2Freturn-routing-origination-stall#66dc5d19e1c4fc7fd4e9dbfa064004e0060b6fc9" =
-      "sha256-voL5h7BHhvDIHqhVmQ43t8xXtD+PXOWt/aWpcBHLPL8=";
+    "git+https://github.com/hoprnet/edge-client.git?rev=64619e05cfcfca85e96c5a63a8c1dc02ef31ea77#64619e05cfcfca85e96c5a63a8c1dc02ef31ea77" =
+      "sha256-Il43cNlTx2uGhYIrWIohJ1aqHARUeiVacm7y0XdP14s=";
+    "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#adefa298ade3d61c45f194000e4feca2cc073a26" =
+      "sha256-JXtFX7+TUKMajfmmvaF1hcOQ2Y8li7gpoX/eb9LM+3c=";
   };
 
   builders = nixLib.mkRustBuilders {
