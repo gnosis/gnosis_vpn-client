@@ -276,8 +276,7 @@ pub enum TicketStatsStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NerdStatsResponse {
     pub connection: NerdStatsConnection,
-    /// Raw wxHOPR/xDAI allocation breakdown across open channels, Safe, and the node EOA.
-    /// Not included in `Status`, which only carries the derived `FundingStatus`.
+    /// Raw allocation breakdown; `Status` only carries the derived `FundingStatus`.
     pub capacity_allocations: Option<balance::CapacityAllocations>,
 }
 

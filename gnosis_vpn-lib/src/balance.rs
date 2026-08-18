@@ -34,8 +34,7 @@ pub fn wxhopr_scientific(b: Balance<WxHOPR>) -> Option<String> {
     })
 }
 
-/// Health of a single funding resource (traffic or gas), derived by pooling all
-/// allocations for that resource rather than checking each location in isolation.
+/// Traffic/gas health, pooled across all allocations rather than checked per-location.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub enum FundingLevel {
     Good,
@@ -43,9 +42,7 @@ pub enum FundingLevel {
     Empty,
 }
 
-/// Traffic (wxHOPR) and gas (xDAI) health, plus how much more is needed to reach the
-/// ideal recommendation. Pools wxHOPR across open channels, Safe, and the node EOA, so
-/// funds deposited but not yet swept into the Safe still count toward traffic health.
+/// Traffic/gas health plus wxHOPR/xDAI still needed to reach the ideal recommendation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FundingStatus {
     pub traffic: FundingLevel,
@@ -249,9 +246,7 @@ impl Display for Balances {
     }
 }
 
-/// Pools wxHOPR/xDAI across every allocation location (rather than checking each in
-/// isolation) to decide traffic/gas health, so funds sitting unswept on the node EOA
-/// aren't mistaken for a shortfall.
+/// Pools every allocation location so funds sitting unswept on the node EOA still count.
 pub fn to_funding_status(
     ideal: BalanceRecommendation,
     capacity_allocations: &CapacityAllocations,
@@ -289,8 +284,7 @@ pub fn to_funding_status(
         FundingLevel::Good
     };
 
-    // Sub saturates at zero, so a resource that already exceeds the ideal recommendation
-    // yields a zero (filtered-out) deficit rather than an underflow.
+    // saturating_sub floors an already-exceeded ideal at zero instead of underflowing.
     let wxhopr_deficit = (traffic != FundingLevel::Good)
         .then(|| ideal.wxhopr - total_stake)
         .filter(|d| !d.is_zero());
@@ -349,9 +343,7 @@ mod tests {
 
     #[test]
     fn traffic_pools_channel_safe_and_node_eoa_bytes() {
-        // 1 GB each on the channel, Safe, and node EOA = 3 GB total: right at the
-        // Empty/Low boundary (not below it), so the pooled total already excludes it
-        // from Empty even though no single location alone would.
+        // 1 GB each, pooled to 3 GB: at the Empty/Low boundary, not below it.
         let allocations = allocs(Some(capacity(0, GB)), capacity(0, GB), capacity(0, GB));
         let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero());
         assert_eq!(status.traffic, FundingLevel::Low);
@@ -366,8 +358,7 @@ mod tests {
 
     #[test]
     fn traffic_good_when_eoa_alone_covers_5gb() {
-        // wxHOPR deposited on the node EOA but not yet swept into the Safe still
-        // counts toward traffic health.
+        // unswept EOA wxHOPR alone counts toward traffic.
         let allocations = allocs(None, capacity(0, 5 * GB), Capacity::default());
         let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero());
         assert_eq!(status.traffic, FundingLevel::Good);
