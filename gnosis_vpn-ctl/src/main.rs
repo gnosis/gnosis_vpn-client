@@ -1,3 +1,4 @@
+use bytesize::ByteSize;
 use exitcode::{self, ExitCode};
 
 use std::fmt;
@@ -402,20 +403,8 @@ fn format_capacity(capacity: Option<&balance::Capacity>) -> String {
         Some(c) => format!(
             " [{} msgs, {}]",
             human_msgs(c.expected_messages),
-            human_bytes(c.byte_capacity)
+            ByteSize(c.byte_capacity)
         ),
-    }
-}
-
-fn human_bytes(bytes: u64) -> String {
-    const KB: u64 = 1_024;
-    const MB: u64 = 1_024 * KB;
-    const GB: u64 = 1_024 * MB;
-    match bytes {
-        b if b >= GB => format!("{:.1} GB", b as f64 / GB as f64),
-        b if b >= MB => format!("{:.1} MB", b as f64 / MB as f64),
-        b if b >= KB => format!("{:.1} KB", b as f64 / KB as f64),
-        b => format!("{b} B"),
     }
 }
 
@@ -572,6 +561,13 @@ fn print_connected_stats(stats: &command::ConnStats) {
     println!("{str_resp}");
 }
 
+fn format_handshake_age(d: Duration) -> String {
+    // drop sub-second precision so humantime output skips ms/us
+    let secs = Duration::from_secs(d.as_secs());
+    // 3 decimals: NepTUN's tick granularity (pump.rs TIMER_PERIOD)
+    format!("{:.3}s ({})", d.as_secs_f64(), humantime::format_duration(secs))
+}
+
 /// Render the last WireGuard tunnel stats sample, if the pump has started and
 /// recorded one. `rtt`/handshake age are labeled "as of last handshake", not
 /// "current" - WireGuard only updates them on a handshake, which recurs every
@@ -583,12 +579,14 @@ fn print_wg_tunnel_stats(stats: &command::ConnStats) -> String {
     let rtt = current.rtt_ms.map(|ms| format!("{ms}ms")).unwrap_or("--".to_string());
     let handshake_age = current
         .time_since_last_handshake
-        .map(|d| format!("{:.0}s ago", d.as_secs_f64()))
+        .map(format_handshake_age)
         .unwrap_or("--".to_string());
     format!(
-        "---\nTunnel RTT (as of last handshake): {rtt}\nLast handshake: {handshake_age}\nTx bytes: {}\nRx bytes: {}\nEstimated loss: {:.1}%\n",
+        "---\nTunnel RTT (as of last handshake): {rtt}\nLast handshake: {handshake_age} ago\nTx bytes: {} ({})\nRx bytes: {} ({})\nEstimated loss: {:.1}%\n",
         current.tx_bytes,
+        ByteSize(current.tx_bytes),
         current.rx_bytes,
+        ByteSize(current.rx_bytes),
         current.estimated_loss * 100.0,
     )
 }

@@ -150,9 +150,11 @@ pub struct BalanceRecommendation {
     /// Total wxHOPR to fund: channel stakes plus the fee to start.
     #[serde(with = "serde_utils::balance")]
     pub wxhopr: Balance<WxHOPR>,
-    /// Total xDai to fund the node with for gas, carried from edgli's
-    /// `suggested_xdai_fund_amount` (0.005 xDai) — a funding target, distinct
-    /// from the per-transaction ceiling in [`Self::xdai_fee_per_tx`].
+    /// Recommended xDai balance for gas: the total amount to fund the node with.
+    ///
+    /// Not [`Self::xdai_fee_per_tx`], which is a ceiling on a single transaction rather than
+    /// expected spend -- funding one transaction's worth would leave the node unable to finish
+    /// starting up.
     #[serde(with = "serde_utils::balance")]
     pub xdai: Balance<XDai>,
     /// wxHOPR needed to stake the missing channels.
@@ -409,11 +411,15 @@ mod tests {
             fee_to_start: Balance::<WxHOPR>::from(10_000u64),
             txs_to_start: 3,
             xdai_fee_per_tx: Balance::<XDai>::from(100u64),
-            xdai_fund_amount: Balance::<XDai>::from(42u64),
+            xdai_fund_amount: Balance::<XDai>::from(5_000u64),
         };
         let mirrored: BalanceRecommendation = rec.into();
         assert_eq!(mirrored.wxhopr, Balance::<WxHOPR>::from(10_800u64));
-        assert_eq!(mirrored.xdai, Balance::<XDai>::from(42u64));
+        assert_eq!(
+            mirrored.xdai,
+            Balance::<XDai>::from(5_000u64),
+            "xdai must mirror the fund amount, not one transaction's fee ceiling"
+        );
         assert_eq!(mirrored.channel_stakes, Balance::<WxHOPR>::from(800u64));
         assert_eq!(mirrored.fee_to_start, Balance::<WxHOPR>::from(10_000u64));
         assert_eq!(mirrored.txs_to_start, 3);
