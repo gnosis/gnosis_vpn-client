@@ -25,7 +25,7 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.5", features = ["derive", "env"] }
 clap_complete = "~4.6.8"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "9e24e8b9177e85f1e752010c43ab792d8ed93c3f", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "7d4de8ecfdc22bab2f7bb9674beccbafa053f56b", features = [
   "blokli",
   "telemetry",
 ] }
@@ -36,8 +36,8 @@ futures-util = "~0.3.33"
 # Cargo treats `?branch=X#sha` and `?rev=sha` as distinct sources even for byte-identical
 # commits -- mixing the two builds hoprnet twice and fails with `expected
 # hopr_lib::HoprSessionClientConfig, found HoprSessionClientConfig`. Keep both entries in the
-# same form. Testing pin: repoint to `branch = "release/4.0"` once the upstream stack lands.
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "kauki/test/transport/return-routing-origination-stall", features = [
+# same form.
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "release/4.0", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
