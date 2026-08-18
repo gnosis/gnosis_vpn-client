@@ -25,10 +25,9 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.5", features = ["derive", "env"] }
 clap_complete = "~4.6.8"
-# Testing pin: branch mj/public-compute-capacity head — carries the NodeEoa capacity entry
-# (edge-client#141), xdai_fund_amount (#142), and the graph-presence migration (#145) via its
-# merge of edge-client main. Repoint to edge-client main once the branch lands.
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "64619e05cfcfca85e96c5a63a8c1dc02ef31ea77", features = [
+# edge-client main head: the NodeEoa capacity entry + CapacityAllocations struct landed
+# there via #147, alongside xdai_fund_amount (#142) and the graph-presence migration (#145).
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "a8c7edb71b3f6b0bee97587ad38e0a6e755f01a8", features = [
   "blokli",
   "telemetry",
 ] }
