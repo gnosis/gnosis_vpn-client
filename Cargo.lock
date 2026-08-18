@@ -3602,6 +3602,7 @@ dependencies = [
 name = "gnosis_vpn-ctl"
 version = "0.94.2"
 dependencies = [
+ "bytesize",
  "clap",
  "clap_complete",
  "exitcode",
