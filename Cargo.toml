@@ -15,7 +15,7 @@ name = "gnosis_vpn"
 anyhow = { version = "~1.0.104" }
 async-trait = "~0.1.91"
 backon = { version = "~1.6.0" }
-base64 = "~0.23.0"
+base64 = "~0.22.1"
 bytesize = "~2.7.0"
 cfg-if = "~1.0.4"
 chrono = { version = "~0.4.45", default-features = false, features = [
@@ -25,9 +25,7 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.5", features = ["derive", "env"] }
 clap_complete = "~4.6.8"
-# edge-client main head: the NodeEoa capacity entry + CapacityAllocations struct landed
-# there via #147, alongside xdai_fund_amount (#142) and the graph-presence migration (#145).
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "a8c7edb71b3f6b0bee97587ad38e0a6e755f01a8", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "f472e2677b2aee85817ba868ba31b91da84f1b44", features = [
   "blokli",
   "telemetry",
 ] }
@@ -38,7 +36,7 @@ futures-util = "~0.3.33"
 # Cargo treats `?branch=X#sha` and `?rev=sha` as distinct sources even for byte-identical
 # commits -- mixing the two builds hoprnet twice and fails with `expected
 # hopr_lib::HoprSessionClientConfig, found HoprSessionClientConfig`. Keep both entries in the
-# same form. `edgli` now tracks `release/4.0` (the upstream stack landed), so match it.
+# same form.
 hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "release/4.0", features = [
   "runtime-tokio",
 ] }
@@ -48,6 +46,7 @@ humantime-serde = "~1.1.1"
 ipnetwork = "~0.21.1"
 libc = "~0.2.189"
 mnl = "~0.3.1"
+multiaddr = "~0.18.2"
 neptun = { git = "https://github.com/NordSecurity/neptun.git", tag = "v3.0.1" }
 nftnl = "~0.9.3"
 notify = "~8.2.0"
@@ -69,7 +68,7 @@ tokio-util = { version = "~0.7.19", features = ["rt"] }
 toml = "~1.1.4"
 tracing = { version = "~0.1.44", features = ["release_max_level_debug"] }
 tracing-subscriber = "~0.3.23"
-unix-ancillary = "~0.3.0"
+unix-ancillary = "~0.2.2"
 url = { version = "~2.5.8", features = ["serde"] }
 uzers = "~0.12.2"
 x25519-dalek = { version = "~2.0.1", features = [
