@@ -1,5 +1,5 @@
 use bytesize::ByteSize;
-use edgli::multiaddr::Protocol;
+use edgli::multiaddr;
 use edgli::{BlockchainConnectorConfig, BlokliEndpoint, EdgeNodeApi, EdgliInitState};
 use edgli::{
     Edgli,
@@ -446,14 +446,14 @@ impl Hopr {
 /// Walks each multiaddr from right to left (via `pop`), collecting
 /// `Protocol::Ip4` components. The result is deduplicated and sorted
 /// via `BTreeSet`, then returned as a `Vec`.
-fn extract_ipv4_addrs(multiaddrs: &[edgli::multiaddr::Multiaddr]) -> Vec<Ipv4Addr> {
+fn extract_ipv4_addrs(multiaddrs: &[multiaddr::Multiaddr]) -> Vec<Ipv4Addr> {
     multiaddrs
         .iter()
         .flat_map(|addr| {
             let mut addr = addr.clone();
             let mut found = vec![];
             while let Some(protocol) = addr.pop() {
-                if let Protocol::Ip4(ipv4) = protocol {
+                if let multiaddr::Protocol::Ip4(ipv4) = protocol {
                     found.push(ipv4);
                 }
             }
@@ -469,8 +469,8 @@ mod tests {
     use super::*;
     use std::str::FromStr;
 
-    fn multiaddr(s: &str) -> edgli::multiaddr::Multiaddr {
-        edgli::multiaddr::Multiaddr::from_str(s).expect("valid multiaddr")
+    fn multiaddr(s: &str) -> multiaddr::Multiaddr {
+        multiaddr::Multiaddr::from_str(s).expect("valid multiaddr")
     }
 
     #[test]
