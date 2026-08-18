@@ -171,5 +171,3 @@ path    = { hops = 1 }
 # how capacity converts to a wxHOPR stake: "deterministic" or { probabilistic = { success_probability = 0.999 } };
 # default: { probabilistic = { success_probability = 0.99 } }
 # sizing_mode = { probabilistic = { success_probability = 0.99 } }
-#
-# hop count is fixed at the protocol maximum (3), not configurable
