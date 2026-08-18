@@ -521,7 +521,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                             | "topup_capacity"
                             | "lower_capacity_threshold"
                             | "min_safe_capacity_required"
-                            | "sizing_mode"
                     ) {
                         continue;
                     }
@@ -532,6 +531,25 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                     continue;
                                 }
                                 wrong.push(format!("strategy.channel_allowlist.{k2}"));
+                            }
+                        }
+                        continue;
+                    }
+                    if k == "sizing_mode" {
+                        if let Some(mode) = v.as_table() {
+                            for (k2, v2) in mode.iter() {
+                                if k2 != "probabilistic" {
+                                    wrong.push(format!("strategy.sizing_mode.{k2}"));
+                                    continue;
+                                }
+                                if let Some(probabilistic) = v2.as_table() {
+                                    for (k3, _) in probabilistic.iter() {
+                                        if k3 == "success_probability" {
+                                            continue;
+                                        }
+                                        wrong.push(format!("strategy.sizing_mode.probabilistic.{k3}"));
+                                    }
+                                }
                             }
                         }
                         continue;
@@ -1148,6 +1166,23 @@ sizing_mode = "deterministic"
             .expect("valid TOML");
 
         assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn strategy_sizing_mode_probabilistic_typo_is_reported() {
+        let table = r#####"
+version = 6
+
+[strategy.sizing_mode.probabilistic]
+success_probabilty = 0.95
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["strategy.sizing_mode.probabilistic.success_probabilty".to_string()]
+        );
     }
 
     #[test]
