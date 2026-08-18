@@ -166,9 +166,10 @@ path    = { hops = 1 }
 # topup_capacity = "1 GiB"
 # channel balance (as data capacity) below which a top-up fires; default: 256 MiB
 # lower_capacity_threshold = "256 MiB"
-# minimum safe balance before opening/funding any channel; default: derived from channel_capacity
-# min_safe_capacity_required = "1 GiB"
-# how capacity converts to a wxHOPR stake: "deterministic" or { probabilistic = { success_probability = 0.999 } }
-# sizing_mode = "deterministic"
+# minimum safe balance before opening/funding any channel; default: max(2 x channel_capacity, 1 GiB) = 2 GiB
+# min_safe_capacity_required = "2 GiB"
+# how capacity converts to a wxHOPR stake: "deterministic" or { probabilistic = { success_probability = 0.999 } };
+# default: { probabilistic = { success_probability = 0.99 } }
+# sizing_mode = { probabilistic = { success_probability = 0.99 } }
 #
 # hop count is fixed at the protocol maximum (3), not configurable
