@@ -159,3 +159,21 @@ path    = { hops = 1 }
 # [strategy.channel_allowlist]
 # enabled = false
 # peers = ["0x...", "0x..."]
+
+# data volume a single channel should carry before it needs a top-up; default: 1 GiB
+# channel_capacity = "1 GiB"
+# data volume added to a channel's stake on top-up; default: 1 GiB
+# topup_capacity = "1 GiB"
+# channel balance (as data capacity) below which a top-up fires; default: 256 MiB
+# lower_capacity_threshold = "256 MiB"
+# minimum safe balance (as data capacity) required before opening/funding any channel;
+# default: derived from channel_capacity. Setting this explicitly opts out of that
+# derivation and is used as-is.
+# min_safe_capacity_required = "1 GiB"
+# how each capacity above converts to a wxHOPR stake: "deterministic" (mean drain) or
+# { probabilistic = { success_probability = 0.999 } } (adds a statistical buffer against
+# premature top-ups); default: probabilistic with success_probability = 0.99
+# sizing_mode = "deterministic"
+#
+# hop count every stake is sized for is fixed at the protocol maximum (3) and is not
+# configurable

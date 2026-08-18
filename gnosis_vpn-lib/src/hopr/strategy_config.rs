@@ -20,12 +20,25 @@ pub struct StrategyConfig {
     /// When `Some`, channels are opened exclusively to these peers; `None` uses quality-score selection.
     pub channel_allowlist: Option<HashSet<Address>>,
 
-    /// Data volume a single channel should carry before it needs a top-up.
-    ///
-    /// The only sizing input we supply; edgli derives the sizing mode and stakes from it
-    /// and passes it to the strategy as given. `None` leaves edgli's default in place.
-    /// Raising it also raises the safe balance required before any channel opens.
+    /// Data volume a single channel should carry before it needs a top-up. `None` leaves
+    /// edgli's default in place. Raising it also raises the safe balance required before
+    /// any channel opens, unless `min_safe_capacity_required` is set explicitly below.
     pub channel_capacity: Option<ByteSize>,
+
+    /// Data volume added to a channel's stake on top-up. `None` leaves edgli's default in place.
+    pub topup_capacity: Option<ByteSize>,
+
+    /// Channel balance (as data capacity) below which a top-up fires. `None` leaves edgli's
+    /// default in place.
+    pub lower_capacity_threshold: Option<ByteSize>,
+
+    /// Minimum safe balance (as data capacity) required before opening/funding any channel.
+    /// `None` derives it from `channel_capacity`; setting this explicitly opts out of that
+    /// derivation and is used as-is.
+    pub min_safe_capacity_required: Option<ByteSize>,
+
+    /// How each capacity field above converts to a wxHOPR stake. `None` leaves edgli's default in place.
+    pub sizing_mode: Option<edgli::strategy::CapacitySizingMode>,
 }
 
 impl Default for StrategyConfig {
@@ -36,6 +49,10 @@ impl Default for StrategyConfig {
             target_open_channels: def.target_open_channels,
             channel_allowlist: def.channel_allowlist,
             channel_capacity: def.channel_capacity,
+            topup_capacity: def.topup_capacity,
+            lower_capacity_threshold: def.lower_capacity_threshold,
+            min_safe_capacity_required: def.min_safe_capacity_required,
+            sizing_mode: def.sizing_mode,
         }
     }
 }
@@ -47,6 +64,10 @@ impl From<StrategyConfig> for edgli::strategy::IncentiveConfiguration {
             target_open_channels: c.target_open_channels,
             channel_allowlist: c.channel_allowlist,
             channel_capacity: c.channel_capacity,
+            topup_capacity: c.topup_capacity,
+            lower_capacity_threshold: c.lower_capacity_threshold,
+            min_safe_capacity_required: c.min_safe_capacity_required,
+            sizing_mode: c.sizing_mode,
         }
     }
 }
