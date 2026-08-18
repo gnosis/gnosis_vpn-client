@@ -14,7 +14,6 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use url::Url;
 
-use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -48,7 +47,7 @@ pub(crate) enum Results {
         res: Result<balance::BalanceRecommendation, Error>,
     },
     CapacityAllocations {
-        res: Result<HashMap<balance::CapacityAllocator, balance::Capacity>, Error>,
+        res: Result<balance::CapacityAllocations, Error>,
     },
     Balances {
         res: Result<balance::Balances, Error>,
@@ -565,11 +564,9 @@ impl Display for Results {
             Results::CapacityAllocations { res } => match res {
                 Ok(caps) => write!(
                     f,
-                    "CapacityAllocations: {} entries, node capacity: {}",
-                    caps.len(),
-                    caps.get(&balance::CapacityAllocator::NodeEoa)
-                        .map(|c| c.stake.to_string())
-                        .unwrap_or_else(|| "none".into())
+                    "CapacityAllocations: {} channels, node capacity: {}",
+                    caps.peer_allocations.len(),
+                    caps.node.stake
                 ),
                 Err(err) => write!(f, "CapacityAllocations: Error({})", err),
             },

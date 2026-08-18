@@ -16,6 +16,34 @@ pub mod address {
     }
 }
 
+/// `HashMap<Address, V>` as a JSON object keyed by checksum address strings.
+pub mod address_map {
+    use super::*;
+    use serde::Serialize;
+    use serde::ser::SerializeMap;
+    use std::collections::HashMap;
+
+    pub fn serialize<V: Serialize, S: Serializer>(
+        map: &HashMap<Address, V>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut m = s.serialize_map(Some(map.len()))?;
+        for (addr, v) in map {
+            m.serialize_entry(&addr.to_checksum(), v)?;
+        }
+        m.end()
+    }
+
+    pub fn deserialize<'de, V: Deserialize<'de>, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<HashMap<Address, V>, D::Error> {
+        let raw = HashMap::<String, V>::deserialize(d)?;
+        raw.into_iter()
+            .map(|(k, v)| Ok((k.parse::<Address>().map_err(serde::de::Error::custom)?, v)))
+            .collect()
+    }
+}
+
 pub mod balance {
     use super::*;
 

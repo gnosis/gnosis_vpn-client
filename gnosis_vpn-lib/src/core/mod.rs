@@ -90,7 +90,7 @@ pub struct Core {
     hopr: Option<Arc<Hopr>>,
     minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
     ideal_balance_recommendation: Option<balance::BalanceRecommendation>,
-    capacity_allocations: Option<HashMap<balance::CapacityAllocator, balance::Capacity>>,
+    capacity_allocations: Option<balance::CapacityAllocations>,
     balances: Option<balance::Balances>,
     strategy_handle: Option<AbortHandle>,
     route_healths: HashMap<String, RouteHealth>,
@@ -686,8 +686,8 @@ impl Core {
             },
             Results::CapacityAllocations { res } => match res {
                 Ok(caps) => {
-                    tracing::info!(count = caps.len(), "received capacity allocations");
-                    let has_channels = caps.keys().any(|k| matches!(k, balance::CapacityAllocator::Peer(_)));
+                    tracing::info!(channels = caps.peer_allocations.len(), "received capacity allocations");
+                    let has_channels = !caps.peer_allocations.is_empty();
                     self.capacity_allocations = Some(caps);
                     if has_channels && let Some(hopr) = self.hopr.clone() {
                         let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
@@ -785,7 +785,7 @@ impl Core {
                         let channels_already_available = self
                             .capacity_allocations
                             .as_ref()
-                            .is_some_and(|map| map.keys().any(|k| matches!(k, balance::CapacityAllocator::Peer(_))));
+                            .is_some_and(|caps| !caps.peer_allocations.is_empty());
                         for (idx, id) in dest_ids.into_iter().enumerate() {
                             if let Some(dest) = self.config.destinations.get(&id).cloned()
                                 && let Some(rh) = self.route_healths.get_mut(&id)

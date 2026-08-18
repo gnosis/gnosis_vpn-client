@@ -3,7 +3,7 @@
 //! so any type that can't be named here isn't properly exported.
 //! Compilation failure == missing export.
 
-use gnosis_vpn_lib::balance::{BalanceRecommendation, Capacity, CapacityAllocator, CapacityEntry, FundingIssue};
+use gnosis_vpn_lib::balance::{BalanceRecommendation, Capacity, CapacityAllocations, FundingIssue};
 use gnosis_vpn_lib::command::{
     ActiveSession, BalanceResponse, ChannelBalance, ChannelOut, Command, ConnStats, ConnectResponse, ConnectedInfo,
     ConnectingInfo, DestinationState, DisconnectResponse, DisconnectingInfo, FundingToolResponse, HoprInitStatus,
@@ -65,8 +65,7 @@ fn assert_types_are_accessible() {
     let _: LoadAvg;
     let _: BalanceRecommendation;
     let _: FundingIssue;
-    let _: CapacityEntry;
-    let _: CapacityAllocator;
+    let _: CapacityAllocations;
     let _: Capacity;
 }
 

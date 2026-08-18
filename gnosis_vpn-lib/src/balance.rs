@@ -87,27 +87,6 @@ impl Display for FundingIssue {
     }
 }
 
-/// Which entity holds a wxHOPR stake: an open outgoing channel to a peer, the
-/// unallocated balance in the Safe contract, or the node EOA (deposited funds
-/// not yet swept into the Safe).
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(tag = "type", content = "address", rename_all = "snake_case")]
-pub enum CapacityAllocator {
-    Safe,
-    Peer(#[serde(with = "serde_utils::address")] Address),
-    NodeEoa,
-}
-
-impl Display for CapacityAllocator {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CapacityAllocator::Peer(addr) => write!(f, "channel({})", addr.to_checksum()),
-            CapacityAllocator::Safe => write!(f, "safe"),
-            CapacityAllocator::NodeEoa => write!(f, "node-eoa"),
-        }
-    }
-}
-
 /// Data-throughput capacity for a wxHOPR stake at the current ticket price.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Capacity {
@@ -118,12 +97,29 @@ pub struct Capacity {
     pub byte_capacity: u64,
 }
 
-/// A single capacity entry pairing an allocator with its capacity.
-/// Used in status responses instead of a HashMap so JSON keys remain strings.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CapacityEntry {
-    pub allocator: CapacityAllocator,
-    pub capacity: Capacity,
+impl Default for Capacity {
+    fn default() -> Self {
+        Capacity {
+            stake: Balance::<WxHOPR>::zero(),
+            expected_messages: 0,
+            min_guaranteed_messages: 0,
+            byte_capacity: 0,
+        }
+    }
+}
+
+/// Serde mirror of [`edgli::strategy::CapacityAllocations`]: every entity holding
+/// a wxHOPR stake — open outgoing channels, the unallocated Safe balance, and the
+/// node EOA (deposited funds not yet swept into the Safe).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CapacityAllocations {
+    /// Open outgoing payment channels, keyed by destination peer.
+    #[serde(with = "serde_utils::address_map")]
+    pub peer_allocations: HashMap<Address, Capacity>,
+    /// wxHOPR on the node EOA, not yet swept into the Safe.
+    pub node: Capacity,
+    /// The unallocated wxHOPR balance held in the user's Safe contract.
+    pub safe: Capacity,
 }
 
 impl From<edgli::strategy::Capacity> for Capacity {
@@ -133,6 +129,16 @@ impl From<edgli::strategy::Capacity> for Capacity {
             expected_messages: c.expected_messages,
             min_guaranteed_messages: c.min_guaranteed_messages,
             byte_capacity: c.byte_capacity,
+        }
+    }
+}
+
+impl From<edgli::strategy::CapacityAllocations> for CapacityAllocations {
+    fn from(a: edgli::strategy::CapacityAllocations) -> Self {
+        CapacityAllocations {
+            peer_allocations: a.peer_allocations.into_iter().map(|(addr, c)| (addr, c.into())).collect(),
+            node: a.node.into(),
+            safe: a.safe.into(),
         }
     }
 }
@@ -227,7 +233,7 @@ impl Display for Balances {
 
 pub fn to_funding_issues(
     ideal: BalanceRecommendation,
-    capacity_allocations: &HashMap<CapacityAllocator, Capacity>,
+    capacity_allocations: &CapacityAllocations,
     node_xdai: Balance<XDai>,
 ) -> Vec<FundingIssue> {
     let mut issues = Vec::new();
@@ -237,29 +243,31 @@ pub fn to_funding_issues(
     // checks below stay allocation-specific — EOA funds cannot pay for traffic
     // until swept — but the EOA stake must count here so a freshly deposited
     // node is not reported as unfunded.
-    let total_stake = capacity_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>();
+    let peer_stake = capacity_allocations
+        .peer_allocations
+        .values()
+        .map(|c| c.stake)
+        .sum::<Balance<WxHOPR>>();
+    let total_stake = capacity_allocations.node.stake + capacity_allocations.safe.stake + peer_stake;
     if node_xdai.is_zero() && total_stake.is_zero() {
         issues.push(FundingIssue::Unfunded);
         return issues;
     }
 
     let channel_messages: u64 = capacity_allocations
-        .iter()
-        .filter_map(|(k, v)| matches!(k, CapacityAllocator::Peer(_)).then_some(v.min_guaranteed_messages))
+        .peer_allocations
+        .values()
+        .map(|c| c.min_guaranteed_messages)
         .sum();
     if channel_messages < 1 {
         issues.push(FundingIssue::ChannelsOutOfFunds);
     }
 
-    let safe = capacity_allocations.get(&CapacityAllocator::Safe);
-    let safe_messages = safe.map(|c| c.min_guaranteed_messages).unwrap_or(0);
-    if safe_messages < 1 {
+    let safe = capacity_allocations.safe;
+    if safe.min_guaranteed_messages < 1 {
         issues.push(FundingIssue::SafeOutOfFunds);
-    } else {
-        let safe_stake = safe.map(|c| c.stake).unwrap_or_default();
-        if safe_stake * 2 < ideal.wxhopr {
-            issues.push(FundingIssue::SafeLowOnFunds);
-        }
+    } else if safe.stake * 2 < ideal.wxhopr {
+        issues.push(FundingIssue::SafeLowOnFunds);
     }
 
     // 100 Gwei — heuristic threshold below which the node is unlikely to cover the gas cost of a typical transaction
@@ -306,9 +314,22 @@ mod tests {
         }
     }
 
+    /// Allocations with at most one open channel (to a fixed peer address).
+    fn allocs(peer: Option<Capacity>, node: Capacity, safe: Capacity) -> CapacityAllocations {
+        CapacityAllocations {
+            peer_allocations: peer.map(|c| (Address::from([1u8; 20]), c)).into_iter().collect(),
+            node,
+            safe,
+        }
+    }
+
     #[test]
     fn unfunded_when_xdai_and_stake_are_zero() {
-        let issues = to_funding_issues(ideal(100, 100), &HashMap::new(), Balance::<XDai>::zero());
+        let issues = to_funding_issues(
+            ideal(100, 100),
+            &CapacityAllocations::default(),
+            Balance::<XDai>::zero(),
+        );
         assert_eq!(issues, vec![FundingIssue::Unfunded]);
     }
 
@@ -316,9 +337,8 @@ mod tests {
     fn eoa_stake_prevents_unfunded() {
         // wxHOPR deposited on the node EOA but not yet swept into the Safe:
         // the node is funded, just not ready — never "Unfunded".
-        let mut allocs = HashMap::new();
-        allocs.insert(CapacityAllocator::NodeEoa, peer_capacity(100, 0));
-        let issues = to_funding_issues(ideal(100, 100), &allocs, Balance::<XDai>::zero());
+        let allocations = allocs(None, peer_capacity(100, 0), Capacity::default());
+        let issues = to_funding_issues(ideal(100, 100), &allocations, Balance::<XDai>::zero());
         assert!(!issues.contains(&FundingIssue::Unfunded));
         assert!(issues.contains(&FundingIssue::ChannelsOutOfFunds));
         assert!(issues.contains(&FundingIssue::SafeOutOfFunds));
@@ -327,11 +347,10 @@ mod tests {
 
     #[test]
     fn channels_out_of_funds_when_no_peer_messages() {
-        let mut allocs = HashMap::new();
-        allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 5));
+        let allocations = allocs(None, Capacity::default(), safe_capacity(100, 5));
         let issues = to_funding_issues(
             ideal(100, 100),
-            &allocs,
+            &allocations,
             Balance::<XDai>::from(1_000_000_000_000_000_u64),
         );
         assert!(issues.contains(&FundingIssue::ChannelsOutOfFunds));
@@ -339,15 +358,10 @@ mod tests {
 
     #[test]
     fn safe_out_of_funds_when_safe_has_no_messages() {
-        let mut allocs = HashMap::new();
-        allocs.insert(
-            CapacityAllocator::Peer(Address::from([1u8; 20])),
-            peer_capacity(100, 10),
-        );
-        allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 0));
+        let allocations = allocs(Some(peer_capacity(100, 10)), Capacity::default(), safe_capacity(100, 0));
         let issues = to_funding_issues(
             ideal(100, 100),
-            &allocs,
+            &allocations,
             Balance::<XDai>::from(1_000_000_000_000_000_u64),
         );
         assert!(issues.contains(&FundingIssue::SafeOutOfFunds));
@@ -355,16 +369,11 @@ mod tests {
 
     #[test]
     fn safe_low_on_funds_when_stake_below_half_ideal() {
-        let mut allocs = HashMap::new();
-        allocs.insert(
-            CapacityAllocator::Peer(Address::from([1u8; 20])),
-            peer_capacity(100, 10),
-        );
         // safe stake 30, ideal wxhopr 100 → 30*2=60 < 100 → SafeLowOnFunds
-        allocs.insert(CapacityAllocator::Safe, safe_capacity(30, 5));
+        let allocations = allocs(Some(peer_capacity(100, 10)), Capacity::default(), safe_capacity(30, 5));
         let issues = to_funding_issues(
             ideal(100, 100),
-            &allocs,
+            &allocations,
             Balance::<XDai>::from(1_000_000_000_000_000_u64),
         );
         assert!(issues.contains(&FundingIssue::SafeLowOnFunds));
@@ -372,15 +381,10 @@ mod tests {
 
     #[test]
     fn node_underfunded_when_xdai_below_100_gwei() {
-        let mut allocs = HashMap::new();
-        allocs.insert(
-            CapacityAllocator::Peer(Address::from([1u8; 20])),
-            peer_capacity(100, 10),
-        );
-        allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 5));
+        let allocations = allocs(Some(peer_capacity(100, 10)), Capacity::default(), safe_capacity(100, 5));
         let issues = to_funding_issues(
             ideal(100, 1_000_000_000_000_u64), // ideal xdai = 1000 Gwei
-            &allocs,
+            &allocations,
             Balance::<XDai>::from(50_000_000_000_u64), // 50 Gwei < 100 Gwei threshold
         );
         assert!(issues.contains(&FundingIssue::NodeUnderfunded));
@@ -389,15 +393,10 @@ mod tests {
 
     #[test]
     fn node_low_on_funds_when_xdai_below_ideal() {
-        let mut allocs = HashMap::new();
-        allocs.insert(
-            CapacityAllocator::Peer(Address::from([1u8; 20])),
-            peer_capacity(100, 10),
-        );
-        allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 5));
+        let allocations = allocs(Some(peer_capacity(100, 10)), Capacity::default(), safe_capacity(100, 5));
         let issues = to_funding_issues(
             ideal(100, 1_000_000_000_000_u64), // ideal xdai = 1000 Gwei
-            &allocs,
+            &allocations,
             Balance::<XDai>::from(500_000_000_000_u64), // 500 Gwei: above threshold, below ideal
         );
         assert!(issues.contains(&FundingIssue::NodeLowOnFunds));
@@ -428,15 +427,10 @@ mod tests {
 
     #[test]
     fn no_issues_when_well_funded() {
-        let mut allocs = HashMap::new();
-        allocs.insert(
-            CapacityAllocator::Peer(Address::from([1u8; 20])),
-            peer_capacity(100, 10),
-        );
-        allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 5));
+        let allocations = allocs(Some(peer_capacity(100, 10)), Capacity::default(), safe_capacity(100, 5));
         let issues = to_funding_issues(
             ideal(100, 100),
-            &allocs,
+            &allocations,
             Balance::<XDai>::from(2_000_000_000_000_000_u64),
         );
         assert!(issues.is_empty());
