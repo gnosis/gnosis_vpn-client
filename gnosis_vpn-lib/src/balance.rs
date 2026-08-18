@@ -47,7 +47,7 @@ pub enum FundingLevel {
 pub struct FundingStatus {
     pub traffic: FundingLevel,
     pub gas: FundingLevel,
-    /// wxHOPR still needed to reach the ideal recommendation; `None` while `traffic` is `Good`.
+    /// wxHOPR still needed to reach the ideal recommendation; can be `None` even while `traffic` isn't `Good`.
     #[serde(with = "serde_utils::opt_balance")]
     pub wxhopr_deficit: Option<Balance<WxHOPR>>,
     /// xDAI still needed to reach the ideal recommendation; `None` while `gas` is `Good`.
@@ -284,12 +284,13 @@ pub fn to_funding_status(
         FundingLevel::Good
     };
 
-    // saturating_sub floors an already-exceeded ideal at zero instead of underflowing.
+    // `-` on Balance saturates at zero; wxhopr_deficit is relative to `ideal` only, which ignores drained stake on already-open channels.
     let wxhopr_deficit = (traffic != FundingLevel::Good)
         .then(|| ideal.wxhopr - total_stake)
         .filter(|d| !d.is_zero());
+    // Floored at xdai_low_below so this can't go None while gas isn't Good, even if `ideal` dips below it.
     let xdai_deficit = (gas != FundingLevel::Good)
-        .then(|| ideal.xdai - node_xdai)
+        .then(|| ideal.xdai.max(xdai_low_below) - node_xdai)
         .filter(|d| !d.is_zero());
 
     FundingStatus {
@@ -454,6 +455,18 @@ mod tests {
         assert_eq!(
             status.xdai_deficit,
             Some(Balance::<XDai>::from(999_000_000_000_000_000_u64))
+        );
+    }
+
+    #[test]
+    fn xdai_deficit_reported_even_when_ideal_is_below_low_threshold() {
+        let node_xdai = Balance::<XDai>::from(2_000_000_000_000_000_u64); // 0.002 xDAI, in the Low band
+        let status = to_funding_status(ideal(0, 0), &CapacityAllocations::default(), node_xdai);
+        assert_eq!(status.gas, FundingLevel::Low);
+        assert_eq!(
+            status.xdai_deficit,
+            Some(Balance::<XDai>::from(3_500_000_000_000_000_u64) - node_xdai),
+            "deficit must be floored at the Low threshold, not the (lower) ideal recommendation"
         );
     }
 
