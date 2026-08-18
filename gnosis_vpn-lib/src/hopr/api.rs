@@ -418,16 +418,18 @@ impl Hopr {
         Ok(rec.into())
     }
 
+    /// Capacity allocations: open outgoing channels, the unallocated Safe
+    /// balance, and wxHOPR sitting on the node EOA (deposited but not yet
+    /// swept into the Safe) — edgli's struct mirrored into
+    /// [`balance::CapacityAllocations`] for serialization.
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
-    pub async fn capacity_allocations(
-        &self,
-    ) -> Result<HashMap<balance::CapacityAllocator, balance::Capacity>, HoprError> {
+    pub async fn capacity_allocations(&self) -> Result<balance::CapacityAllocations, HoprError> {
         let raw = self
             .edgli
             .describe_current_capacity_allocations()
             .await
             .map_err(|e| HoprError::Strategy(e.to_string()))?;
-        Ok(raw.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
+        Ok(raw.into())
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]

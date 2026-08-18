@@ -276,17 +276,27 @@ fn pretty_print(resp: &Response) {
                 .map(|s| format!(" ({s})"))
                 .unwrap_or_default();
             str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\n"));
+            let allocations = capacity_allocations.as_ref();
+            if let Some(nc) = allocations.map(|a| a.node).filter(|c| !c.stake.is_zero()) {
+                let sci = balance::wxhopr_scientific(nc.stake)
+                    .map(|s| format!(" ({s})"))
+                    .unwrap_or_default();
+                str_resp.push_str(&format!(
+                    "Node wxHOPR (not yet in Safe): {}{sci}{}\n",
+                    nc.stake,
+                    format_capacity(Some(&nc))
+                ));
+            }
             if channels_out.is_empty() {
                 str_resp.push_str("---\nNo outgoing channels.\n");
             } else {
-                let allocations = capacity_allocations.as_deref().unwrap_or(&[]);
                 let sci = balance::wxhopr_scientific(*safe)
                     .map(|s| format!(" ({s})"))
                     .unwrap_or_default();
-                let safe_cap = find_capacity(allocations, &balance::CapacityAllocator::Safe);
+                let safe_cap = allocations.map(|a| &a.safe);
                 str_resp.push_str(&format!("Safe: {safe}{sci}{}\n", format_capacity(safe_cap)));
                 for ch in channels_out {
-                    let ch_cap = find_capacity(allocations, &balance::CapacityAllocator::Peer(ch.address));
+                    let ch_cap = allocations.and_then(|a| a.peer_allocations.get(&ch.address));
                     str_resp.push_str(&format!("{ch}{}\n", format_capacity(ch_cap)));
                 }
             }
@@ -373,16 +383,6 @@ fn format_probability(p: f64) -> String {
     let s = format!("{:.8}", p);
     let trimmed = s.trim_end_matches('0');
     trimmed.trim_end_matches('.').to_string()
-}
-
-fn find_capacity<'a>(
-    allocations: &'a [balance::CapacityEntry],
-    allocator: &balance::CapacityAllocator,
-) -> Option<&'a balance::Capacity> {
-    allocations
-        .iter()
-        .find(|e| &e.allocator == allocator)
-        .map(|e| &e.capacity)
 }
 
 fn format_capacity(capacity: Option<&balance::Capacity>) -> String {

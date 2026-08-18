@@ -878,10 +878,12 @@ mod tests {
             history: vec![sample],
         })
         .unwrap();
+        // `at` is u64 epoch-milliseconds, `time_since_last_handshake` is f64
+        // milliseconds (serde_utils::system_time / opt_duration_ms).
         let sample_json = concat!(
-            r#"{"at":{"secs_since_epoch":0,"nanos_since_epoch":0},"#,
+            r#"{"at":0,"#,
             r#""tx_bytes":100,"rx_bytes":200,"rtt_ms":42,"#,
-            r#""time_since_last_handshake":{"secs":5,"nanos":0},"estimated_loss":0.1}"#
+            r#""time_since_last_handshake":5000.0,"estimated_loss":0.1}"#
         );
         assert_eq!(
             populated,
@@ -898,9 +900,9 @@ mod tests {
         assert!(empty.history.is_empty());
 
         let sample_json = concat!(
-            r#"{"at":{"secs_since_epoch":0,"nanos_since_epoch":0},"#,
+            r#"{"at":0,"#,
             r#""tx_bytes":100,"rx_bytes":200,"rtt_ms":42,"#,
-            r#""time_since_last_handshake":{"secs":5,"nanos":0},"estimated_loss":0.1}"#
+            r#""time_since_last_handshake":5000.0,"estimated_loss":0.1}"#
         );
         let populated: WgTunnelStats =
             serde_json::from_str(&format!(r#"{{"current":{sample_json},"history":[{sample_json}]}}"#)).unwrap();
