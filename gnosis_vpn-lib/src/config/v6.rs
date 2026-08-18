@@ -1152,8 +1152,7 @@ sizing_mode = "deterministic"
 
     #[test]
     fn strategy_all_requested_capacity_fields_round_trip() {
-        // Regression covering the exact set of values operators requested: assumed_hops
-        // is deliberately absent -- it's a fixed protocol constant, not a config key.
+        // assumed_hops is absent on purpose -- it's a fixed protocol constant, not a config key.
         let cfg = parse(
             r#####"
 version = 6
