@@ -538,6 +538,9 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "sizing_mode" {
                         if let Some(mode) = v.as_table() {
                             for (k2, v2) in mode.iter() {
+                                if k2 == "deterministic" {
+                                    continue;
+                                }
                                 if k2 != "probabilistic" {
                                     wrong.push(format!("strategy.sizing_mode.{k2}"));
                                     continue;
@@ -1183,6 +1186,20 @@ success_probabilty = 0.95
             wrong_keys(&table),
             vec!["strategy.sizing_mode.probabilistic.success_probabilty".to_string()]
         );
+    }
+
+    #[test]
+    fn strategy_sizing_mode_table_form_deterministic_is_known() {
+        let table = r#####"
+version = 6
+
+[strategy.sizing_mode]
+deterministic = {}
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
     }
 
     #[test]
