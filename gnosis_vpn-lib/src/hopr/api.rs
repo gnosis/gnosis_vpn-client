@@ -1,4 +1,5 @@
 use bytesize::ByteSize;
+use edgli::multiaddr::Protocol;
 use edgli::{BlockchainConnectorConfig, BlokliEndpoint, EdgeNodeApi, EdgliInitState};
 use edgli::{
     Edgli,
@@ -21,7 +22,6 @@ use hopr_utils_session::{
     HopSessionFactory, ListenerId, ListenerJoinHandles, SessionFactory, SessionTargetSpec, create_tcp_client_binding,
     create_udp_client_binding,
 };
-use multiaddr::Protocol;
 use tracing::instrument;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -446,7 +446,7 @@ impl Hopr {
 /// Walks each multiaddr from right to left (via `pop`), collecting
 /// `Protocol::Ip4` components. The result is deduplicated and sorted
 /// via `BTreeSet`, then returned as a `Vec`.
-fn extract_ipv4_addrs(multiaddrs: &[multiaddr::Multiaddr]) -> Vec<Ipv4Addr> {
+fn extract_ipv4_addrs(multiaddrs: &[edgli::multiaddr::Multiaddr]) -> Vec<Ipv4Addr> {
     multiaddrs
         .iter()
         .flat_map(|addr| {
@@ -469,8 +469,8 @@ mod tests {
     use super::*;
     use std::str::FromStr;
 
-    fn multiaddr(s: &str) -> multiaddr::Multiaddr {
-        multiaddr::Multiaddr::from_str(s).expect("valid multiaddr")
+    fn multiaddr(s: &str) -> edgli::multiaddr::Multiaddr {
+        edgli::multiaddr::Multiaddr::from_str(s).expect("valid multiaddr")
     }
 
     #[test]

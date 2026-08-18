@@ -25,7 +25,7 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.5", features = ["derive", "env"] }
 clap_complete = "~4.6.8"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "7d4de8ecfdc22bab2f7bb9674beccbafa053f56b", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "8868995d146c706304c56c3c8f2aa96b2a07cfb9", features = [
   "blokli",
   "telemetry",
 ] }
@@ -46,7 +46,6 @@ humantime-serde = "~1.1.1"
 ipnetwork = "~0.21.1"
 libc = "~0.2.189"
 mnl = "~0.3.1"
-multiaddr = "~0.19.0"
 neptun = { git = "https://github.com/NordSecurity/neptun.git", tag = "v3.0.1" }
 nftnl = "~0.9.3"
 notify = "~8.2.0"
