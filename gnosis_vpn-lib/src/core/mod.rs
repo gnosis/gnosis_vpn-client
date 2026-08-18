@@ -340,9 +340,10 @@ impl Core {
                     WorkerCommand::NerdStats => {
                         tracing::debug!("incoming nerd stats request");
                         let Some(ops) = self.incentive_operations.clone() else {
-                            let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::NoInfo(
-                                command::TicketStatsStatus::Waiting,
-                            )));
+                            let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
+                                connection: command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Waiting),
+                                capacity_allocations: self.capacity_allocations.clone(),
+                            }));
                             return true;
                         };
                         let sender = results_sender.clone();
@@ -414,17 +415,17 @@ impl Core {
                             } => RunMode::warmup(edgli_init_state, None, last_error),
                             Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status()), None),
                             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
-                                let funding_issues = match (
+                                let funding_status = match (
                                     &self.ideal_balance_recommendation,
                                     &self.capacity_allocations,
                                     &self.balances,
                                 ) {
                                     (Some(ideal), Some(allocs), Some(bals)) => {
-                                        Some(balance::to_funding_issues(*ideal, allocs, bals.node_xdai))
+                                        Some(balance::to_funding_status(*ideal, allocs, bals.node_xdai))
                                     }
                                     _ => None,
                                 };
-                                RunMode::running(self.hopr.as_ref().map(|h| h.status()), funding_issues)
+                                RunMode::running(self.hopr.as_ref().map(|h| h.status()), funding_status)
                             }
                             Phase::ShuttingDown => RunMode::Shutdown,
                         };
@@ -552,10 +553,10 @@ impl Core {
                     WorkerCommand::Balance => {
                         let result = match (&self.hopr, &self.balances) {
                             (Some(hopr), Some(balances)) => {
-                                let funding_issues =
+                                let funding_status =
                                     match (&self.ideal_balance_recommendation, &self.capacity_allocations) {
                                         (Some(ideal), Some(allocs)) => {
-                                            Some(balance::to_funding_issues(*ideal, allocs, balances.node_xdai))
+                                            Some(balance::to_funding_status(*ideal, allocs, balances.node_xdai))
                                         }
                                         _ => None,
                                     };
@@ -565,7 +566,7 @@ impl Core {
                                     &self.config.destinations.clone(),
                                     self.capacity_allocations.as_ref(),
                                     self.ideal_balance_recommendation,
-                                    funding_issues,
+                                    funding_status,
                                 ))
                             }
                             _ => Err("balance data not yet available".to_string()),
@@ -1038,22 +1039,23 @@ impl Core {
             } => match &self.phase {
                 Phase::Connecting(conn) => {
                     let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
-                    let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connecting(
-                        ticket_stats_status,
-                        conn_stats,
-                    )));
+                    let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
+                        connection: command::NerdStatsConnection::Connecting(ticket_stats_status, conn_stats),
+                        capacity_allocations: self.capacity_allocations.clone(),
+                    }));
                 }
                 Phase::Connected(conn) => {
                     let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
-                    let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::Connected(
-                        ticket_stats_status,
-                        conn_stats,
-                    )));
+                    let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
+                        connection: command::NerdStatsConnection::Connected(ticket_stats_status, conn_stats),
+                        capacity_allocations: self.capacity_allocations.clone(),
+                    }));
                 }
                 _ => {
-                    let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse::NoInfo(
-                        ticket_stats_status,
-                    )));
+                    let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
+                        connection: command::NerdStatsConnection::NoInfo(ticket_stats_status),
+                        capacity_allocations: self.capacity_allocations.clone(),
+                    }));
                 }
             },
         };

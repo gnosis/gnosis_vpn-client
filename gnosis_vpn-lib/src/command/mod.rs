@@ -165,7 +165,7 @@ pub enum RunMode {
     /// Normal operation where connections can be made
     Running {
         hopr_status: Option<HoprStatus>,
-        funding_issues: Option<Vec<balance::FundingIssue>>,
+        funding_status: Option<balance::FundingStatus>,
     },
     /// Shutting down edge client,
     Shutdown,
@@ -274,7 +274,14 @@ pub enum TicketStatsStatus {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum NerdStatsResponse {
+pub struct NerdStatsResponse {
+    pub connection: NerdStatsConnection,
+    /// Raw allocation breakdown; `Status` only carries the derived `FundingStatus`.
+    pub capacity_allocations: Option<balance::CapacityAllocations>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum NerdStatsConnection {
     NoInfo(TicketStatsStatus),
     Connecting(TicketStatsStatus, ConnStats),
     Connected(TicketStatsStatus, ConnStats),
@@ -370,10 +377,10 @@ impl RunMode {
         }
     }
 
-    pub fn running(hopr_state: Option<HoprState>, funding_issues: Option<Vec<balance::FundingIssue>>) -> Self {
+    pub fn running(hopr_state: Option<HoprState>, funding_status: Option<balance::FundingStatus>) -> Self {
         RunMode::Running {
             hopr_status: hopr_state.map(|s| s.into()),
-            funding_issues,
+            funding_status,
         }
     }
 }
@@ -543,24 +550,15 @@ impl Display for RunMode {
             },
             RunMode::Running {
                 hopr_status,
-                funding_issues,
+                funding_status,
             } => {
                 match hopr_status {
                     Some(s) => write!(f, "Ready ({s})")?,
                     None => write!(f, "Ready")?,
                 }
-                match funding_issues.as_deref() {
+                match funding_status {
                     None => write!(f, " - waiting for funding calculations")?,
-                    Some([]) => write!(f, " - well funded")?,
-                    Some(issues) => {
-                        writeln!(f, "\n---")?;
-                        for (i, issue) in issues.iter().enumerate() {
-                            if i > 0 {
-                                writeln!(f)?;
-                            }
-                            write!(f, "Funding issue: {issue}")?;
-                        }
-                    }
+                    Some(status) => write!(f, " - traffic: {}, gas: {}", status.traffic, status.gas)?,
                 }
                 Ok(())
             }
@@ -749,10 +747,10 @@ mod tests {
         match RunMode::running(hopr_state, None) {
             RunMode::Running {
                 hopr_status,
-                funding_issues,
+                funding_status,
             } => {
                 assert_eq!(hopr_status, Some(HoprStatus::Running));
-                assert_eq!(funding_issues, None);
+                assert!(funding_status.is_none());
             }
             other => panic!("unexpected run mode {other:?}"),
         }
