@@ -1,4 +1,5 @@
 use bytesize::ByteSize;
+use edgli::multiaddr;
 use edgli::{BlockchainConnectorConfig, BlokliEndpoint, EdgeNodeApi, EdgliInitState};
 use edgli::{
     Edgli,
@@ -21,7 +22,6 @@ use hopr_utils_session::{
     HopSessionFactory, ListenerId, ListenerJoinHandles, SessionFactory, SessionTargetSpec, create_tcp_client_binding,
     create_udp_client_binding,
 };
-use multiaddr::Protocol;
 use tracing::instrument;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -453,7 +453,7 @@ fn extract_ipv4_addrs(multiaddrs: &[multiaddr::Multiaddr]) -> Vec<Ipv4Addr> {
             let mut addr = addr.clone();
             let mut found = vec![];
             while let Some(protocol) = addr.pop() {
-                if let Protocol::Ip4(ipv4) = protocol {
+                if let multiaddr::Protocol::Ip4(ipv4) = protocol {
                     found.push(ipv4);
                 }
             }
