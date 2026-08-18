@@ -136,7 +136,11 @@ impl From<edgli::strategy::Capacity> for Capacity {
 impl From<edgli::strategy::CapacityAllocations> for CapacityAllocations {
     fn from(a: edgli::strategy::CapacityAllocations) -> Self {
         CapacityAllocations {
-            peer_allocations: a.peer_allocations.into_iter().map(|(addr, c)| (addr, c.into())).collect(),
+            peer_allocations: a
+                .peer_allocations
+                .into_iter()
+                .map(|(addr, c)| (addr, c.into()))
+                .collect(),
             node: a.node.into(),
             safe: a.safe.into(),
         }

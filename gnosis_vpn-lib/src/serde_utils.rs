@@ -23,10 +23,7 @@ pub mod address_map {
     use serde::ser::SerializeMap;
     use std::collections::HashMap;
 
-    pub fn serialize<V: Serialize, S: Serializer>(
-        map: &HashMap<Address, V>,
-        s: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn serialize<V: Serialize, S: Serializer>(map: &HashMap<Address, V>, s: S) -> Result<S::Ok, S::Error> {
         let mut m = s.serialize_map(Some(map.len()))?;
         for (addr, v) in map {
             m.serialize_entry(&addr.to_checksum(), v)?;
@@ -34,9 +31,7 @@ pub mod address_map {
         m.end()
     }
 
-    pub fn deserialize<'de, V: Deserialize<'de>, D: Deserializer<'de>>(
-        d: D,
-    ) -> Result<HashMap<Address, V>, D::Error> {
+    pub fn deserialize<'de, V: Deserialize<'de>, D: Deserializer<'de>>(d: D) -> Result<HashMap<Address, V>, D::Error> {
         let raw = HashMap::<String, V>::deserialize(d)?;
         raw.into_iter()
             .map(|(k, v)| Ok((k.parse::<Address>().map_err(serde::de::Error::custom)?, v)))
