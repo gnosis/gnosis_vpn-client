@@ -3,12 +3,13 @@
 //! so any type that can't be named here isn't properly exported.
 //! Compilation failure == missing export.
 
-use gnosis_vpn_lib::balance::{BalanceRecommendation, Capacity, CapacityAllocations, FundingIssue};
+use gnosis_vpn_lib::balance::{BalanceRecommendation, Capacity, CapacityAllocations, FundingLevel, FundingStatus};
 use gnosis_vpn_lib::command::{
     ActiveSession, BalanceResponse, ChannelBalance, ChannelOut, Command, ConnStats, ConnectResponse, ConnectedInfo,
     ConnectingInfo, DestinationState, DisconnectResponse, DisconnectingInfo, FundingToolResponse, HoprInitStatus,
-    HoprStatus, Info, InfoResponse, NerdStatsResponse, ReconnectingInfo, Response, RouteHealthView, RunMode,
-    StartClientResponse, StatusResponse, StopClientResponse, TicketStats, TicketStatsStatus, WorkerCommand,
+    HoprStatus, Info, InfoResponse, NerdStatsConnection, NerdStatsResponse, ReconnectingInfo, Response,
+    RouteHealthView, RunMode, StartClientResponse, StatusResponse, StopClientResponse, TicketStats, TicketStatsStatus,
+    WorkerCommand,
 };
 use gnosis_vpn_lib::connection::destination::{Address, Destination, HopRouting};
 use gnosis_vpn_lib::connection::{DownPhase, UpPhase};
@@ -43,6 +44,7 @@ fn assert_types_are_accessible() {
     let _: TicketStatsStatus;
     let _: TicketStats;
     let _: NerdStatsResponse;
+    let _: NerdStatsConnection;
     let _: ConnStats;
     let _: WgTunnelStats;
     let _: TunnelStatsSample;
@@ -64,7 +66,8 @@ fn assert_types_are_accessible() {
     let _: Slots;
     let _: LoadAvg;
     let _: BalanceRecommendation;
-    let _: FundingIssue;
+    let _: FundingStatus;
+    let _: FundingLevel;
     let _: CapacityAllocations;
     let _: Capacity;
 }

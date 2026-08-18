@@ -52,6 +52,23 @@ pub mod balance {
     }
 }
 
+pub mod opt_balance {
+    use super::*;
+
+    pub fn serialize<C: Currency, S: Serializer>(bal: &Option<Balance<C>>, s: S) -> Result<S::Ok, S::Error> {
+        match bal {
+            None => s.serialize_none(),
+            Some(bal) => s.serialize_some(&bal.to_string()),
+        }
+    }
+
+    pub fn deserialize<'de, C: Currency, D: Deserializer<'de>>(d: D) -> Result<Option<Balance<C>>, D::Error> {
+        let s = Option::<String>::deserialize(d)?;
+        s.map(|s| s.parse::<Balance<C>>().map_err(serde::de::Error::custom))
+            .transpose()
+    }
+}
+
 pub mod system_time {
     use super::*;
 

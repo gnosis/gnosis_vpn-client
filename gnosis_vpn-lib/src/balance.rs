@@ -34,16 +34,46 @@ pub fn wxhopr_scientific(b: Balance<WxHOPR>) -> Option<String> {
     })
 }
 
-// in order of priority
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum FundingIssue {
-    Unfunded,           // node xdai zero and no wxhopr on the node EOA, in safe or channels - initial state
-    ChannelsOutOfFunds, // less than 1 message available in all channels combined
-    SafeOutOfFunds,     // less than 1 message available in safe
-    SafeLowOnFunds,     // less than 0.5 of ideal safe balance
-    NodeUnderfunded,    // xDai is below 100 Gwei - unlikely to cover gas for a transaction
-    NodeLowOnFunds,     // xDai is below the ideal amount
+/// Health of a single funding resource (traffic or gas), derived by pooling all
+/// allocations for that resource rather than checking each location in isolation.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub enum FundingLevel {
+    Good,
+    Low,
+    Empty,
 }
+
+/// Traffic (wxHOPR) and gas (xDAI) health, plus how much more is needed to reach the
+/// ideal recommendation. Pools wxHOPR across open channels, Safe, and the node EOA, so
+/// funds deposited but not yet swept into the Safe still count toward traffic health.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FundingStatus {
+    pub traffic: FundingLevel,
+    pub gas: FundingLevel,
+    /// wxHOPR still needed to reach the ideal recommendation; `None` while `traffic` is `Good`.
+    #[serde(with = "serde_utils::opt_balance")]
+    pub wxhopr_deficit: Option<Balance<WxHOPR>>,
+    /// xDAI still needed to reach the ideal recommendation; `None` while `gas` is `Good`.
+    #[serde(with = "serde_utils::opt_balance")]
+    pub xdai_deficit: Option<Balance<XDai>>,
+}
+
+impl Display for FundingLevel {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = match self {
+            FundingLevel::Good => "Good",
+            FundingLevel::Low => "Low",
+            FundingLevel::Empty => "Empty",
+        };
+        write!(f, "{s}")
+    }
+}
+
+const TRAFFIC_EMPTY_BELOW_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+const TRAFFIC_LOW_BELOW_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+// 0.0015 / 0.0035 xDAI, in wei
+const XDAI_EMPTY_BELOW_WEI: u64 = 1_500_000_000_000_000;
+const XDAI_LOW_BELOW_WEI: u64 = 3_500_000_000_000_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum FundingTool {
@@ -68,22 +98,6 @@ impl FundingTool {
         Self::RERUN_COOLDOWN
             .checked_sub(elapsed)
             .filter(|remaining| !remaining.is_zero())
-    }
-}
-
-impl Display for FundingIssue {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let s = match self {
-            FundingIssue::Unfunded => "unfunded - nothing will work",
-            FundingIssue::ChannelsOutOfFunds => "channels are out of funds - connections will not work",
-            FundingIssue::SafeOutOfFunds => "safe is out of funds - connections will stop working",
-            FundingIssue::SafeLowOnFunds => "safe is low on funds - connections will soon stop working",
-            FundingIssue::NodeUnderfunded => "node underfunded - cannot open new connections or keep existing ones",
-            FundingIssue::NodeLowOnFunds => {
-                "node low on funds - will soon be unable to open new connections or keep existing ones"
-            }
-        };
-        write!(f, "{s}")
     }
 }
 
@@ -235,54 +249,61 @@ impl Display for Balances {
     }
 }
 
-pub fn to_funding_issues(
+/// Pools wxHOPR/xDAI across every allocation location (rather than checking each in
+/// isolation) to decide traffic/gas health, so funds sitting unswept on the node EOA
+/// aren't mistaken for a shortfall.
+pub fn to_funding_status(
     ideal: BalanceRecommendation,
     capacity_allocations: &CapacityAllocations,
     node_xdai: Balance<XDai>,
-) -> Vec<FundingIssue> {
-    let mut issues = Vec::new();
-
-    // Total wxHOPR that can (eventually) pay for traffic: node EOA (deposited,
-    // not yet swept into the Safe), Safe, and open channels. The per-location
-    // checks below stay allocation-specific — EOA funds cannot pay for traffic
-    // until swept — but the EOA stake must count here so a freshly deposited
-    // node is not reported as unfunded.
+) -> FundingStatus {
     let peer_stake = capacity_allocations
         .peer_allocations
         .values()
         .map(|c| c.stake)
         .sum::<Balance<WxHOPR>>();
     let total_stake = capacity_allocations.node.stake + capacity_allocations.safe.stake + peer_stake;
-    if node_xdai.is_zero() && total_stake.is_zero() {
-        issues.push(FundingIssue::Unfunded);
-        return issues;
-    }
 
-    let channel_messages: u64 = capacity_allocations
+    let peer_bytes: u64 = capacity_allocations
         .peer_allocations
         .values()
-        .map(|c| c.min_guaranteed_messages)
+        .map(|c| c.byte_capacity)
         .sum();
-    if channel_messages < 1 {
-        issues.push(FundingIssue::ChannelsOutOfFunds);
-    }
+    let total_bytes = capacity_allocations.node.byte_capacity + capacity_allocations.safe.byte_capacity + peer_bytes;
 
-    let safe = capacity_allocations.safe;
-    if safe.min_guaranteed_messages < 1 {
-        issues.push(FundingIssue::SafeOutOfFunds);
-    } else if safe.stake * 2 < ideal.wxhopr {
-        issues.push(FundingIssue::SafeLowOnFunds);
-    }
+    let traffic = if total_bytes < TRAFFIC_EMPTY_BELOW_BYTES {
+        FundingLevel::Empty
+    } else if total_bytes < TRAFFIC_LOW_BELOW_BYTES {
+        FundingLevel::Low
+    } else {
+        FundingLevel::Good
+    };
 
-    // 100 Gwei — heuristic threshold below which the node is unlikely to cover the gas cost of a typical transaction
-    let node_xdai_min_gas_threshold = Balance::<XDai>::from(100_000_000_000u64);
-    if node_xdai < node_xdai_min_gas_threshold {
-        issues.push(FundingIssue::NodeUnderfunded);
-    } else if node_xdai < ideal.xdai {
-        issues.push(FundingIssue::NodeLowOnFunds);
-    }
+    let xdai_empty_below = Balance::<XDai>::from(XDAI_EMPTY_BELOW_WEI);
+    let xdai_low_below = Balance::<XDai>::from(XDAI_LOW_BELOW_WEI);
+    let gas = if node_xdai < xdai_empty_below {
+        FundingLevel::Empty
+    } else if node_xdai < xdai_low_below {
+        FundingLevel::Low
+    } else {
+        FundingLevel::Good
+    };
 
-    issues
+    // Sub saturates at zero, so a resource that already exceeds the ideal recommendation
+    // yields a zero (filtered-out) deficit rather than an underflow.
+    let wxhopr_deficit = (traffic != FundingLevel::Good)
+        .then(|| ideal.wxhopr - total_stake)
+        .filter(|d| !d.is_zero());
+    let xdai_deficit = (gas != FundingLevel::Good)
+        .then(|| ideal.xdai - node_xdai)
+        .filter(|d| !d.is_zero());
+
+    FundingStatus {
+        traffic,
+        gas,
+        wxhopr_deficit,
+        xdai_deficit,
+    }
 }
 
 #[cfg(test)]
@@ -300,23 +321,16 @@ mod tests {
         }
     }
 
-    fn peer_capacity(stake: u64, msgs: u64) -> Capacity {
+    fn capacity(stake: u64, bytes: u64) -> Capacity {
         Capacity {
             stake: Balance::<WxHOPR>::from(stake),
-            expected_messages: msgs,
-            min_guaranteed_messages: msgs,
-            byte_capacity: 0,
+            expected_messages: 0,
+            min_guaranteed_messages: 0,
+            byte_capacity: bytes,
         }
     }
 
-    fn safe_capacity(stake: u64, msgs: u64) -> Capacity {
-        Capacity {
-            stake: Balance::<WxHOPR>::from(stake),
-            expected_messages: msgs,
-            min_guaranteed_messages: msgs,
-            byte_capacity: 0,
-        }
-    }
+    const GB: u64 = 1024 * 1024 * 1024;
 
     /// Allocations with at most one open channel (to a fixed peer address).
     fn allocs(peer: Option<Capacity>, node: Capacity, safe: Capacity) -> CapacityAllocations {
@@ -328,83 +342,65 @@ mod tests {
     }
 
     #[test]
-    fn unfunded_when_xdai_and_stake_are_zero() {
-        let issues = to_funding_issues(
-            ideal(100, 100),
+    fn traffic_empty_when_no_capacity_anywhere() {
+        let status = to_funding_status(ideal(0, 0), &CapacityAllocations::default(), Balance::<XDai>::zero());
+        assert_eq!(status.traffic, FundingLevel::Empty);
+    }
+
+    #[test]
+    fn traffic_pools_channel_safe_and_node_eoa_bytes() {
+        // 1 GB each on the channel, Safe, and node EOA = 3 GB total: right at the
+        // Empty/Low boundary (not below it), so the pooled total already excludes it
+        // from Empty even though no single location alone would.
+        let allocations = allocs(Some(capacity(0, GB)), capacity(0, GB), capacity(0, GB));
+        let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero());
+        assert_eq!(status.traffic, FundingLevel::Low);
+    }
+
+    #[test]
+    fn traffic_low_between_thresholds() {
+        let allocations = allocs(None, capacity(0, 4 * GB), Capacity::default());
+        let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero());
+        assert_eq!(status.traffic, FundingLevel::Low);
+    }
+
+    #[test]
+    fn traffic_good_when_eoa_alone_covers_5gb() {
+        // wxHOPR deposited on the node EOA but not yet swept into the Safe still
+        // counts toward traffic health.
+        let allocations = allocs(None, capacity(0, 5 * GB), Capacity::default());
+        let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero());
+        assert_eq!(status.traffic, FundingLevel::Good);
+    }
+
+    #[test]
+    fn gas_empty_below_threshold() {
+        let status = to_funding_status(
+            ideal(0, 0),
             &CapacityAllocations::default(),
-            Balance::<XDai>::zero(),
+            Balance::<XDai>::from(1_000_000_000_000_000_u64), // 0.001 xDAI < 0.0015 threshold
         );
-        assert_eq!(issues, vec![FundingIssue::Unfunded]);
+        assert_eq!(status.gas, FundingLevel::Empty);
     }
 
     #[test]
-    fn eoa_stake_prevents_unfunded() {
-        // wxHOPR deposited on the node EOA but not yet swept into the Safe:
-        // the node is funded, just not ready — never "Unfunded".
-        let allocations = allocs(None, peer_capacity(100, 0), Capacity::default());
-        let issues = to_funding_issues(ideal(100, 100), &allocations, Balance::<XDai>::zero());
-        assert!(!issues.contains(&FundingIssue::Unfunded));
-        assert!(issues.contains(&FundingIssue::ChannelsOutOfFunds));
-        assert!(issues.contains(&FundingIssue::SafeOutOfFunds));
-        assert!(issues.contains(&FundingIssue::NodeUnderfunded));
+    fn gas_low_between_thresholds() {
+        let status = to_funding_status(
+            ideal(0, 0),
+            &CapacityAllocations::default(),
+            Balance::<XDai>::from(2_000_000_000_000_000_u64), // 0.002 xDAI
+        );
+        assert_eq!(status.gas, FundingLevel::Low);
     }
 
     #[test]
-    fn channels_out_of_funds_when_no_peer_messages() {
-        let allocations = allocs(None, Capacity::default(), safe_capacity(100, 5));
-        let issues = to_funding_issues(
-            ideal(100, 100),
-            &allocations,
-            Balance::<XDai>::from(1_000_000_000_000_000_u64),
+    fn gas_good_at_or_above_threshold() {
+        let status = to_funding_status(
+            ideal(0, 0),
+            &CapacityAllocations::default(),
+            Balance::<XDai>::from(3_500_000_000_000_000_u64), // 0.0035 xDAI, at the boundary
         );
-        assert!(issues.contains(&FundingIssue::ChannelsOutOfFunds));
-    }
-
-    #[test]
-    fn safe_out_of_funds_when_safe_has_no_messages() {
-        let allocations = allocs(Some(peer_capacity(100, 10)), Capacity::default(), safe_capacity(100, 0));
-        let issues = to_funding_issues(
-            ideal(100, 100),
-            &allocations,
-            Balance::<XDai>::from(1_000_000_000_000_000_u64),
-        );
-        assert!(issues.contains(&FundingIssue::SafeOutOfFunds));
-    }
-
-    #[test]
-    fn safe_low_on_funds_when_stake_below_half_ideal() {
-        // safe stake 30, ideal wxhopr 100 → 30*2=60 < 100 → SafeLowOnFunds
-        let allocations = allocs(Some(peer_capacity(100, 10)), Capacity::default(), safe_capacity(30, 5));
-        let issues = to_funding_issues(
-            ideal(100, 100),
-            &allocations,
-            Balance::<XDai>::from(1_000_000_000_000_000_u64),
-        );
-        assert!(issues.contains(&FundingIssue::SafeLowOnFunds));
-    }
-
-    #[test]
-    fn node_underfunded_when_xdai_below_100_gwei() {
-        let allocations = allocs(Some(peer_capacity(100, 10)), Capacity::default(), safe_capacity(100, 5));
-        let issues = to_funding_issues(
-            ideal(100, 1_000_000_000_000_u64), // ideal xdai = 1000 Gwei
-            &allocations,
-            Balance::<XDai>::from(50_000_000_000_u64), // 50 Gwei < 100 Gwei threshold
-        );
-        assert!(issues.contains(&FundingIssue::NodeUnderfunded));
-        assert!(!issues.contains(&FundingIssue::NodeLowOnFunds));
-    }
-
-    #[test]
-    fn node_low_on_funds_when_xdai_below_ideal() {
-        let allocations = allocs(Some(peer_capacity(100, 10)), Capacity::default(), safe_capacity(100, 5));
-        let issues = to_funding_issues(
-            ideal(100, 1_000_000_000_000_u64), // ideal xdai = 1000 Gwei
-            &allocations,
-            Balance::<XDai>::from(500_000_000_000_u64), // 500 Gwei: above threshold, below ideal
-        );
-        assert!(issues.contains(&FundingIssue::NodeLowOnFunds));
-        assert!(!issues.contains(&FundingIssue::NodeUnderfunded));
+        assert_eq!(status.gas, FundingLevel::Good);
     }
 
     #[test]
@@ -430,14 +426,59 @@ mod tests {
     }
 
     #[test]
-    fn no_issues_when_well_funded() {
-        let allocations = allocs(Some(peer_capacity(100, 10)), Capacity::default(), safe_capacity(100, 5));
-        let issues = to_funding_issues(
+    fn wxhopr_deficit_none_when_traffic_good() {
+        let allocations = allocs(None, capacity(1_000, 5 * GB), Capacity::default());
+        let status = to_funding_status(ideal(100, 0), &allocations, Balance::<XDai>::zero());
+        assert_eq!(status.traffic, FundingLevel::Good);
+        assert_eq!(status.wxhopr_deficit, None);
+    }
+
+    #[test]
+    fn wxhopr_deficit_reported_when_traffic_not_good() {
+        let allocations = allocs(None, capacity(30, 0), Capacity::default());
+        let status = to_funding_status(ideal(100, 0), &allocations, Balance::<XDai>::zero());
+        assert_eq!(status.traffic, FundingLevel::Empty);
+        assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(70u64)));
+    }
+
+    #[test]
+    fn xdai_deficit_none_when_gas_good() {
+        let status = to_funding_status(
+            ideal(0, 100),
+            &CapacityAllocations::default(),
+            Balance::<XDai>::from(3_500_000_000_000_000_u64),
+        );
+        assert_eq!(status.gas, FundingLevel::Good);
+        assert_eq!(status.xdai_deficit, None);
+    }
+
+    #[test]
+    fn xdai_deficit_reported_when_gas_not_good() {
+        let status = to_funding_status(
+            ideal(0, 1_000_000_000_000_000_000_u64), // 1 xDAI ideal
+            &CapacityAllocations::default(),
+            Balance::<XDai>::from(1_000_000_000_000_000_u64), // 0.001 xDAI on hand
+        );
+        assert_eq!(status.gas, FundingLevel::Empty);
+        assert_eq!(
+            status.xdai_deficit,
+            Some(Balance::<XDai>::from(999_000_000_000_000_000_u64))
+        );
+    }
+
+    #[test]
+    fn good_traffic_and_gas_when_well_funded() {
+        // 2 GB each on the channel, Safe, and node EOA = 6 GB pooled, above the 5 GB threshold.
+        let allocations = allocs(Some(capacity(100, 2 * GB)), capacity(0, 2 * GB), capacity(100, 2 * GB));
+        let status = to_funding_status(
             ideal(100, 100),
             &allocations,
-            Balance::<XDai>::from(2_000_000_000_000_000_u64),
+            Balance::<XDai>::from(3_500_000_000_000_000_u64), // 0.0035 xDAI — at the Good threshold
         );
-        assert!(issues.is_empty());
+        assert_eq!(status.traffic, FundingLevel::Good);
+        assert_eq!(status.gas, FundingLevel::Good);
+        assert_eq!(status.wxhopr_deficit, None);
+        assert_eq!(status.xdai_deficit, None);
     }
 
     // `Balance::<WxHOPR>::from(n)` takes wei (10^-18 token). The scientific

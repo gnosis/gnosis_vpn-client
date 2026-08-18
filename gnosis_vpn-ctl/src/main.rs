@@ -264,7 +264,7 @@ fn pretty_print(resp: &Response) {
             info,
             capacity_allocations,
             ideal_balance: _,
-            funding_issues,
+            funding_status,
         })) => {
             let mut str_resp = String::new();
             str_resp.push_str(&format!(
@@ -300,15 +300,9 @@ fn pretty_print(resp: &Response) {
                     str_resp.push_str(&format!("{ch}{}\n", format_capacity(ch_cap)));
                 }
             }
-            match funding_issues.as_deref() {
+            match &funding_status {
                 None => str_resp.push_str("---\nWaiting for funding calculations\n"),
-                Some([]) => str_resp.push_str("---\nWell funded\n"),
-                Some(issues) => {
-                    str_resp.push_str("---\n");
-                    for issue in issues {
-                        str_resp.push_str(&format!("Funding issue: {issue}\n"));
-                    }
-                }
+                Some(status) => str_resp.push_str(&format!("---\n{}", format_funding_status(status))),
             }
             println!("{str_resp}");
         }
@@ -385,6 +379,21 @@ fn format_probability(p: f64) -> String {
     trimmed.trim_end_matches('.').to_string()
 }
 
+fn format_funding_status(status: &balance::FundingStatus) -> String {
+    let wxhopr_deficit = status
+        .wxhopr_deficit
+        .map(|d| format!(" (top up {d} recommended)"))
+        .unwrap_or_default();
+    let xdai_deficit = status
+        .xdai_deficit
+        .map(|d| format!(" (top up {d} recommended)"))
+        .unwrap_or_default();
+    format!(
+        "Traffic: {}{wxhopr_deficit}\nGas: {}{xdai_deficit}\n",
+        status.traffic, status.gas
+    )
+}
+
 fn format_capacity(capacity: Option<&balance::Capacity>) -> String {
     match capacity {
         None => String::new(),
@@ -423,17 +432,26 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Pong => exitcode::OK,
         Response::Telemetry(Some(_)) => exitcode::OK,
         Response::Telemetry(None) => exitcode::UNAVAILABLE,
-        Response::NerdStats(command::NerdStatsResponse::NoInfo(command::TicketStatsStatus::Available(_))) => {
-            exitcode::OK
-        }
-        Response::NerdStats(command::NerdStatsResponse::NoInfo(command::TicketStatsStatus::Waiting)) => {
-            exitcode::UNAVAILABLE
-        }
-        Response::NerdStats(command::NerdStatsResponse::NoInfo(command::TicketStatsStatus::Error(_))) => {
-            exitcode::SOFTWARE
-        }
-        Response::NerdStats(command::NerdStatsResponse::Connecting(..)) => exitcode::OK,
-        Response::NerdStats(command::NerdStatsResponse::Connected(..)) => exitcode::OK,
+        Response::NerdStats(command::NerdStatsResponse {
+            connection: command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Available(_)),
+            ..
+        }) => exitcode::OK,
+        Response::NerdStats(command::NerdStatsResponse {
+            connection: command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Waiting),
+            ..
+        }) => exitcode::UNAVAILABLE,
+        Response::NerdStats(command::NerdStatsResponse {
+            connection: command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Error(_)),
+            ..
+        }) => exitcode::SOFTWARE,
+        Response::NerdStats(command::NerdStatsResponse {
+            connection: command::NerdStatsConnection::Connecting(..),
+            ..
+        }) => exitcode::OK,
+        Response::NerdStats(command::NerdStatsResponse {
+            connection: command::NerdStatsConnection::Connected(..),
+            ..
+        }) => exitcode::OK,
         Response::FundingTool(command::FundingToolResponse::WrongPhase) => exitcode::UNAVAILABLE,
         Response::FundingTool(command::FundingToolResponse::Started) => exitcode::OK,
         Response::FundingTool(command::FundingToolResponse::InProgress) => exitcode::OK,
@@ -473,20 +491,41 @@ fn print_ticket_stats_status(status: &command::TicketStatsStatus) {
 }
 
 fn print_nerd_stats(nerd_stats: &command::NerdStatsResponse) {
-    match nerd_stats {
-        command::NerdStatsResponse::NoInfo(ts_status) => {
+    match &nerd_stats.connection {
+        command::NerdStatsConnection::NoInfo(ts_status) => {
             print_ticket_stats_status(ts_status);
             println!("(connect to a destination to see more stats)");
         }
-        command::NerdStatsResponse::Connecting(ts_status, conn) => {
+        command::NerdStatsConnection::Connecting(ts_status, conn) => {
             print_ticket_stats_status(ts_status);
             println!("---");
             print_connecting_stats(conn);
         }
-        command::NerdStatsResponse::Connected(ts_status, conn) => {
+        command::NerdStatsConnection::Connected(ts_status, conn) => {
             print_ticket_stats_status(ts_status);
             println!("---");
             print_connected_stats(conn);
+        }
+    }
+    if let Some(allocations) = &nerd_stats.capacity_allocations {
+        println!("---");
+        println!(
+            "Node wxHOPR (not yet in Safe): {}{}",
+            allocations.node.stake,
+            format_capacity(Some(&allocations.node))
+        );
+        println!(
+            "Safe: {}{}",
+            allocations.safe.stake,
+            format_capacity(Some(&allocations.safe))
+        );
+        for (address, capacity) in &allocations.peer_allocations {
+            println!(
+                "Channel({}): {}{}",
+                address.to_checksum(),
+                capacity.stake,
+                format_capacity(Some(capacity))
+            );
         }
     }
 }

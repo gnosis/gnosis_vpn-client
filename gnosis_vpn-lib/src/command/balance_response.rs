@@ -36,7 +36,7 @@ pub struct BalanceResponse {
     pub info: Info,
     pub capacity_allocations: Option<balance::CapacityAllocations>,
     pub ideal_balance: Option<balance::BalanceRecommendation>,
-    pub funding_issues: Option<Vec<balance::FundingIssue>>,
+    pub funding_status: Option<balance::FundingStatus>,
 }
 
 impl BalanceResponse {
@@ -46,7 +46,7 @@ impl BalanceResponse {
         destinations: &HashMap<String, Destination>,
         capacity_allocations: Option<&balance::CapacityAllocations>,
         ideal_balance: Option<balance::BalanceRecommendation>,
-        funding_issues: Option<Vec<balance::FundingIssue>>,
+        funding_status: Option<balance::FundingStatus>,
     ) -> Self {
         let node = balances.node_xdai;
         let safe = balances.safe_wxhopr;
@@ -61,7 +61,7 @@ impl BalanceResponse {
             info,
             capacity_allocations,
             ideal_balance,
-            funding_issues,
+            funding_status,
         }
     }
 }
