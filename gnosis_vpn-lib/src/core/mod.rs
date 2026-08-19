@@ -344,7 +344,6 @@ impl Core {
                         let Some(ops) = self.incentive_operations.clone() else {
                             let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
                                 connection: command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Waiting),
-                                capacity_allocations: self.capacity_allocations.clone(),
                             }));
                             return true;
                         };
@@ -1044,20 +1043,17 @@ impl Core {
                     let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
                     let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
                         connection: command::NerdStatsConnection::Connecting(ticket_stats_status, conn_stats),
-                        capacity_allocations: self.capacity_allocations.clone(),
                     }));
                 }
                 Phase::Connected(conn) => {
                     let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
                     let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
                         connection: command::NerdStatsConnection::Connected(ticket_stats_status, conn_stats),
-                        capacity_allocations: self.capacity_allocations.clone(),
                     }));
                 }
                 _ => {
                     let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
                         connection: command::NerdStatsConnection::NoInfo(ticket_stats_status),
-                        capacity_allocations: self.capacity_allocations.clone(),
                     }));
                 }
             },
