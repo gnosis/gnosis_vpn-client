@@ -24,14 +24,7 @@ use crate::wireguard;
 /// header plus the 16-byte Poly1305 tag.
 const WG_DATA_OVERHEAD: usize = 32;
 
-/// Emit a WireGuard keepalive after this many seconds of tunnel idleness.
-///
-/// The tunnel's egress rides a chain of UDP flows (local session socket -> HOPR
-/// QUIC/UDP to the entry node -> mixnet -> exit -> the real WireGuard server),
-/// each of which is subject to NAT/conntrack idle expiry along the path. Without a
-/// keepalive an idle period silently drops those mappings and strands the return
-/// path. 25 s is WireGuard's own recommended value: comfortably under the common
-/// 30 s NAT UDP idle floor while adding negligible traffic.
+/// Keeps the multi-hop UDP egress chain (local→HOPR→mixnet→exit→WG server) alive across NAT/conntrack idle timeouts; 25 s is under the common 30 s floor.
 const WG_PERSISTENT_KEEPALIVE_SECS: u16 = 25;
 
 /// Scratch buffer for a single NepTUN output. It must strictly dominate any
