@@ -294,7 +294,12 @@ impl CapacityReconciler {
     /// probability, so it cannot recompute capacities from scratch). Whenever a
     /// pending stake exists, at least one fallback has a non-zero stake to scale from.
     fn scaled_capacity(&self, stake: Balance<WxHOPR>, current: &SnapshotTotals) -> (u64, u64, u64) {
-        let tokens = |b: Balance<WxHOPR>| -> f64 { b.amount_in_base_units().parse().unwrap_or(0.0) };
+        let tokens = |b: Balance<WxHOPR>| -> f64 {
+            b.amount_in_base_units().parse().unwrap_or_else(|e| {
+                tracing::warn!(balance = %b, error = %e, "failed to parse balance while scaling pending capacity");
+                0.0
+            })
+        };
         let scale = |bytes: u64, msgs: u64, min_msgs: u64, base: Balance<WxHOPR>| {
             let base = tokens(base);
             (base > 0.0).then(|| {
