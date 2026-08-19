@@ -223,7 +223,7 @@ impl SnapshotTotals {
 /// stake is a transfer toward a channel (usage drainage hits channel stakes instead),
 /// so a Safe/EOA drop not matched by a channel gain is treated as in-flight and folded
 /// back into the published Safe capacity. The fold-in expires after
-/// [`PENDING_ALLOCATION_MAX_POLLS`] polls so a real spend (e.g. a manual withdrawal)
+/// `PENDING_ALLOCATION_MAX_POLLS` polls so a real spend (e.g. a manual withdrawal)
 /// still surfaces, just late; the same window means a transiently over-counted
 /// snapshot (EOA→Safe sweep landing between the two balance reads) also decays over
 /// that many polls instead of one.
