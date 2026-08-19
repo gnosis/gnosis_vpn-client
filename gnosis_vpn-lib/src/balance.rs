@@ -66,8 +66,7 @@ impl Display for FundingLevel {
     }
 }
 
-// Traffic bands, inclusive upper bounds: Empty at or below 768 MB, Low at or
-// below 1536 MB, Good above that.
+// Retuned for the reconciled (pooled) quota counting; bounds inclusive.
 const TRAFFIC_EMPTY_MAX_BYTES: u64 = 768 * 1024 * 1024;
 const TRAFFIC_LOW_MAX_BYTES: u64 = 1536 * 1024 * 1024;
 // 0.0015 / 0.0035 xDAI, in wei
@@ -173,12 +172,10 @@ impl Display for CapacityAllocations {
     }
 }
 
-/// How many successive capacity polls an unexplained Safe/EOA stake drop keeps being
-/// folded back into the published total before it is accepted as a real spend.
+/// Bounds how long an unexplained Safe/EOA drop is masked, so a real spend still surfaces.
 const PENDING_ALLOCATION_MAX_POLLS: u8 = 5;
 
-/// wxHOPR believed to be in flight between allocation locations (Safe/EOA → channel),
-/// folded back into the published Safe capacity until it reappears or expires.
+/// Stake presumed in flight (Safe/EOA → channel), folded into published capacity until indexed or expired.
 #[derive(Clone, Copy, Debug)]
 struct PendingAllocation {
     stake: Balance<WxHOPR>,
@@ -216,17 +213,13 @@ impl SnapshotTotals {
 
 /// Keeps the pooled capacity total conserved across the snapshot's non-atomic reads.
 ///
-/// The snapshot reads the channel list (indexer-fed, lags the chain) before the live
-/// Safe/EOA balance queries, so while the strategy funds a channel out of the Safe the
-/// stake is counted nowhere for a poll or two — the pooled total visibly dips and
-/// recovers. wxHOPR is conserved, and the only legitimate *fast* drop of Safe+EOA
-/// stake is a transfer toward a channel (usage drainage hits channel stakes instead),
-/// so a Safe/EOA drop not matched by a channel gain is treated as in-flight and folded
-/// back into the published Safe capacity. The fold-in expires after
-/// `PENDING_ALLOCATION_MAX_POLLS` polls so a real spend (e.g. a manual withdrawal)
-/// still surfaces, just late; the same window means a transiently over-counted
-/// snapshot (EOA→Safe sweep landing between the two balance reads) also decays over
-/// that many polls instead of one.
+/// Channels are read from the indexer (lags the chain) before the live Safe/EOA
+/// balances, so stake moving Safe→channel is counted nowhere for a poll or two.
+/// The only legitimate *fast* Safe/EOA drop is a transfer toward a channel (usage
+/// drains channel stakes instead), so an unmatched drop is presumed in-flight and
+/// folded back into the published Safe capacity. The fold-in expires after
+/// `PENDING_ALLOCATION_MAX_POLLS` polls so a real spend still surfaces, just late;
+/// a transient over-count decays over the same window.
 #[derive(Debug, Default)]
 pub struct CapacityReconciler {
     prev: Option<SnapshotTotals>,
@@ -234,17 +227,14 @@ pub struct CapacityReconciler {
 }
 
 impl CapacityReconciler {
-    /// Feed a fresh raw snapshot and get the snapshot to publish, with any in-flight
-    /// stake folded into the `safe` component (values only — same shape, so downstream
-    /// consumers summing the components are covered without protocol changes).
+    /// Snapshot to publish: in-flight stake folded into `safe`. Same shape as the
+    /// raw snapshot, so downstream consumers summing components need no protocol change.
     pub fn reconcile(&mut self, raw: CapacityAllocations) -> CapacityAllocations {
         let totals = SnapshotTotals::of(&raw);
         let pending_stake = match &self.prev {
             Some(prev) => {
                 let carried = self.pending.map(|p| p.stake).unwrap_or_else(Balance::zero);
-                // Channel-stake drops (ticket drainage, closure) are real and pass
-                // through; `-` saturates at zero, yielding
-                // max(0, published_prev - channel_drop - raw_total).
+                // Channel drops (drainage, closure) are real usage, not in-flight; `-` saturates at zero.
                 let channel_drop = prev.channel_stake - totals.channel_stake;
                 prev.stake + carried - channel_drop - totals.stake
             }
@@ -289,10 +279,9 @@ impl CapacityReconciler {
         })
     }
 
-    /// Capacity numbers for a pending stake, scaled linearly from the freshest
-    /// stake→capacity ratio available (the client holds neither ticket price nor win
-    /// probability, so it cannot recompute capacities from scratch). Whenever a
-    /// pending stake exists, at least one fallback has a non-zero stake to scale from.
+    /// Scaled linearly from the freshest stake→capacity ratio on hand — the client
+    /// holds neither ticket price nor win probability, so it cannot recompute
+    /// capacities. A pending stake guarantees some fallback has non-zero stake.
     fn scaled_capacity(&self, stake: Balance<WxHOPR>, current: &SnapshotTotals) -> (u64, u64, u64) {
         let tokens = |b: Balance<WxHOPR>| -> f64 {
             b.amount_in_base_units().parse().unwrap_or_else(|e| {
