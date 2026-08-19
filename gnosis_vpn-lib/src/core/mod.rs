@@ -91,6 +91,7 @@ pub struct Core {
     minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
     ideal_balance_recommendation: Option<balance::BalanceRecommendation>,
     capacity_allocations: Option<balance::CapacityAllocations>,
+    capacity_reconciler: balance::CapacityReconciler,
     balances: Option<balance::Balances>,
     strategy_handle: Option<AbortHandle>,
     route_healths: HashMap<String, RouteHealth>,
@@ -205,6 +206,7 @@ impl Core {
             minimum_balance_recommendation: None,
             ideal_balance_recommendation: None,
             capacity_allocations: None,
+            capacity_reconciler: balance::CapacityReconciler::default(),
             balances: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
@@ -687,7 +689,8 @@ impl Core {
             },
             Results::CapacityAllocations { res } => match res {
                 Ok(caps) => {
-                    tracing::info!(channels = caps.peer_allocations.len(), "received capacity allocations");
+                    let caps = self.capacity_reconciler.reconcile(caps);
+                    tracing::info!(%caps, "received capacity allocations");
                     let has_channels = !caps.peer_allocations.is_empty();
                     self.capacity_allocations = Some(caps);
                     if has_channels && let Some(hopr) = self.hopr.clone() {
