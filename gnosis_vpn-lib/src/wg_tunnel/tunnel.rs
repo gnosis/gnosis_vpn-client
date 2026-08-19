@@ -112,9 +112,6 @@ impl WgTunnel {
             Some(psk) => Some(wireguard::decode_key32(psk)?),
             None => None,
         };
-        // index 0, no rate limiter - single-peer client. A persistent keepalive
-        // keeps the tunnel's NAT/conntrack path warm across idle gaps (see
-        // WG_PERSISTENT_KEEPALIVE_SECS).
         let tunn =
             Tunn::new(secret, peer, preshared_key, Some(WG_PERSISTENT_KEEPALIVE_SECS), 0, None).map_err(Error::Tunn)?;
         Ok(Self {
