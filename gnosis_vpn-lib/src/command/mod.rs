@@ -276,8 +276,6 @@ pub enum TicketStatsStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NerdStatsResponse {
     pub connection: NerdStatsConnection,
-    /// Raw allocation breakdown; `Status` only carries the derived `FundingStatus`.
-    pub capacity_allocations: Option<balance::CapacityAllocations>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
