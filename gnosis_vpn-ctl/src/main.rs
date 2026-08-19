@@ -507,27 +507,6 @@ fn print_nerd_stats(nerd_stats: &command::NerdStatsResponse) {
             print_connected_stats(conn);
         }
     }
-    if let Some(allocations) = &nerd_stats.capacity_allocations {
-        println!("---");
-        println!(
-            "Node wxHOPR (not yet in Safe): {}{}",
-            allocations.node.stake,
-            format_capacity(Some(&allocations.node))
-        );
-        println!(
-            "Safe: {}{}",
-            allocations.safe.stake,
-            format_capacity(Some(&allocations.safe))
-        );
-        for (address, capacity) in &allocations.peer_allocations {
-            println!(
-                "Channel({}): {}{}",
-                address.to_checksum(),
-                capacity.stake,
-                format_capacity(Some(capacity))
-            );
-        }
-    }
 }
 
 fn print_connecting_stats(stats: &command::ConnStats) {
