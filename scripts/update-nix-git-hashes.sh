@@ -43,7 +43,9 @@ to_sri() {
 
 # crane percent-decodes each source string before its outputHashes lookup, so the key must match decoded.
 percent_decode() {
-    printf '%b' "${1//%/\\x}"
+    local s="${1//\\/\\\\}"
+    s=$(printf '%s' "$s" | sed -E 's/%([0-9A-Fa-f]{2})/\\x\1/g')
+    printf '%b' "$s"
 }
 
 lines=()
