@@ -41,6 +41,11 @@ to_sri() {
         nix hash convert --hash-algo sha256 --to sri "$1"
 }
 
+# crane percent-decodes each source string before its outputHashes lookup, so the key must match decoded.
+percent_decode() {
+    printf '%b' "${1//%/\\x}"
+}
+
 lines=()
 for source in "${sources[@]}"; do
     url="${source#git+}"
@@ -51,7 +56,7 @@ for source in "${sources[@]}"; do
     base32_hash="$(nix-prefetch-git --url "$url" --rev "$rev" --quiet | jq -r '.sha256')"
     sri_hash="$(to_sri "$base32_hash")"
 
-    lines+=("    \"${source}\" =")
+    lines+=("    \"$(percent_decode "$source")\" =")
     lines+=("      \"${sri_hash}\";")
 done
 # Command substitution strips trailing newlines, so add one back: awk's block
