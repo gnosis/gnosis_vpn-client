@@ -16,8 +16,7 @@ jobs:
   sync-hashes:
     name: Sync outputHashes
     runs-on: depot-ubuntu-22.04-4 # Depot Ubuntu 22.04, 4 CPUs, 16 GB RAM
-    # Only Renovate moves git-pinned Cargo deps on its own branches; anyone
-    # else's Cargo.lock edits go through the normal PR review + CI path.
+    # Only Renovate's git-pinned Cargo bumps get auto-synced; others go through normal PR review.
     if: |
       github.event.pull_request.head.repo.fork == false &&
       github.event.pull_request.user.login == 'renovate[bot]'
