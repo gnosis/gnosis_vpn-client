@@ -25,7 +25,7 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.5", features = ["derive", "env"] }
 clap_complete = "~4.6.8"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "f472e2677b2aee85817ba868ba31b91da84f1b44", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "4ba1e5977520828cec40f426c0e0a27d6dae71f7", features = [
   "blokli",
   "telemetry",
 ] }
@@ -37,7 +37,7 @@ futures-util = "~0.3.33"
 # commits -- mixing the two builds hoprnet twice and fails with `expected
 # hopr_lib::HoprSessionClientConfig, found HoprSessionClientConfig`. Keep both entries in the
 # same form.
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "release/4.0", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "kauki/test/session/8356-wg-datagram-boundary-repro", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
