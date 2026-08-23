@@ -57,8 +57,6 @@ pub(super) enum Capability {
     NoDelay,
     #[serde(alias = "no_rate_control")]
     NoRateControl,
-    #[serde(alias = "datagram")]
-    Datagram,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -199,7 +197,6 @@ pub(super) fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
             Capability::RetransmissionAckOnly => SessionCapability::RetransmissionAck,
             Capability::NoDelay => SessionCapability::NoDelay,
             Capability::NoRateControl => SessionCapability::NoRateControl,
-            Capability::Datagram => SessionCapability::Datagram,
         };
         flags |= cap;
     }
@@ -215,10 +212,10 @@ impl Connection {
     }
 
     pub fn default_wg_capabilities() -> Vec<Capability> {
-        // Datagram preserves UDP/WireGuard datagram boundaries over the session (hoprnet#8356):
-        // each datagram is delivered as exactly one read, so neptun never sees a split/coalesced
-        // buffer. Requires a session peer that supports the Datagram capability.
-        vec![Capability::Segmentation, Capability::NoDelay, Capability::Datagram]
+        // NoDelay on a stateless session preserves UDP/WireGuard datagram boundaries over the
+        // session (hoprnet#8356): each datagram is delivered as exactly one read, so neptun never
+        // sees a split/coalesced buffer.
+        vec![Capability::Segmentation, Capability::NoDelay]
     }
 
     pub fn default_bridge_target() -> SessionTarget {

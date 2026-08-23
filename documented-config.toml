@@ -69,7 +69,7 @@ path    = { hops = 1 }
 
 # determine specific connection parameters for persistent main connection
 # [connection.wg]
-# capabilities = [ "segmentation", "no_delay", "datagram" ]
+# capabilities = [ "segmentation", "no_delay" ]
 # target = "172.30.0.1:51820"
 
 # adjust internal session validation ping settings
