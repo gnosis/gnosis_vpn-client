@@ -185,6 +185,12 @@ def htmlescape: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
 JQ
 
     cat >"$WORK/heatmap.awk" <<'AWK'
+function htmlescape(s) {
+    gsub(/&/, "\\&amp;", s)
+    gsub(/</, "\\&lt;", s)
+    gsub(/>/, "\\&gt;", s)
+    return s
+}
 function hexval(c) {
     return index("0123456789abcdef", tolower(c)) - 1
 }
@@ -229,7 +235,7 @@ END {
 
     for (r = 1; r <= n_rounds; r++) {
         x = label_w + (r - 1) * cell_w + cell_w / 2
-        printf "<text x=\"%.1f\" y=\"%d\" class=\"heatmap-round-label\">%s</text>\n", x, header_h - 6, roundarr[r]
+        printf "<text x=\"%.1f\" y=\"%d\" class=\"heatmap-round-label\">%s</text>\n", x, header_h - 6, htmlescape(roundarr[r])
     }
 
     latrange = maxlat - minlat
@@ -237,21 +243,21 @@ END {
 
     for (i = 1; i <= n_ids; i++) {
         y = header_h + (i - 1) * cell_h
-        printf "<text x=\"0\" y=\"%.1f\" class=\"heatmap-id-label\">%s</text>\n", y + cell_h / 2 + 4, idarr[i]
+        printf "<text x=\"0\" y=\"%.1f\" class=\"heatmap-id-label\">%s</text>\n", y + cell_h / 2 + 4, htmlescape(idarr[i])
         for (r = 1; r <= n_rounds; r++) {
             key = idarr[i] SUBSEP roundarr[r]
             x = label_w + (r - 1) * cell_w
             o = (key in outcome) ? outcome[key] : "absent"
             cls = "cell-" o
-            title = o
+            title = htmlescape(o)
             if (o == "connected" && (key in lat)) {
                 frac = (lat[key] - minlat) / latrange
-                title = o " - " lat[key] " ms"
+                title = htmlescape(o) " - " lat[key] " ms"
                 printf "<rect x=\"%.1f\" y=\"%.1f\" width=\"%d\" height=\"%d\" class=\"%s\" fill=\"%s\"><title>%s round %s: %s</title></rect>\n", \
-                    x + 1, y + 1, cell_w - 2, cell_h - 2, cls, lerp_color(LAT_LOW, LAT_HIGH, frac), idarr[i], roundarr[r], title
+                    x + 1, y + 1, cell_w - 2, cell_h - 2, cls, lerp_color(LAT_LOW, LAT_HIGH, frac), htmlescape(idarr[i]), htmlescape(roundarr[r]), title
             } else {
                 printf "<rect x=\"%.1f\" y=\"%.1f\" width=\"%d\" height=\"%d\" class=\"%s\"><title>%s round %s: %s</title></rect>\n", \
-                    x + 1, y + 1, cell_w - 2, cell_h - 2, cls, idarr[i], roundarr[r], title
+                    x + 1, y + 1, cell_w - 2, cell_h - 2, cls, htmlescape(idarr[i]), htmlescape(roundarr[r]), title
             }
         }
     }
@@ -260,6 +266,12 @@ END {
 AWK
 
     cat >"$WORK/line.awk" <<'AWK'
+function htmlescape(s) {
+    gsub(/&/, "\\&amp;", s)
+    gsub(/</, "\\&lt;", s)
+    gsub(/>/, "\\&gt;", s)
+    return s
+}
 BEGIN {
     FS = "\t"
     n_ids = split(ids, idarr, " ")
@@ -311,7 +323,7 @@ END {
         color = palette[((idpos[id] - 1) % 8) + 1]
         lx = pad_l + (ki - 1) * 80
         printf "<rect x=\"%d\" y=\"%d\" width=\"10\" height=\"10\" fill=\"%s\"></rect>\n", lx, ly - 9, color
-        printf "<text x=\"%d\" y=\"%d\" class=\"legend-label\">%s</text>\n", lx + 14, ly, id
+        printf "<text x=\"%d\" y=\"%d\" class=\"legend-label\">%s</text>\n", lx + 14, ly, htmlescape(id)
     }
     printf "</svg>\n"
 }
@@ -358,6 +370,12 @@ END {
 AWK
 
     cat >"$WORK/timeline.awk" <<'AWK'
+function htmlescape(s) {
+    gsub(/&/, "\\&amp;", s)
+    gsub(/</, "\\&lt;", s)
+    gsub(/>/, "\\&gt;", s)
+    return s
+}
 function funding_color(level) {
     if (level == "Good") return "#16a34a"
     if (level == "Low") return "#d97706"
@@ -386,9 +404,9 @@ END {
     for (i = 1; i <= n; i++) {
         x = pad_l + (i - 1) * barw
         printf "<rect x=\"%.1f\" y=\"%d\" width=\"%.1f\" height=\"14\" fill=\"%s\"><title>round %s funding: %s</title></rect>\n", \
-            x, pad_t + ploth, barw - 1, funding_color(traffic[i]), round[i], traffic[i]
+            x, pad_t + ploth, barw - 1, funding_color(traffic[i]), htmlescape(round[i]), htmlescape(traffic[i])
         if ((i - 1) % int((n / 12) + 1) == 0) {
-            printf "<text x=\"%.1f\" y=\"%d\" class=\"axis-label\">%s</text>\n", x, pad_t + ploth + 26, round[i]
+            printf "<text x=\"%.1f\" y=\"%d\" class=\"axis-label\">%s</text>\n", x, pad_t + ploth + 26, htmlescape(round[i])
         }
         cx = x + barw / 2
         cy = pad_t + ploth - (cum[i] / maxcum) * (ploth - 4)
