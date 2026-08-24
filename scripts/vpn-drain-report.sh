@@ -179,7 +179,7 @@ JQ
     cat >"$WORK/dest_rows.jq" <<'JQ'
 def htmlescape: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
 .per_destination[] | select(.id == $id) | .series[] |
-"<tr><td>" + (.round|tostring) + "</td><td>" + .outcome + "</td><td>" +
+"<tr><td>" + (.round|tostring) + "</td><td>" + (.outcome|htmlescape) + "</td><td>" +
 ((.latency // "-")|tostring) + "</td><td>" + ((.throughput // "-")|tostring) + "</td><td>" +
 ((.loss // "-")|tostring) + "</td><td>" + ((.reason // "-")|htmlescape) + "</td></tr>"
 JQ
@@ -189,6 +189,10 @@ function htmlescape(s) {
     gsub(/&/, "\\&amp;", s)
     gsub(/</, "\\&lt;", s)
     gsub(/>/, "\\&gt;", s)
+    return s
+}
+function slugify(s) {
+    gsub(/[^A-Za-z0-9_-]/, "-", s)
     return s
 }
 function hexval(c) {
@@ -248,7 +252,7 @@ END {
             key = idarr[i] SUBSEP roundarr[r]
             x = label_w + (r - 1) * cell_w
             o = (key in outcome) ? outcome[key] : "absent"
-            cls = "cell-" o
+            cls = "cell-" slugify(o)
             title = htmlescape(o)
             if (o == "connected" && (key in lat)) {
                 frac = (lat[key] - minlat) / latrange
