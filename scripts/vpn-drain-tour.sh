@@ -126,7 +126,7 @@ collect_connection_metrics() {
     local host https_ok=0 https_total=0
     for host in $TARGETS; do
         https_total=$((https_total + 1))
-        if http_metrics "https://$host" "$HTTP_TIMEOUT" >/dev/null 2>&1; then
+        if http_metrics "https://$host" "$HTTP_TIMEOUT" --head >/dev/null 2>&1; then
             https_ok=$((https_ok + 1))
         fi
     done
@@ -210,7 +210,7 @@ record_attempt() {
          }')"
     printf '%s\n' "$row" >>"$RUNS_JSONL"
     printf '%s\n' "$row" | jq -r '[
-        .round, .destination_id, .outcome, (.reason // ""),
+        .round, .destination_id, .outcome, (.reason // "" | gsub("\r\n|\r|\n"; " ")),
         (.selection.capacity_used // ""), (.selection.capacity_available // ""), (.selection.ping_rtt_ms // ""),
         (.metrics.gateway_ping_avg_ms // ""), (.metrics.packet_loss_pct // ""),
         (.metrics.streaming_bps // ""), (.metrics.egress_ip // ""),
