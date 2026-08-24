@@ -134,6 +134,8 @@ Check available params and env vars via:
 
 `gnosis_vpn-root --help` `gnosis_vpn-ctl --help`
 
+Diagnostic/ops scripts (connectivity smoke test, capacity/latency drain tour, WireGuard traffic sampling) live in [`scripts/`](scripts/README.md).
+
 ## Dependency Updates
 
 Renovate runs on Renovate's `schedule:earlyMondays` preset with a 14-day minimum

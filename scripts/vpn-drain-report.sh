@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # vpn-drain-report.sh - reads <run-dir>/runs.jsonl (from vpn-drain-tour.sh) and writes one self-contained <run-dir>/report.html: a cross-destination comparison table, outcome heatmap, latency/throughput trend lines and a funding drain timeline, plus per-destination histogram/round-data sections reachable via anchor links (kept in the same document, not linked sub-pages, so a browser's Print -> Save as PDF captures everything, aided by a `@media print` stylesheet that expands the collapsed sections and page-breaks between them); charts are inline SVG built by awk, no charting library.
 # Required commands: bash, jq, awk. Run `./vpn-drain-report.sh --help` for options.
+# Fetch this alongside vpn-smoke-test.sh/vpn-drain-tour.sh: see scripts/README.md.
 
 set -euo pipefail
 

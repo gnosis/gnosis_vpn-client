@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # vpn-drain-tour.sh - each round, connect to every configured destination once (best exit-capacity/latency first, recording why any destination can't connect), smoke-test it, and repeat rounds until `gnosis_vpn-ctl balance` reports funding as Empty or nothing connects; writes raw runs.jsonl/metrics.csv only (run vpn-drain-report.sh against the output dir for the comparison report).
 # Required commands: bash, gnosis_vpn-ctl, jq, curl, ping, awk, uname. Run `./vpn-drain-tour.sh --help` for options.
+# Fetch this alongside vpn-smoke-test.sh/vpn-drain-report.sh: see scripts/README.md.
 
 set -euo pipefail
 
