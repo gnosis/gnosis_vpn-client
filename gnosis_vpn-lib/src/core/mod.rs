@@ -1603,10 +1603,7 @@ impl Core {
         }
     }
 
-    /// Reacts to new WireGuard telemetry by advancing the active session's
-    /// SURB balancer setpoint one tick toward `conn.surb_target` (see
-    /// `Up::advance_surb_ramp`). A no-op once converged or before a target
-    /// has been set.
+    /// Advances the active session's SURB balancer toward `conn.surb_target` on each telemetry tick (see `Up::advance_surb_ramp`).
     fn maybe_adjust_session(&self, conn: &mut connection::up::Up, sample: &wg_tunnel::TunnelStatsSample) {
         let Some(configurator) = conn.session_configurator.clone() else {
             return;

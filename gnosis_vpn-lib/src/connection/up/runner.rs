@@ -201,11 +201,7 @@ impl Runner {
         let main_surb = surb_config_for(&self.options.surb_balancing.main)?;
         match (ping_surb.management, main_surb.management) {
             (Some(applied), Some(target)) => {
-                // A spliced session is not in the listener registry, so the SURB
-                // balancer's target is tracked on `Up` and slewed toward smoothly
-                // by `core` from live telemetry, instead of jumping straight to
-                // the main-tier config here (which would flood the response
-                // buffer immediately and block normal traffic at startup).
+                // Not in the listener registry, so the target is tracked on `Up` and slewed toward gradually by `core`, instead of jumping straight to it here (which floods the response buffer at startup).
                 let _ = results_sender
                     .send(progress(Progress::SetSurbTarget { applied, target }))
                     .await;

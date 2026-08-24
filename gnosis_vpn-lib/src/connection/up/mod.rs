@@ -47,8 +47,7 @@ pub enum Progress {
     SessionConfigurator(HoprSessionConfigurator),
     Ping,
     AdjustToMain(Duration),
-    /// Sets the SURB balancer's desired target; `core` slews the applied
-    /// config toward it over time instead of jumping straight there.
+    /// Sets the SURB balancer's desired target; `core` slews toward it over time.
     SetSurbTarget {
         applied: SurbBalancerConfig,
         target: SurbBalancerConfig,
@@ -58,9 +57,7 @@ pub enum Progress {
 /// How long a SURB balancer target change takes to fully converge.
 const SURB_RAMP_DURATION: Duration = Duration::from_secs(60);
 
-/// Maximum per-second change in each SURB balancer knob, computed once when
-/// a new target is set so the follower converges over a fixed duration
-/// instead of jumping straight to the target.
+/// Max per-second change per SURB balancer knob, so the follower converges gradually instead of jumping.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurbSlewRate {
     /// Max change in `target_surb_buffer_size`, per second.
@@ -92,10 +89,7 @@ fn step_towards(current: u64, target: u64, rate_per_sec: u64, elapsed: Duration)
     }
 }
 
-/// Move `applied`'s numeric SURB balancer fields toward `target` by at most
-/// `rate`, clamped to never overshoot. `surb_decay` and
-/// `sustain_on_return_path_loss` are taken from `target` directly - they're
-/// tuning flags, not capacity, so there's nothing to slew.
+/// Moves `applied`'s capacity fields toward `target` by at most `rate`, never overshooting; decay/sustain flags come from `target` as-is.
 pub(crate) fn slew_towards(
     applied: SurbBalancerConfig,
     target: SurbBalancerConfig,
@@ -169,9 +163,7 @@ pub struct Up {
     /// Handle to adjust the active session's SURB balancer from telemetry.
     /// Retained past the initial ping->main adjustment so it can be reused.
     pub session_configurator: Option<HoprSessionConfigurator>,
-    /// Desired SURB balancer setpoint. Persists for the life of the
-    /// connection (not cleared on convergence) so it can be moved again
-    /// later - e.g. by a future policy reacting to sustained demand.
+    /// Desired SURB balancer setpoint; persists past convergence so a future demand-driven policy can retarget it.
     pub surb_target: Option<SurbBalancerConfig>,
     /// SURB balancer setpoint actually pushed to the session so far.
     pub surb_applied: Option<SurbBalancerConfig>,
@@ -219,11 +211,7 @@ impl Up {
         }
     }
 
-    /// Advance the SURB balancer setpoint one tick toward `surb_target`,
-    /// pushing the result through `configurator` when it actually changes.
-    /// Safe to call every telemetry sample: a no-op once converged, and
-    /// logs (rather than propagates) a failed push so a transient error
-    /// doesn't tear down the connection - the next tick retries.
+    /// Advances the SURB balancer setpoint one tick toward `surb_target`; a no-op once converged, and logs rather than propagates a failed push so the next tick retries.
     pub fn advance_surb_ramp(&mut self, configurator: &HoprSessionConfigurator, now: SystemTime) {
         let (Some(target), Some(applied), Some(rate)) = (self.surb_target, self.surb_applied, self.surb_ramp_rate)
         else {
