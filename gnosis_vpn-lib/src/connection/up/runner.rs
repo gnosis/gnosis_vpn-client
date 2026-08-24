@@ -197,14 +197,27 @@ impl Runner {
         let _ = results_sender
             .send(progress(Progress::AdjustToMain(round_trip_time)))
             .await;
+        let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
         let main_surb = surb_config_for(&self.options.surb_balancing.main)?;
-        if let Some(main_config) = main_surb.management {
-            // A spliced session is not in the listener registry, so the SURB balancer
-            // is adjusted through its configurator handle directly.
-            tracing::debug!("adjusting spliced wg session to main session");
-            configurator
-                .update_surb_balancer_config(main_config)
-                .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
+        match (ping_surb.management, main_surb.management) {
+            (Some(applied), Some(target)) => {
+                // A spliced session is not in the listener registry, so the SURB
+                // balancer's target is tracked on `Up` and slewed toward smoothly
+                // by `core` from live telemetry, instead of jumping straight to
+                // the main-tier config here (which would flood the response
+                // buffer immediately and block normal traffic at startup).
+                let _ = results_sender
+                    .send(progress(Progress::SetSurbTarget { applied, target }))
+                    .await;
+            }
+            (None, Some(target)) => {
+                // No ping-tier config to ramp from - fall back to the direct jump.
+                tracing::debug!("adjusting spliced wg session to main session");
+                configurator
+                    .update_surb_balancer_config(target)
+                    .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
+            }
+            _ => {}
         }
 
         Ok(session.clone())

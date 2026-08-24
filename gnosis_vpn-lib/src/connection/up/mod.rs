@@ -1,4 +1,4 @@
-use edgli::hopr_lib::exports::transport::HoprSessionConfigurator;
+use edgli::hopr_lib::exports::transport::{HoprSessionConfigurator, SurbBalancerConfig};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -47,6 +47,77 @@ pub enum Progress {
     SessionConfigurator(HoprSessionConfigurator),
     Ping,
     AdjustToMain(Duration),
+    /// Sets the SURB balancer's desired target; `core` slews the applied
+    /// config toward it over time instead of jumping straight there.
+    SetSurbTarget {
+        applied: SurbBalancerConfig,
+        target: SurbBalancerConfig,
+    },
+}
+
+/// How long a SURB balancer target change takes to fully converge.
+const SURB_RAMP_DURATION: Duration = Duration::from_secs(60);
+
+/// Maximum per-second change in each SURB balancer knob, computed once when
+/// a new target is set so the follower converges over a fixed duration
+/// instead of jumping straight to the target.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurbSlewRate {
+    /// Max change in `target_surb_buffer_size`, per second.
+    buffer_per_sec: u64,
+    /// Max change in `max_surbs_per_sec`, per second.
+    rate_per_sec: u64,
+}
+
+impl SurbSlewRate {
+    /// Rate that closes the gap between `applied` and `target` over `duration`.
+    fn to_cover(applied: SurbBalancerConfig, target: SurbBalancerConfig, duration: Duration) -> Self {
+        let secs = duration.as_secs_f64().max(1.0);
+        let buffer_gap = applied.target_surb_buffer_size.abs_diff(target.target_surb_buffer_size);
+        let rate_gap = applied.max_surbs_per_sec.abs_diff(target.max_surbs_per_sec);
+        Self {
+            buffer_per_sec: (buffer_gap as f64 / secs).ceil() as u64,
+            rate_per_sec: (rate_gap as f64 / secs).ceil() as u64,
+        }
+    }
+}
+
+/// Move a single value toward `target` by at most `rate * elapsed`, without overshoot.
+fn step_towards(current: u64, target: u64, rate_per_sec: u64, elapsed: Duration) -> u64 {
+    let max_step = (rate_per_sec as f64 * elapsed.as_secs_f64()) as u64;
+    if current < target {
+        current.saturating_add(max_step).min(target)
+    } else {
+        current.saturating_sub(max_step).max(target)
+    }
+}
+
+/// Move `applied`'s numeric SURB balancer fields toward `target` by at most
+/// `rate`, clamped to never overshoot. `surb_decay` and
+/// `sustain_on_return_path_loss` are taken from `target` directly - they're
+/// tuning flags, not capacity, so there's nothing to slew.
+pub(crate) fn slew_towards(
+    applied: SurbBalancerConfig,
+    target: SurbBalancerConfig,
+    elapsed: Duration,
+    rate: SurbSlewRate,
+) -> SurbBalancerConfig {
+    SurbBalancerConfig {
+        target_surb_buffer_size: step_towards(
+            applied.target_surb_buffer_size,
+            target.target_surb_buffer_size,
+            rate.buffer_per_sec,
+            elapsed,
+        ),
+        max_surbs_per_sec: step_towards(
+            applied.max_surbs_per_sec,
+            target.max_surbs_per_sec,
+            rate.rate_per_sec,
+            elapsed,
+        ),
+        surb_decay: target.surb_decay,
+        sustain_on_return_path_loss: target.sustain_on_return_path_loss,
+    }
 }
 
 #[derive(Debug)]
@@ -98,6 +169,14 @@ pub struct Up {
     /// Handle to adjust the active session's SURB balancer from telemetry.
     /// Retained past the initial ping->main adjustment so it can be reused.
     pub session_configurator: Option<HoprSessionConfigurator>,
+    /// Desired SURB balancer setpoint. Persists for the life of the
+    /// connection (not cleared on convergence) so it can be moved again
+    /// later - e.g. by a future policy reacting to sustained demand.
+    pub surb_target: Option<SurbBalancerConfig>,
+    /// SURB balancer setpoint actually pushed to the session so far.
+    pub surb_applied: Option<SurbBalancerConfig>,
+    surb_ramp_rate: Option<SurbSlewRate>,
+    surb_last_tick: Option<SystemTime>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -133,6 +212,38 @@ impl Up {
             ping_session: None,
             wg_stats: VecDeque::new(),
             session_configurator: None,
+            surb_target: None,
+            surb_applied: None,
+            surb_ramp_rate: None,
+            surb_last_tick: None,
+        }
+    }
+
+    /// Advance the SURB balancer setpoint one tick toward `surb_target`,
+    /// pushing the result through `configurator` when it actually changes.
+    /// Safe to call every telemetry sample: a no-op once converged, and
+    /// logs (rather than propagates) a failed push so a transient error
+    /// doesn't tear down the connection - the next tick retries.
+    pub fn advance_surb_ramp(&mut self, configurator: &HoprSessionConfigurator, now: SystemTime) {
+        let (Some(target), Some(applied), Some(rate)) = (self.surb_target, self.surb_applied, self.surb_ramp_rate)
+        else {
+            return;
+        };
+        if applied == target {
+            return;
+        }
+        let elapsed = self
+            .surb_last_tick
+            .and_then(|last| now.duration_since(last).ok())
+            .unwrap_or_default();
+        let next = slew_towards(applied, target, elapsed, rate);
+        self.surb_last_tick = Some(now);
+        if next == applied {
+            return;
+        }
+        match configurator.update_surb_balancer_config(next) {
+            Ok(()) => self.surb_applied = Some(next),
+            Err(e) => tracing::warn!(error = ?e, "failed to adjust surb balancer - will retry next tick"),
         }
     }
 
@@ -176,6 +287,12 @@ impl Up {
             }
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
             Progress::AdjustToMain(_round_trip_time) => self.phase = (now, Phase::AdjustToMain),
+            Progress::SetSurbTarget { applied, target } => {
+                self.surb_ramp_rate = Some(SurbSlewRate::to_cover(applied, target, SURB_RAMP_DURATION));
+                self.surb_applied = Some(applied);
+                self.surb_target = Some(target);
+                self.surb_last_tick = Some(now);
+            }
         }
     }
 
@@ -246,6 +363,7 @@ impl Display for Progress {
             Progress::AdjustToMain(round_trip_time) => {
                 write!(f, "Adjusting to main connection with RTT of {:?}", round_trip_time)
             }
+            Progress::SetSurbTarget { .. } => write!(f, "Ramping SURB balancer to main session"),
         }
     }
 }
@@ -258,5 +376,66 @@ impl Display for Setback {
             Setback::OpenPing(err) => write!(f, "Failed to open main connection: {err}"),
             Setback::Ping(err) => write!(f, "Ping verification failed: {err}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod surb_ramp_tests {
+    use super::*;
+
+    fn config(buffer: u64, rate: u64) -> SurbBalancerConfig {
+        SurbBalancerConfig {
+            target_surb_buffer_size: buffer,
+            max_surbs_per_sec: rate,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn step_towards_does_not_move_when_elapsed_is_zero() {
+        assert_eq!(step_towards(0, 100, 10, Duration::ZERO), 0);
+    }
+
+    #[test]
+    fn step_towards_does_not_move_when_already_at_target() {
+        assert_eq!(step_towards(100, 100, 10, Duration::from_secs(5)), 100);
+    }
+
+    #[test]
+    fn step_towards_moves_up_without_overshoot() {
+        assert_eq!(step_towards(0, 100, 10, Duration::from_secs(5)), 50);
+        // A large elapsed converges exactly on the target, never past it.
+        assert_eq!(step_towards(0, 100, 10, Duration::from_secs(50)), 100);
+    }
+
+    #[test]
+    fn step_towards_moves_down_without_overshoot() {
+        // Problem 2's future decay-back-down case: the same function, reversed.
+        assert_eq!(step_towards(100, 0, 10, Duration::from_secs(5)), 50);
+        assert_eq!(step_towards(100, 0, 10, Duration::from_secs(50)), 0);
+    }
+
+    #[test]
+    fn slew_towards_keeps_target_decay_and_sustain_flags() {
+        let applied = config(0, 0);
+        let target = SurbBalancerConfig {
+            surb_decay: Some((Duration::from_secs(60), 0.05)),
+            sustain_on_return_path_loss: true,
+            ..config(1000, 100)
+        };
+        let rate = SurbSlewRate::to_cover(applied, target, Duration::from_secs(10));
+        let next = slew_towards(applied, target, Duration::from_secs(10), rate);
+        assert_eq!(next, target, "a full-duration step should land exactly on the target");
+    }
+
+    #[test]
+    fn surb_slew_rate_to_cover_closes_the_gap_over_the_given_duration() {
+        let applied = config(0, 0);
+        let target = config(600, 60);
+        let rate = SurbSlewRate::to_cover(applied, target, Duration::from_secs(60));
+        let halfway = slew_towards(applied, target, Duration::from_secs(30), rate);
+        assert_eq!(halfway, config(300, 30));
+        let done = slew_towards(applied, target, Duration::from_secs(60), rate);
+        assert_eq!(done, target);
     }
 }
