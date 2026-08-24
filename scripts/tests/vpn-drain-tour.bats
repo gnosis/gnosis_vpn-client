@@ -1,9 +1,5 @@
 #!/usr/bin/env bats
-#
-# Offline tests for scripts/vpn-drain-tour.sh. Pure helpers are exercised by
-# sourcing the script; whole-run behavior is exercised by executing it with
-# the curl/ping/gnosis_vpn-ctl fakes injected via GVPN_CURL / GVPN_PING /
-# GVPN_CTL. No network or real gnosis_vpn-ctl is used.
+# Offline tests for scripts/vpn-drain-tour.sh: pure helpers via sourcing, whole-run behavior via the curl/ping/gnosis_vpn-ctl fakes injected through GVPN_CURL/GVPN_PING/GVPN_CTL - no network or real gnosis_vpn-ctl.
 
 setup() {
     SCRIPT="${BATS_TEST_DIRNAME}/../vpn-drain-tour.sh"

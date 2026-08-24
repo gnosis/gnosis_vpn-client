@@ -1,32 +1,11 @@
 #!/usr/bin/env bash
-#
-# vpn-drain-tour.sh - cycle through every configured Gnosis VPN destination,
-# best exit-capacity/latency first, smoke-testing each connection.
-#
-# Each round: fetch `gnosis_vpn-ctl status`, rank connectable destinations by
-# lowest used-capacity fraction then lowest latency, connect to each once
-# (recording *why* when a destination can't be connected to), run a smoke-test
-# probe, disconnect, then move to the next. Rounds repeat - capacity and
-# funding both change over time - until `gnosis_vpn-ctl balance` reports the
-# account's traffic funding as Empty, or a whole round connects to nothing.
-#
-# Writes raw per-attempt data only (runs.jsonl / metrics.csv); no charts are
-# rendered here. Run vpn-drain-report.sh against the output directory
-# afterwards to render a comparison report.
-#
-# Required commands: bash, gnosis_vpn-ctl, jq, curl, ping, awk, uname.
-#
-# Run `./vpn-drain-tour.sh --help` for options.
+# vpn-drain-tour.sh - each round, connect to every configured destination once (best exit-capacity/latency first, recording why any destination can't connect), smoke-test it, and repeat rounds until `gnosis_vpn-ctl balance` reports funding as Empty or nothing connects; writes raw runs.jsonl/metrics.csv only (run vpn-drain-report.sh against the output dir for the comparison report).
+# Required commands: bash, gnosis_vpn-ctl, jq, curl, ping, awk, uname. Run `./vpn-drain-tour.sh --help` for options.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Sourced (not executed) for its pure helpers and output primitives - record,
-# section, info, detect_os, ping_argv, parse_rtt_avg, parse_loss, http_metrics,
-# CURL_W and the *_TIMEOUT/SIZES/TARGETS defaults. main() never runs because
-# vpn-smoke-test.sh only calls it when executed directly. Its own PASS/WARN/
-# FAIL/SKIP tallies are reused per-connection (reset in collect_connection_metrics)
-# rather than for a whole-run summary, since this script prints its own.
+# Sourced (main() only runs when executed directly) for its record/section/info/detect_os/ping_argv/parse_rtt_avg/parse_loss/http_metrics helpers and *_TIMEOUT/SIZES/TARGETS defaults; its PASS/WARN/FAIL/SKIP tallies are reused per-connection in collect_connection_metrics rather than for a whole-run summary.
 # shellcheck source=vpn-smoke-test.sh
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/vpn-smoke-test.sh"
@@ -75,13 +54,7 @@ iso_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # Destination ranking
 # ---------------------------------------------------------------------------
 
-# rank_destinations <status-json> -> JSON array, best-to-worst.
-#
-# tier 0 = ReadyToConnect/Connecting with known exit health (sorted by lowest
-# used-capacity fraction, then lowest latency); tier 1 = Routable (connectable,
-# health not probed yet); tier 2 = not connectable right now (NeedsPeering,
-# NeedsChannel, Unrecoverable, or no route_health at all) - these are recorded
-# as skipped without a connect attempt.
+# rank_destinations <status-json> -> best-to-worst JSON array: tier 0 = ReadyToConnect/Connecting with known exit health (sorted by used-capacity fraction then latency), tier 1 = Routable (connectable, health unknown), tier 2 = not connectable now (recorded as skipped, no connect attempt).
 rank_destinations() {
     jq -c '
       .Status.destinations
@@ -131,18 +104,9 @@ wait_for_connected() {
     return 1
 }
 
-# collect_connection_metrics -> sets LAST_METRICS_JSON.
-#
-# Gateway ping (avg + loss in one pass), HTTPS reachability count, the sized-
-# download ladder, a short streaming transfer, and egress IP/geo - the same
-# probe families as vpn-smoke-test.sh's checks, reimplemented here (using its
-# sourced helpers) to capture raw numeric values instead of human-formatted
-# PASS/WARN/FAIL text. MTU and IPv6-leak checks are intentionally skipped:
-# they don't feed capacity/latency comparison and would slow down a tour that
-# repeats this per destination per round.
+# collect_connection_metrics -> sets LAST_METRICS_JSON from gateway ping/loss, HTTPS reachability, sized downloads, a short stream, and egress IP/geo (vpn-smoke-test.sh's probes reimplemented for raw numeric values instead of PASS/WARN/FAIL text); MTU/IPv6-leak checks are skipped since they don't feed capacity/latency comparison and would slow a tour repeating this per destination per round.
 collect_connection_metrics() {
-    # Reset/set from here, but read by record()/check_*-style logic in the
-    # sourced vpn-smoke-test.sh, so shellcheck can't see the usage.
+    # Read by record() in the sourced vpn-smoke-test.sh, so shellcheck can't see the usage.
     # shellcheck disable=SC2034
     PASS_COUNT=0 WARN_COUNT=0 FAIL_COUNT=0 SKIP_COUNT=0 GATEWAY_UP=0
     local argv out="" rc=0 ping_avg="" loss_pct=""
@@ -220,8 +184,7 @@ collect_connection_metrics() {
 # Data recording
 # ---------------------------------------------------------------------------
 
-# record_attempt <round> <id> <address> <cap-used> <cap-avail> <ping-rtt-ms>
-#                 <outcome> <reason> <metrics-json> <funding-json> <started> <ended>
+# record_attempt <round> <id> <address> <cap-used> <cap-avail> <ping-rtt-ms> <outcome> <reason> <metrics-json> <funding-json> <started> <ended>
 record_attempt() {
     local row
     row="$(jq -c -n \
@@ -299,12 +262,7 @@ attempt_destination() {
     return 0
 }
 
-# run_round <round> <funding-json> -> sets ROUND_SUCCESSES.
-#
-# Not returned via `echo` + command substitution: record()/section() (called
-# transitively through attempt_destination) print status lines to stdout, and
-# capturing the function's whole stdout would swallow those lines into the
-# "return value" instead of the terminal.
+# run_round <round> <funding-json> -> sets ROUND_SUCCESSES (not echoed: attempt_destination prints status lines via record(), which a command substitution would swallow into the "return value" instead of the terminal).
 run_round() {
     local round="$1" funding_json="$2" status_json ranked count i=0 successes=0
     status_json="$(get_status_json)"

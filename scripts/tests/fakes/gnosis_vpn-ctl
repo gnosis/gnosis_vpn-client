@@ -1,12 +1,5 @@
 #!/usr/bin/env bash
-#
-# Fake gnosis_vpn-ctl for the offline vpn-drain-tour.sh suite. Fixed 3-destination
-# fixture: de1 and us1 are ReadyToConnect (de1 has the lower used-capacity
-# fraction so it ranks first), fr1 needs a channel and is never connectable.
-# Behavior is driven by FAKE_CTL_* environment variables; state that must
-# persist across invocations (the currently connected destination, how many
-# times balance has been queried) lives in $FAKE_CTL_STATE, since each
-# invocation is a separate process.
+# Fake gnosis_vpn-ctl for the offline vpn-drain-tour.sh suite: fixed 3-destination fixture (de1 and us1 ReadyToConnect, de1 ranks first on lower used-capacity; fr1 NeedsChannel, never connectable), driven by FAKE_CTL_* env vars, with cross-invocation state (connected id, balance call count) kept in $FAKE_CTL_STATE since each call is a separate process.
 set -u
 
 STATE="${FAKE_CTL_STATE:?FAKE_CTL_STATE must be set}"

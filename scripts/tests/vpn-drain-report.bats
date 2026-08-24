@@ -1,8 +1,5 @@
 #!/usr/bin/env bats
-#
-# Offline tests for scripts/vpn-drain-report.sh. Runs it against small
-# runs.jsonl fixtures and asserts on the generated report.html - no network,
-# no gnosis_vpn-ctl.
+# Offline tests for scripts/vpn-drain-report.sh: runs it against small runs.jsonl fixtures and asserts on the generated report.html - no network, no gnosis_vpn-ctl.
 
 setup() {
     SCRIPT="${BATS_TEST_DIRNAME}/../vpn-drain-report.sh"

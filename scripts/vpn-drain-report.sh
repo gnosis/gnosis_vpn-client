@@ -1,22 +1,6 @@
 #!/usr/bin/env bash
-#
-# vpn-drain-report.sh - render a comparison report from a vpn-drain-tour.sh run.
-#
-# Reads <run-dir>/runs.jsonl (written by vpn-drain-tour.sh) and writes
-# <run-dir>/report.html: a cross-destination comparison (table, an outcome
-# heatmap over rounds, overlaid latency/throughput trend lines, and a drain
-# timeline correlating funding with connection outcomes), plus a per-
-# destination detail section (histograms + raw round-by-round data) reachable
-# via anchor links from the table. The whole thing is one HTML document -
-# not linked sub-pages - specifically so a browser's Print -> Save as PDF
-# captures everything in one shareable file; a `@media print` stylesheet
-# forces the collapsed detail sections open and page-breaks between them.
-#
-# No charting library: bar/line/histogram charts are inline SVG built by awk.
-#
-# Required commands: bash, jq, awk.
-#
-# Run `./vpn-drain-report.sh --help` for options.
+# vpn-drain-report.sh - reads <run-dir>/runs.jsonl (from vpn-drain-tour.sh) and writes one self-contained <run-dir>/report.html: a cross-destination comparison table, outcome heatmap, latency/throughput trend lines and a funding drain timeline, plus per-destination histogram/round-data sections reachable via anchor links (kept in the same document, not linked sub-pages, so a browser's Print -> Save as PDF captures everything, aided by a `@media print` stylesheet that expands the collapsed sections and page-breaks between them); charts are inline SVG built by awk, no charting library.
+# Required commands: bash, jq, awk. Run `./vpn-drain-report.sh --help` for options.
 
 set -euo pipefail
 
@@ -83,8 +67,7 @@ parse_args() {
 }
 
 # ---------------------------------------------------------------------------
-# Embedded jq/awk programs, written out to a scratch dir so they stay
-# readable here instead of living as escaped one-liners in bash strings.
+# Embedded jq/awk programs (written to a scratch dir, not escaped one-liners)
 # ---------------------------------------------------------------------------
 
 write_programs() {
