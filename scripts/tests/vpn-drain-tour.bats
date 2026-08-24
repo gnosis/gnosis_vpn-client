@@ -17,11 +17,11 @@ setup() {
     local status_json
     status_json='{"Status":{"destinations":[
         {"destination":{"id":"high-use","address":"0xA"},
-         "route_health":{"state":"ReadyToConnect","exit":{"ping_rtt":10,"health":{"slots":{"available":10,"connected":9}}}}},
+         "route_health":{"state":{"state":"ReadyToConnect","exit":{"ping_rtt":10,"health":{"slots":{"available":10,"connected":9}}}}}},
         {"destination":{"id":"low-use","address":"0xB"},
-         "route_health":{"state":"ReadyToConnect","exit":{"ping_rtt":50,"health":{"slots":{"available":10,"connected":1}}}}},
+         "route_health":{"state":{"state":"ReadyToConnect","exit":{"ping_rtt":50,"health":{"slots":{"available":10,"connected":1}}}}}},
         {"destination":{"id":"no-channel","address":"0xC"},
-         "route_health":{"state":"NeedsChannel"}}
+         "route_health":{"state":{"state":"NeedsChannel"}}}
     ]}}'
     run bash -c "source '$SCRIPT'; rank_destinations '$status_json' | jq -c '[.[].id]'"
     [ "$status" -eq 0 ]
@@ -31,9 +31,9 @@ setup() {
 @test "rank_destinations puts Routable (no exit data) after known-capacity destinations" {
     local status_json
     status_json='{"Status":{"destinations":[
-        {"destination":{"id":"routable","address":"0xA"}, "route_health":{"state":"Routable"}},
+        {"destination":{"id":"routable","address":"0xA"}, "route_health":{"state":{"state":"Routable"}}},
         {"destination":{"id":"known","address":"0xB"},
-         "route_health":{"state":"ReadyToConnect","exit":{"ping_rtt":10,"health":{"slots":{"available":10,"connected":5}}}}}
+         "route_health":{"state":{"state":"ReadyToConnect","exit":{"ping_rtt":10,"health":{"slots":{"available":10,"connected":5}}}}}}
     ]}}'
     run bash -c "source '$SCRIPT'; rank_destinations '$status_json' | jq -c '[.[].id]'"
     [ "$status" -eq 0 ]

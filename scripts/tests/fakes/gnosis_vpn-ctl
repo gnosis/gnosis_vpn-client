@@ -35,15 +35,17 @@ status_json() {
     cat <<JSON
 {"Status":{"run_mode":"Running","destinations":[
   {"destination":{"id":"de1","meta":{},"address":"0xDE1","routing":1},
-   "route_health":{"state":"ReadyToConnect","last_error":null,"checking_since":null,"consecutive_failures":0,
-     "exit":{"checked_at":0,"versions":{"versions":["v1"],"latest":"v1"},"ping_rtt":40.0,
-       "health":{"slots":{"available":10,"connected":2},"load_avg":{"one":0.1,"five":0.1,"fifteen":0.1,"nproc":4}}}}},
+   "route_health":{"last_error":null,"checking_since":null,"consecutive_failures":0,
+     "state":{"state":"ReadyToConnect",
+       "exit":{"checked_at":0,"versions":{"versions":["v1"],"latest":"v1"},"ping_rtt":40.0,
+       "health":{"slots":{"available":10,"connected":2},"load_avg":{"one":0.1,"five":0.1,"fifteen":0.1,"nproc":4}}}}}},
   {"destination":{"id":"us1","meta":{},"address":"0xUS1","routing":1},
-   "route_health":{"state":"ReadyToConnect","last_error":null,"checking_since":null,"consecutive_failures":0,
-     "exit":{"checked_at":0,"versions":{"versions":["v1"],"latest":"v1"},"ping_rtt":80.0,
-       "health":{"slots":{"available":5,"connected":4},"load_avg":{"one":0.1,"five":0.1,"fifteen":0.1,"nproc":4}}}}},
+   "route_health":{"last_error":null,"checking_since":null,"consecutive_failures":0,
+     "state":{"state":"ReadyToConnect",
+       "exit":{"checked_at":0,"versions":{"versions":["v1"],"latest":"v1"},"ping_rtt":80.0,
+       "health":{"slots":{"available":5,"connected":4},"load_avg":{"one":0.1,"five":0.1,"fifteen":0.1,"nproc":4}}}}}},
   {"destination":{"id":"fr1","meta":{},"address":"0xFR1","routing":1},
-   "route_health":{"state":"NeedsChannel","last_error":null,"checking_since":null,"consecutive_failures":0}}
+   "route_health":{"last_error":null,"checking_since":null,"consecutive_failures":0,"state":{"state":"NeedsChannel"}}}
 ],"target_destination":null,"connecting":null,"reconnecting":null,"connected":$connected_block,"disconnecting":[]}}
 JSON
 }

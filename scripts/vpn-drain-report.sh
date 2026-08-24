@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vpn-drain-report.sh - reads <run-dir>/runs.jsonl (from vpn-drain-tour.sh) and writes one self-contained <run-dir>/report.html: a cross-destination comparison table, outcome heatmap, latency/throughput trend lines and a funding drain timeline, plus per-destination histogram/round-data sections reachable via anchor links (kept in the same document, not linked sub-pages, so a browser's Print -> Save as PDF captures everything, aided by a `@media print` stylesheet that expands the collapsed sections and page-breaks between them); charts are inline SVG built by awk, no charting library.
+# vpn-drain-report.sh - reads <run-dir>/runs.jsonl (from vpn-drain-tour.sh) and writes one self-contained <run-dir>/report.html: a cross-destination comparison table, outcome heatmap, latency/throughput trend lines and a funding drain timeline, plus per-destination histogram/round-data sections reachable via anchor links (kept in the same document, not linked sub-pages, so a browser's Print -> Save as PDF captures everything, aided by a small `beforeprint`/`afterprint` script that expands the collapsed sections and a `@media print` stylesheet that page-breaks between them); charts are inline SVG built by awk, no charting library.
 # Required commands: bash, jq, awk. Run `./vpn-drain-report.sh --help` for options.
 # Fetch this alongside vpn-smoke-test.sh/vpn-drain-tour.sh: see scripts/README.md.
 
@@ -574,8 +574,18 @@ render_report() {
         printf '<h2>Destination detail</h2>\n'
         render_destination_sections
 
-        printf '<footer>Raw data: <code>%s</code>, <code>%s</code>. Open in a browser and use Print &rarr; Save as PDF to share; the print stylesheet expands every destination section onto its own page.</footer>\n' \
+        printf '<footer>Raw data: <code>%s</code>, <code>%s</code>. Open in a browser and use Print &rarr; Save as PDF to share; destination sections auto-expand for print and collapse back after.</footer>\n' \
             "$(htmlescape_str "$RUN_DIR/runs.jsonl")" "$(htmlescape_str "$RUN_DIR/metrics.csv")"
+        printf '<script>\n'
+        printf 'var closedBeforePrint = []\n'
+        printf "window.addEventListener('beforeprint', function () {\n"
+        printf "    closedBeforePrint = Array.prototype.slice.call(document.querySelectorAll('details.dest-section:not([open])'))\n"
+        printf '    closedBeforePrint.forEach(function (d) { d.open = true })\n'
+        printf '})\n'
+        printf "window.addEventListener('afterprint', function () {\n"
+        printf '    closedBeforePrint.forEach(function (d) { d.open = false })\n'
+        printf '})\n'
+        printf '</script>\n'
         printf '</div>\n</body></html>\n'
     } >"$OUT_FILE"
 }
@@ -595,7 +605,13 @@ check_deps() {
     if [ "$INSTALL_DEPS" -eq 1 ]; then
         command -v apt-get >/dev/null 2>&1 || die "--install-deps needs apt-get, which was not found"
         printf 'Installing missing dependencies: %s\n' "${missing_pkgs[*]}"
-        sudo apt-get update && sudo apt-get install -y "${missing_pkgs[@]}"
+        if [ "${EUID:-1}" -eq 0 ]; then
+            apt-get update && apt-get install -y "${missing_pkgs[@]}"
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y "${missing_pkgs[@]}"
+        else
+            die "--install-deps needs sudo (or re-run as root)"
+        fi
         return 0
     fi
 
