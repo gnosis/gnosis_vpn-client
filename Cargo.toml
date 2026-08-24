@@ -13,9 +13,9 @@ name = "gnosis_vpn"
 
 [workspace.dependencies]
 anyhow = { version = "~1.0.104" }
-async-trait = "~0.1.91"
+async-trait = "~0.1.92"
 backon = { version = "~1.6.0" }
-base64 = "~0.22.1"
+base64 = "~0.23.1"
 bytesize = "~2.7.0"
 cfg-if = "~1.0.4"
 chrono = { version = "~0.4.45", default-features = false, features = [
@@ -23,8 +23,8 @@ chrono = { version = "~0.4.45", default-features = false, features = [
   "serde",
   "std",
 ] }
-clap = { version = "~4.6.5", features = ["derive", "env"] }
-clap_complete = "~4.6.8"
+clap = { version = "~4.6.6", features = ["derive", "env"] }
+clap_complete = "~4.6.9"
 edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "4ba1e5977520828cec40f426c0e0a27d6dae71f7", features = [
   "blokli",
   "telemetry",
@@ -46,7 +46,6 @@ humantime-serde = "~1.1.1"
 ipnetwork = "~0.21.1"
 libc = "~0.2.189"
 mnl = "~0.3.1"
-multiaddr = "~0.18.2"
 neptun = { git = "https://github.com/NordSecurity/neptun.git", tag = "v3.0.1" }
 nftnl = "~0.9.3"
 notify = "~8.2.0"
@@ -59,16 +58,16 @@ rustix = { version = "~1.1.4", features = ["fs", "net", "pipe", "stdio"] }
 serde = { version = "~1.0.229", features = ["derive"] }
 serde-saphyr = "~0.0.29"
 serde_json = "~1.0.151"
-serde_with = "~3.21.0"
+serde_with = "~3.22.0"
 tempfile = "~3.27.0"
-thiserror = "~2.0.19"
+thiserror = "~2.0.20"
 tikv-jemallocator = "~0.7.0"
 tokio = { version = "~1.53.1", features = ["full"] }
 tokio-util = { version = "~0.7.19", features = ["rt"] }
 toml = "~1.1.4"
 tracing = { version = "~0.1.44", features = ["release_max_level_debug"] }
 tracing-subscriber = "~0.3.23"
-unix-ancillary = "~0.2.2"
+unix-ancillary = "~0.3.0"
 url = { version = "~2.5.8", features = ["serde"] }
 uzers = "~0.12.2"
 x25519-dalek = { version = "~2.0.1", features = [
