@@ -361,7 +361,14 @@ check_deps() {
             exit 2
         }
         printf '%sInstalling missing dependencies: %s%s\n' "$C_BOLD" "${missing_pkgs[*]}" "$C_RESET"
-        sudo apt-get update && sudo apt-get install -y "${missing_pkgs[@]}"
+        if [ "${EUID:-1}" -eq 0 ]; then
+            apt-get update && apt-get install -y "${missing_pkgs[@]}"
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y "${missing_pkgs[@]}"
+        else
+            printf '\n%sAborting: --install-deps needs sudo (or re-run as root).%s\n' "$C_RED" "$C_RESET" >&2
+            exit 2
+        fi
         return 0
     fi
 
