@@ -13,7 +13,7 @@ name = "gnosis_vpn"
 
 [workspace.dependencies]
 anyhow = { version = "~1.0.104" }
-async-trait = "~0.1.91"
+async-trait = "~0.1.92"
 backon = { version = "~1.6.0" }
 base64 = "~0.22.1"
 bytesize = "~2.7.0"
@@ -23,8 +23,8 @@ chrono = { version = "~0.4.45", default-features = false, features = [
   "serde",
   "std",
 ] }
-clap = { version = "~4.6.5", features = ["derive", "env"] }
-clap_complete = "~4.6.8"
+clap = { version = "~4.6.6", features = ["derive", "env"] }
+clap_complete = "~4.6.9"
 edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "f472e2677b2aee85817ba868ba31b91da84f1b44", features = [
   "blokli",
   "telemetry",
@@ -61,7 +61,7 @@ serde-saphyr = "~0.0.29"
 serde_json = "~1.0.151"
 serde_with = "~3.21.0"
 tempfile = "~3.27.0"
-thiserror = "~2.0.19"
+thiserror = "~2.0.20"
 tikv-jemallocator = "~0.7.0"
 tokio = { version = "~1.53.1", features = ["full"] }
 tokio-util = { version = "~0.7.19", features = ["rt"] }
