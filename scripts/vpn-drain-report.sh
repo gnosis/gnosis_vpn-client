@@ -7,6 +7,7 @@ set -euo pipefail
 RUN_DIR=""
 OUT_FILE=""
 HIST_BINS=8
+INSTALL_DEPS=0
 
 die() {
     printf 'ERROR: %s\n' "$*" >&2
@@ -23,6 +24,7 @@ Options:
       --run-dir DIR   Run directory containing runs.jsonl (required)
       --out FILE      Output path                  (default <run-dir>/report.html)
       --hist-bins N   Histogram bin count           (default 8)
+      --install-deps  Install missing jq/awk via apt-get (Debian/Ubuntu) and continue
   -h, --help          Show this help
 EOF
 }
@@ -52,6 +54,10 @@ parse_args() {
         --hist-bins)
             HIST_BINS="$2"
             shift 2
+            ;;
+        --install-deps)
+            INSTALL_DEPS=1
+            shift
             ;;
         -h | --help)
             usage
@@ -555,16 +561,36 @@ render_report() {
     } >"$OUT_FILE"
 }
 
-require_cmd() {
-    command -v "$1" >/dev/null 2>&1 || die "$1 is required"
+# check_deps <cmd> <apt-pkg> [<cmd> <apt-pkg> ...] -> with --install-deps, apt-get installs any missing command's package and returns; otherwise dies with the apt-get command to run.
+check_deps() {
+    local missing_cmds=() missing_pkgs=()
+    while [ "$#" -gt 0 ]; do
+        command -v "$1" >/dev/null 2>&1 || {
+            missing_cmds+=("$1")
+            missing_pkgs+=("$2")
+        }
+        shift 2
+    done
+    [ "${#missing_cmds[@]}" -eq 0 ] && return 0
+
+    if [ "$INSTALL_DEPS" -eq 1 ]; then
+        command -v apt-get >/dev/null 2>&1 || die "--install-deps needs apt-get, which was not found"
+        printf 'Installing missing dependencies: %s\n' "${missing_pkgs[*]}"
+        sudo apt-get update && sudo apt-get install -y "${missing_pkgs[@]}"
+        return 0
+    fi
+
+    if command -v apt-get >/dev/null 2>&1; then
+        die "missing ${missing_cmds[*]}. On Debian/Ubuntu: sudo apt-get install -y ${missing_pkgs[*]} (or re-run with --install-deps)"
+    fi
+    die "missing ${missing_cmds[*]}"
 }
 
 main() {
     parse_args "$@"
     [ -n "$RUN_DIR" ] || die "--run-dir is required (see --help)"
     [ -f "$RUN_DIR/runs.jsonl" ] || die "$RUN_DIR/runs.jsonl not found"
-    require_cmd jq
-    require_cmd awk
+    check_deps jq jq awk gawk
 
     OUT_FILE="${OUT_FILE:-$RUN_DIR/report.html}"
     AGGREGATE="$RUN_DIR/aggregate.json"

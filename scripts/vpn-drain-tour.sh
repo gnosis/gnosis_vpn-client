@@ -20,6 +20,7 @@ OUT_DIR=""
 MAX_ROUNDS=50
 CONNECT_TIMEOUT=60
 POLL_INTERVAL=2
+INSTALL_DEPS=0
 
 readonly DISCONNECT_SETTLE=2 # brief pause after disconnect before the next connect
 
@@ -341,16 +342,39 @@ print_final_summary() {
 # Preflight, CLI parsing, main
 # ---------------------------------------------------------------------------
 
-require_jq() {
-    if ! command -v jq >/dev/null 2>&1; then
-        printf '\n%sAborting: jq is required to parse gnosis_vpn-ctl JSON output.%s\n' "$C_RED" "$C_RESET" >&2
-        exit 2
+# check_deps <cmd> <apt-pkg> [<cmd> <apt-pkg> ...] -> with --install-deps, apt-get installs any missing command's package and returns; otherwise aborts with the apt-get command to run.
+check_deps() {
+    local missing_cmds=() missing_pkgs=()
+    while [ "$#" -gt 0 ]; do
+        command -v "$1" >/dev/null 2>&1 || {
+            missing_cmds+=("$1")
+            missing_pkgs+=("$2")
+        }
+        shift 2
+    done
+    [ "${#missing_cmds[@]}" -eq 0 ] && return 0
+
+    if [ "$INSTALL_DEPS" -eq 1 ]; then
+        command -v apt-get >/dev/null 2>&1 || {
+            printf '\n%sAborting: --install-deps needs apt-get, which was not found.%s\n' "$C_RED" "$C_RESET" >&2
+            exit 2
+        }
+        printf '%sInstalling missing dependencies: %s%s\n' "$C_BOLD" "${missing_pkgs[*]}" "$C_RESET"
+        sudo apt-get update && sudo apt-get install -y "${missing_pkgs[@]}"
+        return 0
     fi
+
+    printf '\n%sAborting: missing %s.%s\n' "$C_RED" "${missing_cmds[*]}" "$C_RESET" >&2
+    if command -v apt-get >/dev/null 2>&1; then
+        printf 'On Debian/Ubuntu: sudo apt-get install -y %s\n' "${missing_pkgs[*]}" >&2
+        printf '(or re-run this script with --install-deps)\n' >&2
+    fi
+    exit 2
 }
 
 require_ctl() {
     if ! command -v "$CTL_BIN" >/dev/null 2>&1; then
-        printf '\n%sAborting: %s not found (set GVPN_CTL to override).%s\n' "$C_RED" "$CTL_BIN" "$C_RESET" >&2
+        printf '\n%sAborting: %s not found (set GVPN_CTL to override). gnosis_vpn-ctl is this project'"'"'s own binary, not an apt package - install/build the client first.%s\n' "$C_RED" "$CTL_BIN" "$C_RESET" >&2
         exit 2
     fi
 }
@@ -378,6 +402,7 @@ Options:
       --dl-timeout N        Sized-download timeout (s)               (default 120)
       --ping-timeout N      Ping timeout (s)                         (default 15)
       --quick               Shrink the per-connection probe set (skip 3 MB download, shorten streaming)
+      --install-deps        Install missing jq/curl/ping/awk via apt-get (Debian/Ubuntu) and continue
       --no-color            Disable colored output
   -h, --help                Show this help
 
@@ -444,6 +469,10 @@ parse_args() {
             QUICK=1
             shift
             ;;
+        --install-deps)
+            INSTALL_DEPS=1
+            shift
+            ;;
         --no-color)
             # Read by setup_colors() in the sourced vpn-smoke-test.sh.
             # shellcheck disable=SC2034
@@ -467,7 +496,7 @@ main() {
     parse_args "$@"
     setup_colors
     OS="$(detect_os)"
-    require_jq
+    check_deps jq jq "$CURL_BIN" curl "$PING_BIN" iputils-ping awk gawk
     require_ctl
 
     OUT_DIR="${OUT_DIR:-./vpn-drain-runs/$(date -u +%Y%m%dT%H%M%SZ)}"

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Fake apt-get for the offline vpn-drain-tour.sh/vpn-drain-report.sh --install-deps tests: records its argv and exits 0 without touching the real system.
+set -u
+[ -n "${FAKE_APT_GET_LOG:-}" ] && printf '%s\n' "$*" >>"$FAKE_APT_GET_LOG"
+exit 0

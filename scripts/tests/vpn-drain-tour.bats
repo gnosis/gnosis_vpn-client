@@ -67,6 +67,29 @@ setup() {
     done
 }
 
+@test "a missing dependency aborts with an apt-get hint" {
+    export PATH="${FAKES}:${PATH}"
+    export GVPN_CURL="${BATS_TEST_TMPDIR}/no-such-curl"
+    run "$SCRIPT" --out-dir "${BATS_TEST_TMPDIR}/run" --max-rounds 1
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"missing"* ]]
+    [[ "$output" == *"apt-get install"* ]]
+    [[ "$output" == *curl* ]]
+}
+
+@test "--install-deps apt-get installs the missing package and continues" {
+    export PATH="${FAKES}:${PATH}"
+    export FAKE_APT_GET_LOG="${BATS_TEST_TMPDIR}/apt-get.log"
+    export GVPN_CURL="${BATS_TEST_TMPDIR}/no-such-curl"
+    export FAKE_CTL_EMPTY_AFTER=1
+
+    run "$SCRIPT" --out-dir "${BATS_TEST_TMPDIR}/run" --max-rounds 1 --install-deps
+    [ "$status" -eq 0 ]
+    [ -f "$FAKE_APT_GET_LOG" ]
+    run grep -c "install -y curl" "$FAKE_APT_GET_LOG"
+    [ "$output" -eq 1 ]
+}
+
 # --- whole run ---------------------------------------------------------
 
 @test "tour connects best-first, records a rejected connect, skips a needs-channel destination, and stops when funds drain" {
