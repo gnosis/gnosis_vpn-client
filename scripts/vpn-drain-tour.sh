@@ -63,7 +63,7 @@ rank_destinations() {
       | map(
           (.route_health) as $rh
           | (.destination) as $d
-          | ($rh.state // "NoHealth") as $state
+          | ($rh.state.state // "NoHealth") as $state
           | (if ($state == "ReadyToConnect" or $state == "Connecting") then 0
              elif ($state == "Routable") then 1
              else 2 end) as $tier
@@ -72,12 +72,12 @@ rank_destinations() {
               address: $d.address,
               state: $state,
               last_error: ($rh.last_error // null),
-              available: ($rh.exit.health.slots.available // null),
-              connected_slots: ($rh.exit.health.slots.connected // null),
-              ping_rtt_ms: ($rh.exit.ping_rtt // null),
+              available: ($rh.state.exit.health.slots.available // null),
+              connected_slots: ($rh.state.exit.health.slots.connected // null),
+              ping_rtt_ms: ($rh.state.exit.ping_rtt // null),
               tier: $tier,
-              used_fraction: (if (($rh.exit.health.slots.available // 0) > 0)
-                              then ($rh.exit.health.slots.connected / $rh.exit.health.slots.available)
+              used_fraction: (if (($rh.state.exit.health.slots.available // 0) > 0)
+                              then ($rh.state.exit.health.slots.connected / $rh.state.exit.health.slots.available)
                               else 999 end)
             }
         )
