@@ -212,6 +212,9 @@ impl Connection {
     }
 
     pub fn default_wg_capabilities() -> Vec<Capability> {
+        // NoDelay on a stateless session preserves UDP/WireGuard datagram boundaries over the
+        // session (hoprnet#8356): each datagram is delivered as exactly one read, so neptun never
+        // sees a split/coalesced buffer.
         vec![Capability::Segmentation, Capability::NoDelay]
     }
 
