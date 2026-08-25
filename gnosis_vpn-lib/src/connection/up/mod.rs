@@ -16,6 +16,7 @@ use crate::wg_tunnel::{self, TunnelStatsSample};
 use crate::wireguard::WireGuard;
 use crate::{gvpn_client, log_output, remote_data, wireguard};
 
+mod demand;
 pub(crate) mod runner;
 
 #[derive(Debug)]
@@ -169,6 +170,10 @@ pub struct Up {
     pub surb_applied: Option<SurbBalancerConfig>,
     surb_ramp_rate: Option<SurbSlewRate>,
     surb_last_tick: Option<SystemTime>,
+    /// Demand-driven SURB target policy state (Problem 2): smoothed WireGuard
+    /// byte rates plus hysteresis bookkeeping, used to decide whether to boost
+    /// `surb_target` above the main tier's baseline. `None` until observed.
+    demand: Option<demand::DemandTracker>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -208,6 +213,7 @@ impl Up {
             surb_applied: None,
             surb_ramp_rate: None,
             surb_last_tick: None,
+            demand: None,
         }
     }
 
@@ -235,6 +241,48 @@ impl Up {
             }
             Err(e) => tracing::warn!(error = ?e, "failed to adjust surb balancer - will retry next tick"),
         }
+    }
+
+    /// Retargets the SURB balancer's setpoint to `target`, recomputing the
+    /// follower's ramp rate so it converges within `duration` regardless of
+    /// the gap from whatever is currently applied - reusing the previous
+    /// rate here would make convergence time an unpredictable function of
+    /// whatever gap it was originally sized for (see `Progress::SetSurbTarget`).
+    /// Leaves `surb_applied`/`surb_last_tick` alone: `advance_surb_ramp`
+    /// already tracks incremental progress from wherever `surb_applied` sits.
+    pub fn retarget_surb_balancer(&mut self, target: SurbBalancerConfig, duration: Duration) {
+        if self.surb_target == Some(target) {
+            return;
+        }
+        let applied = self.surb_applied.unwrap_or(target);
+        self.surb_ramp_rate = Some(SurbSlewRate::to_cover(applied, target, duration));
+        self.surb_target = Some(target);
+    }
+
+    /// Demand-driven SURB target policy (Problem 2): folds the latest
+    /// `wg_stats` sample into a smoothed demand signal and retargets
+    /// `surb_target` relative to `main_baseline` when sustained one-sided
+    /// traffic is detected. No-op until the ping->main `SetSurbTarget`
+    /// transition has already happened, so this can never disturb that
+    /// bootstrap.
+    pub fn maybe_adjust_surb_demand(&mut self, main_baseline: SurbBalancerConfig, now: SystemTime) {
+        if self.surb_target.is_none() {
+            return;
+        }
+        let mut recent = self.wg_stats.iter().rev();
+        let Some((cur, prev)) = recent.next().zip(recent.next()) else {
+            return;
+        };
+        let (cur, prev) = (cur.clone(), prev.clone());
+
+        let min_demand = main_baseline.max_surbs_per_sec as f64
+            * edgli::hopr_lib::exports::transport::SURB_SIZE as f64
+            * demand::MIN_DEMAND_FRACTION;
+        let tracker = self.demand.get_or_insert_with(|| demand::DemandTracker::new(now));
+        tracker.observe(&prev, &cur, min_demand);
+
+        let target = demand::target_for(main_baseline, tracker.is_boosted());
+        self.retarget_surb_balancer(target, demand::RAMP_DURATION);
     }
 
     /// Record a new WireGuard telemetry sample, evicting the oldest once at
