@@ -256,6 +256,7 @@ impl Up {
                 self.surb_applied = Some(next);
                 self.surb_last_tick = Some(now);
             }
+            // Unthrottled by design: failure means the session is already gone, so a reconnect self-resolves this within ~tunnel_ping_max_failures * tunnel_ping.
             Err(e) => tracing::warn!(error = ?e, "failed to adjust surb balancer - will retry next tick"),
         }
     }
