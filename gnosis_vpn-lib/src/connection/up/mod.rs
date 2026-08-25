@@ -225,10 +225,10 @@ impl Up {
             .and_then(|last| now.duration_since(last).ok())
             .unwrap_or_default();
         let next = slew_towards(applied, target, elapsed, rate);
-        self.surb_last_tick = Some(now);
         if next == applied {
             return;
         }
+        self.surb_last_tick = Some(now);
         match configurator.update_surb_balancer_config(next) {
             Ok(()) => self.surb_applied = Some(next),
             Err(e) => tracing::warn!(error = ?e, "failed to adjust surb balancer - will retry next tick"),
