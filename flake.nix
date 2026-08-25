@@ -186,6 +186,7 @@
                 pkgs.bats
                 pkgs.cargo-machete
                 pkgs.cargo-shear
+                pkgs.jq
                 pkgs.just
                 pkgs.rust-analyzer
               ]
