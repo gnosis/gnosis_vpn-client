@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Fake sudo for the offline --install-deps tests: just execs its argv, no privilege escalation.
+exec "$@"
