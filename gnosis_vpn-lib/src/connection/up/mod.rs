@@ -277,16 +277,17 @@ impl Up {
             return;
         }
         let mut recent = self.wg_stats.iter().rev();
-        let Some((cur, prev)) = recent.next().zip(recent.next()) else {
+        // wg_stats is oldest-to-newest; reversed, the first next() is newest, the second is the sample before it.
+        let Some((newest, older)) = recent.next().zip(recent.next()) else {
             return;
         };
-        let (cur, prev) = (cur.clone(), prev.clone());
+        let (newest, older) = (newest.clone(), older.clone());
 
         let min_demand = main_baseline.max_surbs_per_sec as f64
             * edgli::hopr_lib::exports::transport::SURB_SIZE as f64
             * demand::MIN_DEMAND_FRACTION;
         let tracker = self.demand.get_or_insert_with(|| demand::DemandTracker::new(now));
-        tracker.observe(&prev, &cur, min_demand);
+        tracker.observe(&older, &newest, min_demand);
 
         let target = demand::target_for(main_baseline, tracker.is_boosted());
         self.retarget_surb_balancer(target, demand::RAMP_DURATION);
