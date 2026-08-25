@@ -163,11 +163,7 @@ pub(crate) fn to_surb_balancer_config(
     let config = SurbBalancerConfig {
         target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::exports::transport::SESSION_MTU as u64,
         max_surbs_per_sec,
-        // When the return path starts dropping replies, the Entry balancer's produced-minus-consumed
-        // estimate reads as a filling SURB buffer exactly when the Exit is draining it, so it stops
-        // producing and the Exit starves of SURBs -- the desync behind GNO-713. Opting in lets the
-        // already-wired silent-destination detector force production flat-out until replies resume.
-        sustain_on_return_path_loss: true,
+        sustain_on_return_path_loss: true, // keep producing SURBs when return-path loss hides consumed replies (GNO-713)
         ..Default::default()
     };
     Ok(config)
