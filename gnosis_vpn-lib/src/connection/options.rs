@@ -163,6 +163,7 @@ pub(crate) fn to_surb_balancer_config(
     let config = SurbBalancerConfig {
         target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::exports::transport::SESSION_MTU as u64,
         max_surbs_per_sec,
+        sustain_on_return_path_loss: true, // keep producing SURBs when return-path loss hides consumed replies (GNO-713)
         ..Default::default()
     };
     Ok(config)
