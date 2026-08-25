@@ -228,9 +228,11 @@ impl Up {
         if next == applied {
             return;
         }
-        self.surb_last_tick = Some(now);
         match configurator.update_surb_balancer_config(next) {
-            Ok(()) => self.surb_applied = Some(next),
+            Ok(()) => {
+                self.surb_applied = Some(next);
+                self.surb_last_tick = Some(now);
+            }
             Err(e) => tracing::warn!(error = ?e, "failed to adjust surb balancer - will retry next tick"),
         }
     }

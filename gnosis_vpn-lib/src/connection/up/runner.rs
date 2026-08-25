@@ -152,6 +152,7 @@ impl Runner {
         //    raw session is spliced directly into the pump - no local listener and no
         //    loopback hop.
         let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
+        let ping_surb_management = ping_surb.management;
         let SplicedWgSession {
             session: hopr_session,
             configurator,
@@ -197,9 +198,8 @@ impl Runner {
         let _ = results_sender
             .send(progress(Progress::AdjustToMain(round_trip_time)))
             .await;
-        let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
         let main_surb = surb_config_for(&self.options.surb_balancing.main)?;
-        match (ping_surb.management, main_surb.management) {
+        match (ping_surb_management, main_surb.management) {
             (Some(applied), Some(target)) => {
                 // Not in the listener registry, so the target is tracked on `Up` and slewed toward gradually by `core`, instead of jumping straight to it here (which floods the response buffer at startup).
                 let _ = results_sender
