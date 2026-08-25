@@ -1605,10 +1605,9 @@ impl Core {
 
     /// Advances the active session's SURB balancer toward `conn.surb_target` on each telemetry tick (see `Up::advance_surb_ramp`).
     fn maybe_adjust_session(&self, conn: &mut connection::up::Up, sample: &wg_tunnel::TunnelStatsSample) {
-        let Some(configurator) = conn.session_configurator.clone() else {
-            return;
+        if let Some(configurator) = conn.session_configurator.clone() {
+            conn.advance_surb_ramp(&configurator, sample.at);
         };
-        conn.advance_surb_ramp(&configurator, sample.at);
     }
 
     fn spawn_tunnel_ping_probe(&self, results_sender: &mpsc::Sender<Results>) {
