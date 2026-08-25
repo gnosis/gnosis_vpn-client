@@ -70,7 +70,7 @@ function parsePing(out, target) {
 const CLAMP = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 async function measureLatency(page) {
-  const s = [];
+  let s = [];
   for (let i = 0; i < 12; i++) {
     try {
       const ms = await page.evaluate(async (i) => {
@@ -83,6 +83,7 @@ async function measureLatency(page) {
       s.push(ms);
     } catch { /* skip failed sample */ }
   }
+  s = s.filter((v) => typeof v === 'number' && Number.isFinite(v));
   if (!s.length) return { error: 'all latency samples failed' };
   s.sort((a, b) => a - b);
   const avg = s.reduce((a, b) => a + b, 0) / s.length;
