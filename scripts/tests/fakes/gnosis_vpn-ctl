@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Fake gnosis_vpn-ctl for the offline vpn-drain-tour.sh suite: fixed 3-destination fixture (de1 and us1 ReadyToConnect, de1 ranks first on lower used-capacity; fr1 NeedsChannel, never connectable), driven by FAKE_CTL_* env vars, with cross-invocation state (connected id, balance call count) kept in $FAKE_CTL_STATE since each call is a separate process.
+set -u
+
+STATE="${FAKE_CTL_STATE:?FAKE_CTL_STATE must be set}"
+mkdir -p "$STATE"
+CONNECTED_FILE="$STATE/connected"
+BALANCE_CALLS_FILE="$STATE/balance_calls"
+EMPTY_AFTER="${FAKE_CTL_EMPTY_AFTER:-0}" # 0 = funding traffic always "Good"
+
+is_in_list() {
+    local needle="$1" hay=" ${2:-} "
+    [ "$hay" != "  " ] && case "$hay" in *" $needle "*) return 0 ;; esac
+    return 1
+}
+
+args=()
+skip_next=0
+for a in "$@"; do
+    if [ "$skip_next" -eq 1 ]; then
+        skip_next=0
+        continue
+    fi
+    case "$a" in
+    -o) skip_next=1 ;;
+    *) args+=("$a") ;;
+    esac
+done
+cmd="${args[0]:-}"
+
+status_json() {
+    local connected="" connected_block="null"
+    [ -f "$CONNECTED_FILE" ] && connected="$(cat "$CONNECTED_FILE")"
+    [ -n "$connected" ] && connected_block="{\"destination_id\":\"$connected\",\"since\":0}"
+    cat <<JSON
+{"Status":{"run_mode":"Running","destinations":[
+  {"destination":{"id":"de1","meta":{},"address":"0xDE1","routing":1},
+   "route_health":{"last_error":null,"checking_since":null,"consecutive_failures":0,
+     "state":{"state":"ReadyToConnect",
+       "exit":{"checked_at":0,"versions":{"versions":["v1"],"latest":"v1"},"ping_rtt":40.0,
+       "health":{"slots":{"available":10,"connected":2},"load_avg":{"one":0.1,"five":0.1,"fifteen":0.1,"nproc":4}}}}}},
+  {"destination":{"id":"us1","meta":{},"address":"0xUS1","routing":1},
+   "route_health":{"last_error":null,"checking_since":null,"consecutive_failures":0,
+     "state":{"state":"ReadyToConnect",
+       "exit":{"checked_at":0,"versions":{"versions":["v1"],"latest":"v1"},"ping_rtt":80.0,
+       "health":{"slots":{"available":5,"connected":4},"load_avg":{"one":0.1,"five":0.1,"fifteen":0.1,"nproc":4}}}}}},
+  {"destination":{"id":"fr1","meta":{},"address":"0xFR1","routing":1},
+   "route_health":{"last_error":null,"checking_since":null,"consecutive_failures":0,"state":{"state":"NeedsChannel"}}}
+],"target_destination":null,"connecting":null,"reconnecting":null,"connected":$connected_block,"disconnecting":[]}}
+JSON
+}
+
+balance_json() {
+    local calls=0
+    [ -f "$BALANCE_CALLS_FILE" ] && calls="$(cat "$BALANCE_CALLS_FILE")"
+    calls=$((calls + 1))
+    echo "$calls" >"$BALANCE_CALLS_FILE"
+    local traffic="Good"
+    if [ "$EMPTY_AFTER" -gt 0 ] && [ "$calls" -ge "$EMPTY_AFTER" ]; then
+        traffic="Empty"
+    fi
+    cat <<JSON
+{"Balance":{"Ok":{"node":"1 xDai","safe":"1 wxHOPR","channels_out":[],
+  "info":{"node_address":"0xNODE","node_peer_id":"12D3","safe_address":"0xSAFE"},
+  "capacity_allocations":null,"ideal_balance":null,
+  "funding_status":{"traffic":"$traffic","gas":"Good","wxhopr_deficit":null,"xdai_deficit":null}}}}
+JSON
+}
+
+case "$cmd" in
+status)
+    status_json
+    exit 0
+    ;;
+balance)
+    balance_json
+    exit 0
+    ;;
+connect)
+    id="${args[1]:-}"
+    if is_in_list "$id" "${FAKE_CTL_FAIL_CONNECT:-}"; then
+        echo "UnableToConnect: no route to $id" >&2
+        exit 1
+    fi
+    if is_in_list "$id" "${FAKE_CTL_STALL_CONNECT:-}"; then
+        echo "Connecting to $id"
+        exit 0
+    fi
+    echo "$id" >"$CONNECTED_FILE"
+    echo "Connecting to $id"
+    exit 0
+    ;;
+disconnect)
+    rm -f "$CONNECTED_FILE"
+    echo "Disconnected"
+    exit 0
+    ;;
+*)
+    echo "fake gnosis_vpn-ctl: unknown command '$cmd'" >&2
+    exit 2
+    ;;
+esac

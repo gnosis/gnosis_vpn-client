@@ -13,6 +13,8 @@
 # dscacheutil add resolved addresses to verbose DNS output.
 #
 # Run `./vpn-smoke-test.sh --help` for options.
+#
+# Fetch this alongside vpn-drain-tour.sh/vpn-drain-report.sh: see scripts/README.md.
 
 set -euo pipefail
 
