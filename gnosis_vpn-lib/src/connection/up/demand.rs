@@ -4,12 +4,9 @@ use std::time::{Duration, SystemTime};
 
 use crate::wg_tunnel::TunnelStatsSample;
 
-/// EWMA time constant: filters ~4s per-sample noise while staying well above
-/// hoprd's own 100ms PID cadence - the "outer, slow" half of the system.
+/// EWMA time constant: smooths ~4s sample noise while staying well above hoprd's own 100ms PID cadence.
 const EWMA_TAU: Duration = Duration::from_secs(30);
-/// Floor below which a direction's demand is ignored as idle-link noise, as a
-/// fraction of the main tier's configured throughput ceiling - self-scales
-/// with whatever bandwidth the operator has configured.
+/// Floor below which a direction's demand is idle-link noise, as a fraction of the main tier's configured throughput ceiling.
 pub(crate) const MIN_DEMAND_FRACTION: f64 = 0.1;
 /// Dominant/recessive ratio required to enter the boosted state.
 const ENTER_IMBALANCE_RATIO: f64 = 4.0;
@@ -17,16 +14,13 @@ const ENTER_IMBALANCE_RATIO: f64 = 4.0;
 const EXIT_IMBALANCE_RATIO: f64 = 2.0;
 /// Minimum dwell time before a state is allowed to flip again - a second, independent thrash guard.
 const MIN_DWELL: Duration = Duration::from_secs(45);
-/// How long a demand-driven retarget takes to converge - shorter than the
-/// startup ramp's 60s since these gaps are smaller and should arrive promptly.
+/// Convergence time for a demand-driven retarget - shorter than the 60s startup ramp since these gaps are smaller.
 pub(crate) const RAMP_DURATION: Duration = Duration::from_secs(20);
 const BOOST_MULTIPLIER: u64 = 2;
-/// Independent safety cap (~double the main tier's own documented 10 MB
-/// "maximum allowed" default) since the client can't see the exit node's real ceiling.
+/// Independent safety cap (~2x main tier's documented 10 MB "maximum allowed" default) since the client can't see the exit node's real ceiling.
 const ABSOLUTE_CAP_SURBS: u64 = 20_000;
 
-/// Smoothed WireGuard byte rates plus hysteresis bookkeeping, used to decide
-/// whether sustained one-sided traffic warrants boosting the SURB target.
+/// Smoothed WireGuard byte rates plus hysteresis bookkeeping, deciding whether to boost `surb_target`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DemandTracker {
     tx_ewma_bytes_per_sec: f64,
@@ -56,10 +50,7 @@ impl DemandTracker {
             return;
         }
         let secs = elapsed.as_secs_f64();
-        // TODO: replace this WG tx/rx-byte-delta proxy with hoprd's own SURB-balancer
-        // buffer-level telemetry (`hopr_surb_balancer_current_buffer_estimate` /
-        // `current_buffer_target`, reachable via `hopr::telemetry()`) once edge-client
-        // stabilizes exporting it; that reflects the real buffer level, not an inference.
+        // TODO: replace this WG byte-delta proxy with hoprd's own SURB-balancer buffer telemetry once edge-client stabilizes exporting it.
         let tx_rate = cur.tx_bytes.saturating_sub(prev.tx_bytes) as f64 / secs;
         let rx_rate = cur.rx_bytes.saturating_sub(prev.rx_bytes) as f64 / secs;
 
@@ -82,9 +73,7 @@ impl DemandTracker {
     }
 }
 
-/// Whether the smoothed traffic looks like sustained one-sided demand.
-/// Uses a lower ratio to stay boosted than to enter it (hysteresis), so a
-/// signal hovering near the threshold can't flip back and forth.
+/// Whether smoothed traffic looks like sustained one-sided demand; uses a lower ratio to stay boosted than to enter it (hysteresis).
 fn wants_boost(dominant: f64, recessive: f64, currently_boosted: bool, min_demand_bytes_per_sec: f64) -> bool {
     if dominant < min_demand_bytes_per_sec {
         return false;
@@ -97,11 +86,7 @@ fn wants_boost(dominant: f64, recessive: f64, currently_boosted: bool, min_deman
     dominant >= recessive * ratio
 }
 
-/// Doubles `baseline`'s target buffer size when boosted, capped at an
-/// absolute ceiling independent of the multiplier. Only `target_surb_buffer_size`
-/// moves; rate cap, decay, and sustain-on-loss pass through from `baseline` unchanged.
-/// Decay back to `baseline` is free: once `boosted` is false this returns
-/// `baseline` again, and the untouched follower slews back down on its own.
+/// Doubles `baseline`'s target buffer when boosted (capped, never below baseline); decay is free since this returns `baseline` once unboosted.
 pub(crate) fn target_for(baseline: SurbBalancerConfig, boosted: bool) -> SurbBalancerConfig {
     if !boosted {
         return baseline;
@@ -240,9 +225,7 @@ mod demand_tests {
             "precondition: should be boosted before demand subsides"
         );
 
-        // Traffic returns to balanced and stays there long enough for the EWMA
-        // (tau=30s) to decay the huge boost-phase rx rate back down - many
-        // time constants, since it started from a large ratio.
+        // Balanced traffic held long enough (many EWMA time constants) to decay the huge boost-phase rx rate back down.
         let start = 20 * 4;
         for i in 1..=150u64 {
             let t = start + i * 4;
@@ -265,8 +248,7 @@ mod demand_tests {
         let mut prev = sample(0, 0, 0);
         let mut transitions = 0;
         let mut last_boosted = tracker.is_boosted();
-        // Alternate between two rates whose EWMA hovers right around the
-        // enter/exit ratio band, spaced well under MIN_DWELL apart.
+        // Alternate two rates whose EWMA hovers right around the enter/exit ratio band, spaced well under MIN_DWELL.
         for i in 1..=30u64 {
             let rx = if i % 2 == 0 { i * 4_000_000 } else { i * 1_500_000 };
             let cur = sample(i * 4, i * 1_000_000, rx);

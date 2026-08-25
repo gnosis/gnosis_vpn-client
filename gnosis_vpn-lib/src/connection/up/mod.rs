@@ -170,9 +170,7 @@ pub struct Up {
     pub surb_applied: Option<SurbBalancerConfig>,
     surb_ramp_rate: Option<SurbSlewRate>,
     surb_last_tick: Option<SystemTime>,
-    /// Demand-driven SURB target policy state (Problem 2): smoothed WireGuard
-    /// byte rates plus hysteresis bookkeeping, used to decide whether to boost
-    /// `surb_target` above the main tier's baseline. `None` until observed.
+    /// Demand-driven SURB target policy state (Problem 2); `None` until observed.
     demand: Option<demand::DemandTracker>,
 }
 
@@ -243,13 +241,7 @@ impl Up {
         }
     }
 
-    /// Retargets the SURB balancer's setpoint to `target`, recomputing the
-    /// follower's ramp rate so it converges within `duration` regardless of
-    /// the gap from whatever is currently applied - reusing the previous
-    /// rate here would make convergence time an unpredictable function of
-    /// whatever gap it was originally sized for (see `Progress::SetSurbTarget`).
-    /// Leaves `surb_applied`/`surb_last_tick` alone: `advance_surb_ramp`
-    /// already tracks incremental progress from wherever `surb_applied` sits.
+    /// Retargets the SURB balancer to `target`, recomputing the ramp rate so it converges within `duration` regardless of the current gap.
     pub fn retarget_surb_balancer(&mut self, target: SurbBalancerConfig, duration: Duration) {
         if self.surb_target == Some(target) {
             return;
@@ -259,12 +251,7 @@ impl Up {
         self.surb_target = Some(target);
     }
 
-    /// Demand-driven SURB target policy (Problem 2): folds the latest
-    /// `wg_stats` sample into a smoothed demand signal and retargets
-    /// `surb_target` relative to `main_baseline` when sustained one-sided
-    /// traffic is detected. No-op until the ping->main `SetSurbTarget`
-    /// transition has already happened, so this can never disturb that
-    /// bootstrap.
+    /// Demand-driven SURB target policy (Problem 2); no-op until the ping->main `SetSurbTarget` transition has already happened.
     pub fn maybe_adjust_surb_demand(&mut self, main_baseline: SurbBalancerConfig, now: SystemTime) {
         if self.surb_target.is_none() {
             return;
