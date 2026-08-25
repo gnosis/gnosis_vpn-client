@@ -58,6 +58,11 @@ pub enum Progress {
 /// How long a SURB balancer target change takes to fully converge.
 const SURB_RAMP_DURATION: Duration = Duration::from_secs(60);
 
+/// Caps how much a single ramp tick can advance the setpoint by, so a run of failed
+/// pushes can't let elapsed time balloon into one big jump that reintroduces the
+/// flood this ramp exists to avoid. Comfortably above the ~250ms telemetry cadence.
+const MAX_RAMP_TICK_ELAPSED: Duration = Duration::from_secs(1);
+
 /// Max per-second change per SURB balancer knob, so the follower converges gradually instead of jumping.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurbSlewRate {
@@ -112,6 +117,19 @@ pub(crate) fn slew_towards(
         ),
         surb_decay: target.surb_decay,
         sustain_on_return_path_loss: target.sustain_on_return_path_loss,
+    }
+}
+
+/// Elapsed time to use for this ramp tick, and whether the clock moved backward
+/// since the last tick (e.g. an NTP correction) — which can't be measured as
+/// elapsed time and would otherwise stall the ramp forever waiting to catch back up.
+fn ramp_tick_elapsed(last_tick: Option<SystemTime>, now: SystemTime) -> (Duration, bool) {
+    match last_tick {
+        None => (Duration::ZERO, false),
+        Some(last) => match now.duration_since(last) {
+            Ok(elapsed) => (elapsed.min(MAX_RAMP_TICK_ELAPSED), false),
+            Err(_) => (Duration::ZERO, true),
+        },
     }
 }
 
@@ -224,10 +242,11 @@ impl Up {
         if applied == target {
             return;
         }
-        let elapsed = self
-            .surb_last_tick
-            .and_then(|last| now.duration_since(last).ok())
-            .unwrap_or_default();
+        let (elapsed, clock_went_backward) = ramp_tick_elapsed(self.surb_last_tick, now);
+        if clock_went_backward {
+            self.surb_last_tick = Some(now);
+            return;
+        }
         let next = slew_towards(applied, target, elapsed, rate);
         if next == applied {
             return;
@@ -462,5 +481,30 @@ mod surb_ramp_tests {
         assert_eq!(halfway, config(300, 30));
         let done = slew_towards(applied, target, Duration::from_secs(60), rate);
         assert_eq!(done, target);
+    }
+
+    #[test]
+    fn ramp_tick_elapsed_is_zero_before_first_tick() {
+        let now = SystemTime::now();
+        assert_eq!(ramp_tick_elapsed(None, now), (Duration::ZERO, false));
+    }
+
+    #[test]
+    fn ramp_tick_elapsed_caps_large_gaps() {
+        let last = SystemTime::now();
+        let now = last + Duration::from_secs(300);
+        let (elapsed, clock_went_backward) = ramp_tick_elapsed(Some(last), now);
+        assert_eq!(
+            elapsed, MAX_RAMP_TICK_ELAPSED,
+            "a backlog of failed pushes should not produce one big jump"
+        );
+        assert!(!clock_went_backward);
+    }
+
+    #[test]
+    fn ramp_tick_elapsed_detects_backward_clock() {
+        let last = SystemTime::now();
+        let now = last - Duration::from_secs(5);
+        assert_eq!(ramp_tick_elapsed(Some(last), now), (Duration::ZERO, true));
     }
 }
