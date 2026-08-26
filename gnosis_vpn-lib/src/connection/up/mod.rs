@@ -259,16 +259,6 @@ impl Up {
         }
     }
 
-    /// Retargets the SURB balancer to `target`, recomputing the ramp rate so it converges within `duration` regardless of the current gap.
-    pub fn retarget_surb_balancer(&mut self, target: SurbBalancerConfig, duration: Duration) {
-        if self.surb_target == Some(target) {
-            return;
-        }
-        let applied = self.surb_applied.unwrap_or(target);
-        self.surb_ramp_rate = Some(SurbSlewRate::to_cover(applied, target, duration));
-        self.surb_target = Some(target);
-    }
-
     /// Record a new WireGuard telemetry sample, evicting the oldest once at
     /// the retention bound.
     pub fn record_wg_stats(&mut self, sample: TunnelStatsSample) {
