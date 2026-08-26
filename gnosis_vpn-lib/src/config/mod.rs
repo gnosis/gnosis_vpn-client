@@ -8,6 +8,7 @@ use tokio::fs;
 
 use crate::connection::{destination::Destination, options::Options as ConnectionOptions};
 use crate::hopr::blokli_config::BlokliConfig;
+use crate::hopr::pix_config::PixConfig;
 use crate::hopr::strategy_config::StrategyConfig;
 use crate::wireguard::Config as WireGuardConfig;
 
@@ -26,6 +27,7 @@ pub struct Config {
     pub wireguard: WireGuardConfig,
     pub blokli: BlokliConfig,
     pub strategy: StrategyConfig,
+    pub pix: PixConfig,
 }
 
 #[derive(Debug, Error)]

@@ -5,7 +5,7 @@
 /// `path = { intermediates = [...] }` with `path = { hops = <count> }`.
 use bytesize::ByteSize;
 use edgli::hopr_lib::HopRouting;
-use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::api::types::primitive::prelude::{Address, HoprBalance};
 use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
 use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionCapability, SessionTarget};
 use human_bandwidth::re::bandwidth::Bandwidth;
@@ -21,6 +21,7 @@ use std::vec::Vec;
 use crate::config;
 use crate::connection::{destination::Destination as ConnDestination, options};
 use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
+use crate::hopr::pix_config::PixConfig;
 use crate::hopr::strategy_config::StrategyConfig;
 use crate::ping;
 use crate::wireguard::Config as WireGuardConfig;
@@ -565,6 +566,24 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
+        if key == "pix" {
+            if let Some(pix) = value.as_table() {
+                for (k, _) in pix.iter() {
+                    if matches!(
+                        k.as_str(),
+                        "price_per_byte"
+                            | "max_ssa_allocation"
+                            | "deposit_buffer_period"
+                            | "max_deposit_tracking_time"
+                            | "max_deposit_retries"
+                    ) {
+                        continue;
+                    }
+                    wrong.push(format!("pix.{k}"));
+                }
+            }
+            continue;
+        }
         wrong.push(key.clone());
     }
     wrong
@@ -640,6 +659,47 @@ impl From<Option<Strategy>> for StrategyConfig {
 
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct Pix {
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) price_per_byte: Option<HoprBalance>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) max_ssa_allocation: Option<HoprBalance>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) deposit_buffer_period: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) max_deposit_tracking_time: Option<Duration>,
+    pub(super) max_deposit_retries: Option<usize>,
+}
+
+impl From<Option<Pix>> for PixConfig {
+    fn from(v: Option<Pix>) -> Self {
+        let def = PixConfig::default();
+        Self {
+            price_per_byte: v.as_ref().and_then(|p| p.price_per_byte).unwrap_or(def.price_per_byte),
+            max_ssa_allocation: v
+                .as_ref()
+                .and_then(|p| p.max_ssa_allocation)
+                .unwrap_or(def.max_ssa_allocation),
+            deposit_buffer_period: v
+                .as_ref()
+                .and_then(|p| p.deposit_buffer_period)
+                .unwrap_or(def.deposit_buffer_period),
+            max_deposit_tracking_time: v
+                .as_ref()
+                .and_then(|p| p.max_deposit_tracking_time)
+                .unwrap_or(def.max_deposit_tracking_time),
+            max_deposit_retries: v
+                .as_ref()
+                .and_then(|p| p.max_deposit_retries)
+                .unwrap_or(def.max_deposit_retries),
+        }
+    }
+}
+
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub version: u8,
     pub(super) destinations: Option<HashMap<String, Destination>>,
@@ -647,6 +707,7 @@ pub struct Config {
     pub(super) wireguard: Option<WireGuard>,
     pub(super) blokli: Option<BlokliConfig>,
     pub(super) strategy: Option<Strategy>,
+    pub(super) pix: Option<Pix>,
 }
 
 #[serde_as]
@@ -681,12 +742,14 @@ impl TryFrom<Config> for config::Config {
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
         let strategy = value.strategy.into();
+        let pix = value.pix.into();
         Ok(config::Config {
             connection,
             destinations,
             wireguard,
             blokli,
             strategy,
+            pix,
         })
     }
 }
@@ -717,6 +780,7 @@ pub fn convert_destinations(
 mod tests {
     use super::{ChannelAllowlistConfig, Config, Strategy, WireGuardConfig, convert_destinations, wrong_keys};
     use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
+    use crate::hopr::pix_config::PixConfig;
     use crate::hopr::strategy_config::StrategyConfig;
     use edgli::hopr_lib::HopRouting;
     use edgli::hopr_lib::api::types::primitive::prelude::Address;
@@ -1278,5 +1342,92 @@ sizing_mode = "deterministic"
         });
         let cfg: StrategyConfig = strategy.into();
         assert!(cfg.channel_allowlist.is_none());
+    }
+
+    #[test]
+    fn pix_is_always_registered() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(result.pix, PixConfig::default());
+    }
+
+    #[test]
+    fn pix_fields_are_parsed_and_override_the_default() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[pix]
+price_per_byte = "5 wxHOPR"
+max_ssa_allocation = "50 wxHOPR"
+deposit_buffer_period = "250ms"
+max_deposit_tracking_time = "30s"
+max_deposit_retries = 5
+"#####,
+        );
+        let pix = cfg.pix.expect("pix section present");
+        let converted: PixConfig = Some(pix).into();
+        assert_eq!(converted.deposit_buffer_period, Duration::from_millis(250));
+        assert_eq!(converted.max_deposit_tracking_time, Duration::from_secs(30));
+        assert_eq!(converted.max_deposit_retries, 5);
+    }
+
+    #[test]
+    fn pix_fields_are_optional_and_fall_back_to_defaults() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[pix]
+max_deposit_retries = 7
+"#####,
+        );
+        let pix = cfg.pix.expect("pix section present");
+        let converted: PixConfig = Some(pix).into();
+        let def = PixConfig::default();
+        assert_eq!(converted.max_deposit_retries, 7);
+        assert_eq!(converted.price_per_byte, def.price_per_byte);
+        assert_eq!(converted.max_ssa_allocation, def.max_ssa_allocation);
+        assert_eq!(converted.deposit_buffer_period, def.deposit_buffer_period);
+        assert_eq!(converted.max_deposit_tracking_time, def.max_deposit_tracking_time);
+    }
+
+    #[test]
+    fn pix_fields_are_known_keys() {
+        let table = r#####"
+version = 6
+
+[pix]
+price_per_byte = "5 wxHOPR"
+max_ssa_allocation = "50 wxHOPR"
+deposit_buffer_period = "250ms"
+max_deposit_tracking_time = "30s"
+max_deposit_retries = 5
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn pix_typo_is_reported() {
+        let table = r#####"
+version = 6
+
+[pix]
+pric_per_byte = "5 wxHOPR"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), vec!["pix.pric_per_byte".to_string()]);
     }
 }

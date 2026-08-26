@@ -171,3 +171,21 @@ path    = { hops = 1 }
 # how capacity converts to a wxHOPR stake: "deterministic" or { probabilistic = { success_probability = 0.999 } };
 # default: { probabilistic = { success_probability = 0.99 } }
 # sizing_mode = { probabilistic = { success_probability = 0.99 } }
+
+###
+## pix section - exit-incentivization payment strategy (pays the Exit per byte)
+##
+## PIX always runs, on every session; this section only adjusts its parameters. Deposits are
+## paid from the node's own address, not the Safe, so the node needs its own wxHOPR float.
+
+# [pix]
+# wxHOPR charged per byte of the agreed per-SSA quota; default: 1 wxHOPR
+# price_per_byte = "1 wxHOPR"
+# ceiling on a single SSA deposit, refused outright if exceeded; default: 100 wxHOPR
+# max_ssa_allocation = "100 wxHOPR"
+# debounce window before a batch of pending deposits is flushed; default: 500ms
+# deposit_buffer_period = "500ms"
+# how long to poll a stealth address for a deposit to land; default: 60s
+# max_deposit_tracking_time = "60s"
+# additional deposit-transfer attempts beyond the first; default: 3
+# max_deposit_retries = 3

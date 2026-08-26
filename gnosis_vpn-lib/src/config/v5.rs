@@ -369,6 +369,7 @@ impl TryFrom<Config> for config::Config {
             wireguard,
             blokli,
             strategy: Default::default(),
+            pix: Default::default(),
         })
     }
 }
