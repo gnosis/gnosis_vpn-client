@@ -1603,13 +1603,8 @@ impl Core {
         }
     }
 
-    /// Lets the demand-driven policy retarget `surb_target`, then advances the balancer toward it (see `Up::advance_surb_ramp`).
+    /// Advances the active session's SURB balancer toward `conn.surb_target` on each telemetry tick (see `Up::advance_surb_ramp`).
     fn maybe_adjust_session(&self, conn: &mut connection::up::Up, sample: &wg_tunnel::TunnelStatsSample) {
-        if let Ok(params) = connection::options::surb_config_for(&self.config.connection.surb_balancing.main)
-            && let Some(main_baseline) = params.management
-        {
-            conn.maybe_adjust_surb_demand(main_baseline, sample.at);
-        }
         if let Some(configurator) = conn.session_configurator.clone() {
             conn.advance_surb_ramp(&configurator, sample.at);
         };

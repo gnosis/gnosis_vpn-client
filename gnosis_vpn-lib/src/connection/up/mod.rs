@@ -16,7 +16,6 @@ use crate::wg_tunnel::{self, TunnelStatsSample};
 use crate::wireguard::WireGuard;
 use crate::{gvpn_client, log_output, remote_data, wireguard};
 
-mod demand;
 pub(crate) mod runner;
 
 #[derive(Debug)]
@@ -182,14 +181,14 @@ pub struct Up {
     /// Handle to adjust the active session's SURB balancer from telemetry.
     /// Retained past the initial ping->main adjustment so it can be reused.
     pub session_configurator: Option<HoprSessionConfigurator>,
-    /// Desired SURB balancer setpoint; persists past convergence so a future demand-driven policy can retarget it.
+    /// Desired SURB balancer setpoint. Persists for the life of the connection
+    /// (not cleared on convergence) so it can be moved again later - e.g. by
+    /// a future policy reacting to sustained demand.
     pub surb_target: Option<SurbBalancerConfig>,
     /// SURB balancer setpoint actually pushed to the session so far.
     pub surb_applied: Option<SurbBalancerConfig>,
     surb_ramp_rate: Option<SurbSlewRate>,
     surb_last_tick: Option<SystemTime>,
-    /// Demand-driven SURB target policy state (Problem 2); `None` until observed.
-    demand: Option<demand::DemandTracker>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -229,7 +228,6 @@ impl Up {
             surb_applied: None,
             surb_ramp_rate: None,
             surb_last_tick: None,
-            demand: None,
         }
     }
 
@@ -269,28 +267,6 @@ impl Up {
         let applied = self.surb_applied.unwrap_or(target);
         self.surb_ramp_rate = Some(SurbSlewRate::to_cover(applied, target, duration));
         self.surb_target = Some(target);
-    }
-
-    /// Demand-driven SURB target policy (Problem 2); no-op until the ping->main `SetSurbTarget` transition has already happened.
-    pub fn maybe_adjust_surb_demand(&mut self, main_baseline: SurbBalancerConfig, now: SystemTime) {
-        if self.surb_target.is_none() {
-            return;
-        }
-        let mut recent = self.wg_stats.iter().rev();
-        // wg_stats is oldest-to-newest; reversed, the first next() is newest, the second is the sample before it.
-        let Some((newest, older)) = recent.next().zip(recent.next()) else {
-            return;
-        };
-        let (newest, older) = (newest.clone(), older.clone());
-
-        let min_demand = main_baseline.max_surbs_per_sec as f64
-            * edgli::hopr_lib::exports::transport::SURB_SIZE as f64
-            * demand::MIN_DEMAND_FRACTION;
-        let tracker = self.demand.get_or_insert_with(|| demand::DemandTracker::new(now));
-        tracker.observe(&older, &newest, min_demand);
-
-        let target = demand::target_for(main_baseline, tracker.is_boosted());
-        self.retarget_surb_balancer(target, demand::RAMP_DURATION);
     }
 
     /// Record a new WireGuard telemetry sample, evicting the oldest once at
