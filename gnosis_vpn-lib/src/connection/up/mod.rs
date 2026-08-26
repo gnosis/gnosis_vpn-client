@@ -57,9 +57,7 @@ pub enum Progress {
 /// How long a SURB balancer target change takes to fully converge.
 const SURB_RAMP_DURATION: Duration = Duration::from_secs(60);
 
-/// Caps how much a single ramp tick can advance the setpoint by, so a run of failed
-/// pushes can't let elapsed time balloon into one big jump that reintroduces the
-/// flood this ramp exists to avoid. Comfortably above the ~250ms telemetry cadence.
+/// Caps ramp-tick elapsed time so a backlog of failed pushes can't cause one big jump; comfortably above the ~250ms telemetry cadence.
 const MAX_RAMP_TICK_ELAPSED: Duration = Duration::from_secs(1);
 
 /// Max per-second change per SURB balancer knob, so the follower converges gradually instead of jumping.
@@ -119,9 +117,7 @@ pub(crate) fn slew_towards(
     }
 }
 
-/// Elapsed time to use for this ramp tick, and whether the clock moved backward
-/// since the last tick (e.g. an NTP correction) — which can't be measured as
-/// elapsed time and would otherwise stall the ramp forever waiting to catch back up.
+/// Elapsed time for this tick, plus whether the clock moved backward (e.g. an NTP correction), which can't be measured as elapsed time.
 fn ramp_tick_elapsed(last_tick: Option<SystemTime>, now: SystemTime) -> (Duration, bool) {
     match last_tick {
         None => (Duration::ZERO, false),
@@ -181,9 +177,7 @@ pub struct Up {
     /// Handle to adjust the active session's SURB balancer from telemetry.
     /// Retained past the initial ping->main adjustment so it can be reused.
     pub session_configurator: Option<HoprSessionConfigurator>,
-    /// Desired SURB balancer setpoint. Persists for the life of the connection
-    /// (not cleared on convergence) so it can be moved again later - e.g. by
-    /// a future policy reacting to sustained demand.
+    /// Desired SURB balancer setpoint; persists past convergence so it can be moved again later.
     pub surb_target: Option<SurbBalancerConfig>,
     /// SURB balancer setpoint actually pushed to the session so far.
     pub surb_applied: Option<SurbBalancerConfig>,
