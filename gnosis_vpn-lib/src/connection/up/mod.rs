@@ -1,4 +1,4 @@
-use edgli::hopr_lib::exports::transport::HoprSessionConfigurator;
+use edgli::hopr_lib::exports::transport::{HoprSessionConfigurator, SurbBalancerConfig};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -47,6 +47,85 @@ pub enum Progress {
     SessionConfigurator(HoprSessionConfigurator),
     Ping,
     AdjustToMain(Duration),
+    /// Sets the SURB balancer's desired target; `core` slews toward it over time.
+    SetSurbTarget {
+        applied: SurbBalancerConfig,
+        target: SurbBalancerConfig,
+    },
+}
+
+/// How long a SURB balancer target change takes to fully converge.
+const SURB_RAMP_DURATION: Duration = Duration::from_secs(60);
+
+/// Caps ramp-tick elapsed time so a backlog of failed pushes can't cause one big jump; comfortably above the ~250ms telemetry cadence.
+const MAX_RAMP_TICK_ELAPSED: Duration = Duration::from_secs(1);
+
+/// Max per-second change per SURB balancer knob, so the follower converges gradually instead of jumping.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurbSlewRate {
+    /// Max change in `target_surb_buffer_size`, per second.
+    buffer_per_sec: u64,
+    /// Max change in `max_surbs_per_sec`, per second.
+    rate_per_sec: u64,
+}
+
+impl SurbSlewRate {
+    /// Rate that closes the gap between `applied` and `target` over `duration`.
+    fn to_cover(applied: SurbBalancerConfig, target: SurbBalancerConfig, duration: Duration) -> Self {
+        let secs = duration.as_secs_f64().max(1.0);
+        let buffer_gap = applied.target_surb_buffer_size.abs_diff(target.target_surb_buffer_size);
+        let rate_gap = applied.max_surbs_per_sec.abs_diff(target.max_surbs_per_sec);
+        Self {
+            buffer_per_sec: (buffer_gap as f64 / secs).ceil() as u64,
+            rate_per_sec: (rate_gap as f64 / secs).ceil() as u64,
+        }
+    }
+}
+
+/// Move a single value toward `target` by at most `rate * elapsed`, without overshoot.
+fn step_towards(current: u64, target: u64, rate_per_sec: u64, elapsed: Duration) -> u64 {
+    let max_step = (rate_per_sec as f64 * elapsed.as_secs_f64()) as u64;
+    if current < target {
+        current.saturating_add(max_step).min(target)
+    } else {
+        current.saturating_sub(max_step).max(target)
+    }
+}
+
+/// Moves `applied`'s capacity fields toward `target` by at most `rate`, never overshooting; decay/sustain flags come from `target` as-is.
+pub(crate) fn slew_towards(
+    applied: SurbBalancerConfig,
+    target: SurbBalancerConfig,
+    elapsed: Duration,
+    rate: SurbSlewRate,
+) -> SurbBalancerConfig {
+    SurbBalancerConfig {
+        target_surb_buffer_size: step_towards(
+            applied.target_surb_buffer_size,
+            target.target_surb_buffer_size,
+            rate.buffer_per_sec,
+            elapsed,
+        ),
+        max_surbs_per_sec: step_towards(
+            applied.max_surbs_per_sec,
+            target.max_surbs_per_sec,
+            rate.rate_per_sec,
+            elapsed,
+        ),
+        surb_decay: target.surb_decay,
+        sustain_on_return_path_loss: target.sustain_on_return_path_loss,
+    }
+}
+
+/// Elapsed time for this tick, plus whether the clock moved backward (e.g. an NTP correction), which can't be measured as elapsed time.
+fn ramp_tick_elapsed(last_tick: Option<SystemTime>, now: SystemTime) -> (Duration, bool) {
+    match last_tick {
+        None => (Duration::ZERO, false),
+        Some(last) => match now.duration_since(last) {
+            Ok(elapsed) => (elapsed.min(MAX_RAMP_TICK_ELAPSED), false),
+            Err(_) => (Duration::ZERO, true),
+        },
+    }
 }
 
 #[derive(Debug)]
@@ -98,6 +177,12 @@ pub struct Up {
     /// Handle to adjust the active session's SURB balancer from telemetry.
     /// Retained past the initial ping->main adjustment so it can be reused.
     pub session_configurator: Option<HoprSessionConfigurator>,
+    /// Desired SURB balancer setpoint; persists past convergence so it can be moved again later.
+    pub surb_target: Option<SurbBalancerConfig>,
+    /// SURB balancer setpoint actually pushed to the session so far.
+    pub surb_applied: Option<SurbBalancerConfig>,
+    surb_ramp_rate: Option<SurbSlewRate>,
+    surb_last_tick: Option<SystemTime>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -133,6 +218,38 @@ impl Up {
             ping_session: None,
             wg_stats: VecDeque::new(),
             session_configurator: None,
+            surb_target: None,
+            surb_applied: None,
+            surb_ramp_rate: None,
+            surb_last_tick: None,
+        }
+    }
+
+    /// Advances the SURB balancer setpoint one tick toward `surb_target`; a no-op once converged, and logs rather than propagates a failed push so the next tick retries.
+    pub fn advance_surb_ramp(&mut self, configurator: &HoprSessionConfigurator, now: SystemTime) {
+        let (Some(target), Some(applied), Some(rate)) = (self.surb_target, self.surb_applied, self.surb_ramp_rate)
+        else {
+            return;
+        };
+        if applied == target {
+            return;
+        }
+        let (elapsed, clock_went_backward) = ramp_tick_elapsed(self.surb_last_tick, now);
+        if clock_went_backward {
+            self.surb_last_tick = Some(now);
+            return;
+        }
+        let next = slew_towards(applied, target, elapsed, rate);
+        if next == applied {
+            return;
+        }
+        match configurator.update_surb_balancer_config(next) {
+            Ok(()) => {
+                self.surb_applied = Some(next);
+                self.surb_last_tick = Some(now);
+            }
+            // Unthrottled by design: failure means the session is already gone, so a reconnect self-resolves this within ~tunnel_ping_max_failures * tunnel_ping.
+            Err(e) => tracing::warn!(error = ?e, "failed to adjust surb balancer - will retry next tick"),
         }
     }
 
@@ -176,6 +293,12 @@ impl Up {
             }
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
             Progress::AdjustToMain(_round_trip_time) => self.phase = (now, Phase::AdjustToMain),
+            Progress::SetSurbTarget { applied, target } => {
+                self.surb_ramp_rate = Some(SurbSlewRate::to_cover(applied, target, SURB_RAMP_DURATION));
+                self.surb_applied = Some(applied);
+                self.surb_target = Some(target);
+                self.surb_last_tick = Some(now);
+            }
         }
     }
 
@@ -246,6 +369,7 @@ impl Display for Progress {
             Progress::AdjustToMain(round_trip_time) => {
                 write!(f, "Adjusting to main connection with RTT of {:?}", round_trip_time)
             }
+            Progress::SetSurbTarget { .. } => write!(f, "Ramping SURB balancer to main session"),
         }
     }
 }
@@ -258,5 +382,91 @@ impl Display for Setback {
             Setback::OpenPing(err) => write!(f, "Failed to open main connection: {err}"),
             Setback::Ping(err) => write!(f, "Ping verification failed: {err}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod surb_ramp_tests {
+    use super::*;
+
+    fn config(buffer: u64, rate: u64) -> SurbBalancerConfig {
+        SurbBalancerConfig {
+            target_surb_buffer_size: buffer,
+            max_surbs_per_sec: rate,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn step_towards_does_not_move_when_elapsed_is_zero() {
+        assert_eq!(step_towards(0, 100, 10, Duration::ZERO), 0);
+    }
+
+    #[test]
+    fn step_towards_does_not_move_when_already_at_target() {
+        assert_eq!(step_towards(100, 100, 10, Duration::from_secs(5)), 100);
+    }
+
+    #[test]
+    fn step_towards_moves_up_without_overshoot() {
+        assert_eq!(step_towards(0, 100, 10, Duration::from_secs(5)), 50);
+        // A large elapsed converges exactly on the target, never past it.
+        assert_eq!(step_towards(0, 100, 10, Duration::from_secs(50)), 100);
+    }
+
+    #[test]
+    fn step_towards_moves_down_without_overshoot() {
+        // Problem 2's future decay-back-down case: the same function, reversed.
+        assert_eq!(step_towards(100, 0, 10, Duration::from_secs(5)), 50);
+        assert_eq!(step_towards(100, 0, 10, Duration::from_secs(50)), 0);
+    }
+
+    #[test]
+    fn slew_towards_keeps_target_decay_and_sustain_flags() {
+        let applied = config(0, 0);
+        let target = SurbBalancerConfig {
+            surb_decay: Some((Duration::from_secs(60), 0.05)),
+            sustain_on_return_path_loss: true,
+            ..config(1000, 100)
+        };
+        let rate = SurbSlewRate::to_cover(applied, target, Duration::from_secs(10));
+        let next = slew_towards(applied, target, Duration::from_secs(10), rate);
+        assert_eq!(next, target, "a full-duration step should land exactly on the target");
+    }
+
+    #[test]
+    fn surb_slew_rate_to_cover_closes_the_gap_over_the_given_duration() {
+        let applied = config(0, 0);
+        let target = config(600, 60);
+        let rate = SurbSlewRate::to_cover(applied, target, Duration::from_secs(60));
+        let halfway = slew_towards(applied, target, Duration::from_secs(30), rate);
+        assert_eq!(halfway, config(300, 30));
+        let done = slew_towards(applied, target, Duration::from_secs(60), rate);
+        assert_eq!(done, target);
+    }
+
+    #[test]
+    fn ramp_tick_elapsed_is_zero_before_first_tick() {
+        let now = SystemTime::now();
+        assert_eq!(ramp_tick_elapsed(None, now), (Duration::ZERO, false));
+    }
+
+    #[test]
+    fn ramp_tick_elapsed_caps_large_gaps() {
+        let last = SystemTime::now();
+        let now = last + Duration::from_secs(300);
+        let (elapsed, clock_went_backward) = ramp_tick_elapsed(Some(last), now);
+        assert_eq!(
+            elapsed, MAX_RAMP_TICK_ELAPSED,
+            "a backlog of failed pushes should not produce one big jump"
+        );
+        assert!(!clock_went_backward);
+    }
+
+    #[test]
+    fn ramp_tick_elapsed_detects_backward_clock() {
+        let last = SystemTime::now();
+        let now = last - Duration::from_secs(5);
+        assert_eq!(ramp_tick_elapsed(Some(last), now), (Duration::ZERO, true));
     }
 }
