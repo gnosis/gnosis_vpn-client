@@ -960,12 +960,12 @@ impl Core {
             Results::WgStatsSample(sample) => match self.phase.clone() {
                 Phase::Connecting(mut conn) => {
                     conn.record_wg_stats(sample.clone());
-                    self.maybe_adjust_session(&conn, &sample);
+                    self.maybe_adjust_session(&mut conn, &sample);
                     self.phase = Phase::Connecting(conn);
                 }
                 Phase::Connected(mut conn) => {
                     conn.record_wg_stats(sample.clone());
-                    self.maybe_adjust_session(&conn, &sample);
+                    self.maybe_adjust_session(&mut conn, &sample);
                     self.phase = Phase::Connected(conn);
                 }
                 phase => {
@@ -1603,20 +1603,11 @@ impl Core {
         }
     }
 
-    /// Hook point for reacting to new WireGuard telemetry by adjusting the
-    /// active session's SURB balancer configuration. Policy (thresholds,
-    /// hysteresis/debounce, which `SurbBalancerConfig` field responds to which
-    /// telemetry trend) is intentionally not implemented here - this only wires
-    /// the mechanism (retained configurator + full sample history on `Up`) so
-    /// policy can be added later without further plumbing.
-    fn maybe_adjust_session(&self, conn: &connection::up::Up, _sample: &wg_tunnel::TunnelStatsSample) {
-        let Some(_configurator) = conn.session_configurator.as_ref() else {
-            return;
+    /// Advances the active session's SURB balancer toward `conn.surb_target` on each telemetry tick (see `Up::advance_surb_ramp`).
+    fn maybe_adjust_session(&self, conn: &mut connection::up::Up, sample: &wg_tunnel::TunnelStatsSample) {
+        if let Some(configurator) = conn.session_configurator.clone() {
+            conn.advance_surb_ramp(&configurator, sample.at);
         };
-        // TODO: derive an adjusted SurbBalancerConfig from conn.wg_stats (the
-        // retained history) and _sample, then call
-        // _configurator.update_surb_balancer_config(...). That call is safe to
-        // repeat - it fails gracefully if the session/manager is already gone.
     }
 
     fn spawn_tunnel_ping_probe(&self, results_sender: &mpsc::Sender<Results>) {
