@@ -152,6 +152,7 @@ impl Runner {
         //    raw session is spliced directly into the pump - no local listener and no
         //    loopback hop.
         let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
+        let ping_surb_management = ping_surb.management;
         let SplicedWgSession {
             session: hopr_session,
             configurator,
@@ -199,13 +200,21 @@ impl Runner {
             .await;
         // PIX has no live-adjust path, so it was already decided at session-open (`options.pix.ping_main`).
         let main_surb = surb_config_for(&self.options.surb_balancing.main)?;
-        if let Some(main_config) = main_surb.management {
-            // A spliced session is not in the listener registry, so the SURB balancer
-            // is adjusted through its configurator handle directly.
-            tracing::debug!("adjusting spliced wg session to main session");
-            configurator
-                .update_surb_balancer_config(main_config)
-                .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
+        match (ping_surb_management, main_surb.management) {
+            (Some(applied), Some(target)) => {
+                // Not in the listener registry, so the target is tracked on `Up` and slewed toward gradually by `core`, instead of jumping straight to it here (which floods the response buffer at startup).
+                let _ = results_sender
+                    .send(progress(Progress::SetSurbTarget { applied, target }))
+                    .await;
+            }
+            (None, Some(target)) => {
+                // No ping-tier config to ramp from - fall back to the direct jump.
+                tracing::debug!("adjusting spliced wg session to main session");
+                configurator
+                    .update_surb_balancer_config(target)
+                    .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
+            }
+            _ => {}
         }
 
         Ok(session.clone())
