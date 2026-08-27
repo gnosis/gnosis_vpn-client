@@ -74,8 +74,11 @@ impl Hopr {
         })
     }
 
-    /// `cfg` with PIX applied; the single choke point `open_session`/`open_wg_session` share.
-    fn pix_aware_session_cfg(&self, cfg: HoprSessionClientConfig) -> Result<HoprSessionClientConfig, HoprError> {
+    /// `cfg` with PIX applied. Callers opt in per session kind — see `options::PixBalancing`.
+    pub(crate) fn pix_aware_session_cfg(
+        &self,
+        cfg: HoprSessionClientConfig,
+    ) -> Result<HoprSessionClientConfig, HoprError> {
         self.edgli
             .with_pix(cfg)
             .map_err(|e| HoprError::Strategy(format!("failed to apply PIX to session config: {e}")))
@@ -94,7 +97,6 @@ impl Hopr {
         cfg: HoprSessionClientConfig,
     ) -> Result<SessionClientMetadata, HoprError> {
         tracing::debug!("open hopr session");
-        let cfg = self.pix_aware_session_cfg(cfg)?;
         let bind_host: std::net::SocketAddr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 0).into();
 
         let protocol = match target {
@@ -206,7 +208,6 @@ impl Hopr {
         cfg: HoprSessionClientConfig,
     ) -> Result<SplicedWgSession, HoprError> {
         tracing::debug!("open spliced hopr wg session");
-        let cfg = self.pix_aware_session_cfg(cfg)?;
         let target_spec = match &target {
             SessionTarget::UdpStream(addr) => match addr {
                 edgli::hopr_lib::exports::transport::session::SealedHost::Plain(ip_or_host) => {

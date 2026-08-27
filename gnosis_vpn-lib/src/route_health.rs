@@ -908,6 +908,11 @@ impl HealthSession {
             surb_management: health_surb.management,
             ..Default::default()
         };
+        let cfg = if options.pix.health_check.enabled {
+            hopr.pix_aware_session_cfg(cfg)?
+        } else {
+            cfg
+        };
         tracing::debug!(%destination, "opening TCP session for health check");
         let meta = hopr
             .open_session(

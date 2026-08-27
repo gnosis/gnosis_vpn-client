@@ -39,6 +39,7 @@ pub(super) struct Connection {
     pub(super) wg: Option<ConnectionProtocol>,
     pub(super) ping: Option<PingOptions>,
     pub(super) surb_balancing: Option<SurbBalancingConfig>,
+    pub(super) pix_balancing: Option<PixBalancingConfig>,
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
     pub(super) lan_lockdown: Option<bool>,
     pub(super) probe_local_addresses: Option<bool>,
@@ -104,6 +105,18 @@ pub(super) struct SurbBalancingConfig {
     main: Option<SessionSurbConfig>,
     bridge: Option<SessionSurbConfig>,
     health_check: Option<SessionSurbConfig>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct SessionPixConfig {
+    enabled: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct PixBalancingConfig {
+    ping_main: Option<SessionPixConfig>,
+    bridge: Option<SessionPixConfig>,
+    health_check: Option<SessionPixConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -253,6 +266,15 @@ fn apply_session_surb(cfg: Option<SessionSurbConfig>, def: options::SessionSurbO
     }
 }
 
+fn apply_session_pix(cfg: Option<SessionPixConfig>, def: options::SessionPixOptions) -> options::SessionPixOptions {
+    match cfg {
+        None => def,
+        Some(c) => options::SessionPixOptions {
+            enabled: c.enabled.unwrap_or(def.enabled),
+        },
+    }
+}
+
 impl From<Option<Connection>> for options::Options {
     fn from(conn: Option<Connection>) -> Self {
         let connection = conn.as_ref();
@@ -302,6 +324,15 @@ impl From<Option<Connection>> for options::Options {
             bridge: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.bridge.clone()), def.bridge),
             health_check: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.health_check.clone()), def.health_check),
         };
+
+        let pix_cfg = connection.and_then(|c| c.pix_balancing.clone());
+        let def = options::PixBalancing::default();
+        let pix = options::PixBalancing {
+            ping_main: apply_session_pix(pix_cfg.as_ref().and_then(|s| s.ping_main.clone()), def.ping_main),
+            bridge: apply_session_pix(pix_cfg.as_ref().and_then(|s| s.bridge.clone()), def.bridge),
+            health_check: apply_session_pix(pix_cfg.as_ref().and_then(|s| s.health_check.clone()), def.health_check),
+        };
+
         let http_timeout = connection
             .and_then(|c| c.http_timeout)
             .unwrap_or(Connection::default_http_timeout());
@@ -326,6 +357,7 @@ impl From<Option<Connection>> for options::Options {
             sessions,
             ping_options: ping_opts,
             surb_balancing,
+            pix,
             timeouts,
             health_check_intervals,
             lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
@@ -472,6 +504,25 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                     continue;
                                 }
                                 wrong.push(format!("connection.surb_balancing.{k2}"));
+                            }
+                        }
+                        continue;
+                    }
+                    if k == "pix_balancing" {
+                        if let Some(pix) = v.as_table() {
+                            for (k2, v2) in pix.iter() {
+                                if k2 == "ping_main" || k2 == "bridge" || k2 == "health_check" {
+                                    if let Some(session) = v2.as_table() {
+                                        for (k3, _) in session.iter() {
+                                            if k3 == "enabled" {
+                                                continue;
+                                            }
+                                            wrong.push(format!("connection.pix_balancing.{k2}.{k3}"));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                wrong.push(format!("connection.pix_balancing.{k2}"));
                             }
                         }
                         continue;
@@ -1429,5 +1480,95 @@ pric_per_byte = "5 wxHOPR"
             .expect("valid TOML");
 
         assert_eq!(wrong_keys(&table), vec!["pix.pric_per_byte".to_string()]);
+    }
+
+    #[test]
+    fn pix_balancing_defaults_to_enabled_for_ping_main_only() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert!(result.connection.pix.ping_main.enabled);
+        assert!(!result.connection.pix.bridge.enabled);
+        assert!(!result.connection.pix.health_check.enabled);
+    }
+
+    #[test]
+    fn pix_balancing_overrides_are_applied() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.pix_balancing.bridge]
+enabled = true
+
+[connection.pix_balancing.ping_main]
+enabled = false
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert!(result.connection.pix.bridge.enabled);
+        assert!(!result.connection.pix.ping_main.enabled);
+        // untouched key keeps its default
+        assert!(!result.connection.pix.health_check.enabled);
+    }
+
+    #[test]
+    fn pix_balancing_fields_are_known_keys() {
+        let table = r#####"
+version = 6
+
+[connection.pix_balancing.bridge]
+enabled = false
+
+[connection.pix_balancing.ping_main]
+enabled = true
+
+[connection.pix_balancing.health_check]
+enabled = false
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn pix_balancing_typo_is_reported() {
+        let table = r#####"
+version = 6
+
+[connection.pix_balancing.bridge]
+enalbed = false
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["connection.pix_balancing.bridge.enalbed".to_string()]
+        );
+    }
+
+    #[test]
+    fn pix_balancing_unknown_session_key_is_reported() {
+        let table = r#####"
+version = 6
+
+[connection.pix_balancing.main]
+enabled = true
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), vec!["connection.pix_balancing.main".to_string()]);
     }
 }

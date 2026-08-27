@@ -118,6 +118,20 @@ path    = { hops = 1 }
 # max_surb_upstream = "128 Kb/s"
 # always_max_out_surbs = false  # defaults to `enabled` - send only 1 SURB per request even if 2 would fit
 
+# adjust PIX enablement per session type
+# bridge and health_check default to disabled; ping_main defaults to enabled
+# ping_main covers the shared ping/main tunnel session - ping and main are the same
+# physical session, so PIX can only be decided once, at session-open time
+#
+# [connection.pix.bridge]
+# enabled = false
+#
+# [connection.pix.ping_main]
+# enabled = true
+#
+# [connection.pix.health_check]
+# enabled = false
+
 ###
 ## wireguard section - specific VPN-related settings
 
@@ -175,8 +189,9 @@ path    = { hops = 1 }
 ###
 ## pix section - exit-incentivization payment strategy (pays the Exit per byte)
 ##
-## PIX always runs, on every session; this section only adjusts its parameters. Deposits are
-## paid from the node's own address, not the Safe, so the node needs its own wxHOPR float.
+## Tunes the parameters of the global PIX settlement reactor, shared by every session that has
+## PIX enabled (see connection.pix above for per-session-type enablement). Deposits are paid
+## from the node's own address, not the Safe, so the node needs its own wxHOPR float.
 
 # [pix]
 # wxHOPR charged per byte of the agreed per-SSA quota; default: 1 wxHOPR
