@@ -89,6 +89,8 @@
             export CARGO_BUILD_RUSTFLAGS="''${CARGO_BUILD_RUSTFLAGS:-} --cfg tokio_unstable --check-cfg cfg(tokio_unstable)"
           '';
 
+          obscura = import ./nix/obscura.nix { inherit lib pkgs; };
+
           gnosisvpnPackages = import ./nix/gnosisvpn.nix {
             inherit
               lib
@@ -172,6 +174,27 @@
               binary-gnosis_vpn-aarch64-darwin
               binary-gnosis_vpn-aarch64-darwin-dev
               ;
+          };
+
+          # Headless-browsing baseline harness. Deliberately no Rust toolchain: it drives
+          # an already-built gnosis_vpn-ctl, so it only needs obscura + node.
+          devShells.headless = pkgs.mkShell {
+            packages = [
+              obscura
+              pkgs.curl
+              pkgs.git
+              pkgs.jq
+              pkgs.nodejs
+            ];
+
+            shellHook = ''
+              root="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
+              export PATH="$root/network-baseline:$PATH"
+              if [ ! -d "$root/network-baseline/node_modules" ]; then
+                echo "== installing node deps (npm ci) =="
+                (cd "$root/network-baseline" && npm ci)
+              fi
+            '';
           };
 
           devShells.default = craneLib.devShell (

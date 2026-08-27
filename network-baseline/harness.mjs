@@ -3,30 +3,52 @@
 // and writes <OUTDIR>/<EXIT>.json.
 //
 // Env: EXIT, OUTDIR, EXPECTED_CC, CDP (default ws://127.0.0.1:9222/devtools/browser)
-//      NAV_TIMEOUT_MS, DOWNLOAD_SECS, UPLOAD_SECS, DWELL_MS
-import puppeteer from 'puppeteer-core';
-import { readFileSync, writeFileSync } from 'fs';
-import { spawn } from 'child_process';
+//      NAV_TIMEOUT_MS, DOWNLOAD_SECS, UPLOAD_SECS, DWELL_MS, CRAWL_START, CRAWL_HOPS
+import puppeteer from "puppeteer-core";
+import { readFileSync, writeFileSync } from "fs";
+import { spawn } from "child_process";
 
-const EXIT = process.env.EXIT || 'unknown';
-const OUTDIR = process.env.OUTDIR || '.';
-const EXPECTED_CC = process.env.EXPECTED_CC || '';
-const CDP = process.env.CDP || 'ws://127.0.0.1:9222/devtools/browser';
+const EXIT = process.env.EXIT || "unknown";
+const OUTDIR = process.env.OUTDIR || ".";
+const EXPECTED_CC = process.env.EXPECTED_CC || "";
+const CDP = process.env.CDP || "ws://127.0.0.1:9222/devtools/browser";
 const NAV_TIMEOUT_MS = +(process.env.NAV_TIMEOUT_MS || 90000);
 const DOWNLOAD_SECS = +(process.env.DOWNLOAD_SECS || 90);
 const UPLOAD_SECS = +(process.env.UPLOAD_SECS || 45);
 const DWELL_MS = +(process.env.DWELL_MS || 4000);
+const CRAWL_START =
+  process.env.CRAWL_START || "https://en.wikipedia.org/wiki/Special:Random";
+const CRAWL_HOPS = +(process.env.CRAWL_HOPS || 5);
+
+// A video is drawn per run so one edge-cached asset can't define the numbers.
+// max_res is the upload's native ceiling; what the player actually settled on is
+// recorded per run (probe below), which is the number that reflects the tunnel.
+const YT_VIDEOS = [
+  { id: "aqz-KE-bpKQ", name: "big-buck-bunny-60fps", max_res: "2160p" },
+  { id: "LXb3EKWsInQ", name: "costa-rica-60fps-hdr", max_res: "2160p" },
+  { id: "jNQXAC9IVRw", name: "me-at-the-zoo", max_res: "240p" },
+];
+// run.sh draws the index once so every exit in a run watches the same video —
+// otherwise the per-exit numbers compare a 4K upload against a 240p one.
+const YT_INDEX = Number.isInteger(+process.env.YT_VIDEO_INDEX)
+  ? +process.env.YT_VIDEO_INDEX
+  : Math.floor(Math.random() * YT_VIDEOS.length);
+const YT_PICK = YT_VIDEOS[YT_INDEX % YT_VIDEOS.length];
 
 const SITES = [
-  { label: 'youtube-home', url: 'https://www.youtube.com' },
-  { label: 'youtube-watch', url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ' },
-  { label: 'cnn-home', url: 'https://www.cnn.com' },
-  { label: 'cnn-world', url: 'https://www.cnn.com/world' },
-  { label: 'wikipedia', url: 'https://en.wikipedia.org/wiki/Special:Random' },
-  { label: 'bbc', url: 'https://www.bbc.com/news' },
-  { label: 'github', url: 'https://github.com/trending' },
-  { label: 'reddit', url: 'https://www.reddit.com' },
-  { label: 'amazon', url: 'https://www.amazon.com' },
+  { label: "youtube-home", url: "https://www.youtube.com" },
+  {
+    label: "youtube-watch",
+    url: `https://www.youtube.com/watch?v=${YT_PICK.id}`,
+    video: YT_PICK,
+  },
+  { label: "cnn-home", url: "https://www.cnn.com" },
+  { label: "cnn-world", url: "https://www.cnn.com/world" },
+  { label: "wikipedia", url: "https://en.wikipedia.org/wiki/Special:Random" },
+  { label: "bbc", url: "https://www.bbc.com/news" },
+  { label: "github", url: "https://github.com/trending" },
+  { label: "reddit", url: "https://www.reddit.com" },
+  { label: "amazon", url: "https://www.amazon.com" },
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -34,16 +56,21 @@ const nowISO = () => new Date().toISOString();
 
 // ---- ICMP latency sampler (through the tunnel, full-tunnel routing) ----
 function startPing(target) {
-  const p = spawn('ping', ['-i', '1', target]);
-  let out = '';
-  p.stdout.on('data', (d) => (out += d));
-  p.stderr.on('data', () => {});
+  const p = spawn("ping", ["-i", "1", target]);
+  let out = "";
+  p.stdout.on("data", (d) => (out += d));
+  p.stderr.on("data", () => {});
   return {
     stop() {
       return new Promise((resolve) => {
-        p.on('close', () => resolve(parsePing(out, target)));
-        p.kill('SIGINT'); // macOS ping prints summary on SIGINT
-        setTimeout(() => { try { p.kill('SIGKILL'); } catch {} resolve(parsePing(out, target)); }, 3000);
+        p.on("close", () => resolve(parsePing(out, target)));
+        p.kill("SIGINT"); // macOS ping prints summary on SIGINT
+        setTimeout(() => {
+          try {
+            p.kill("SIGKILL");
+          } catch {}
+          resolve(parsePing(out, target));
+        }, 3000);
       });
     },
   };
@@ -51,14 +78,20 @@ function startPing(target) {
 function parsePing(out, target) {
   const rtts = [...out.matchAll(/time=([\d.]+)\s*ms/g)].map((m) => +m[1]);
   const lossM = out.match(/([\d.]+)%\s*packet loss/);
-  const statsM = out.match(/round-trip min\/avg\/max\/stddev = ([\d.]+)\/([\d.]+)\/([\d.]+)\/([\d.]+)/);
+  const statsM = out.match(
+    /round-trip min\/avg\/max\/stddev = ([\d.]+)\/([\d.]+)\/([\d.]+)\/([\d.]+)/,
+  );
   return {
     target,
     samples: rtts.length,
     loss_pct: lossM ? +lossM[1] : null,
-    min_ms: statsM ? +statsM[1] : (rtts.length ? Math.min(...rtts) : null),
-    avg_ms: statsM ? +statsM[2] : (rtts.length ? +(rtts.reduce((a, b) => a + b, 0) / rtts.length).toFixed(2) : null),
-    max_ms: statsM ? +statsM[3] : (rtts.length ? Math.max(...rtts) : null),
+    min_ms: statsM ? +statsM[1] : rtts.length ? Math.min(...rtts) : null,
+    avg_ms: statsM
+      ? +statsM[2]
+      : rtts.length
+        ? +(rtts.reduce((a, b) => a + b, 0) / rtts.length).toFixed(2)
+        : null,
+    max_ms: statsM ? +statsM[3] : rtts.length ? Math.max(...rtts) : null,
     stddev_ms: statsM ? +statsM[4] : null,
   };
 }
@@ -74,74 +107,162 @@ async function measureLatency(page) {
   for (let i = 0; i < 12; i++) {
     try {
       const ms = await page.evaluate(async (i) => {
-        const ac = new AbortController(); const to = setTimeout(() => ac.abort(), 15000);
+        const ac = new AbortController();
+        const to = setTimeout(() => ac.abort(), 15000);
         const t = performance.now();
-        try { await fetch('https://speed.cloudflare.com/__down?bytes=0&i=' + i, { cache: 'no-store', signal: ac.signal }); }
-        finally { clearTimeout(to); }
+        try {
+          await fetch("https://speed.cloudflare.com/__down?bytes=0&i=" + i, {
+            cache: "no-store",
+            signal: ac.signal,
+          });
+        } finally {
+          clearTimeout(to);
+        }
         return performance.now() - t;
       }, i);
       s.push(ms);
-    } catch { /* skip failed sample */ }
+    } catch {
+      /* skip failed sample */
+    }
   }
-  s = s.filter((v) => typeof v === 'number' && Number.isFinite(v));
-  if (!s.length) return { error: 'all latency samples failed' };
+  s = s.filter((v) => typeof v === "number" && Number.isFinite(v));
+  if (!s.length) return { error: "all latency samples failed" };
   s.sort((a, b) => a - b);
   const avg = s.reduce((a, b) => a + b, 0) / s.length;
-  const jitter = s.slice(1).reduce((a, v, i) => a + Math.abs(v - s[i]), 0) / (s.length - 1);
-  return { samples: s.length, min_ms: +s[0].toFixed(2), avg_ms: +avg.toFixed(2), max_ms: +s[s.length - 1].toFixed(2), median_ms: +s[Math.floor(s.length / 2)].toFixed(2), jitter_ms: +jitter.toFixed(2) };
+  const jitter =
+    s.slice(1).reduce((a, v, i) => a + Math.abs(v - s[i]), 0) / (s.length - 1);
+  return {
+    samples: s.length,
+    min_ms: +s[0].toFixed(2),
+    avg_ms: +avg.toFixed(2),
+    max_ms: +s[s.length - 1].toFixed(2),
+    median_ms: +s[Math.floor(s.length / 2)].toFixed(2),
+    jitter_ms: +jitter.toFixed(2),
+  };
 }
 
 async function measureDownload(page, secs) {
   const STREAMS = 4;
-  let totalBytes = 0, perStream = 256 * 1024;
+  let totalBytes = 0,
+    perStream = 256 * 1024;
   const t0 = Date.now();
   try {
     while ((Date.now() - t0) / 1000 < secs) {
-      const r = await page.evaluate(async ({ bytes, streams }) => {
-        const ac = new AbortController(); const to = setTimeout(() => ac.abort(), 25000);
-        const t = performance.now(); let b = 0;
-        try {
-          await Promise.all(Array.from({ length: streams }, async () => {
-            const resp = await fetch('https://speed.cloudflare.com/__down?bytes=' + bytes + '&t=' + performance.now(), { cache: 'no-store', signal: ac.signal });
-            b += (await resp.arrayBuffer()).byteLength;
-          }));
-        } finally { clearTimeout(to); }
-        return { bytes: b, ms: performance.now() - t };
-      }, { bytes: perStream, streams: STREAMS });
+      const r = await page.evaluate(
+        async ({ bytes, streams }) => {
+          const ac = new AbortController();
+          const to = setTimeout(() => ac.abort(), 25000);
+          const t = performance.now();
+          let b = 0;
+          try {
+            await Promise.all(
+              Array.from({ length: streams }, async () => {
+                const resp = await fetch(
+                  "https://speed.cloudflare.com/__down?bytes=" +
+                    bytes +
+                    "&t=" +
+                    performance.now(),
+                  { cache: "no-store", signal: ac.signal },
+                );
+                b += (await resp.arrayBuffer()).byteLength;
+              }),
+            );
+          } finally {
+            clearTimeout(to);
+          }
+          return { bytes: b, ms: performance.now() - t };
+        },
+        { bytes: perStream, streams: STREAMS },
+      );
+      if (!Number.isFinite(r?.bytes) || !Number.isFinite(r?.ms)) break;
       totalBytes += r.bytes;
-      const bps = r.bytes * 8 / (r.ms / 1000);           // aggregate bits/s this call
-      perStream = CLAMP(Math.round((bps / 8) / STREAMS * 8), 256 * 1024, 25_000_000); // target ~8s/call
+      const bps = (r.bytes * 8) / (r.ms / 1000); // aggregate bits/s this call
+      perStream = CLAMP(
+        Math.round((bps / 8 / STREAMS) * 8),
+        256 * 1024,
+        25_000_000,
+      ); // target ~8s/call
     }
-  } catch (e) { /* obscura 30s abort or reset: keep partial */ if (!totalBytes) return { error: String(e).split('\n')[0] }; }
+  } catch (e) {
+    /* obscura 30s abort or reset: keep partial */ if (!totalBytes)
+      return { error: String(e).split("\n")[0] };
+  }
   const elapsed = (Date.now() - t0) / 1000;
-  return { bytes: totalBytes, secs: +elapsed.toFixed(2), mbps: +((totalBytes * 8) / elapsed / 1e6).toFixed(2), streams: STREAMS };
+  // Nothing moved: report it as a failure rather than a credible 0 Mbps, which
+  // would enter summary.csv as a real datapoint and skew a before/after diff.
+  if (!totalBytes)
+    return {
+      error: "no bytes transferred",
+      secs: +elapsed.toFixed(2),
+      streams: STREAMS,
+    };
+  return {
+    bytes: totalBytes,
+    secs: +elapsed.toFixed(2),
+    mbps: +((totalBytes * 8) / elapsed / 1e6).toFixed(2),
+    streams: STREAMS,
+  };
 }
 
 async function measureUpload(page, secs) {
   const STREAMS = 3;
-  let totalBytes = 0, perStream = 256 * 1024;
+  let totalBytes = 0,
+    perStream = 256 * 1024;
   const t0 = Date.now();
   try {
     while ((Date.now() - t0) / 1000 < secs) {
-      const r = await page.evaluate(async ({ bytes, streams }) => {
-        const ac = new AbortController(); const to = setTimeout(() => ac.abort(), 25000);
-        const payload = new Uint8Array(bytes);
-        const t = performance.now(); let b = 0;
-        try {
-          await Promise.all(Array.from({ length: streams }, async () => {
-            const resp = await fetch('https://speed.cloudflare.com/__up', { method: 'POST', body: payload, cache: 'no-store', signal: ac.signal });
-            await resp.arrayBuffer(); b += bytes;
-          }));
-        } finally { clearTimeout(to); }
-        return { bytes: b, ms: performance.now() - t };
-      }, { bytes: perStream, streams: STREAMS });
+      const r = await page.evaluate(
+        async ({ bytes, streams }) => {
+          const ac = new AbortController();
+          const to = setTimeout(() => ac.abort(), 25000);
+          const payload = new Uint8Array(bytes);
+          const t = performance.now();
+          let b = 0;
+          try {
+            await Promise.all(
+              Array.from({ length: streams }, async () => {
+                const resp = await fetch("https://speed.cloudflare.com/__up", {
+                  method: "POST",
+                  body: payload,
+                  cache: "no-store",
+                  signal: ac.signal,
+                });
+                await resp.arrayBuffer();
+                b += bytes;
+              }),
+            );
+          } finally {
+            clearTimeout(to);
+          }
+          return { bytes: b, ms: performance.now() - t };
+        },
+        { bytes: perStream, streams: STREAMS },
+      );
+      if (!Number.isFinite(r?.bytes) || !Number.isFinite(r?.ms)) break;
       totalBytes += r.bytes;
-      const bps = r.bytes * 8 / (r.ms / 1000);
-      perStream = CLAMP(Math.round((bps / 8) / STREAMS * 8), 256 * 1024, 15_000_000);
+      const bps = (r.bytes * 8) / (r.ms / 1000);
+      perStream = CLAMP(
+        Math.round((bps / 8 / STREAMS) * 8),
+        256 * 1024,
+        15_000_000,
+      );
     }
-  } catch (e) { if (!totalBytes) return { error: String(e).split('\n')[0] }; }
+  } catch (e) {
+    if (!totalBytes) return { error: String(e).split("\n")[0] };
+  }
   const elapsed = (Date.now() - t0) / 1000;
-  return { bytes: totalBytes, secs: +elapsed.toFixed(2), mbps: +((totalBytes * 8) / elapsed / 1e6).toFixed(2), streams: STREAMS };
+  if (!totalBytes)
+    return {
+      error: "no bytes transferred",
+      secs: +elapsed.toFixed(2),
+      streams: STREAMS,
+    };
+  return {
+    bytes: totalBytes,
+    secs: +elapsed.toFixed(2),
+    mbps: +((totalBytes * 8) / elapsed / 1e6).toFixed(2),
+    streams: STREAMS,
+  };
 }
 
 async function runSpeedtest(page, label) {
@@ -158,52 +279,186 @@ async function egressCheck(page) {
       const ac = new AbortController();
       const to = setTimeout(() => ac.abort(), 20000); // keep in-page failure under obscura's 30s protocol cap
       try {
-        const r = await fetch('https://cloudflare.com/cdn-cgi/trace', { cache: 'no-store', signal: ac.signal });
+        const r = await fetch("https://cloudflare.com/cdn-cgi/trace", {
+          cache: "no-store",
+          signal: ac.signal,
+        });
         const t = await r.text();
-        const kv = Object.fromEntries(t.trim().split('\n').map((l) => l.split('=')));
+        const kv = Object.fromEntries(
+          t
+            .trim()
+            .split("\n")
+            .map((l) => l.split("=")),
+        );
         return { ip: kv.ip, loc: kv.loc, colo: kv.colo, warp: kv.warp };
-      } catch (e) { return { error: String(e) }; } finally { clearTimeout(to); }
+      } catch (e) {
+        return { error: String(e) };
+      } finally {
+        clearTimeout(to);
+      }
     });
-  } catch (e) { return { error: 'evaluate-aborted: ' + String(e).split('\n')[0] }; }
+  } catch (e) {
+    return { error: "evaluate-aborted: " + String(e).split("\n")[0] };
+  }
 }
 
 // ---- single site navigation with node-side timing + failure counters ----
 async function visit(page, site) {
-  let failedResponses = 0, requestFailures = 0;
-  const onResp = (resp) => { if (resp.status() >= 400) failedResponses++; };
-  const onFail = () => { requestFailures++; };
-  page.on('response', onResp);
-  page.on('requestfailed', onFail);
+  let failedResponses = 0,
+    requestFailures = 0;
+  const onResp = (resp) => {
+    if (resp.status() >= 400) failedResponses++;
+  };
+  const onFail = () => {
+    requestFailures++;
+  };
+  page.on("response", onResp);
+  page.on("requestfailed", onFail);
   const rec = { label: site.label, url: site.url, at: nowISO() };
   const t0 = Date.now();
   try {
     // DOMContentLoaded = "page usable" over the capped tunnel; some sites (e.g. cnn)
     // resolve with no HTTP status object but still render — success = goto did not throw.
-    const resp = await page.goto(site.url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+    const resp = await page.goto(site.url, {
+      waitUntil: "domcontentloaded",
+      timeout: NAV_TIMEOUT_MS,
+    });
     rec.dcl_ms = Date.now() - t0;
     rec.http_status = resp ? resp.status() : null;
     // scroll to trigger lazy loads + a bounded settle window ("jump around")
-    try { await page.evaluate(() => window.scrollBy(0, 3000)); } catch {}
+    try {
+      await page.evaluate(() => window.scrollBy(0, 3000));
+    } catch {}
     await sleep(DWELL_MS);
     rec.load_ms = Date.now() - t0;
+    if (site.video) {
+      rec.video = { ...site.video };
+      try {
+        // Autoplay is blocked, so nudge it: muted playback is the only kind a
+        // headless browser will start unprompted.
+        await page.evaluate(async () => {
+          const v = document.querySelector("video");
+          if (v) {
+            v.muted = true;
+            try {
+              await v.play();
+            } catch {}
+          }
+        });
+        await sleep(DWELL_MS);
+        rec.video.observed = await page.evaluate(() => {
+          const v = document.querySelector("video");
+          const player = document.getElementById("movie_player");
+          return {
+            playing: v ? !v.paused : null,
+            width: v?.videoWidth ?? null,
+            height: v?.videoHeight ?? null,
+            quality: player?.getPlaybackQuality?.() ?? null,
+            played_s: v ? +v.currentTime.toFixed(2) : null,
+            buffered_s: v?.buffered?.length
+              ? +v.buffered.end(v.buffered.length - 1).toFixed(2)
+              : null,
+          };
+        });
+      } catch {
+        /* player API absent or evaluate aborted: leave observed unset */
+      }
+    }
     try {
       const nav = await page.evaluate(() => {
-        const n = performance.getEntriesByType('navigation')[0];
-        return n ? { ttfb_ms: Math.round(n.responseStart), domInteractive_ms: Math.round(n.domInteractive), load_ms: Math.round(n.loadEventEnd) } : null;
+        const n = performance.getEntriesByType("navigation")[0];
+        return n
+          ? {
+              ttfb_ms: Math.round(n.responseStart),
+              domInteractive_ms: Math.round(n.domInteractive),
+              load_ms: Math.round(n.loadEventEnd),
+            }
+          : null;
       });
       if (nav) rec.perf_timing = nav;
     } catch {}
-    rec.outcome = (rec.http_status && rec.http_status >= 400) ? 'http_error' : 'ok';
+    rec.outcome =
+      rec.http_status && rec.http_status >= 400 ? "http_error" : "ok";
   } catch (e) {
     rec.total_ms = Date.now() - t0;
-    rec.outcome = /timeout|Timeout|Navigation timeout/.test(String(e)) ? 'timeout' : 'error';
-    rec.error = String(e).split('\n')[0];
+    rec.outcome = /timeout|Timeout|Navigation timeout/.test(String(e))
+      ? "timeout"
+      : "error";
+    rec.error = String(e).split("\n")[0];
   }
   rec.failed_responses = failedResponses;
   rec.request_failures = requestFailures;
-  page.off('response', onResp);
-  page.off('requestfailed', onFail);
+  page.off("response", onResp);
+  page.off("requestfailed", onFail);
   return rec;
+}
+
+// ---- link crawl on a light site ----
+// One-shot loads of heavy pages measure asset weight; following links measures how
+// fast you can actually move around behind the tunnel. Wikipedia: small pages,
+// stable markup, no DRM or bot wall.
+async function crawl(page, startUrl, hops) {
+  const out = [];
+  let url = startUrl;
+  for (let hop = 0; hop < hops; hop++) {
+    const rec = { hop, url, at: nowISO() };
+    const t0 = Date.now();
+    try {
+      const resp = await page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout: NAV_TIMEOUT_MS,
+      });
+      rec.ms = Date.now() - t0;
+      rec.http_status = resp ? resp.status() : null;
+      rec.outcome =
+        rec.http_status && rec.http_status >= 400 ? "http_error" : "ok";
+      rec.resolved_url = page.url();
+      try {
+        rec.title = await page.title();
+      } catch {}
+      // Article-body links come back as absolute URLs, not /wiki/ paths, so resolve
+      // every href and keep same-origin main-namespace articles (a ":" means
+      // Help:/Category:/File:, which are chrome rather than reading material).
+      const next = await page.evaluate(
+        (visited) => {
+          const seen = new Set(visited);
+          const candidates = Array.from(
+            document.querySelectorAll("#mw-content-text a[href]"),
+          )
+            .map((a) => {
+              try {
+                return new URL(a.getAttribute("href"), location.href);
+              } catch {
+                return null;
+              }
+            })
+            .filter(
+              (u) =>
+                u &&
+                u.origin === location.origin &&
+                /^\/wiki\/[^:]+$/.test(u.pathname),
+            )
+            .map((u) => u.origin + u.pathname)
+            .filter((u) => !seen.has(u));
+          return candidates.length
+            ? candidates[Math.floor(Math.random() * candidates.length)]
+            : null;
+        },
+        [...out.map((h) => h.resolved_url), rec.resolved_url].filter(Boolean),
+      );
+      out.push(rec);
+      // A dead end shouldn't cut the walk short: re-seed from a random article so
+      // the run still reports the hop count it was asked for.
+      url = next || startUrl;
+    } catch (e) {
+      rec.ms = Date.now() - t0;
+      rec.outcome = /timeout|Timeout/.test(String(e)) ? "timeout" : "error";
+      rec.error = String(e).split("\n")[0];
+      out.push(rec);
+      break;
+    }
+  }
+  return out;
 }
 
 // ---- main ----
@@ -212,32 +467,59 @@ const result = {
   expected_cc: EXPECTED_CC,
   started_at: nowISO(),
   cdp: CDP,
-  params: { NAV_TIMEOUT_MS, DOWNLOAD_SECS, UPLOAD_SECS, DWELL_MS },
+  params: {
+    NAV_TIMEOUT_MS,
+    DOWNLOAD_SECS,
+    UPLOAD_SECS,
+    DWELL_MS,
+    CRAWL_START,
+    CRAWL_HOPS,
+  },
+  youtube_video: YT_PICK,
 };
 
-const pings = [startPing('1.1.1.1'), startPing('10.128.0.1')];
+const pings = [startPing("1.1.1.1"), startPing("10.128.0.1")];
 
 const browser = await puppeteer.connect({ browserWSEndpoint: CDP });
 const page = await browser.newPage();
 try {
   result.egress = await egressCheck(page);
-  result.egress_match = EXPECTED_CC ? (result.egress.loc === EXPECTED_CC) : null;
-  console.log(`[${EXIT}] egress: ${JSON.stringify(result.egress)} match=${result.egress_match}`);
+  result.egress_match = EXPECTED_CC ? result.egress.loc === EXPECTED_CC : null;
+  console.log(
+    `[${EXIT}] egress: ${JSON.stringify(result.egress)} match=${result.egress_match}`,
+  );
 
   result.navigations = [];
   for (const site of SITES) {
     const rec = await visit(page, site);
-    console.log(`[${EXIT}] ${rec.label} -> ${rec.outcome} status=${rec.http_status ?? '-'} load=${rec.load_ms ?? rec.total_ms ?? '-'}ms fails=${rec.failed_responses}/${rec.request_failures}`);
+    console.log(
+      `[${EXIT}] ${rec.label} -> ${rec.outcome} status=${rec.http_status ?? "-"} load=${rec.load_ms ?? rec.total_ms ?? "-"}ms fails=${rec.failed_responses}/${rec.request_failures}`,
+    );
     result.navigations.push(rec);
   }
-  const okCount = result.navigations.filter((n) => n.outcome === 'ok').length;
-  console.log(`[${EXIT}] navigations ok: ${okCount}/${result.navigations.length}`);
+  const okCount = result.navigations.filter((n) => n.outcome === "ok").length;
+  console.log(
+    `[${EXIT}] navigations ok: ${okCount}/${result.navigations.length}`,
+  );
+
+  result.crawl = await crawl(page, CRAWL_START, CRAWL_HOPS);
+  const crawlOk = result.crawl.filter((h) => h.outcome === "ok");
+  const crawlAvg = crawlOk.length
+    ? Math.round(crawlOk.reduce((a, h) => a + h.ms, 0) / crawlOk.length)
+    : "-";
+  console.log(
+    `[${EXIT}] crawl: ${crawlOk.length}/${result.crawl.length} hops ok, avg ${crawlAvg}ms`,
+  );
 
   result.speedtests = [];
-  for (const label of ['run1', 'run2']) {
-    console.log(`[${EXIT}] speedtest ${label} (down ${DOWNLOAD_SECS}s / up ${UPLOAD_SECS}s)...`);
+  for (const label of ["run1", "run2"]) {
+    console.log(
+      `[${EXIT}] speedtest ${label} (down ${DOWNLOAD_SECS}s / up ${UPLOAD_SECS}s)...`,
+    );
     const st = await runSpeedtest(page, label);
-    console.log(`[${EXIT}] ${label}: down=${st.download.mbps ?? st.download.error} up=${st.upload.mbps ?? st.upload.error} lat=${st.latency.avg_ms ?? st.latency.error}`);
+    console.log(
+      `[${EXIT}] ${label}: down=${st.download.mbps ?? st.download.error} up=${st.upload.mbps ?? st.upload.error} lat=${st.latency.avg_ms ?? st.latency.error}`,
+    );
     result.speedtests.push(st);
     await sleep(3000);
   }
@@ -245,15 +527,25 @@ try {
   result.fatal_error = String(e);
   console.error(`[${EXIT}] FATAL`, e);
 } finally {
-  try { await page.close(); } catch {}
-  try { await browser.disconnect(); } catch {}
+  try {
+    await page.close();
+  } catch {}
+  try {
+    await browser.disconnect();
+  } catch {}
 }
 
 result.ping = await Promise.all(pings.map((p) => p.stop()));
-console.log(`[${EXIT}] ping 1.1.1.1: avg=${result.ping[0].avg_ms}ms loss=${result.ping[0].loss_pct}%`);
+console.log(
+  `[${EXIT}] ping 1.1.1.1: avg=${result.ping[0].avg_ms}ms loss=${result.ping[0].loss_pct}%`,
+);
 result.ended_at = nowISO();
-result.wall_secs = Math.round((Date.parse(result.ended_at) - Date.parse(result.started_at)) / 1000);
+result.wall_secs = Math.round(
+  (Date.parse(result.ended_at) - Date.parse(result.started_at)) / 1000,
+);
 
 writeFileSync(`${OUTDIR}/${EXIT}.json`, JSON.stringify(result, null, 2));
-console.log(`[${EXIT}] wrote ${OUTDIR}/${EXIT}.json (wall ${result.wall_secs}s)`);
+console.log(
+  `[${EXIT}] wrote ${OUTDIR}/${EXIT}.json (wall ${result.wall_secs}s)`,
+);
 process.exit(0);

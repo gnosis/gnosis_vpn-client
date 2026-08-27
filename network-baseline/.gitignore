@@ -1,7 +1,8 @@
-# runtime binaries + deps — fetched by setup.sh, never committed
+# leftover from the pre-nix setup script; obscura now comes from the dev shell
 bin/
+
+# node deps — installed by the `headless` dev shell, never committed
 node_modules/
-obscura*.tar.gz
 
 # run outputs + logs — regenerated per run
 results/
