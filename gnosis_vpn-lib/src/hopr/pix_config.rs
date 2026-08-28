@@ -45,26 +45,26 @@ impl Default for PixConfig {
     }
 }
 
-// Per-field defaults, not a container-level `#[serde(default)]`, so `serde_as` field wrapping can't bypass them.
+// Per-field defaults (container-level `#[serde(default)]` doesn't survive `serde_as`); each builds only the upstream struct it needs.
 impl PixConfig {
     fn default_price_per_byte() -> HoprBalance {
-        Self::default().price_per_byte
+        edgli::strategy::PixEntryStrategy::default().price_per_byte
     }
 
     fn default_max_ssa_allocation() -> HoprBalance {
-        Self::default().max_ssa_allocation
+        edgli::strategy::PixEntryStrategy::default().max_ssa_allocation
     }
 
     fn default_deposit_buffer_period() -> Duration {
-        Self::default().deposit_buffer_period
+        edgli::strategy::PixEntryStrategy::default().deposit_buffer_period
     }
 
     fn default_max_deposit_tracking_time() -> Duration {
-        Self::default().max_deposit_tracking_time
+        edgli::strategy::PixEntryPool::default().max_deposit_tracking_time
     }
 
     fn default_max_deposit_retries() -> usize {
-        Self::default().max_deposit_retries
+        edgli::strategy::PixEntryPool::default().max_deposit_retries
     }
 }
 
