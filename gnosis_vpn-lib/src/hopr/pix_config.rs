@@ -7,25 +7,27 @@ use serde_with::{DisplayFromStr, serde_as};
 /// Operator-tunable parameters for the PIX exit-incentivization strategy; unset fields fall back to upstream defaults.
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
 pub struct PixConfig {
     /// wxHOPR charged per byte of the agreed per-SSA quota.
     #[serde_as(as = "DisplayFromStr")]
+    #[serde(default = "PixConfig::default_price_per_byte")]
     pub price_per_byte: HoprBalance,
 
     /// Ceiling on a single SSA deposit; a computed deposit above this is refused outright.
     #[serde_as(as = "DisplayFromStr")]
+    #[serde(default = "PixConfig::default_max_ssa_allocation")]
     pub max_ssa_allocation: HoprBalance,
 
     /// Debounce window before a batch of pending deposits is flushed.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "humantime_serde", default = "PixConfig::default_deposit_buffer_period")]
     pub deposit_buffer_period: Duration,
 
     /// How long the pool keeps polling a stealth address for a deposit to land.
-    #[serde(with = "humantime_serde")]
+    #[serde(with = "humantime_serde", default = "PixConfig::default_max_deposit_tracking_time")]
     pub max_deposit_tracking_time: Duration,
 
     /// Attempts *in addition to* the first for a deposit transfer.
+    #[serde(default = "PixConfig::default_max_deposit_retries")]
     pub max_deposit_retries: usize,
 }
 
@@ -43,6 +45,29 @@ impl Default for PixConfig {
     }
 }
 
+// Per-field defaults, not a container-level `#[serde(default)]`, so `serde_as` field wrapping can't bypass them.
+impl PixConfig {
+    fn default_price_per_byte() -> HoprBalance {
+        Self::default().price_per_byte
+    }
+
+    fn default_max_ssa_allocation() -> HoprBalance {
+        Self::default().max_ssa_allocation
+    }
+
+    fn default_deposit_buffer_period() -> Duration {
+        Self::default().deposit_buffer_period
+    }
+
+    fn default_max_deposit_tracking_time() -> Duration {
+        Self::default().max_deposit_tracking_time
+    }
+
+    fn default_max_deposit_retries() -> usize {
+        Self::default().max_deposit_retries
+    }
+}
+
 impl From<PixConfig> for edgli::strategy::PixEntryConfig {
     fn from(c: PixConfig) -> Self {
         Self {
@@ -56,5 +81,21 @@ impl From<PixConfig> for edgli::strategy::PixEntryConfig {
                 max_deposit_retries: c.max_deposit_retries,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_toml_falls_back_to_pix_config_default() {
+        let parsed: PixConfig = toml::from_str("max_deposit_retries = 7").expect("valid partial PixConfig");
+        let def = PixConfig::default();
+        assert_eq!(parsed.max_deposit_retries, 7);
+        assert_eq!(parsed.price_per_byte, def.price_per_byte);
+        assert_eq!(parsed.max_ssa_allocation, def.max_ssa_allocation);
+        assert_eq!(parsed.deposit_buffer_period, def.deposit_buffer_period);
+        assert_eq!(parsed.max_deposit_tracking_time, def.max_deposit_tracking_time);
     }
 }
