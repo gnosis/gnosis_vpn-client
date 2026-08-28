@@ -39,7 +39,7 @@ pub(super) struct Connection {
     pub(super) wg: Option<ConnectionProtocol>,
     pub(super) ping: Option<PingOptions>,
     pub(super) surb_balancing: Option<SurbBalancingConfig>,
-    pub(super) pix_balancing: Option<PixBalancingConfig>,
+    pub(super) pix: Option<PixOptionsConfig>,
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
     pub(super) lan_lockdown: Option<bool>,
     pub(super) probe_local_addresses: Option<bool>,
@@ -113,7 +113,7 @@ pub(super) struct SessionPixConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct PixBalancingConfig {
+pub(super) struct PixOptionsConfig {
     ping_main: Option<SessionPixConfig>,
     bridge: Option<SessionPixConfig>,
     health_check: Option<SessionPixConfig>,
@@ -325,9 +325,9 @@ impl From<Option<Connection>> for options::Options {
             health_check: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.health_check.clone()), def.health_check),
         };
 
-        let pix_cfg = connection.and_then(|c| c.pix_balancing.clone());
-        let def = options::PixBalancing::default();
-        let pix = options::PixBalancing {
+        let pix_cfg = connection.and_then(|c| c.pix.clone());
+        let def = options::PixOptions::default();
+        let pix = options::PixOptions {
             ping_main: apply_session_pix(pix_cfg.as_ref().and_then(|s| s.ping_main.clone()), def.ping_main),
             bridge: apply_session_pix(pix_cfg.as_ref().and_then(|s| s.bridge.clone()), def.bridge),
             health_check: apply_session_pix(pix_cfg.as_ref().and_then(|s| s.health_check.clone()), def.health_check),
@@ -508,7 +508,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
-                    if k == "pix_balancing" {
+                    if k == "pix" {
                         if let Some(pix) = v.as_table() {
                             for (k2, v2) in pix.iter() {
                                 if k2 == "ping_main" || k2 == "bridge" || k2 == "health_check" {
@@ -517,12 +517,12 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                             if k3 == "enabled" {
                                                 continue;
                                             }
-                                            wrong.push(format!("connection.pix_balancing.{k2}.{k3}"));
+                                            wrong.push(format!("connection.pix.{k2}.{k3}"));
                                         }
                                     }
                                     continue;
                                 }
-                                wrong.push(format!("connection.pix_balancing.{k2}"));
+                                wrong.push(format!("connection.pix.{k2}"));
                             }
                         }
                         continue;
@@ -617,7 +617,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
-        if key == "pix" {
+        if key == "pix_strategy" {
             if let Some(pix) = value.as_table() {
                 for (k, _) in pix.iter() {
                     if matches!(
@@ -630,7 +630,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     ) {
                         continue;
                     }
-                    wrong.push(format!("pix.{k}"));
+                    wrong.push(format!("pix_strategy.{k}"));
                 }
             }
             continue;
@@ -710,7 +710,7 @@ impl From<Option<Strategy>> for StrategyConfig {
 
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct Pix {
+pub(super) struct PixStrategy {
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(default)]
     pub(super) price_per_byte: Option<HoprBalance>,
@@ -724,8 +724,8 @@ pub(super) struct Pix {
     pub(super) max_deposit_retries: Option<usize>,
 }
 
-impl From<Option<Pix>> for PixConfig {
-    fn from(v: Option<Pix>) -> Self {
+impl From<Option<PixStrategy>> for PixConfig {
+    fn from(v: Option<PixStrategy>) -> Self {
         let def = PixConfig::default();
         Self {
             price_per_byte: v.as_ref().and_then(|p| p.price_per_byte).unwrap_or(def.price_per_byte),
@@ -758,7 +758,7 @@ pub struct Config {
     pub(super) wireguard: Option<WireGuard>,
     pub(super) blokli: Option<BlokliConfig>,
     pub(super) strategy: Option<Strategy>,
-    pub(super) pix: Option<Pix>,
+    pub(super) pix_strategy: Option<PixStrategy>,
 }
 
 #[serde_as]
@@ -793,14 +793,14 @@ impl TryFrom<Config> for config::Config {
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
         let strategy = value.strategy.into();
-        let pix = value.pix.into();
+        let pix_strategy = value.pix_strategy.into();
         Ok(config::Config {
             connection,
             destinations,
             wireguard,
             blokli,
             strategy,
-            pix,
+            pix_strategy,
         })
     }
 }
@@ -1396,7 +1396,7 @@ sizing_mode = "deterministic"
     }
 
     #[test]
-    fn pix_is_always_registered() {
+    fn pix_strategy_is_always_registered() {
         let cfg = parse(
             r#####"
 version = 6
@@ -1406,16 +1406,16 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 "#####,
         );
         let result: crate::config::Config = cfg.try_into().expect("should succeed");
-        assert_eq!(result.pix, PixConfig::default());
+        assert_eq!(result.pix_strategy, PixConfig::default());
     }
 
     #[test]
-    fn pix_fields_are_parsed_and_override_the_default() {
+    fn pix_strategy_fields_are_parsed_and_override_the_default() {
         let cfg = parse(
             r#####"
 version = 6
 
-[pix]
+[pix_strategy]
 price_per_byte = "5 wxHOPR"
 max_ssa_allocation = "50 wxHOPR"
 deposit_buffer_period = "250ms"
@@ -1423,25 +1423,25 @@ max_deposit_tracking_time = "30s"
 max_deposit_retries = 5
 "#####,
         );
-        let pix = cfg.pix.expect("pix section present");
-        let converted: PixConfig = Some(pix).into();
+        let pix_strategy = cfg.pix_strategy.expect("pix_strategy section present");
+        let converted: PixConfig = Some(pix_strategy).into();
         assert_eq!(converted.deposit_buffer_period, Duration::from_millis(250));
         assert_eq!(converted.max_deposit_tracking_time, Duration::from_secs(30));
         assert_eq!(converted.max_deposit_retries, 5);
     }
 
     #[test]
-    fn pix_fields_are_optional_and_fall_back_to_defaults() {
+    fn pix_strategy_fields_are_optional_and_fall_back_to_defaults() {
         let cfg = parse(
             r#####"
 version = 6
 
-[pix]
+[pix_strategy]
 max_deposit_retries = 7
 "#####,
         );
-        let pix = cfg.pix.expect("pix section present");
-        let converted: PixConfig = Some(pix).into();
+        let pix_strategy = cfg.pix_strategy.expect("pix_strategy section present");
+        let converted: PixConfig = Some(pix_strategy).into();
         let def = PixConfig::default();
         assert_eq!(converted.max_deposit_retries, 7);
         assert_eq!(converted.price_per_byte, def.price_per_byte);
@@ -1451,11 +1451,11 @@ max_deposit_retries = 7
     }
 
     #[test]
-    fn pix_fields_are_known_keys() {
+    fn pix_strategy_fields_are_known_keys() {
         let table = r#####"
 version = 6
 
-[pix]
+[pix_strategy]
 price_per_byte = "5 wxHOPR"
 max_ssa_allocation = "50 wxHOPR"
 deposit_buffer_period = "250ms"
@@ -1469,21 +1469,21 @@ max_deposit_retries = 5
     }
 
     #[test]
-    fn pix_typo_is_reported() {
+    fn pix_strategy_typo_is_reported() {
         let table = r#####"
 version = 6
 
-[pix]
+[pix_strategy]
 pric_per_byte = "5 wxHOPR"
 "#####
             .parse::<toml::Table>()
             .expect("valid TOML");
 
-        assert_eq!(wrong_keys(&table), vec!["pix.pric_per_byte".to_string()]);
+        assert_eq!(wrong_keys(&table), vec!["pix_strategy.pric_per_byte".to_string()]);
     }
 
     #[test]
-    fn pix_balancing_defaults_to_enabled_for_ping_main_only() {
+    fn pix_defaults_to_enabled_for_ping_main_only() {
         let cfg = parse(
             r#####"
 version = 6
@@ -1499,7 +1499,7 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
     }
 
     #[test]
-    fn pix_balancing_overrides_are_applied() {
+    fn pix_overrides_are_applied() {
         let cfg = parse(
             r#####"
 version = 6
@@ -1507,10 +1507,10 @@ version = 6
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 
-[connection.pix_balancing.bridge]
+[connection.pix.bridge]
 enabled = true
 
-[connection.pix_balancing.ping_main]
+[connection.pix.ping_main]
 enabled = false
 "#####,
         );
@@ -1522,17 +1522,17 @@ enabled = false
     }
 
     #[test]
-    fn pix_balancing_fields_are_known_keys() {
+    fn pix_fields_are_known_keys() {
         let table = r#####"
 version = 6
 
-[connection.pix_balancing.bridge]
+[connection.pix.bridge]
 enabled = false
 
-[connection.pix_balancing.ping_main]
+[connection.pix.ping_main]
 enabled = true
 
-[connection.pix_balancing.health_check]
+[connection.pix.health_check]
 enabled = false
 "#####
             .parse::<toml::Table>()
@@ -1542,33 +1542,30 @@ enabled = false
     }
 
     #[test]
-    fn pix_balancing_typo_is_reported() {
+    fn pix_typo_is_reported() {
         let table = r#####"
 version = 6
 
-[connection.pix_balancing.bridge]
+[connection.pix.bridge]
 enalbed = false
 "#####
             .parse::<toml::Table>()
             .expect("valid TOML");
 
-        assert_eq!(
-            wrong_keys(&table),
-            vec!["connection.pix_balancing.bridge.enalbed".to_string()]
-        );
+        assert_eq!(wrong_keys(&table), vec!["connection.pix.bridge.enalbed".to_string()]);
     }
 
     #[test]
-    fn pix_balancing_unknown_session_key_is_reported() {
+    fn pix_unknown_session_key_is_reported() {
         let table = r#####"
 version = 6
 
-[connection.pix_balancing.main]
+[connection.pix.main]
 enabled = true
 "#####
             .parse::<toml::Table>()
             .expect("valid TOML");
 
-        assert_eq!(wrong_keys(&table), vec!["connection.pix_balancing.main".to_string()]);
+        assert_eq!(wrong_keys(&table), vec!["connection.pix.main".to_string()]);
     }
 }

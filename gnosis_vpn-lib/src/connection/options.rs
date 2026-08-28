@@ -16,7 +16,7 @@ pub struct Options {
     pub sessions: Sessions,
     pub ping_options: ping::Options,
     pub surb_balancing: SurbBalancing,
-    pub pix: PixBalancing,
+    pub pix: PixOptions,
     pub health_check_intervals: HealthCheckIntervals,
     pub lan_lockdown: bool,
     /// Whether announced peer addresses that are private/local IPs (loopback, RFC1918,
@@ -85,7 +85,7 @@ pub struct SessionPixOptions {
 
 /// Per-session-kind PIX enablement; `ping_main` is one toggle since ping and main share one session.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct PixBalancing {
+pub struct PixOptions {
     pub ping_main: SessionPixOptions,
     pub bridge: SessionPixOptions,
     pub health_check: SessionPixOptions,
@@ -132,7 +132,7 @@ impl Default for SurbBalancing {
     }
 }
 
-impl Default for PixBalancing {
+impl Default for PixOptions {
     fn default() -> Self {
         Self {
             ping_main: SessionPixOptions { enabled: true },

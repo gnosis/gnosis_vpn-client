@@ -74,7 +74,7 @@ impl Hopr {
         })
     }
 
-    /// `cfg` with PIX applied. Callers opt in per session kind — see `options::PixBalancing`.
+    /// `cfg` with PIX applied. Callers opt in per session kind — see `options::PixOptions`.
     pub(crate) fn pix_aware_session_cfg(
         &self,
         cfg: HoprSessionClientConfig,
@@ -367,6 +367,9 @@ impl Hopr {
             None => tracing::warn!("default_strategy_cfg returned no strategies; LowLatency selector not applied"),
         }
         // `default_strategy_cfg` never emits `Pix` on its own; PIX always runs, so add it explicitly.
+        // Drop any pre-existing entry first so a future upstream default can't register it twice.
+        cfg.strategies
+            .retain(|s| !matches!(s, edgli::strategy::EdgeStrategyKind::Pix(_)));
         cfg.strategies.push(edgli::strategy::EdgeStrategyKind::Pix(pix.into()));
         self.edgli
             .run_reactor_from_cfg(cfg)

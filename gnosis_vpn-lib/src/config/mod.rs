@@ -27,7 +27,7 @@ pub struct Config {
     pub wireguard: WireGuardConfig,
     pub blokli: BlokliConfig,
     pub strategy: StrategyConfig,
-    pub pix: PixConfig,
+    pub pix_strategy: PixConfig,
 }
 
 #[derive(Debug, Error)]

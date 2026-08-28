@@ -7,6 +7,7 @@ use serde_with::{DisplayFromStr, serde_as};
 /// Operator-tunable parameters for the PIX exit-incentivization strategy; unset fields fall back to upstream defaults.
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PixConfig {
     /// wxHOPR charged per byte of the agreed per-SSA quota.
     #[serde_as(as = "DisplayFromStr")]

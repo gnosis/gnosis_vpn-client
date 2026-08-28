@@ -187,13 +187,13 @@ path    = { hops = 1 }
 # sizing_mode = { probabilistic = { success_probability = 0.99 } }
 
 ###
-## pix section - exit-incentivization payment strategy (pays the Exit per byte)
+## pix_strategy section - exit-incentivization payment strategy (pays the Exit per byte)
 ##
 ## Tunes the parameters of the global PIX settlement reactor, shared by every session that has
 ## PIX enabled (see connection.pix above for per-session-type enablement). Deposits are paid
 ## from the node's own address, not the Safe, so the node needs its own wxHOPR float.
 
-# [pix]
+# [pix_strategy]
 # wxHOPR charged per byte of the agreed per-SSA quota; default: 1 wxHOPR
 # price_per_byte = "1 wxHOPR"
 # ceiling on a single SSA deposit, refused outright if exceeded; default: 100 wxHOPR

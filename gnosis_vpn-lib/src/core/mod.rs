@@ -1748,7 +1748,7 @@ impl Core {
         }
         let Some(edgli) = self.hopr.as_ref() else { return };
         match edgli
-            .start_telemetry_reactor(self.config.strategy.clone().into(), self.config.pix.clone())
+            .start_telemetry_reactor(self.config.strategy.clone().into(), self.config.pix_strategy.clone())
             .await
         {
             Ok(strategy_process) => {
