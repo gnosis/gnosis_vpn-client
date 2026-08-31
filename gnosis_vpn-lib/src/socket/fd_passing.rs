@@ -230,13 +230,12 @@ fn recv_one_fd(sock: &UnixStream) -> io::Result<Option<OwnedFd>> {
             received.extend(fds);
         }
     }
-    if received.len() != 1 {
-        return Err(io::Error::new(
+    let [fd]: [OwnedFd; 1] = received.try_into().map_err(|_| {
+        io::Error::new(
             io::ErrorKind::InvalidData,
             "expected exactly one SCM_RIGHTS file descriptor",
-        ));
-    }
-    let fd = received.pop().expect("checked len == 1 above");
+        )
+    })?;
     ensure_cloexec(&fd)?;
     Ok(Some(fd))
 }
