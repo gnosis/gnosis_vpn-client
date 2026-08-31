@@ -30,8 +30,8 @@ edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "917636aad2e
   "telemetry",
 ] }
 exitcode = "~1.1.2"
-futures = "~0.3.33"
-futures-util = "~0.3.33"
+futures = "~0.3.34"
+futures-util = "~0.3.34"
 # Pinned by BRANCH, not by rev, and the form matters. `edgli` pins `hopr-lib` by branch, and
 # Cargo treats `?branch=X#sha` and `?rev=sha` as distinct sources even for byte-identical
 # commits -- mixing the two builds hoprnet twice and fails with `expected
@@ -47,7 +47,7 @@ ipnetwork = "~0.21.1"
 libc = "~0.2.189"
 mnl = "~0.3.1"
 neptun = { git = "https://github.com/NordSecurity/neptun.git", tag = "v3.0.1" }
-nftnl = "~0.9.3"
+nftnl = "~0.9.4"
 notify = "~8.2.0"
 pfctl = "~0.7.0"
 ping = { version = "~0.9.0", features = ["tokio"] }
