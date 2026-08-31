@@ -3699,7 +3699,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "unix-ancillary",
  "url",
  "uzers",
  "x25519-dalek",
@@ -9219,15 +9218,6 @@ checksum = "f4987bdc12753382e0bec4a65c50738ffaabc998b9cdd1f952fb5f39b0048a96"
 dependencies = [
  "crypto-common 0.2.2",
  "ctutils",
-]
-
-[[package]]
-name = "unix-ancillary"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9489acc673c33bd2d6a2a79d1dfc280358e97cb2ce7059e9b29b00de0d21087"
-dependencies = [
- "libc",
 ]
 
 [[package]]

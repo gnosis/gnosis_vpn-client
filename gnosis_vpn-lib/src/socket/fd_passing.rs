@@ -18,11 +18,14 @@
 
 #![deny(unsafe_code)]
 
-use std::io;
+use std::io::{self, IoSlice, IoSliceMut};
+use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 
-use unix_ancillary::UnixStreamExt;
+use rustix::net::{
+    RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SendFlags,
+};
 
 /// Send a single open file descriptor to the connected peer over `sock`.
 ///
@@ -33,7 +36,11 @@ use unix_ancillary::UnixStreamExt;
 /// caller as usual.
 pub fn send_fd(sock: &UnixStream, fd: &impl AsFd) -> io::Result<()> {
     let payload = [0];
-    let sent = sock.send_fds(&payload, std::slice::from_ref(fd))?;
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut control = SendAncillaryBuffer::new(&mut space);
+    let borrowed = [fd.as_fd()];
+    control.push(SendAncillaryMessage::ScmRights(&borrowed));
+    let sent = rustix::net::sendmsg(sock, &[IoSlice::new(&payload)], &mut control, SendFlags::empty())?;
     if sent != payload.len() {
         return Err(io::Error::new(
             io::ErrorKind::WriteZero,
@@ -183,18 +190,45 @@ fn socket_type_name(socket_type: rustix::net::SocketType) -> &'static str {
     }
 }
 
+// MSG_CMSG_CLOEXEC doesn't exist on macOS/Solaris; those fall back to a post-receipt fcntl.
+#[cfg(not(any(target_vendor = "apple", target_os = "solaris", target_os = "illumos")))]
+fn recv_flags() -> RecvFlags {
+    RecvFlags::CMSG_CLOEXEC
+}
+#[cfg(any(target_vendor = "apple", target_os = "solaris", target_os = "illumos"))]
+fn recv_flags() -> RecvFlags {
+    RecvFlags::empty()
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "solaris", target_os = "illumos")))]
+fn ensure_cloexec(_fd: &OwnedFd) -> io::Result<()> {
+    Ok(()) // already atomic via MSG_CMSG_CLOEXEC
+}
+#[cfg(any(target_vendor = "apple", target_os = "solaris", target_os = "illumos"))]
+fn ensure_cloexec(fd: &OwnedFd) -> io::Result<()> {
+    let flags = rustix::io::fcntl_getfd(fd)?;
+    rustix::io::fcntl_setfd(fd, flags | rustix::io::FdFlags::CLOEXEC)?;
+    Ok(())
+}
+
 /// Core `recvmsg` for one `SCM_RIGHTS` descriptor.
 fn recv_one_fd(sock: &UnixStream) -> io::Result<Option<OwnedFd>> {
-    let mut byte = [0];
-    // Receive two so a peer sending more than one descriptor is distinguishable
-    // from the valid case. unix-ancillary owns and closes every surplus fd beyond
-    // those two before returning.
-    let (bytes, mut received) = sock.recv_fds_into::<2>(&mut byte)?;
-    if bytes == 0 {
+    let mut byte = [0u8];
+    // Room for two: a peer sending more than one fd is then distinguishable, since the kernel closes the surplus on truncation.
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
+    let mut control = RecvAncillaryBuffer::new(&mut space);
+    let msg = rustix::net::recvmsg(sock, &mut [IoSliceMut::new(&mut byte)], &mut control, recv_flags())?;
+    if msg.bytes == 0 {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "peer closed the fd-passing socket before sending a descriptor",
         ));
+    }
+    let mut received = Vec::new();
+    for message in control.drain() {
+        if let RecvAncillaryMessage::ScmRights(fds) = message {
+            received.extend(fds);
+        }
     }
     if received.len() != 1 {
         return Err(io::Error::new(
@@ -202,16 +236,15 @@ fn recv_one_fd(sock: &UnixStream) -> io::Result<Option<OwnedFd>> {
             "expected exactly one SCM_RIGHTS file descriptor",
         ));
     }
-    Ok(received.pop())
+    let fd = received.pop().expect("checked len == 1 above");
+    ensure_cloexec(&fd)?;
+    Ok(Some(fd))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{IoSlice, Read, Write};
-    use std::mem::MaybeUninit;
-
-    use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags};
+    use std::io::{Read, Write};
 
     /// A fresh anonymous pipe, as two owned ends. The read end is the fd we send
     /// across the socket in tests; writing to the write end and reading it back
