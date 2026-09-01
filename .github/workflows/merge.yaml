@@ -6,6 +6,7 @@ on:
       # - synchronize
     branches:
       - main
+      - release/v4
 concurrency:
   group: merge
   cancel-in-progress: false

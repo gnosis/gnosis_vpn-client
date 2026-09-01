@@ -11,6 +11,7 @@ on:
           - patch
           - minor
           - major
+          - rc
 concurrency:
   group: release
   cancel-in-progress: false
