@@ -25,22 +25,21 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.6", features = ["derive", "env"] }
 clap_complete = "~4.6.9"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "b5122acf55511a8d31f001bee09c410689b66d97", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "d3da1f618cd282ad19725871021fa1920d2a52ba", features = [
   "blokli",
   "pix",
   "pix-test",
   "telemetry",
 ] }
 exitcode = "~1.1.2"
-futures = "~0.3.33"
-futures-util = "~0.3.33"
-# Pinned by REV, not by branch, and the form matters. `edgli` (at the `pix`-carrying commit
-# above) pins `hopr-lib` by `rev` on `master` -- PIX has not landed on `release/4.0` yet -- and
+futures = "~0.3.34"
+futures-util = "~0.3.34"
+# Pinned by REV, not by branch, and the form matters. `edgli` pins `hopr-lib` by rev, and
 # Cargo treats `?branch=X#sha` and `?rev=sha` as distinct sources even for byte-identical
 # commits -- mixing the two builds hoprnet twice and fails with `expected
 # hopr_lib::HoprSessionClientConfig, found HoprSessionClientConfig`. Keep both entries in the
 # same form and pointed at the same commit as edgli's own `hopr-lib` pin.
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "7b46149bc32f0cdca76fd84e52c598b881c7d643", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "87f0e07d505527253b278fc7372b9601afb921d2", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
@@ -50,13 +49,13 @@ ipnetwork = "~0.21.1"
 libc = "~0.2.189"
 mnl = "~0.3.1"
 neptun = { git = "https://github.com/NordSecurity/neptun.git", tag = "v3.0.1" }
-nftnl = "~0.9.3"
+nftnl = "~0.9.4"
 notify = "~8.2.0"
 pfctl = "~0.7.0"
 ping = { version = "~0.9.0", features = ["tokio"] }
 rand = "~0.10.2"
 reqwest = { version = "~0.13.4", features = ["blocking", "json"] }
-rtnetlink = "~0.21.0"
+rtnetlink = "~0.22.0"
 rustix = { version = "~1.1.4", features = ["fs", "net", "pipe", "stdio"] }
 serde = { version = "~1.0.229", features = ["derive"] }
 serde-saphyr = "~0.0.29"
@@ -70,7 +69,6 @@ tokio-util = { version = "~0.7.19", features = ["rt"] }
 toml = "~1.1.4"
 tracing = { version = "~0.1.44", features = ["release_max_level_debug"] }
 tracing-subscriber = "~0.3.23"
-unix-ancillary = "~0.3.0"
 url = { version = "~2.5.8", features = ["serde"] }
 uzers = "~0.12.2"
 x25519-dalek = { version = "~2.0.1", features = [

@@ -18,11 +18,14 @@
 
 #![deny(unsafe_code)]
 
-use std::io;
+use std::io::{self, IoSlice, IoSliceMut};
+use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 
-use unix_ancillary::UnixStreamExt;
+use rustix::net::{
+    RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SendFlags,
+};
 
 /// Send a single open file descriptor to the connected peer over `sock`.
 ///
@@ -33,7 +36,16 @@ use unix_ancillary::UnixStreamExt;
 /// caller as usual.
 pub fn send_fd(sock: &UnixStream, fd: &impl AsFd) -> io::Result<()> {
     let payload = [0];
-    let sent = sock.send_fds(&payload, std::slice::from_ref(fd))?;
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut control = SendAncillaryBuffer::new(&mut space);
+    let borrowed = [fd.as_fd()];
+    // Guard sizing/push drifting apart, which would silently drop the fd from the send.
+    if !control.push(SendAncillaryMessage::ScmRights(&borrowed)) {
+        return Err(io::Error::other(
+            "fd-passing control buffer too small for SCM_RIGHTS message",
+        ));
+    }
+    let sent = rustix::net::sendmsg(sock, &[IoSlice::new(&payload)], &mut control, SendFlags::empty())?;
     if sent != payload.len() {
         return Err(io::Error::new(
             io::ErrorKind::WriteZero,
@@ -51,16 +63,6 @@ pub fn send_fd(sock: &UnixStream, fd: &impl AsFd) -> io::Result<()> {
 /// returned fd is close-on-exec.
 pub fn recv_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
     recv_one_fd(sock)?.ok_or_else(|| io::Error::new(io::ErrorKind::WouldBlock, "no descriptor available"))
-}
-
-/// Attempt one receive on a nonblocking socket, returning `Ok(None)` when no
-/// descriptor is currently buffered. Used by [`recv_latest_fd`] while it holds
-/// the socket in nonblocking mode to drain descriptors from aborted attempts.
-fn try_recv_fd(sock: &UnixStream) -> io::Result<Option<OwnedFd>> {
-    match recv_one_fd(sock) {
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
-        result => result,
-    }
 }
 
 /// Receive the most recent descriptor buffered on `sock`, discarding (and closing)
@@ -86,7 +88,7 @@ pub fn recv_latest_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
     // message just ends the drain and we return the newest fd received so far -
     // rather than discarding a good device fd and failing the connection.
     loop {
-        match try_recv_fd(sock) {
+        match recv_one_fd(sock) {
             Ok(Some(newer)) => {
                 discarded += 1;
                 fd = newer;
@@ -183,35 +185,65 @@ fn socket_type_name(socket_type: rustix::net::SocketType) -> &'static str {
     }
 }
 
-/// Core `recvmsg` for one `SCM_RIGHTS` descriptor.
+#[cfg(target_os = "linux")]
+fn recv_flags() -> RecvFlags {
+    RecvFlags::CMSG_CLOEXEC
+}
+#[cfg(target_vendor = "apple")]
+fn recv_flags() -> RecvFlags {
+    RecvFlags::empty()
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_cloexec(_fd: &OwnedFd) -> io::Result<()> {
+    Ok(()) // already atomic via MSG_CMSG_CLOEXEC
+}
+#[cfg(target_vendor = "apple")]
+fn ensure_cloexec(fd: &OwnedFd) -> io::Result<()> {
+    let flags = rustix::io::fcntl_getfd(fd)?;
+    rustix::io::fcntl_setfd(fd, flags | rustix::io::FdFlags::CLOEXEC)?;
+    Ok(())
+}
+
+/// Core `recvmsg` for one `SCM_RIGHTS` descriptor; `Ok(None)` means nonblocking `sock` has nothing buffered.
 fn recv_one_fd(sock: &UnixStream) -> io::Result<Option<OwnedFd>> {
-    let mut byte = [0];
-    // Receive two so a peer sending more than one descriptor is distinguishable
-    // from the valid case. unix-ancillary owns and closes every surplus fd beyond
-    // those two before returning.
-    let (bytes, mut received) = sock.recv_fds_into::<2>(&mut byte)?;
-    if bytes == 0 {
+    let mut byte = [0u8];
+    // Room for two: a peer sending more than one fd is then distinguishable, since the kernel closes the surplus on truncation.
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
+    let mut control = RecvAncillaryBuffer::new(&mut space);
+    let recv = rustix::net::recvmsg(sock, &mut [IoSliceMut::new(&mut byte)], &mut control, recv_flags())
+        .map_err(io::Error::from);
+    let msg = match recv {
+        Ok(msg) => msg,
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if msg.bytes == 0 {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "peer closed the fd-passing socket before sending a descriptor",
         ));
     }
-    if received.len() != 1 {
-        return Err(io::Error::new(
+    let mut received = Vec::new();
+    for message in control.drain() {
+        if let RecvAncillaryMessage::ScmRights(fds) = message {
+            received.extend(fds);
+        }
+    }
+    let [fd]: [OwnedFd; 1] = received.try_into().map_err(|_| {
+        io::Error::new(
             io::ErrorKind::InvalidData,
             "expected exactly one SCM_RIGHTS file descriptor",
-        ));
-    }
-    Ok(received.pop())
+        )
+    })?;
+    ensure_cloexec(&fd)?;
+    Ok(Some(fd))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{IoSlice, Read, Write};
-    use std::mem::MaybeUninit;
-
-    use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags};
+    use std::io::{Read, Write};
 
     /// A fresh anonymous pipe, as two owned ends. The read end is the fd we send
     /// across the socket in tests; writing to the write end and reading it back
@@ -357,12 +389,12 @@ mod tests {
     }
 
     #[test]
-    fn try_recv_fd_returns_none_when_nothing_is_buffered() {
+    fn recv_one_fd_returns_none_when_nothing_is_buffered() {
         // Keep `_a` alive so the peer is open (a closed peer would report EOF, not
         // would-block). With nothing sent, a non-blocking receive must not block.
         let (_a, b) = UnixStream::pair().unwrap();
         b.set_nonblocking(true).unwrap();
-        assert!(try_recv_fd(&b).unwrap().is_none());
+        assert!(recv_one_fd(&b).unwrap().is_none());
     }
 
     /// Read the whole contents readable through `fd` (its write end must be closed).

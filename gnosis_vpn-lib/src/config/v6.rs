@@ -733,6 +733,8 @@ impl From<Option<PixStrategy>> for PixConfig {
                 .as_ref()
                 .and_then(|p| p.max_ssa_allocation)
                 .unwrap_or(def.max_ssa_allocation),
+            max_spend_per_window: def.max_spend_per_window,
+            spend_window: def.spend_window,
             deposit_buffer_period: v
                 .as_ref()
                 .and_then(|p| p.deposit_buffer_period)
@@ -745,6 +747,7 @@ impl From<Option<PixStrategy>> for PixConfig {
                 .as_ref()
                 .and_then(|p| p.max_deposit_retries)
                 .unwrap_or(def.max_deposit_retries),
+            min_safe_hopr_reserve: def.min_safe_hopr_reserve,
         }
     }
 }

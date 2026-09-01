@@ -191,16 +191,23 @@ path    = { hops = 1 }
 ##
 ## Tunes the parameters of the global PIX settlement reactor, shared by every session that has
 ## PIX enabled (see connection.pix above for per-session-type enablement). Deposits are paid
-## from the node's own address, not the Safe, so the node needs its own wxHOPR float.
+## from the Safe (via execTransactionFromModule), same account the channel-lifecycle strategy
+## stakes channels from -- see min_safe_hopr_reserve below to keep PIX from spending that budget.
 
 # [pix_strategy]
 # wxHOPR charged per byte of the agreed per-SSA quota; default: 1 wxHOPR
 # price_per_byte = "1 wxHOPR"
 # ceiling on a single SSA deposit, refused outright if exceeded; default: 100 wxHOPR
 # max_ssa_allocation = "100 wxHOPR"
+# aggregate wxHOPR committed to deposits within spend_window, 0 disables the limit; default: 10000 wxHOPR
+# max_spend_per_window = "10000 wxHOPR"
+# rolling window max_spend_per_window is measured over; default: 1h
+# spend_window = "1h"
 # debounce window before a batch of pending deposits is flushed; default: 500ms
 # deposit_buffer_period = "500ms"
 # how long to poll a stealth address for a deposit to land; default: 60s
 # max_deposit_tracking_time = "60s"
 # additional deposit-transfer attempts beyond the first; default: 3
 # max_deposit_retries = 3
+# wxHOPR the Safe must still hold after a deposit, refused if a deposit would breach it; default: 0
+# min_safe_hopr_reserve = "0 wxHOPR"
