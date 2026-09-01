@@ -211,16 +211,12 @@ fn recv_one_fd(sock: &UnixStream) -> io::Result<Option<OwnedFd>> {
     // Room for two: a peer sending more than one fd is then distinguishable, since the kernel closes the surplus on truncation.
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
     let mut control = RecvAncillaryBuffer::new(&mut space);
-    let msg = match rustix::net::recvmsg(sock, &mut [IoSliceMut::new(&mut byte)], &mut control, recv_flags()) {
+    let recv = rustix::net::recvmsg(sock, &mut [IoSliceMut::new(&mut byte)], &mut control, recv_flags())
+        .map_err(io::Error::from);
+    let msg = match recv {
         Ok(msg) => msg,
-        Err(error) => {
-            let error = io::Error::from(error);
-            return if error.kind() == io::ErrorKind::WouldBlock {
-                Ok(None)
-            } else {
-                Err(error)
-            };
-        }
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+        Err(error) => return Err(error),
     };
     if msg.bytes == 0 {
         return Err(io::Error::new(
