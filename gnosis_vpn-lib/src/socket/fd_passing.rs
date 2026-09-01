@@ -65,16 +65,6 @@ pub fn recv_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
     recv_one_fd(sock)?.ok_or_else(|| io::Error::new(io::ErrorKind::WouldBlock, "no descriptor available"))
 }
 
-/// Attempt one receive on a nonblocking socket, returning `Ok(None)` when no
-/// descriptor is currently buffered. Used by [`recv_latest_fd`] while it holds
-/// the socket in nonblocking mode to drain descriptors from aborted attempts.
-fn try_recv_fd(sock: &UnixStream) -> io::Result<Option<OwnedFd>> {
-    match recv_one_fd(sock) {
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
-        result => result,
-    }
-}
-
 /// Receive the most recent descriptor buffered on `sock`, discarding (and closing)
 /// any older ones.
 ///
@@ -98,7 +88,7 @@ pub fn recv_latest_fd(sock: &UnixStream) -> io::Result<OwnedFd> {
     // message just ends the drain and we return the newest fd received so far -
     // rather than discarding a good device fd and failing the connection.
     loop {
-        match try_recv_fd(sock) {
+        match recv_one_fd(sock) {
             Ok(Some(newer)) => {
                 discarded += 1;
                 fd = newer;
@@ -215,13 +205,23 @@ fn ensure_cloexec(fd: &OwnedFd) -> io::Result<()> {
     Ok(())
 }
 
-/// Core `recvmsg` for one `SCM_RIGHTS` descriptor.
+/// Core `recvmsg` for one `SCM_RIGHTS` descriptor; `Ok(None)` means nonblocking `sock` has nothing buffered.
 fn recv_one_fd(sock: &UnixStream) -> io::Result<Option<OwnedFd>> {
     let mut byte = [0u8];
     // Room for two: a peer sending more than one fd is then distinguishable, since the kernel closes the surplus on truncation.
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
     let mut control = RecvAncillaryBuffer::new(&mut space);
-    let msg = rustix::net::recvmsg(sock, &mut [IoSliceMut::new(&mut byte)], &mut control, recv_flags())?;
+    let msg = match rustix::net::recvmsg(sock, &mut [IoSliceMut::new(&mut byte)], &mut control, recv_flags()) {
+        Ok(msg) => msg,
+        Err(error) => {
+            let error = io::Error::from(error);
+            return if error.kind() == io::ErrorKind::WouldBlock {
+                Ok(None)
+            } else {
+                Err(error)
+            };
+        }
+    };
     if msg.bytes == 0 {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
@@ -393,12 +393,12 @@ mod tests {
     }
 
     #[test]
-    fn try_recv_fd_returns_none_when_nothing_is_buffered() {
+    fn recv_one_fd_returns_none_when_nothing_is_buffered() {
         // Keep `_a` alive so the peer is open (a closed peer would report EOF, not
         // would-block). With nothing sent, a non-blocking receive must not block.
         let (_a, b) = UnixStream::pair().unwrap();
         b.set_nonblocking(true).unwrap();
-        assert!(try_recv_fd(&b).unwrap().is_none());
+        assert!(recv_one_fd(&b).unwrap().is_none());
     }
 
     /// Read the whole contents readable through `fd` (its write end must be closed).
