@@ -39,7 +39,12 @@ pub fn send_fd(sock: &UnixStream, fd: &impl AsFd) -> io::Result<()> {
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
     let mut control = SendAncillaryBuffer::new(&mut space);
     let borrowed = [fd.as_fd()];
-    control.push(SendAncillaryMessage::ScmRights(&borrowed));
+    // Guard sizing/push drifting apart, which would silently drop the fd from the send.
+    if !control.push(SendAncillaryMessage::ScmRights(&borrowed)) {
+        return Err(io::Error::other(
+            "fd-passing control buffer too small for SCM_RIGHTS message",
+        ));
+    }
     let sent = rustix::net::sendmsg(sock, &[IoSlice::new(&payload)], &mut control, SendFlags::empty())?;
     if sent != payload.len() {
         return Err(io::Error::new(
@@ -190,21 +195,20 @@ fn socket_type_name(socket_type: rustix::net::SocketType) -> &'static str {
     }
 }
 
-// MSG_CMSG_CLOEXEC doesn't exist on macOS/Solaris; those fall back to a post-receipt fcntl.
-#[cfg(not(any(target_vendor = "apple", target_os = "solaris", target_os = "illumos")))]
+#[cfg(target_os = "linux")]
 fn recv_flags() -> RecvFlags {
     RecvFlags::CMSG_CLOEXEC
 }
-#[cfg(any(target_vendor = "apple", target_os = "solaris", target_os = "illumos"))]
+#[cfg(target_vendor = "apple")]
 fn recv_flags() -> RecvFlags {
     RecvFlags::empty()
 }
 
-#[cfg(not(any(target_vendor = "apple", target_os = "solaris", target_os = "illumos")))]
+#[cfg(target_os = "linux")]
 fn ensure_cloexec(_fd: &OwnedFd) -> io::Result<()> {
     Ok(()) // already atomic via MSG_CMSG_CLOEXEC
 }
-#[cfg(any(target_vendor = "apple", target_os = "solaris", target_os = "illumos"))]
+#[cfg(target_vendor = "apple")]
 fn ensure_cloexec(fd: &OwnedFd) -> io::Result<()> {
     let flags = rustix::io::fcntl_getfd(fd)?;
     rustix::io::fcntl_setfd(fd, flags | rustix::io::FdFlags::CLOEXEC)?;
