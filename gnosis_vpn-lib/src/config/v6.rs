@@ -624,9 +624,12 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         k.as_str(),
                         "price_per_byte"
                             | "max_ssa_allocation"
+                            | "max_spend_per_window"
+                            | "spend_window"
                             | "deposit_buffer_period"
                             | "max_deposit_tracking_time"
                             | "max_deposit_retries"
+                            | "min_safe_hopr_reserve"
                     ) {
                         continue;
                     }
@@ -717,11 +720,19 @@ pub(super) struct PixStrategy {
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(default)]
     pub(super) max_ssa_allocation: Option<HoprBalance>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) max_spend_per_window: Option<HoprBalance>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) spend_window: Option<Duration>,
     #[serde(default, with = "humantime_serde::option")]
     pub(super) deposit_buffer_period: Option<Duration>,
     #[serde(default, with = "humantime_serde::option")]
     pub(super) max_deposit_tracking_time: Option<Duration>,
     pub(super) max_deposit_retries: Option<usize>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) min_safe_hopr_reserve: Option<HoprBalance>,
 }
 
 impl From<Option<PixStrategy>> for PixConfig {
@@ -733,8 +744,11 @@ impl From<Option<PixStrategy>> for PixConfig {
                 .as_ref()
                 .and_then(|p| p.max_ssa_allocation)
                 .unwrap_or(def.max_ssa_allocation),
-            max_spend_per_window: def.max_spend_per_window,
-            spend_window: def.spend_window,
+            max_spend_per_window: v
+                .as_ref()
+                .and_then(|p| p.max_spend_per_window)
+                .unwrap_or(def.max_spend_per_window),
+            spend_window: v.as_ref().and_then(|p| p.spend_window).unwrap_or(def.spend_window),
             deposit_buffer_period: v
                 .as_ref()
                 .and_then(|p| p.deposit_buffer_period)
@@ -747,7 +761,10 @@ impl From<Option<PixStrategy>> for PixConfig {
                 .as_ref()
                 .and_then(|p| p.max_deposit_retries)
                 .unwrap_or(def.max_deposit_retries),
-            min_safe_hopr_reserve: def.min_safe_hopr_reserve,
+            min_safe_hopr_reserve: v
+                .as_ref()
+                .and_then(|p| p.min_safe_hopr_reserve)
+                .unwrap_or(def.min_safe_hopr_reserve),
         }
     }
 }
@@ -1421,16 +1438,22 @@ version = 6
 [pix_strategy]
 price_per_byte = "5 wxHOPR"
 max_ssa_allocation = "50 wxHOPR"
+max_spend_per_window = "5000 wxHOPR"
+spend_window = "2h"
 deposit_buffer_period = "250ms"
 max_deposit_tracking_time = "30s"
 max_deposit_retries = 5
+min_safe_hopr_reserve = "10 wxHOPR"
 "#####,
         );
         let pix_strategy = cfg.pix_strategy.expect("pix_strategy section present");
         let converted: PixConfig = Some(pix_strategy).into();
+        assert_eq!(converted.max_spend_per_window, "5000 wxHOPR".parse().unwrap());
+        assert_eq!(converted.spend_window, Duration::from_secs(2 * 60 * 60));
         assert_eq!(converted.deposit_buffer_period, Duration::from_millis(250));
         assert_eq!(converted.max_deposit_tracking_time, Duration::from_secs(30));
         assert_eq!(converted.max_deposit_retries, 5);
+        assert_eq!(converted.min_safe_hopr_reserve, "10 wxHOPR".parse().unwrap());
     }
 
     #[test]
@@ -1449,8 +1472,11 @@ max_deposit_retries = 7
         assert_eq!(converted.max_deposit_retries, 7);
         assert_eq!(converted.price_per_byte, def.price_per_byte);
         assert_eq!(converted.max_ssa_allocation, def.max_ssa_allocation);
+        assert_eq!(converted.max_spend_per_window, def.max_spend_per_window);
+        assert_eq!(converted.spend_window, def.spend_window);
         assert_eq!(converted.deposit_buffer_period, def.deposit_buffer_period);
         assert_eq!(converted.max_deposit_tracking_time, def.max_deposit_tracking_time);
+        assert_eq!(converted.min_safe_hopr_reserve, def.min_safe_hopr_reserve);
     }
 
     #[test]
@@ -1461,9 +1487,12 @@ version = 6
 [pix_strategy]
 price_per_byte = "5 wxHOPR"
 max_ssa_allocation = "50 wxHOPR"
+max_spend_per_window = "5000 wxHOPR"
+spend_window = "2h"
 deposit_buffer_period = "250ms"
 max_deposit_tracking_time = "30s"
 max_deposit_retries = 5
+min_safe_hopr_reserve = "10 wxHOPR"
 "#####
             .parse::<toml::Table>()
             .expect("valid TOML");
