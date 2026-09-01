@@ -53,7 +53,7 @@ pfctl = "~0.7.0"
 ping = { version = "~0.9.0", features = ["tokio"] }
 rand = "~0.10.2"
 reqwest = { version = "~0.13.4", features = ["blocking", "json"] }
-rtnetlink = "~0.21.0"
+rtnetlink = "~0.22.0"
 rustix = { version = "~1.1.4", features = ["fs", "net", "pipe", "stdio"] }
 serde = { version = "~1.0.229", features = ["derive"] }
 serde-saphyr = "~0.0.29"
