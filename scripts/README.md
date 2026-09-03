@@ -1,7 +1,5 @@
 # Scripts
 
-Operational/diagnostic tooling for a running Gnosis VPN client. All are standalone bash - no build step.
-
 `vpn-smoke-test.sh`, `vpn-drain-tour.sh`, `vpn-drain-report.sh`, and `wg-traffic.sh` moved to
 [`gnosis_vpn-testenv/scripts`](https://github.com/gnosis/gnosis_vpn-testenv/tree/main/scripts).
 
