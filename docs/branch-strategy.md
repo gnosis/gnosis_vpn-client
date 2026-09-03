@@ -14,6 +14,8 @@
 
 `pr.yml` derives its endpoint from the PR's target branch.
 
+`main` is still on `0.96.1` until the follow-up version bump lands; `0.97.0`+ is the target once it does.
+
 ## Backports
 
 Label a merged `main` PR `backport release/v0.96`; `.github/workflows/backport.yaml`

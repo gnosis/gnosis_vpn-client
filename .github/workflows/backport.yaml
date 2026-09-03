@@ -10,8 +10,14 @@ jobs:
   backport:
     name: Backport merged PR
     runs-on: depot-ubuntu-22.04-4
-    # Catches both orderings: labeled before the merge, or after it.
-    if: github.event.pull_request.merged == true && contains(toJSON(github.event.pull_request.labels.*.name), '"backport ')
+    # main only; labeled checks the label just added, so a later unrelated label doesn't re-run this.
+    if: |
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      (
+        (github.event.action == 'closed' && contains(toJSON(github.event.pull_request.labels.*.name), '"backport ')) ||
+        (github.event.action == 'labeled' && startsWith(github.event.label.name, 'backport '))
+      )
     permissions:
       contents: write
       pull-requests: write
