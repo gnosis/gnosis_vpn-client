@@ -138,7 +138,7 @@ Diagnostic/ops scripts (connectivity smoke test, capacity/latency drain tour, Wi
 
 ## Branches
 
-`main` is the experimental line (hoprd v5); `release/v0.96` is the stable
+`main` is the experimental line (hoprd v5); `release/hoprdv4` is the stable
 maintenance line (hoprd v4). See [docs/branch-strategy.md](docs/branch-strategy.md).
 
 ## Dependency Updates

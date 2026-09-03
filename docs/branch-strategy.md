@@ -4,19 +4,25 @@
 
 `gnosis_vpn-client` embeds hoprd via edge-client. hoprd v4 and v5 can't be dual-pinned in one resolution graph.
 
+The branch is named after the dependency (`hoprdv4`), not our version line: the stable
+line takes many client version bumps (features, fixes) while hoprd itself stays v4, so a
+version-line name would mean cutting a new branch per bump.
+
 ## Lines and networks
 
-| Line            | Versions        | hoprd | Network             | Blokli endpoint                             |
-| --------------- | --------------- | ----- | ------------------- | ------------------------------------------- |
-| `release/v0.96` | `0.96.x`        | v4    | jura-prod (shipped) | `https://blokli-jura.prod.hoprnet.link/`    |
-|                 |                 |       | jura-dev (CI)       | `https://blokli-jura.dev.hoprnet.link/`     |
-| `main`          | `0.97.0` and up | v5    | piz-palu-dev (CI)   | `https://blokli-piz-palu.dev.hoprnet.link/` |
+| Line              | Versions                   | hoprd | Network             | Blokli endpoint                             |
+| ----------------- | -------------------------- | ----- | ------------------- | ------------------------------------------- |
+| `release/hoprdv4` | `0.9x.y`, kept `< 0.100.0` | v4    | jura-prod (shipped) | `https://blokli-jura.prod.hoprnet.link/`    |
+|                   |                            |       | jura-dev (CI)       | `https://blokli-jura.dev.hoprnet.link/`     |
+| `main`            | `0.100.0` and up           | v5    | piz-palu-dev (CI)   | `https://blokli-piz-palu.dev.hoprnet.link/` |
 
 `pr.yml` derives its endpoint from the PR's target branch.
 
-`main` is still on `0.96.1` until the follow-up version bump lands; `0.97.0`+ is the target once it does.
+`0.100.0` is a reserved gap, not a real milestone — it keeps `release/hoprdv4` and
+`main`'s version numbers from ever colliding. Bump only patch/minor on
+`release/hoprdv4`; never let it reach `0.100.0`. Manual discipline, not CI-enforced.
 
 ## Backports
 
-Label a merged `main` PR `backport release/v0.96`; `.github/workflows/backport.yaml`
+Label a merged `main` PR `backport release/hoprdv4`; `.github/workflows/backport.yaml`
 cherry-picks it and opens a PR that runs the same CI as any other.
