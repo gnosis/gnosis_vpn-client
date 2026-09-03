@@ -155,6 +155,6 @@ jobs:
           SYSTEM_TEST_CONFIG: ${{ secrets.SYSTEM_TEST_CONFIG}}
           SYSTEM_TEST_WORKER_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-worker
           SYSTEM_TEST_ROOT_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-root
-          # TODO(hoprd-v5): make branch-conditional once a v5 blokli endpoint exists.
-          SYSTEM_TEST_BLOKLI_URL: https://blokli.rotsee.hoprnet.link
+          # jura-dev (hoprd v4) on the release line; piz-palu-dev (v5) is the default.
+          SYSTEM_TEST_BLOKLI_URL: "${{ startsWith(github.base_ref, 'release/') && 'https://blokli-jura.dev.hoprnet.link/' || 'https://blokli-piz-palu.dev.hoprnet.link/' }}"
         run: just system-tests ${{ github.workspace }}/result-system-tests/bin/gnosis_vpn-system_tests

@@ -2,80 +2,86 @@
 
 ## Why
 
-`gnosis_vpn-client` embeds hoprd directly as a Cargo git dependency (`edgli` +
-`hopr-utils-session`, pinned in the root `Cargo.toml`) rather than talking to it
-over a REST API. hoprd v5 brings breaking changes plus new capabilities (pix,
-exit-node discovery). `edgli`/`hopr-utils-session` can't be dual-pinned in one
-Cargo resolution graph, so this isn't something we can feature-flag inside a
-single binary -- it needs two branches.
+`gnosis_vpn-client` embeds hoprd directly as Cargo git dependencies (`edgli` +
+`hopr-utils-session`, pinned in the root `Cargo.toml`) rather than talking to it over a
+REST API. hoprd v5 brings breaking changes plus new capabilities (pix, exit-node
+discovery), and the two can't be dual-pinned in one Cargo resolution graph -- so this
+can't be feature-flagged inside a single binary. It needs two branches.
 
-`main` is the experimental/leading-edge line, tracking hoprd v5.
-`release/v4` is the stable, hoprd-v4 maintenance line, branched off `main`.
+- `main` is the experimental line, moving toward hoprd v5.
+- `release/v0.96` is the stable maintenance line for the current hoprd-v4 client.
 
-This mirrors the channel model Rust (nightly on trunk, beta/stable cut from
-it) and browsers (canary/stable) use for the same kind of situation.
+The branch is named after **our** version line, not the dependency's. hoprd may bump
+majors again; our maintenance lines shouldn't be renamed when it does, and the mapping
+belongs in the table below rather than encoded in a branch name.
+
+## Compatibility
+
+| Line            | Versions        | hoprd / edgli | Test network | Blokli endpoint                             |
+| --------------- | --------------- | ------------- | ------------ | ------------------------------------------- |
+| `release/v0.96` | `0.96.x`        | v4            | jura-dev     | `https://blokli-jura.dev.hoprnet.link/`     |
+| `main`          | `0.97.0` and up | v5            | piz-palu-dev | `https://blokli-piz-palu.dev.hoprnet.link/` |
+
+The version prefix is what distinguishes the two lines everywhere downstream -- release
+tags, GCP artifact registry versions, and installer version resolution. Keep `main` off
+`0.96.x` and the release line off `0.97+`.
+
+`pr.yml` picks the endpoint from the PR's target branch, so the workflow file stays
+identical on both lines and backports never conflict on it. The system-test CLI default
+in `gnosis_vpn-system_tests/src/cli.rs` does differ per branch -- that one is the local
+developer default, where pointing a v5 client at a v4 network would be a real footgun.
 
 ## How fixes move between the branches
 
-Bug fixes and improvements that aren't hoprd-v5-specific should land on
-`main` first, then get backported to `release/v4` by adding a
-`backport release/v4` label to the merged PR. A bot
-(`.github/workflows/backport.yaml`, using `korthout/backport-action`)
-cherry-picks the commit and opens a PR against `release/v4` automatically.
-That PR runs the same required CI as any other `release/v4` PR before merge.
+Fixes that aren't hoprd-v5-specific land on `main` first, then get backported by adding a
+`backport release/v0.96` label to the merged PR. `.github/workflows/backport.yaml`
+cherry-picks the commit and opens a PR against `release/v0.96`, which then runs the same
+CI as any other PR.
 
-Cherry-picks that touch `Cargo.lock` will likely conflict once `main`'s
-dependency graph diverges around the v5 hopr crates -- that's expected. When
-it happens, pull the bot's branch locally, resolve, run `cargo update` as
-needed, and push the fix to the same branch.
+Cherry-picks touching `Cargo.lock` will conflict once the dependency graphs diverge
+around the v5 hopr crates -- that's expected. Pull the bot's branch, resolve, and push
+back to the same branch.
 
-`release/v4` does not get its own Renovate coverage (same as any other
-non-default branch today) -- hoprd-v4-side dependency bumps land there only
-via backport or a manual PR.
+`release/v0.96` gets no Renovate coverage (same as any non-default branch today).
+hoprd-v4-side dependency bumps land there via backport or a manual PR.
 
-## Releases
+## Dependency pinning on the release line
 
-`release.yaml`'s `release_type` input now includes `rc`, which produces
-`X.Y.Z-rc.N` versions -- these are automatically flagged as GitHub
-prereleases by the underlying `hoprnet/hopr-workflows` actions. Releases cut
-from `main` should use `release_type: rc`; releases cut from `release/v4`
-keep using `patch`/`minor`/`major` as before.
-
-This matters downstream: `gnosis_vpn` (the installer repo)'s
-`scripts/resolve-build-versions.sh` resolves the stable client version via
-`gh api repos/gnosis/gnosis_vpn-client/releases/latest`, which already
-excludes prereleases. So `main`'s rc releases won't show up there without any
-changes on the installer side, and pointing at a specific rc tag later is a
-ready-made path to an opt-in experimental distribution channel if that's ever
-wanted.
+`hopr-utils-session` is pinned by **branch** (`release/4.0`), not by rev -- deliberately,
+see the comment at `Cargo.toml:35`. `Cargo.lock` holds the exact commit, and
+`bump-version.yaml` only runs `cargo update --workspace`, which touches workspace members
+alone. A bare `cargo update` on `release/v0.96` would silently pull newer `release/4.0`
+commits and undercut the point of the stable line -- don't.
 
 ## Where hoprd-specific code lives
 
 `gnosis_vpn-lib/src/hopr/` (`api.rs`, `types.rs`, `config.rs`, `errors.rs`,
 `identity.rs`, `blokli_config.rs`, `strategy_config.rs`) is the seam where all
-`edgli`/`hopr_lib` calls live. Everything outside it (CLI, config schema,
-routing/health, wg_tunnel) is hoprd-version-agnostic. Keeping new
-pix/exit-node-discovery work inside this module keeps backports low-conflict.
+`edgli`/`hopr_lib` calls live. Everything outside it (CLI, config schema, routing/health,
+wg_tunnel) is hoprd-version-agnostic. Keeping new pix/exit-node-discovery work inside
+that module keeps backports low-conflict.
 
-## Open dependency: hoprd v5 testnet
+## Installer integration
 
-`pr.yml`'s system-test job currently points both `main` and `release/v4` PRs
-at the same rotsee (hoprd v4) testnet via `SYSTEM_TEST_BLOKLI_URL`, since no
-hoprd v5 testnet exists yet. Once one does, make that branch-conditional
-(`release/v4` -> rotsee, `main` -> the v5 net) -- see the `TODO(hoprd-v5)`
-comment in `pr.yml`.
+Not wired up yet. The `gnosis_vpn` installer resolves the client via
+`repos/gnosis/gnosis_vpn-client/releases/latest`, which is **chronological** -- it returns
+the most recently published non-prerelease, not the highest version. Once `main` cuts
+`0.97.0`, that resolution flips to the experimental line.
+
+Before releasing from `main`, the installer must pin each of its lanes to a client
+version prefix instead of "latest". The same applies to
+`resolve-registry-version.sh`, which picks the newest artifact by upload time with no
+branch awareness. Until that lands, `release/v0.96` is deliberately absent from
+`merge.yaml`'s branch filter so it publishes nothing to the shared registry package.
 
 ## Promotion
 
-Not committing to specific numbers yet, but "main replaces release/v4"
-should be gated on something like:
+No specific numbers yet, but "main replaces release/v0.96" should be gated on roughly:
 
-- Sustained green `pr.yml` system-tests against the hoprd v5 network for a
-  meaningful stretch of time (weeks, not days).
-- No open P0/P1 regressions on `main` relative to `release/v4`'s behavior.
-- pix and exit-node discovery both past experimental status on the hoprd
-  side, not just compiling against gnosis_vpn-client.
+- Sustained green `pr.yml` system-tests against piz-palu for weeks, not days.
+- No open P0/P1 regressions on `main` relative to the release line's behavior.
+- pix and exit-node discovery past experimental status on the hoprd side, not just
+  compiling against gnosis_vpn-client.
 
-When that bar is met, retiring/renaming `release/v4` and re-pointing
-default-branch-dependent tooling (README badges, contributor docs, branch
-protection) is a separate decision to make at that time.
+Retiring the release line and re-pointing default-branch-dependent tooling (README
+badges, contributor docs, branch protection) is a separate decision for that time.

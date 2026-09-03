@@ -1,38 +1,57 @@
 name: Backport
-
 on:
   pull_request_target:
     types:
       - closed
       - labeled
-
 permissions:
   contents: read
-
 jobs:
   backport:
     name: Backport merged PR
     runs-on: depot-ubuntu-22.04-4
-    if: >
-      github.event.pull_request.merged == true
-      && (
-        github.event.action == 'closed'
-        || startsWith(github.event.label.name, 'backport ')
-      )
+    # Catches both orderings: labeled before the merge, or after it.
+    if: github.event.pull_request.merged == true && contains(toJSON(github.event.pull_request.labels.*.name), '"backport ')
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
     steps:
-      # Default GITHUB_TOKEN PRs skip CI (loop-prevention); use the GH App bot instead.
+      # The action cherry-picks in the runner's work tree, so it needs its own checkout.
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Backport
+        id: backport
+        uses: korthout/backport-action@2e830a1d0b8269505846ddd407a70876913ad1f8 # v4.6.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      # App lacks pull-requests scope; GITHUB_TOKEN's PRs skip CI, so re-push as the app.
       - name: Generate GitHub App token
         id: bot-token
+        if: steps.backport.outputs.created_pull_numbers != ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.GH_APP_GNOSISVPN_CLIENT_ID }}
           private-key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
           owner: gnosis
-      - name: Backport
-        uses: korthout/backport-action@2e830a1d0b8269505846ddd407a70876913ad1f8 # v4.6.0
-        with:
-          github_token: ${{ steps.bot-token.outputs.token }}
-          # Labels look like "backport release/v4" -- the capture group names the target branch.
-          label_pattern: ^backport ([^ ]+)$
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Trigger CI on the backport pull requests
+        if: steps.backport.outputs.created_pull_numbers != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.bot-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          APP_SLUG: ${{ steps.bot-token.outputs.app-slug }}
+          PR_NUMBERS: ${{ steps.backport.outputs.created_pull_numbers }}
+        run: |
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git"
+          for pr in ${PR_NUMBERS}; do
+            branch="$(gh pr view "${pr}" --json headRefName --jq .headRefName)"
+            git fetch origin "${branch}"
+            git checkout -B "${branch}" "origin/${branch}"
+            sleep 1 # a later committer timestamp guarantees a new commit hash
+            git commit --amend --no-edit
+            git push --force origin "HEAD:refs/heads/${branch}"
+          done
