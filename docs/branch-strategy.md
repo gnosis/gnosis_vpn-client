@@ -18,7 +18,3 @@
 
 Label a merged `main` PR `backport release/v0.96`; `.github/workflows/backport.yaml`
 cherry-picks it and opens a PR that runs the same CI as any other.
-
-Renovate covers release lines with `cargo` and `github-actions` disabled -- only security
-fixes and nix flake updates get through. The nix manager stays on so the pinned
-`advisory-db` behind the `gnosis_vpn-audit` check can't go stale and pass green forever.
