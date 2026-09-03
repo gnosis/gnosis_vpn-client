@@ -2,6 +2,7 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "schedule:earlyMondays"],
   "baseBranchPatterns": ["main", "/^release\\/.*/"],
+  "useBaseBranchConfig": "merge",
   "pinDigests": true,
   "prCreation": "immediate",
   "semanticCommits": "enabled",
@@ -34,12 +35,6 @@
       "matchManagers": ["cargo"],
       "matchUpdateTypes": ["minor"],
       "groupName": "rust crates (minor)"
-    },
-    {
-      "description": "Release lines take security fixes only -- routine bumps defeat the point of a stable branch. The nix manager stays enabled so flake.lock's advisory-db keeps the cargo-audit flake check meaningful.",
-      "matchBaseBranches": ["/^release\\/.*/"],
-      "matchManagers": ["cargo", "github-actions"],
-      "enabled": false
     }
   ]
 }
