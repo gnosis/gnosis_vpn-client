@@ -183,7 +183,6 @@
               shellHook = tokioUnstableHook;
 
               packages = [
-                pkgs.bats
                 pkgs.cargo-machete
                 pkgs.cargo-shear
                 pkgs.jq

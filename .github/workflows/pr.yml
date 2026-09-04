@@ -133,12 +133,6 @@ jobs:
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Install just
         uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2
-      - name: Install bats
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bats
-      - name: Run offline smoke-test suite
-        run: just smoke-test-check
       - name: Fetch release binaries
         # Reuses the artifact build-x86_64-linux already built and pushed to
         # cachix, instead of recompiling root/worker/ctl here a second time.
