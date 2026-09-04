@@ -1,13 +1,20 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "schedule:earlyMondays"],
+  "baseBranchPatterns": ["main", "/^release\\/.*/"],
+  "useBaseBranchConfig": "merge",
   "pinDigests": true,
   "prCreation": "immediate",
   "semanticCommits": "enabled",
   "rangeStrategy": "bump",
   "minimumReleaseAge": "14 days",
-  "vulnerabilityAlerts": { "enabled": true },
-  "nix": { "enabled": true },
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "minimumReleaseAge": null
+  },
+  "nix": {
+    "enabled": true
+  },
   "packageRules": [
     {
       "matchManagers": ["github-actions"],

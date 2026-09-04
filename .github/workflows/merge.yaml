@@ -7,7 +7,7 @@ on:
     branches:
       - main
 concurrency:
-  group: merge
+  group: merge-${{ github.event.pull_request.base.ref }}
   cancel-in-progress: false
 permissions:
   contents: read
