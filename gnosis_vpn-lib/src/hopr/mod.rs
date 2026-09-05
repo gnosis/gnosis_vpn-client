@@ -9,7 +9,9 @@ pub use {api::Hopr, errors::HoprError};
 pub(crate) mod blokli_config;
 pub(crate) mod config;
 pub(crate) mod identity;
+pub(crate) mod pix_config;
 pub(crate) mod strategy_config;
+pub use pix_config::PixConfig;
 pub use strategy_config::StrategyConfig;
 
 pub const ENV_VAR_CONFIG: &str = "GNOSISVPN_HOPR_CONFIG_PATH";

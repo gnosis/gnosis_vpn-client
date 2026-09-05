@@ -34,7 +34,7 @@ use crate::peer::{Peer, Peers};
 use crate::{
     balance::{self, Balances},
     hopr::{
-        HoprError,
+        HoprError, PixConfig,
         types::{SessionClientMetadata, SplicedWgSession},
     },
     info::Info,
@@ -72,6 +72,16 @@ impl Hopr {
             edgli: Arc::new(edge_node),
             open_listeners: Default::default(),
         })
+    }
+
+    /// `cfg` with PIX applied. Callers opt in per session kind — see `options::PixOptions`.
+    pub(crate) fn pix_aware_session_cfg(
+        &self,
+        cfg: HoprSessionClientConfig,
+    ) -> Result<HoprSessionClientConfig, HoprError> {
+        self.edgli
+            .with_pix(cfg)
+            .map_err(|e| HoprError::Strategy(format!("failed to apply PIX to session config: {e}")))
     }
 
     // --- session management ---
@@ -344,6 +354,7 @@ impl Hopr {
     pub async fn start_telemetry_reactor(
         &self,
         sizing: edgli::strategy::IncentiveConfiguration,
+        pix: PixConfig,
     ) -> Result<AbortHandle, HoprError> {
         let mut cfg = edgli::strategy::default_strategy_cfg(&sizing)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
@@ -351,8 +362,15 @@ impl Hopr {
             Some(edgli::strategy::EdgeStrategyKind::ChannelLifecycle(lc)) => {
                 lc.selector = edgli::strategy::SelectorProfile::LowLatency;
             }
+            // Non-exhaustive enum; `default_strategy_cfg` only ever emits `ChannelLifecycle` first, so unreached today.
+            Some(_) => {}
             None => tracing::warn!("default_strategy_cfg returned no strategies; LowLatency selector not applied"),
         }
+        // `default_strategy_cfg` never emits `Pix` on its own; PIX always runs, so add it explicitly.
+        // Drop any pre-existing entry first so a future upstream default can't register it twice.
+        cfg.strategies
+            .retain(|s| !matches!(s, edgli::strategy::EdgeStrategyKind::Pix(_)));
+        cfg.strategies.push(edgli::strategy::EdgeStrategyKind::Pix(pix.into()));
         self.edgli
             .run_reactor_from_cfg(cfg)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))

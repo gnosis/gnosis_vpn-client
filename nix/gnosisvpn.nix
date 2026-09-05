@@ -33,10 +33,10 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.1#a45a31d28780695cb816d5e245a70bd520bd1293" =
       "sha256-QF8BAe2eHrGsVvZIGD+Gdi6XFMQ8zHkOObSRjTRN4MY=";
-    "git+https://github.com/hoprnet/edge-client.git?rev=917636aad2eae827542667b1e81793e71d81a324#917636aad2eae827542667b1e81793e71d81a324" =
-      "sha256-m5oC/er9iDnpzo/jj0MTI5ktYSa88a+PXTLOucYwipM=";
-    "git+https://github.com/hoprnet/hoprnet?branch=release/4.0#08d777e442c251bbd2dc55e36434dbd4999b0165" =
-      "sha256-/vIIwu61MXdOQEYQmwkOTA6VoDjZ4afh7Vn4/G3XRno=";
+    "git+https://github.com/hoprnet/edge-client.git?rev=d3da1f618cd282ad19725871021fa1920d2a52ba#d3da1f618cd282ad19725871021fa1920d2a52ba" =
+      "sha256-cP2QJKB5QbtaC8lzZdxnUEXM+rDvhMqEwehVxH39THA=";
+    "git+https://github.com/hoprnet/hoprnet?rev=87f0e07d505527253b278fc7372b9601afb921d2#87f0e07d505527253b278fc7372b9601afb921d2" =
+      "sha256-ko7j0xSXEPm6VIK9mAXz64uEOO8DTDWPsR7ZZdaAFas=";
   };
 
   builders = nixLib.mkRustBuilders {

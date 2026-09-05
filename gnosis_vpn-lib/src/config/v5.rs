@@ -185,6 +185,7 @@ impl From<Option<Connection>> for options::Options {
             sessions,
             ping_options: ping_opts,
             surb_balancing,
+            pix: options::PixOptions::default(), // PIX is required for this version; legacy configs get the same defaults, not an opt-out
             timeouts,
             health_check_intervals,
             lan_lockdown: false,
@@ -369,6 +370,7 @@ impl TryFrom<Config> for config::Config {
             wireguard,
             blokli,
             strategy: Default::default(),
+            pix_strategy: Default::default(),
         })
     }
 }
