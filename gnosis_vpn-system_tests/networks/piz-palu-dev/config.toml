@@ -14,7 +14,6 @@ meta    = { location = "London", flag = "GB" }
 address = "0x0150f9f14d7d8709fb32743bd8c9921da5e411e8"
 meta    = { location = "Mumbai", flag = "IN" }
 
-# Local addition, not in the installer config -- keep it when re-syncing
 [pix_strategy]
 deposit_buffer_period     = "500ms"
 max_deposit_retries       = 3
