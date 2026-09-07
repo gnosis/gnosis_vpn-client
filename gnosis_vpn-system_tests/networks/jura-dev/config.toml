@@ -1,15 +1,21 @@
-# jura-dev system test client config, copied verbatim to /etc/gnosisvpn/config.toml
+# jura-dev system test client config; keep in sync with the gnosis_vpn installer's linux/resources/config-jura-dev.toml
 
 version = 6
 
-[destinations]
+[destinations.USA]
+address = "0xe686ade652a815e0e26803c1a795f9d65c82e06e"
+meta    = { location = "Omaha", flag = "US" }
 
-# exit nodes announced on jura-dev; ids are free-form and only surface in test reports
-[destinations.FILL_ME]
-address = "FILL_ME"
-meta    = { location = "FILL_ME" }
-path    = { hops = 1 }
+[destinations.UK]
+address = "0x7b2b69c52ec97907d7a3b2d2724ba92781b7def7"
+meta    = { location = "London", flag = "GB" }
 
-[connection]
-# dev cluster nodes announce private addresses, which are filtered out by default
-probe_local_addresses = true
+[destinations.India]
+address = "0x7f25c474f26488b2e29343c881f0cdc0e6d02abd"
+meta    = { location = "Mumbai", flag = "IN" }
+
+[connection.surb_balancing.ping]
+max_surb_upstream = "12000 Kb/s"
+
+[connection.surb_balancing.main]
+max_surb_upstream = "12000 Kb/s"

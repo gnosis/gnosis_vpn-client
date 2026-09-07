@@ -1,15 +1,15 @@
-# piz-palu-dev system test client config, copied verbatim to /etc/gnosisvpn/config.toml
+# piz-palu-dev system test client config; keep in sync with the gnosis_vpn installer's linux/resources/config-piz-palu-dev.toml
 
 version = 6
 
-[destinations]
+[destinations.USA]
+address = "0x559dddedcfdf821303f7a9b566ac66d91a634da7"
+meta    = { location = "Omaha", flag = "US" }
 
-# exit nodes announced on piz-palu-dev; ids are free-form and only surface in test reports
-[destinations.FILL_ME]
-address = "FILL_ME"
-meta    = { location = "FILL_ME" }
-path    = { hops = 1 }
+[destinations.UK]
+address = "0xed789f9af8d37b67e84411de26579ac737e469da"
+meta    = { location = "London", flag = "GB" }
 
-[connection]
-# dev cluster nodes announce private addresses, which are filtered out by default
-probe_local_addresses = true
+[destinations.India]
+address = "0x0150f9f14d7d8709fb32743bd8c9921da5e411e8"
+meta    = { location = "Mumbai", flag = "IN" }
