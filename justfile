@@ -72,10 +72,6 @@ system-tests test_binary="gnosis_vpn-system_tests":
         echo "ERROR: unknown network '${SYSTEM_TEST_NETWORK}', no such directory: ${network_dir}" >&2
         exit 1
     fi
-    if grep -qr FILL_ME "${network_dir}"; then
-        echo "ERROR: ${network_dir} still holds FILL_ME placeholders" >&2
-        exit 1
-    fi
 
     blokli_url="${SYSTEM_TEST_BLOKLI_URL:-$(cat "${network_dir}/blokli-url")}"
 
@@ -83,7 +79,6 @@ system-tests test_binary="gnosis_vpn-system_tests":
     echo "=== system test target ==="
     echo "  network:   ${SYSTEM_TEST_NETWORK}"
     echo "  blokli:    ${blokli_url}"
-    grep -v '^#' "${network_dir}/safe.yaml" | sed 's/^/  /' || true
     grep -o '^\[destinations\.[^]]*\]' "${network_dir}/config.toml" | sed 's/^/  destination: /' || true
     # Hashing the encrypted keystore leaks nothing but pins which identity ran; a hash matching the other line means the secret ternary fell through
     echo "  identity:  sha256:$(printf %s "${SYSTEM_TEST_HOPRD_ID}" | sha256sum | cut -c1-12)"
@@ -132,7 +127,6 @@ system-tests test_binary="gnosis_vpn-system_tests":
     printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.pass" > /dev/null
 
     # Non-secret per-network data is checked in, so it is copied rather than piped from a secret
-    sudo cp "${network_dir}/safe.yaml" "${worker_config_dir}/gnosisvpn-hopr.safe"
     sudo cp "${network_dir}/config.toml" "${config_dir}/config.toml"
 
     # Copy the worker binary to the worker's home directory

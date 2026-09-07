@@ -13,9 +13,10 @@
 | `main`            | `0.100.0` and up           | v5    | piz-palu-dev (CI)   | `https://blokli-piz-palu.dev.hoprnet.link/` |
 
 `pr.yml` picks the CI network from the PR's target branch via `SYSTEM_TEST_NETWORK`, which selects
-the non-secret fixture in `gnosis_vpn-system_tests/networks/<network>/` — blokli endpoint,
-safe/module addresses, and the client config carrying that network's destinations. Only the hoprd
-keystore and its password remain repository secrets, suffixed per network
+the non-secret fixture in `gnosis_vpn-system_tests/networks/<network>/` — blokli endpoint and the
+client config carrying that network's destinations. The safe/module pair is resolved on chain from
+the identity at startup. Only the hoprd keystore and its password remain repository secrets,
+suffixed per network
 (`SYSTEM_TEST_HOPRD_ID_JURA_DEV`, `SYSTEM_TEST_HOPRD_ID_PIZ_PALU_DEV`, and their `_PASSWORD_` pairs).
 
 ## Backports
