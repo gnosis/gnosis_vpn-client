@@ -1,40 +1,19 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "schedule:earlyMondays"],
-  "baseBranchPatterns": ["main", "/^release\\/.*/"],
-  "useBaseBranchConfig": "merge",
-  "pinDigests": true,
-  "prCreation": "immediate",
-  "semanticCommits": "enabled",
-  "rangeStrategy": "bump",
-  "minimumReleaseAge": "14 days",
-  "vulnerabilityAlerts": {
-    "enabled": true,
-    "minimumReleaseAge": null
-  },
-  "nix": {
-    "enabled": true
-  },
   "packageRules": [
     {
-      "matchManagers": ["github-actions"],
-      "groupName": "github-actions",
-      "commitMessageTopic": "GitHub Actions"
+      "description": "Stable line: everything off by default; vulnerabilityAlerts re-enables CVE fixes.",
+      "matchPackageNames": ["*"],
+      "enabled": false
     },
     {
+      "description": "Keep advisory-db fresh, else gnosis_vpn-audit passes green against a stale set.",
       "matchManagers": ["nix"],
+      "enabled": true,
       "groupName": "nix flake updates",
       "pinDigests": false
-    },
-    {
-      "matchManagers": ["cargo"],
-      "matchUpdateTypes": ["patch"],
-      "groupName": "rust crates (patch)"
-    },
-    {
-      "matchManagers": ["cargo"],
-      "matchUpdateTypes": ["minor"],
-      "groupName": "rust crates (minor)"
     }
-  ]
+  ],
+  "vulnerabilityAlerts": { "enabled": true, "minimumReleaseAge": null }
 }
