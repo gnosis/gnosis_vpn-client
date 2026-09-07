@@ -13,3 +13,11 @@ meta    = { location = "London", flag = "GB" }
 [destinations.India]
 address = "0x0150f9f14d7d8709fb32743bd8c9921da5e411e8"
 meta    = { location = "Mumbai", flag = "IN" }
+
+# Local addition, not in the installer config -- keep it when re-syncing
+[pix_strategy]
+deposit_buffer_period     = "500ms"
+max_deposit_retries       = 3
+max_deposit_tracking_time = "60s"
+max_ssa_allocation        = "0.000000001 wxHOPR"
+price_per_byte            = "0.000000000000000001 wxHOPR"
