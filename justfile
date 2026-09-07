@@ -67,11 +67,15 @@ system-tests test_binary="gnosis_vpn-system_tests":
     : "${SYSTEM_TEST_WORKER_BINARY:?SYSTEM_TEST_WORKER_BINARY must be set to run system tests}"
     : "${SYSTEM_TEST_ROOT_BINARY:?SYSTEM_TEST_ROOT_BINARY must be set to run system tests}"
 
-    network_dir="{{ justfile_directory() }}/gnosis_vpn-system_tests/networks/${SYSTEM_TEST_NETWORK}"
-    if [ ! -d "${network_dir}" ]; then
-        echo "ERROR: unknown network '${SYSTEM_TEST_NETWORK}', no such directory: ${network_dir}" >&2
+    networks_root="{{ justfile_directory() }}/gnosis_vpn-system_tests/networks"
+
+    # Exact match against the fixture directories, so a traversal value cannot resolve past networks/
+    available="$(cd "${networks_root}" && ls -d */ | tr -d /)"
+    if ! printf '%s\n' "${available}" | grep -qxF "${SYSTEM_TEST_NETWORK}"; then
+        echo "ERROR: unknown network '${SYSTEM_TEST_NETWORK}', available: $(echo ${available} | tr '\n' ' ')" >&2
         exit 1
     fi
+    network_dir="${networks_root}/${SYSTEM_TEST_NETWORK}"
 
     blokli_url="${SYSTEM_TEST_BLOKLI_URL:-$(cat "${network_dir}/blokli-url")}"
 
