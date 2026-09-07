@@ -1,0 +1,15 @@
+# jura-dev system test client config, copied verbatim to /etc/gnosisvpn/config.toml
+
+version = 6
+
+[destinations]
+
+# exit nodes announced on jura-dev; ids are free-form and only surface in test reports
+[destinations.FILL_ME]
+address = "FILL_ME"
+meta    = { location = "FILL_ME" }
+path    = { hops = 1 }
+
+[connection]
+# dev cluster nodes announce private addresses, which are filtered out by default
+probe_local_addresses = true

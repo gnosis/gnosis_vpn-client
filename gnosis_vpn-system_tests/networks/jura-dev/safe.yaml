@@ -1,0 +1,3 @@
+# copied verbatim to ~/.config/gnosisvpn-hopr.safe; parsed by config::read_safe
+safe_address: "FILL_ME"
+module_address: "FILL_ME"
