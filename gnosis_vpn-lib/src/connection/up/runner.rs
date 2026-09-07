@@ -198,6 +198,7 @@ impl Runner {
         let _ = results_sender
             .send(progress(Progress::AdjustToMain(round_trip_time)))
             .await;
+        // PIX has no live-adjust path, so it was already decided at session-open (`options.pix.ping_main`).
         let main_surb = surb_config_for(&self.options.surb_balancing.main)?;
         match (ping_surb_management, main_surb.management) {
             (Some(applied), Some(target)) => {
@@ -252,6 +253,11 @@ async fn open_bridge_session(
         // throttled / multi-hop paths this data session runs over.
         flow_control: Some(FlowControlConfig::robust()),
         ..Default::default()
+    };
+    let cfg = if options.pix.bridge.enabled {
+        hopr.pix_aware_session_cfg(cfg)?
+    } else {
+        cfg
     };
     // Each open_session attempt times out after `initiation_timeout_base × (forward_hops + return_hops + 2)`,
     // where initiation_timeout_base defaults to 500 ms. hopr-lib retries 3× with 2 s delays before giving up:
@@ -342,6 +348,11 @@ async fn open_spliced_wg_session(
         // Robust tail-tolerance profile for the WireGuard data session.
         flow_control: Some(FlowControlConfig::robust()),
         ..Default::default()
+    };
+    let cfg = if options.pix.ping_main.enabled {
+        hopr.pix_aware_session_cfg(cfg)?
+    } else {
+        cfg
     };
     (|| async {
         tracing::debug!(%destination, "attempting to open spliced wg session");

@@ -98,6 +98,11 @@ async fn open_bridge_session(
         flow_control: Some(FlowControlConfig::robust()),
         ..Default::default()
     };
+    let cfg = if options.pix.bridge.enabled {
+        hopr.pix_aware_session_cfg(cfg)?
+    } else {
+        cfg
+    };
     hopr.open_session(
         down.destination.address,
         options.sessions.bridge.target.clone(),
