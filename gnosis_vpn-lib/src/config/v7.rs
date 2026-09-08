@@ -8,7 +8,7 @@
 /// global `[connection.bridge/wg].target` default for that destination when present.
 use bytesize::ByteSize;
 use edgli::hopr_lib::HopRouting;
-use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::api::types::primitive::prelude::{Address, HoprBalance};
 use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
 use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionCapability, SessionTarget};
 use human_bandwidth::re::bandwidth::Bandwidth;
@@ -25,6 +25,7 @@ use crate::config;
 use crate::connection::destination::{Destination as ConnDestination, DestinationSource};
 use crate::connection::options;
 use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
+use crate::hopr::pix_config::PixConfig;
 use crate::hopr::strategy_config::StrategyConfig;
 use crate::ping;
 use crate::wireguard::Config as WireGuardConfig;
@@ -42,6 +43,7 @@ pub(super) struct Connection {
     pub(super) wg: Option<ConnectionProtocol>,
     pub(super) ping: Option<PingOptions>,
     pub(super) surb_balancing: Option<SurbBalancingConfig>,
+    pub(super) pix: Option<PixOptionsConfig>,
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
     pub(super) lan_lockdown: Option<bool>,
     pub(super) probe_local_addresses: Option<bool>,
@@ -107,6 +109,18 @@ pub(super) struct SurbBalancingConfig {
     pub(super) main: Option<SessionSurbConfig>,
     pub(super) bridge: Option<SessionSurbConfig>,
     pub(super) health_check: Option<SessionSurbConfig>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct SessionPixConfig {
+    enabled: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct PixOptionsConfig {
+    ping_main: Option<SessionPixConfig>,
+    bridge: Option<SessionPixConfig>,
+    health_check: Option<SessionPixConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -214,6 +228,9 @@ impl Connection {
     }
 
     pub fn default_wg_capabilities() -> Vec<Capability> {
+        // NoDelay on a stateless session preserves UDP/WireGuard datagram boundaries over the
+        // session (hoprnet#8356): each datagram is delivered as exactly one read, so neptun never
+        // sees a split/coalesced buffer.
         vec![Capability::Segmentation, Capability::NoDelay]
     }
 
@@ -253,6 +270,15 @@ pub(super) fn apply_session_surb(
                 always_max_out_surbs: c.always_max_out_surbs.unwrap_or(enabled),
             }
         }
+    }
+}
+
+fn apply_session_pix(cfg: Option<SessionPixConfig>, def: options::SessionPixOptions) -> options::SessionPixOptions {
+    match cfg {
+        None => def,
+        Some(c) => options::SessionPixOptions {
+            enabled: c.enabled.unwrap_or(def.enabled),
+        },
     }
 }
 
@@ -305,6 +331,18 @@ impl From<Option<Connection>> for options::Options {
             bridge: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.bridge.clone()), def.bridge),
             health_check: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.health_check.clone()), def.health_check),
         };
+
+        let pix_cfg = connection.and_then(|c| c.pix.clone());
+        let def_pix = options::PixOptions::default();
+        let pix = options::PixOptions {
+            ping_main: apply_session_pix(pix_cfg.as_ref().and_then(|s| s.ping_main.clone()), def_pix.ping_main),
+            bridge: apply_session_pix(pix_cfg.as_ref().and_then(|s| s.bridge.clone()), def_pix.bridge),
+            health_check: apply_session_pix(
+                pix_cfg.as_ref().and_then(|s| s.health_check.clone()),
+                def_pix.health_check,
+            ),
+        };
+
         let http_timeout = connection
             .and_then(|c| c.http_timeout)
             .unwrap_or(Connection::default_http_timeout());
@@ -329,6 +367,7 @@ impl From<Option<Connection>> for options::Options {
             sessions,
             ping_options: ping_opts,
             surb_balancing,
+            pix,
             timeouts,
             health_check_intervals,
             lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
@@ -399,6 +438,10 @@ pub(super) struct Strategy {
     pub(super) channel_allowlist: Option<ChannelAllowlistConfig>,
     #[serde(default, deserialize_with = "validate_channel_capacity")]
     pub(super) channel_capacity: Option<ByteSize>,
+    pub(super) topup_capacity: Option<ByteSize>,
+    pub(super) lower_capacity_threshold: Option<ByteSize>,
+    pub(super) min_safe_capacity_required: Option<ByteSize>,
+    pub(super) sizing_mode: Option<edgli::strategy::CapacitySizingMode>,
 }
 
 /// Rejects a capacity edgli cannot turn into a funding config.
@@ -440,6 +483,68 @@ impl From<Option<Strategy>> for StrategyConfig {
                 .and_then(|s| s.channel_allowlist.as_ref())
                 .and_then(|c| c.enabled.then(|| c.peers.iter().cloned().collect())),
             channel_capacity: v.as_ref().and_then(|s| s.channel_capacity),
+            topup_capacity: v.as_ref().and_then(|s| s.topup_capacity),
+            lower_capacity_threshold: v.as_ref().and_then(|s| s.lower_capacity_threshold),
+            min_safe_capacity_required: v.as_ref().and_then(|s| s.min_safe_capacity_required),
+            sizing_mode: v.as_ref().and_then(|s| s.sizing_mode.clone()),
+        }
+    }
+}
+
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct PixStrategy {
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) price_per_byte: Option<HoprBalance>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) max_ssa_allocation: Option<HoprBalance>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) max_spend_per_window: Option<HoprBalance>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) spend_window: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) deposit_buffer_period: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) max_deposit_tracking_time: Option<Duration>,
+    pub(super) max_deposit_retries: Option<usize>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) min_safe_hopr_reserve: Option<HoprBalance>,
+}
+
+impl From<Option<PixStrategy>> for PixConfig {
+    fn from(v: Option<PixStrategy>) -> Self {
+        let def = PixConfig::default();
+        Self {
+            price_per_byte: v.as_ref().and_then(|p| p.price_per_byte).unwrap_or(def.price_per_byte),
+            max_ssa_allocation: v
+                .as_ref()
+                .and_then(|p| p.max_ssa_allocation)
+                .unwrap_or(def.max_ssa_allocation),
+            max_spend_per_window: v
+                .as_ref()
+                .and_then(|p| p.max_spend_per_window)
+                .unwrap_or(def.max_spend_per_window),
+            spend_window: v.as_ref().and_then(|p| p.spend_window).unwrap_or(def.spend_window),
+            deposit_buffer_period: v
+                .as_ref()
+                .and_then(|p| p.deposit_buffer_period)
+                .unwrap_or(def.deposit_buffer_period),
+            max_deposit_tracking_time: v
+                .as_ref()
+                .and_then(|p| p.max_deposit_tracking_time)
+                .unwrap_or(def.max_deposit_tracking_time),
+            max_deposit_retries: v
+                .as_ref()
+                .and_then(|p| p.max_deposit_retries)
+                .unwrap_or(def.max_deposit_retries),
+            min_safe_hopr_reserve: v
+                .as_ref()
+                .and_then(|p| p.min_safe_hopr_reserve)
+                .unwrap_or(def.min_safe_hopr_reserve),
         }
     }
 }
@@ -455,6 +560,7 @@ pub struct Config {
     pub(super) wireguard: Option<WireGuard>,
     pub(super) blokli: Option<BlokliConfig>,
     pub(super) strategy: Option<Strategy>,
+    pub(super) pix_strategy: Option<PixStrategy>,
 }
 
 #[serde_as]
@@ -573,6 +679,25 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
+                    if k == "pix" {
+                        if let Some(pix) = v.as_table() {
+                            for (k2, v2) in pix.iter() {
+                                if k2 == "ping_main" || k2 == "bridge" || k2 == "health_check" {
+                                    if let Some(session) = v2.as_table() {
+                                        for (k3, _) in session.iter() {
+                                            if k3 == "enabled" {
+                                                continue;
+                                            }
+                                            wrong.push(format!("connection.pix.{k2}.{k3}"));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                wrong.push(format!("connection.pix.{k2}"));
+                            }
+                        }
+                        continue;
+                    }
                     if k == "health_check_intervals" {
                         if let Some(hci) = v.as_table() {
                             for (k2, _) in hci.iter() {
@@ -621,7 +746,12 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                 for (k, v) in strategy.iter() {
                     if matches!(
                         k.as_str(),
-                        "min_open_channels" | "target_open_channels" | "channel_capacity"
+                        "min_open_channels"
+                            | "target_open_channels"
+                            | "channel_capacity"
+                            | "topup_capacity"
+                            | "lower_capacity_threshold"
+                            | "min_safe_capacity_required"
                     ) {
                         continue;
                     }
@@ -636,7 +766,50 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
+                    if k == "sizing_mode" {
+                        if let Some(mode) = v.as_table() {
+                            for (k2, v2) in mode.iter() {
+                                if k2 == "deterministic" {
+                                    continue;
+                                }
+                                if k2 != "probabilistic" {
+                                    wrong.push(format!("strategy.sizing_mode.{k2}"));
+                                    continue;
+                                }
+                                if let Some(probabilistic) = v2.as_table() {
+                                    for (k3, _) in probabilistic.iter() {
+                                        if k3 == "success_probability" {
+                                            continue;
+                                        }
+                                        wrong.push(format!("strategy.sizing_mode.probabilistic.{k3}"));
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     wrong.push(format!("strategy.{k}"));
+                }
+            }
+            continue;
+        }
+        if key == "pix_strategy" {
+            if let Some(pix) = value.as_table() {
+                for (k, _) in pix.iter() {
+                    if matches!(
+                        k.as_str(),
+                        "price_per_byte"
+                            | "max_ssa_allocation"
+                            | "max_spend_per_window"
+                            | "spend_window"
+                            | "deposit_buffer_period"
+                            | "max_deposit_tracking_time"
+                            | "max_deposit_retries"
+                            | "min_safe_hopr_reserve"
+                    ) {
+                        continue;
+                    }
+                    wrong.push(format!("pix_strategy.{k}"));
                 }
             }
             continue;
@@ -671,12 +844,14 @@ impl TryFrom<Config> for config::Config {
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
         let strategy = value.strategy.into();
+        let pix_strategy = value.pix_strategy.into();
         Ok(config::Config {
             connection,
             destinations,
             wireguard,
             blokli,
             strategy,
+            pix_strategy,
         })
     }
 }
@@ -720,6 +895,7 @@ mod tests {
         wrong_keys,
     };
     use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
+    use crate::hopr::pix_config::PixConfig;
     use crate::hopr::strategy_config::StrategyConfig;
     use edgli::hopr_lib::HopRouting;
     use edgli::hopr_lib::api::types::primitive::prelude::Address;
@@ -1101,6 +1277,10 @@ channel_capacity = "16 EiB"
                 peers: vec![addr],
             }),
             channel_capacity: None,
+            topup_capacity: None,
+            lower_capacity_threshold: None,
+            min_safe_capacity_required: None,
+            sizing_mode: None,
         });
         let cfg: StrategyConfig = strategy.into();
         assert_eq!(cfg.channel_allowlist, Some(std::collections::HashSet::from([addr])));
@@ -1117,8 +1297,367 @@ channel_capacity = "16 EiB"
                 peers: vec![addr],
             }),
             channel_capacity: None,
+            topup_capacity: None,
+            lower_capacity_threshold: None,
+            min_safe_capacity_required: None,
+            sizing_mode: None,
         });
         let cfg: StrategyConfig = strategy.into();
         assert!(cfg.channel_allowlist.is_none());
+    }
+
+    #[test]
+    fn strategy_new_capacity_fields_are_parsed() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[strategy]
+topup_capacity = "384 MiB"
+lower_capacity_threshold = "128 MiB"
+min_safe_capacity_required = "640 MiB"
+"#####,
+        );
+        let strategy = cfg.strategy.expect("strategy section present");
+        assert_eq!(strategy.topup_capacity, Some(bytesize::ByteSize::mib(384)));
+        assert_eq!(strategy.lower_capacity_threshold, Some(bytesize::ByteSize::mib(128)));
+        assert_eq!(strategy.min_safe_capacity_required, Some(bytesize::ByteSize::mib(640)));
+
+        let converted: StrategyConfig = Some(strategy).into();
+        assert_eq!(converted.topup_capacity, Some(bytesize::ByteSize::mib(384)));
+        assert_eq!(converted.lower_capacity_threshold, Some(bytesize::ByteSize::mib(128)));
+        assert_eq!(converted.min_safe_capacity_required, Some(bytesize::ByteSize::mib(640)));
+    }
+
+    #[test]
+    fn strategy_new_capacity_fields_are_optional() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[strategy]
+channel_capacity = "1 GiB"
+"#####,
+        );
+        let strategy = cfg.strategy.expect("strategy section present");
+        assert!(strategy.topup_capacity.is_none());
+        assert!(strategy.lower_capacity_threshold.is_none());
+        assert!(strategy.min_safe_capacity_required.is_none());
+
+        let converted: StrategyConfig = Some(strategy).into();
+        assert!(converted.topup_capacity.is_none());
+        assert!(converted.lower_capacity_threshold.is_none());
+        assert!(converted.min_safe_capacity_required.is_none());
+    }
+
+    #[test]
+    fn strategy_sizing_mode_deterministic_is_parsed() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[strategy]
+sizing_mode = "deterministic"
+"#####,
+        );
+        let strategy = cfg.strategy.expect("strategy section present");
+        assert_eq!(
+            strategy.sizing_mode,
+            Some(edgli::strategy::CapacitySizingMode::Deterministic)
+        );
+
+        let converted: StrategyConfig = Some(strategy).into();
+        assert_eq!(
+            converted.sizing_mode,
+            Some(edgli::strategy::CapacitySizingMode::Deterministic)
+        );
+    }
+
+    #[test]
+    fn strategy_sizing_mode_probabilistic_is_parsed() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[strategy.sizing_mode.probabilistic]
+success_probability = 0.95
+"#####,
+        );
+        let strategy = cfg.strategy.expect("strategy section present");
+        assert_eq!(
+            strategy.sizing_mode,
+            Some(edgli::strategy::CapacitySizingMode::Probabilistic {
+                success_probability: 0.95
+            })
+        );
+    }
+
+    #[test]
+    fn strategy_new_capacity_fields_are_known_keys() {
+        let table = r#####"
+version = 7
+
+[strategy]
+topup_capacity = "384 MiB"
+lower_capacity_threshold = "128 MiB"
+min_safe_capacity_required = "640 MiB"
+sizing_mode = "deterministic"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn strategy_sizing_mode_probabilistic_typo_is_reported() {
+        let table = r#####"
+version = 7
+
+[strategy.sizing_mode.probabilistic]
+success_probabilty = 0.95
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["strategy.sizing_mode.probabilistic.success_probabilty".to_string()]
+        );
+    }
+
+    #[test]
+    fn strategy_sizing_mode_table_form_deterministic_is_known() {
+        let table = r#####"
+version = 7
+
+[strategy.sizing_mode]
+deterministic = {}
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn strategy_all_requested_capacity_fields_round_trip() {
+        // assumed_hops is absent on purpose -- it's a fixed protocol constant, not a config key.
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[strategy]
+channel_capacity = "640 MiB"
+topup_capacity = "384 MiB"
+lower_capacity_threshold = "128 MiB"
+min_safe_capacity_required = "640 MiB"
+sizing_mode = "deterministic"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(result.strategy.channel_capacity, Some(bytesize::ByteSize::mib(640)));
+        assert_eq!(result.strategy.topup_capacity, Some(bytesize::ByteSize::mib(384)));
+        assert_eq!(
+            result.strategy.lower_capacity_threshold,
+            Some(bytesize::ByteSize::mib(128))
+        );
+        assert_eq!(
+            result.strategy.min_safe_capacity_required,
+            Some(bytesize::ByteSize::mib(640))
+        );
+        assert_eq!(
+            result.strategy.sizing_mode,
+            Some(edgli::strategy::CapacitySizingMode::Deterministic)
+        );
+    }
+
+    #[test]
+    fn pix_strategy_is_always_registered() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(result.pix_strategy, PixConfig::default());
+    }
+
+    #[test]
+    fn pix_strategy_fields_are_parsed_and_override_the_default() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[pix_strategy]
+price_per_byte = "5 wxHOPR"
+max_ssa_allocation = "50 wxHOPR"
+max_spend_per_window = "5000 wxHOPR"
+spend_window = "2h"
+deposit_buffer_period = "250ms"
+max_deposit_tracking_time = "30s"
+max_deposit_retries = 5
+min_safe_hopr_reserve = "10 wxHOPR"
+"#####,
+        );
+        let pix_strategy = cfg.pix_strategy.expect("pix_strategy section present");
+        let converted: PixConfig = Some(pix_strategy).into();
+        assert_eq!(converted.max_spend_per_window, "5000 wxHOPR".parse().unwrap());
+        assert_eq!(converted.spend_window, Duration::from_secs(2 * 60 * 60));
+        assert_eq!(converted.deposit_buffer_period, Duration::from_millis(250));
+        assert_eq!(converted.max_deposit_tracking_time, Duration::from_secs(30));
+        assert_eq!(converted.max_deposit_retries, 5);
+        assert_eq!(converted.min_safe_hopr_reserve, "10 wxHOPR".parse().unwrap());
+    }
+
+    #[test]
+    fn pix_strategy_fields_are_optional_and_fall_back_to_defaults() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[pix_strategy]
+max_deposit_retries = 7
+"#####,
+        );
+        let pix_strategy = cfg.pix_strategy.expect("pix_strategy section present");
+        let converted: PixConfig = Some(pix_strategy).into();
+        let def = PixConfig::default();
+        assert_eq!(converted.max_deposit_retries, 7);
+        assert_eq!(converted.price_per_byte, def.price_per_byte);
+        assert_eq!(converted.max_ssa_allocation, def.max_ssa_allocation);
+        assert_eq!(converted.max_spend_per_window, def.max_spend_per_window);
+        assert_eq!(converted.spend_window, def.spend_window);
+        assert_eq!(converted.deposit_buffer_period, def.deposit_buffer_period);
+        assert_eq!(converted.max_deposit_tracking_time, def.max_deposit_tracking_time);
+        assert_eq!(converted.min_safe_hopr_reserve, def.min_safe_hopr_reserve);
+    }
+
+    #[test]
+    fn pix_strategy_fields_are_known_keys() {
+        let table = r#####"
+version = 7
+
+[pix_strategy]
+price_per_byte = "5 wxHOPR"
+max_ssa_allocation = "50 wxHOPR"
+max_spend_per_window = "5000 wxHOPR"
+spend_window = "2h"
+deposit_buffer_period = "250ms"
+max_deposit_tracking_time = "30s"
+max_deposit_retries = 5
+min_safe_hopr_reserve = "10 wxHOPR"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn pix_strategy_typo_is_reported() {
+        let table = r#####"
+version = 7
+
+[pix_strategy]
+pric_per_byte = "5 wxHOPR"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), vec!["pix_strategy.pric_per_byte".to_string()]);
+    }
+
+    #[test]
+    fn pix_defaults_to_enabled_for_ping_main_only() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert!(result.connection.pix.ping_main.enabled);
+        assert!(!result.connection.pix.bridge.enabled);
+        assert!(!result.connection.pix.health_check.enabled);
+    }
+
+    #[test]
+    fn pix_overrides_are_applied() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.pix.bridge]
+enabled = true
+
+[connection.pix.ping_main]
+enabled = false
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert!(result.connection.pix.bridge.enabled);
+        assert!(!result.connection.pix.ping_main.enabled);
+        // untouched key keeps its default
+        assert!(!result.connection.pix.health_check.enabled);
+    }
+
+    #[test]
+    fn pix_fields_are_known_keys() {
+        let table = r#####"
+version = 7
+
+[connection.pix.bridge]
+enabled = false
+
+[connection.pix.ping_main]
+enabled = true
+
+[connection.pix.health_check]
+enabled = false
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn pix_typo_is_reported() {
+        let table = r#####"
+version = 7
+
+[connection.pix.bridge]
+enalbed = false
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), vec!["connection.pix.bridge.enalbed".to_string()]);
+    }
+
+    #[test]
+    fn pix_unknown_session_key_is_reported() {
+        let table = r#####"
+version = 7
+
+[connection.pix.main]
+enabled = true
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), vec!["connection.pix.main".to_string()]);
     }
 }

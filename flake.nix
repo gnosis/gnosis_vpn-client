@@ -183,10 +183,11 @@
               shellHook = tokioUnstableHook;
 
               packages = [
-                pkgs.bats
                 pkgs.cargo-machete
                 pkgs.cargo-shear
+                pkgs.jq
                 pkgs.just
+                pkgs.nix-prefetch-git
                 pkgs.rust-analyzer
               ]
               ++ lib.attrValues config.treefmt.build.programs;

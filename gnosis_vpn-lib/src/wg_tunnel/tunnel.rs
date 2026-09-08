@@ -24,6 +24,9 @@ use crate::wireguard;
 /// header plus the 16-byte Poly1305 tag.
 const WG_DATA_OVERHEAD: usize = 32;
 
+/// Keeps the multi-hop UDP egress chain (local→HOPR→mixnet→exit→WG server) alive across NAT/conntrack idle timeouts; 25 s is under the common 30 s floor.
+const WG_PERSISTENT_KEEPALIVE_SECS: u16 = 25;
+
 /// Scratch buffer for a single NepTUN output. It must strictly dominate any
 /// packet the pump can hand to `encapsulate`: the pump reads up to `MAX_FRAME`
 /// bytes per packet, and encapsulation adds up to `WG_DATA_OVERHEAD`, so
@@ -109,9 +112,8 @@ impl WgTunnel {
             Some(psk) => Some(wireguard::decode_key32(psk)?),
             None => None,
         };
-        // index 0, no persistent keepalive, no rate limiter - single-peer client,
-        // matching the wg-quick config we are replacing.
-        let tunn = Tunn::new(secret, peer, preshared_key, None, 0, None).map_err(Error::Tunn)?;
+        let tunn =
+            Tunn::new(secret, peer, preshared_key, Some(WG_PERSISTENT_KEEPALIVE_SECS), 0, None).map_err(Error::Tunn)?;
         Ok(Self {
             tunn,
             scratch: vec![0u8; SCRATCH_LEN].into_boxed_slice(),

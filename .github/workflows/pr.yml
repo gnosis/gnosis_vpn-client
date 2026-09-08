@@ -133,12 +133,6 @@ jobs:
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Install just
         uses: extractions/setup-just@dd310ad5a97d8e7b41793f8ef055398d51ad4de6 # v2
-      - name: Install bats
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bats
-      - name: Run offline smoke-test suite
-        run: just smoke-test-check
       - name: Fetch release binaries
         # Reuses the artifact build-x86_64-linux already built and pushed to
         # cachix, instead of recompiling root/worker/ctl here a second time.
@@ -149,10 +143,10 @@ jobs:
           nix build -L .#binary-gnosis_vpn-system_tests -o result-system-tests
       - name: Run the system test
         env:
-          SYSTEM_TEST_HOPRD_ID: ${{ secrets.SYSTEM_TEST_HOPRD_ID }}
-          SYSTEM_TEST_HOPRD_ID_PASSWORD: ${{ secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD }}
-          SYSTEM_TEST_SAFE: ${{ secrets.SYSTEM_TEST_SAFE }}
-          SYSTEM_TEST_CONFIG: ${{ secrets.SYSTEM_TEST_CONFIG}}
+          # Both secret names must exist: a missing one yields '' and falls through to the other network
+          SYSTEM_TEST_NETWORK: "${{ startsWith(github.base_ref, 'release/') && 'jura-dev' || 'piz-palu-dev' }}"
+          SYSTEM_TEST_HOPRD_ID: "${{ startsWith(github.base_ref, 'release/') && secrets.SYSTEM_TEST_HOPRD_ID_JURA_DEV || secrets.SYSTEM_TEST_HOPRD_ID_PIZ_PALU_DEV }}"
+          SYSTEM_TEST_HOPRD_ID_PASSWORD: "${{ startsWith(github.base_ref, 'release/') && secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD_JURA_DEV || secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD_PIZ_PALU_DEV }}"
           SYSTEM_TEST_WORKER_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-worker
           SYSTEM_TEST_ROOT_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-root
         run: just system-tests ${{ github.workspace }}/result-system-tests/bin/gnosis_vpn-system_tests

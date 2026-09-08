@@ -6,6 +6,7 @@ rust-version = { workspace = true }
 version      = { workspace = true }
 
 [dependencies]
+bytesize.workspace       = true
 clap.workspace           = true
 clap_complete.workspace  = true
 exitcode.workspace       = true

@@ -165,7 +165,7 @@ pub enum RunMode {
     /// Normal operation where connections can be made
     Running {
         hopr_status: Option<HoprStatus>,
-        funding_issues: Option<Vec<balance::FundingIssue>>,
+        funding_status: Option<balance::FundingStatus>,
     },
     /// Shutting down edge client,
     Shutdown,
@@ -242,6 +242,7 @@ pub enum FundingToolResponse {
     Started,
     InProgress,
     Done,
+    Cooldown(#[serde(with = "serde_utils::duration_ms")] Duration),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -273,7 +274,12 @@ pub enum TicketStatsStatus {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum NerdStatsResponse {
+pub struct NerdStatsResponse {
+    pub connection: NerdStatsConnection,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum NerdStatsConnection {
     NoInfo(TicketStatsStatus),
     Connecting(TicketStatsStatus, ConnStats),
     Connected(TicketStatsStatus, ConnStats),
@@ -369,10 +375,10 @@ impl RunMode {
         }
     }
 
-    pub fn running(hopr_state: Option<HoprState>, funding_issues: Option<Vec<balance::FundingIssue>>) -> Self {
+    pub fn running(hopr_state: Option<HoprState>, funding_status: Option<balance::FundingStatus>) -> Self {
         RunMode::Running {
             hopr_status: hopr_state.map(|s| s.into()),
-            funding_issues,
+            funding_status,
         }
     }
 }
@@ -542,24 +548,15 @@ impl Display for RunMode {
             },
             RunMode::Running {
                 hopr_status,
-                funding_issues,
+                funding_status,
             } => {
                 match hopr_status {
                     Some(s) => write!(f, "Ready ({s})")?,
                     None => write!(f, "Ready")?,
                 }
-                match funding_issues.as_deref() {
+                match funding_status {
                     None => write!(f, " - waiting for funding calculations")?,
-                    Some([]) => write!(f, " - well funded")?,
-                    Some(issues) => {
-                        writeln!(f, "\n---")?;
-                        for (i, issue) in issues.iter().enumerate() {
-                            if i > 0 {
-                                writeln!(f)?;
-                            }
-                            write!(f, "Funding issue: {issue}")?;
-                        }
-                    }
+                    Some(status) => write!(f, " - traffic: {}, gas: {}", status.traffic, status.gas)?,
                 }
                 Ok(())
             }
@@ -751,10 +748,10 @@ mod tests {
         match RunMode::running(hopr_state, None) {
             RunMode::Running {
                 hopr_status,
-                funding_issues,
+                funding_status,
             } => {
                 assert_eq!(hopr_status, Some(HoprStatus::Running));
-                assert_eq!(funding_issues, None);
+                assert!(funding_status.is_none());
             }
             other => panic!("unexpected run mode {other:?}"),
         }
@@ -880,10 +877,12 @@ mod tests {
             history: vec![sample],
         })
         .unwrap();
+        // `at` is u64 epoch-milliseconds, `time_since_last_handshake` is f64
+        // milliseconds (serde_utils::system_time / opt_duration_ms).
         let sample_json = concat!(
-            r#"{"at":{"secs_since_epoch":0,"nanos_since_epoch":0},"#,
+            r#"{"at":0,"#,
             r#""tx_bytes":100,"rx_bytes":200,"rtt_ms":42,"#,
-            r#""time_since_last_handshake":{"secs":5,"nanos":0},"estimated_loss":0.1}"#
+            r#""time_since_last_handshake":5000.0,"estimated_loss":0.1}"#
         );
         assert_eq!(
             populated,
@@ -900,9 +899,9 @@ mod tests {
         assert!(empty.history.is_empty());
 
         let sample_json = concat!(
-            r#"{"at":{"secs_since_epoch":0,"nanos_since_epoch":0},"#,
+            r#"{"at":0,"#,
             r#""tx_bytes":100,"rx_bytes":200,"rtt_ms":42,"#,
-            r#""time_since_last_handshake":{"secs":5,"nanos":0},"estimated_loss":0.1}"#
+            r#""time_since_last_handshake":5000.0,"estimated_loss":0.1}"#
         );
         let populated: WgTunnelStats =
             serde_json::from_str(&format!(r#"{{"current":{sample_json},"history":[{sample_json}]}}"#)).unwrap();

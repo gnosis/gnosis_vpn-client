@@ -6,16 +6,16 @@ resolver = "2"
 edition      = "2024"
 license      = "LGPL-3.0-only"
 rust-version = "1.94"
-version      = "0.94.2"
+version      = "0.100.0"
 
 [workspace.metadata.crane]
 name = "gnosis_vpn"
 
 [workspace.dependencies]
 anyhow = { version = "~1.0.104" }
-async-trait = "~0.1.91"
+async-trait = "~0.1.92"
 backon = { version = "~1.6.0" }
-base64 = "~0.22.1"
+base64 = "~0.23.1"
 bytesize = "~2.7.0"
 cfg-if = "~1.0.4"
 chrono = { version = "~0.4.45", default-features = false, features = [
@@ -23,16 +23,23 @@ chrono = { version = "~0.4.45", default-features = false, features = [
   "serde",
   "std",
 ] }
-clap = { version = "~4.6.4", features = ["derive", "env"] }
-clap_complete = "~4.6.8"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "b333ba9dd826271d887e2af66866d3e38b0852b3", features = [
+clap = { version = "~4.6.6", features = ["derive", "env"] }
+clap_complete = "~4.6.9"
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "614d4520958af6661aa4da494d32e3e5a68178be", features = [
   "blokli",
+  "pix",
+  "pix-test",
   "telemetry",
 ] }
 exitcode = "~1.1.2"
-futures = "~0.3.33"
-futures-util = "~0.3.33"
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "5b1cd68806ee33dcfb50dfed3b4a2866825f8f68", features = [
+futures = "~0.3.34"
+futures-util = "~0.3.34"
+# Pinned by REV, not by branch, and the form matters. `edgli` pins `hopr-lib` by rev, and
+# Cargo treats `?branch=X#sha` and `?rev=sha` as distinct sources even for byte-identical
+# commits -- mixing the two builds hoprnet twice and fails with `expected
+# hopr_lib::HoprSessionClientConfig, found HoprSessionClientConfig`. Keep both entries in the
+# same form and pointed at the same commit as edgli's own `hopr-lib` pin.
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "85e698a726710e205e8f76f4df7ad52debd2ff86", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
@@ -41,29 +48,27 @@ humantime-serde = "~1.1.1"
 ipnetwork = "~0.21.1"
 libc = "~0.2.189"
 mnl = "~0.3.1"
-multiaddr = "~0.18.2"
 neptun = { git = "https://github.com/NordSecurity/neptun.git", tag = "v3.0.1" }
-nftnl = "~0.9.3"
+nftnl = "~0.9.4"
 notify = "~8.2.0"
 pfctl = "~0.7.0"
 ping = { version = "~0.9.0", features = ["tokio"] }
 rand = "~0.10.2"
 reqwest = { version = "~0.13.4", features = ["blocking", "json"] }
-rtnetlink = "~0.21.0"
+rtnetlink = "~0.22.0"
 rustix = { version = "~1.1.4", features = ["fs", "net", "pipe", "stdio"] }
 serde = { version = "~1.0.229", features = ["derive"] }
 serde-saphyr = "~0.0.29"
 serde_json = "~1.0.151"
-serde_with = "~3.21.0"
+serde_with = "~3.22.0"
 tempfile = "~3.27.0"
-thiserror = "~2.0.19"
+thiserror = "~2.0.20"
 tikv-jemallocator = "~0.7.0"
 tokio = { version = "~1.53.1", features = ["full"] }
 tokio-util = { version = "~0.7.19", features = ["rt"] }
 toml = "~1.1.4"
 tracing = { version = "~0.1.44", features = ["release_max_level_debug"] }
 tracing-subscriber = "~0.3.23"
-unix-ancillary = "~0.2.2"
 url = { version = "~2.5.8", features = ["serde"] }
 uzers = "~0.12.2"
 x25519-dalek = { version = "~2.0.1", features = [
@@ -78,15 +83,6 @@ objc2-foundation = { version = "~0.3.2", features = [
 ] }
 
 gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
-
-[patch.crates-io]
-# Cargo doesn't propagate a git dependency's own [patch] section to consumers, so this mirrors
-# edge-client's own patch exactly: hopr-strategy (crates.io) still depends on the crates.io
-# hopr-types/hopr-api, which duplicate types (Address, Balance<C>, ...) against the git-pinned
-# versions hopr-chain-connector/hopr-lib pull in through edgli. Without this, the workspace ends
-# up with two incompatible copies of each type.
-hopr-api   = { git = "https://github.com/hoprnet/hopr-api", rev = "7c26c0bee697d33529dc9412c271ce6c8d726fc1" }
-hopr-types = { git = "https://github.com/hoprnet/hopr-types", rev = "2a3bb391f1f98475d033b105c69090d050aaff0c" }
 
 # this profile focuses on the best runtime performance and the smallest binary size
 [profile.release]

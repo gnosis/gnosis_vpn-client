@@ -47,7 +47,7 @@ pub(crate) enum Results {
         res: Result<balance::BalanceRecommendation, Error>,
     },
     CapacityAllocations {
-        res: Result<std::collections::HashMap<balance::CapacityAllocator, balance::Capacity>, Error>,
+        res: Result<balance::CapacityAllocations, Error>,
     },
     Balances {
         res: Result<balance::Balances, Error>,
@@ -310,6 +310,9 @@ pub(crate) async fn create_incentive_operations(
 
 /// Watches registered `gvpn:exit` nodes for as long as `Core` keeps re-spawning this task.
 ///
+/// Two steps because upstream splits them: the snapshot needs only a Blokli endpoint, the live
+/// event stream behind it needs `hopr`'s connected chain connector.
+///
 /// Unlike [`create_incentive_operations`], a failure here must never end `Core` — configured
 /// destinations have to keep working even with no Blokli reachable at all — so this reports
 /// failure and returns rather than retrying with a bounded backoff; `Core` re-spawns it on a
@@ -317,10 +320,21 @@ pub(crate) async fn create_incentive_operations(
 pub(crate) async fn watch_exit_nodes(
     worker_params: &WorkerParams,
     blokli_config: BlokliConfig,
+    hopr: Arc<Hopr>,
     results_sender: mpsc::Sender<Results>,
 ) {
     let blokli_endpoint = worker_params.blokli_endpoint(blokli_config.request_timeout);
-    let mut registry = match edgli::watch_exit_nodes(blokli_endpoint).await {
+    let initial = match edgli::list_exit_nodes(blokli_endpoint).await {
+        Ok(nodes) => nodes,
+        Err(err) => {
+            let _ = results_sender
+                .send(Results::ExitNodesRetry { error: err.to_string() })
+                .await;
+            return;
+        }
+    };
+    // Held for the whole loop: dropping the registry aborts the upstream watch task.
+    let mut registry = match hopr.watch_exit_nodes(initial) {
         Ok(registry) => registry,
         Err(err) => {
             let _ = results_sender
@@ -610,7 +624,12 @@ impl Display for Results {
                 Err(err) => write!(f, "IdealBalanceRecommendation: Error({})", err),
             },
             Results::CapacityAllocations { res } => match res {
-                Ok(map) => write!(f, "CapacityAllocations: {} entries", map.len()),
+                Ok(caps) => write!(
+                    f,
+                    "CapacityAllocations: {} channels, node capacity: {}",
+                    caps.peer_allocations.len(),
+                    caps.node.stake
+                ),
                 Err(err) => write!(f, "CapacityAllocations: Error({})", err),
             },
             Results::Balances { res } => match res {

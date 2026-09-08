@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::config;
 
-pub(super) use super::v7::{BlokliConfig, Connection, DestinationPath, Strategy, WireGuard};
+pub(super) use super::v7::{BlokliConfig, Connection, DestinationPath, PixStrategy, Strategy, WireGuard};
 
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -21,6 +21,7 @@ pub struct Config {
     pub(super) wireguard: Option<WireGuard>,
     pub(super) blokli: Option<BlokliConfig>,
     pub(super) strategy: Option<Strategy>,
+    pub(super) pix_strategy: Option<PixStrategy>,
 }
 
 #[serde_as]
@@ -130,6 +131,25 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
+                    if k == "pix" {
+                        if let Some(pix) = v.as_table() {
+                            for (k2, v2) in pix.iter() {
+                                if k2 == "ping_main" || k2 == "bridge" || k2 == "health_check" {
+                                    if let Some(session) = v2.as_table() {
+                                        for (k3, _) in session.iter() {
+                                            if k3 == "enabled" {
+                                                continue;
+                                            }
+                                            wrong.push(format!("connection.pix.{k2}.{k3}"));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                wrong.push(format!("connection.pix.{k2}"));
+                            }
+                        }
+                        continue;
+                    }
                     if k == "health_check_intervals" {
                         if let Some(hci) = v.as_table() {
                             for (k2, _) in hci.iter() {
@@ -173,7 +193,12 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                 for (k, v) in strategy.iter() {
                     if matches!(
                         k.as_str(),
-                        "min_open_channels" | "target_open_channels" | "channel_capacity"
+                        "min_open_channels"
+                            | "target_open_channels"
+                            | "channel_capacity"
+                            | "topup_capacity"
+                            | "lower_capacity_threshold"
+                            | "min_safe_capacity_required"
                     ) {
                         continue;
                     }
@@ -188,7 +213,50 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
+                    if k == "sizing_mode" {
+                        if let Some(mode) = v.as_table() {
+                            for (k2, v2) in mode.iter() {
+                                if k2 == "deterministic" {
+                                    continue;
+                                }
+                                if k2 != "probabilistic" {
+                                    wrong.push(format!("strategy.sizing_mode.{k2}"));
+                                    continue;
+                                }
+                                if let Some(probabilistic) = v2.as_table() {
+                                    for (k3, _) in probabilistic.iter() {
+                                        if k3 == "success_probability" {
+                                            continue;
+                                        }
+                                        wrong.push(format!("strategy.sizing_mode.probabilistic.{k3}"));
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     wrong.push(format!("strategy.{k}"));
+                }
+            }
+            continue;
+        }
+        if key == "pix_strategy" {
+            if let Some(pix) = value.as_table() {
+                for (k, _) in pix.iter() {
+                    if matches!(
+                        k.as_str(),
+                        "price_per_byte"
+                            | "max_ssa_allocation"
+                            | "max_spend_per_window"
+                            | "spend_window"
+                            | "deposit_buffer_period"
+                            | "max_deposit_tracking_time"
+                            | "max_deposit_retries"
+                            | "min_safe_hopr_reserve"
+                    ) {
+                        continue;
+                    }
+                    wrong.push(format!("pix_strategy.{k}"));
                 }
             }
             continue;
@@ -227,16 +295,23 @@ impl TryFrom<Config> for super::v7::Config {
             wireguard: value.wireguard,
             blokli: value.blokli,
             strategy: value.strategy,
+            pix_strategy: value.pix_strategy,
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{Config, wrong_keys};
 
     fn parse(toml: &str) -> Config {
         toml::from_str(toml).expect("valid TOML")
+    }
+
+    /// v6 has no direct conversion into the runtime config — it forward-converts through v7.
+    fn runtime_config(cfg: Config) -> crate::config::Config {
+        let v7_cfg: super::super::v7::Config = cfg.try_into().expect("should forward-convert");
+        v7_cfg.try_into().expect("should succeed")
     }
 
     /// End-to-end regression: a v6 file forward-converts through v7 into the runtime config,
@@ -252,8 +327,7 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 path = { hops = 2 }
 "#####,
         );
-        let v7_cfg: super::super::v7::Config = cfg.try_into().expect("should forward-convert");
-        let result: crate::config::Config = v7_cfg.try_into().expect("should succeed");
+        let result = runtime_config(cfg);
 
         let dest = result.destinations.get("Germany").expect("destination present");
         assert_eq!(dest.routing, edgli::hopr_lib::HopRouting::try_from(2).unwrap());
@@ -270,8 +344,7 @@ path = { hops = 2 }
         // only in v7's `convert_destinations`, forward-converting relaxes it here too — a v6
         // file with none is no longer an error.
         let cfg = parse("version = 6\n");
-        let v7_cfg: super::super::v7::Config = cfg.try_into().expect("should forward-convert");
-        let result: crate::config::Config = v7_cfg.try_into().expect("should succeed");
+        let result = runtime_config(cfg);
         assert!(result.destinations.is_empty());
     }
 
@@ -302,7 +375,7 @@ allowed_ips = "10.0.0.0/8"
 "#####
             .parse()
             .expect("valid TOML");
-        assert_eq!(super::wrong_keys(&table), vec!["wireguard.listen_port".to_string()]);
+        assert_eq!(wrong_keys(&table), vec!["wireguard.listen_port".to_string()]);
     }
 
     #[test]
@@ -318,8 +391,33 @@ gnosis_vpn_server = "172.30.0.1:8000"
             .expect("valid TOML");
 
         assert_eq!(
-            super::wrong_keys(&table),
+            wrong_keys(&table),
             vec!["destinations.Germany.gnosis_vpn_server".to_string()]
         );
+    }
+
+    /// PIX is v7 schema, tested there; this only pins that a v6 file may still carry it.
+    #[test]
+    fn v6_file_still_accepts_the_pix_sections() {
+        let toml = r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.pix.bridge]
+enabled = true
+
+[pix_strategy]
+max_deposit_retries = 5
+"#####;
+        assert_eq!(
+            wrong_keys(&toml.parse::<toml::Table>().expect("valid TOML")),
+            Vec::<String>::new()
+        );
+
+        let result = runtime_config(parse(toml));
+        assert!(result.connection.pix.bridge.enabled);
+        assert_eq!(result.pix_strategy.max_deposit_retries, 5);
     }
 }

@@ -139,6 +139,7 @@ impl TryFrom<Config> for super::v7::Config {
             wireguard: value.wireguard,
             blokli: value.blokli,
             strategy: None,
+            pix_strategy: None,
         })
     }
 }

@@ -34,9 +34,9 @@ pub struct BalanceResponse {
     pub safe: Balance<WxHOPR>,
     pub channels_out: Vec<ChannelOut>,
     pub info: Info,
-    pub capacity_allocations: Option<Vec<balance::CapacityEntry>>,
+    pub capacity_allocations: Option<balance::CapacityAllocations>,
     pub ideal_balance: Option<balance::BalanceRecommendation>,
-    pub funding_issues: Option<Vec<balance::FundingIssue>>,
+    pub funding_status: Option<balance::FundingStatus>,
 }
 
 impl BalanceResponse {
@@ -44,27 +44,15 @@ impl BalanceResponse {
         info: &Info,
         balances: &balance::Balances,
         destinations: &HashMap<String, Destination>,
-        capacity_allocations: Option<&HashMap<balance::CapacityAllocator, balance::Capacity>>,
+        capacity_allocations: Option<&balance::CapacityAllocations>,
         ideal_balance: Option<balance::BalanceRecommendation>,
-        funding_issues: Option<Vec<balance::FundingIssue>>,
+        funding_status: Option<balance::FundingStatus>,
     ) -> Self {
         let node = balances.node_xdai;
         let safe = balances.safe_wxhopr;
         let channels_out = from_balances(balances.channels_out.iter(), destinations);
         let info = info.clone();
-
-        let capacity_allocations = capacity_allocations.map(|map| {
-            let mut entries: Vec<_> = map
-                .iter()
-                .map(|(a, c)| balance::CapacityEntry {
-                    allocator: a.clone(),
-                    capacity: *c,
-                })
-                .collect();
-            // safe first, then peers
-            entries.sort_by_key(|e| matches!(e.allocator, balance::CapacityAllocator::Peer(_)));
-            entries
-        });
+        let capacity_allocations = capacity_allocations.cloned();
 
         BalanceResponse {
             node,
@@ -73,7 +61,7 @@ impl BalanceResponse {
             info,
             capacity_allocations,
             ideal_balance,
-            funding_issues,
+            funding_status,
         }
     }
 }

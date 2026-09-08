@@ -5,6 +5,7 @@ use crate::serde_utils;
 
 use std::collections::HashMap;
 use std::fmt::{self, Display};
+use std::time::{Duration, SystemTime};
 
 /// wxHOPR amounts (in whole tokens, i.e. the value returned by
 /// `Balance::amount_in_base_units` after the wei→token conversion) below this are
@@ -33,65 +34,68 @@ pub fn wxhopr_scientific(b: Balance<WxHOPR>) -> Option<String> {
     })
 }
 
-// in order of priority
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum FundingIssue {
-    Unfunded,           // node xdai zero and no funds in safe or channels - initial state
-    ChannelsOutOfFunds, // less than 1 message available in all channels combined
-    SafeOutOfFunds,     // less than 1 message available in safe
-    SafeLowOnFunds,     // less than 0.5 of ideal safe balance
-    NodeUnderfunded,    // xDai is below 100 Gwei - unlikely to cover gas for a transaction
-    NodeLowOnFunds,     // xDai is below the ideal amount
+/// Traffic/gas health, pooled across all allocations rather than checked per-location.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub enum FundingLevel {
+    Good,
+    Low,
+    Empty,
 }
 
+/// Traffic/gas health plus wxHOPR/xDAI still needed to reach the ideal recommendation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum FundingTool {
-    NotStarted,
-    InProgress,
-    CompletedSuccess,
-    CompletedError(String),
+pub struct FundingStatus {
+    pub traffic: FundingLevel,
+    pub gas: FundingLevel,
+    /// wxHOPR still needed to reach the ideal recommendation; can be `None` even while `traffic` isn't `Good`.
+    #[serde(with = "serde_utils::opt_balance")]
+    pub wxhopr_deficit: Option<Balance<WxHOPR>>,
+    /// xDAI still needed to reach the ideal recommendation; `None` while `gas` is `Good`.
+    #[serde(with = "serde_utils::opt_balance")]
+    pub xdai_deficit: Option<Balance<XDai>>,
 }
 
-impl Display for FundingIssue {
+impl Display for FundingLevel {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = match self {
-            FundingIssue::Unfunded => "unfunded - nothing will work",
-            FundingIssue::ChannelsOutOfFunds => "channels are out of funds - connections will not work",
-            FundingIssue::SafeOutOfFunds => "safe is out of funds - connections will stop working",
-            FundingIssue::SafeLowOnFunds => "safe is low on funds - connections will soon stop working",
-            FundingIssue::NodeUnderfunded => "node underfunded - cannot open new connections or keep existing ones",
-            FundingIssue::NodeLowOnFunds => {
-                "node low on funds - will soon be unable to open new connections or keep existing ones"
-            }
+            FundingLevel::Good => "Good",
+            FundingLevel::Low => "Low",
+            FundingLevel::Empty => "Empty",
         };
         write!(f, "{s}")
     }
 }
 
-/// Which entity holds a wxHOPR stake: either an open outgoing channel to a peer,
-/// or the unallocated balance in the Safe contract.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(tag = "type", content = "address", rename_all = "snake_case")]
-pub enum CapacityAllocator {
-    Safe,
-    Peer(#[serde(with = "serde_utils::address")] Address),
+// Retuned for the reconciled (pooled) quota counting; bounds inclusive.
+const TRAFFIC_EMPTY_MAX_BYTES: u64 = 768 * 1024 * 1024;
+const TRAFFIC_LOW_MAX_BYTES: u64 = 1536 * 1024 * 1024;
+// 0.0015 / 0.0035 xDAI, in wei
+const XDAI_EMPTY_BELOW_WEI: u64 = 1_500_000_000_000_000;
+const XDAI_LOW_BELOW_WEI: u64 = 3_500_000_000_000_000;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum FundingTool {
+    NotStarted,
+    InProgress,
+    CompletedSuccess(#[serde(with = "serde_utils::system_time")] SystemTime),
+    CompletedError(String),
 }
 
-impl From<edgli::strategy::CapacityAllocator> for CapacityAllocator {
-    fn from(a: edgli::strategy::CapacityAllocator) -> Self {
-        match a {
-            edgli::strategy::CapacityAllocator::Peer(addr) => CapacityAllocator::Peer(addr),
-            edgli::strategy::CapacityAllocator::Safe => CapacityAllocator::Safe,
-        }
-    }
-}
+impl FundingTool {
+    /// Successful runs are only restartable once this much time has passed, so a
+    /// misclick can't immediately re-trigger an on-chain funding transaction.
+    const RERUN_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
-impl Display for CapacityAllocator {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CapacityAllocator::Peer(addr) => write!(f, "channel({})", addr.to_checksum()),
-            CapacityAllocator::Safe => write!(f, "safe"),
-        }
+    /// Time left before a successful run may be restarted, or `None` if it's not
+    /// cooling down (still in progress, never run, errored, or cooldown elapsed).
+    pub fn cooldown_remaining(&self) -> Option<Duration> {
+        let FundingTool::CompletedSuccess(completed_at) = self else {
+            return None;
+        };
+        let elapsed = completed_at.elapsed().unwrap_or_default();
+        Self::RERUN_COOLDOWN
+            .checked_sub(elapsed)
+            .filter(|remaining| !remaining.is_zero())
     }
 }
 
@@ -105,12 +109,29 @@ pub struct Capacity {
     pub byte_capacity: u64,
 }
 
-/// A single capacity entry pairing an allocator with its capacity.
-/// Used in status responses instead of a HashMap so JSON keys remain strings.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CapacityEntry {
-    pub allocator: CapacityAllocator,
-    pub capacity: Capacity,
+impl Default for Capacity {
+    fn default() -> Self {
+        Capacity {
+            stake: Balance::<WxHOPR>::zero(),
+            expected_messages: 0,
+            min_guaranteed_messages: 0,
+            byte_capacity: 0,
+        }
+    }
+}
+
+/// Serde mirror of [`edgli::strategy::CapacityAllocations`]: every entity holding
+/// a wxHOPR stake — open outgoing channels, the unallocated Safe balance, and the
+/// node EOA (deposited funds not yet swept into the Safe).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CapacityAllocations {
+    /// Open outgoing payment channels, keyed by destination peer.
+    #[serde(with = "serde_utils::address_map")]
+    pub peer_allocations: HashMap<Address, Capacity>,
+    /// wxHOPR on the node EOA, not yet swept into the Safe.
+    pub node: Capacity,
+    /// The unallocated wxHOPR balance held in the user's Safe contract.
+    pub safe: Capacity,
 }
 
 impl From<edgli::strategy::Capacity> for Capacity {
@@ -121,6 +142,174 @@ impl From<edgli::strategy::Capacity> for Capacity {
             min_guaranteed_messages: c.min_guaranteed_messages,
             byte_capacity: c.byte_capacity,
         }
+    }
+}
+
+impl From<edgli::strategy::CapacityAllocations> for CapacityAllocations {
+    fn from(a: edgli::strategy::CapacityAllocations) -> Self {
+        CapacityAllocations {
+            peer_allocations: a
+                .peer_allocations
+                .into_iter()
+                .map(|(addr, c)| (addr, c.into()))
+                .collect(),
+            node: a.node.into(),
+            safe: a.safe.into(),
+        }
+    }
+}
+
+impl Display for CapacityAllocations {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "CapacityAllocations(node: {}, safe: {}, {} channels totalling {})",
+            self.node.stake,
+            self.safe.stake,
+            self.peer_allocations.len(),
+            self.peer_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>()
+        )
+    }
+}
+
+/// Bounds how long an unexplained Safe/EOA drop is masked, so a real spend still surfaces.
+const PENDING_ALLOCATION_MAX_POLLS: u8 = 5;
+
+/// Stake presumed in flight (Safe/EOA → channel), folded into published capacity until indexed or expired.
+#[derive(Clone, Copy, Debug)]
+struct PendingAllocation {
+    stake: Balance<WxHOPR>,
+    expected_messages: u64,
+    min_guaranteed_messages: u64,
+    byte_capacity: u64,
+    polls_left: u8,
+}
+
+/// Pooled totals of a raw snapshot, kept between polls to detect stake drops.
+#[derive(Clone, Copy, Debug)]
+struct SnapshotTotals {
+    stake: Balance<WxHOPR>,
+    channel_stake: Balance<WxHOPR>,
+    expected_messages: u64,
+    min_guaranteed_messages: u64,
+    byte_capacity: u64,
+}
+
+impl SnapshotTotals {
+    fn of(caps: &CapacityAllocations) -> Self {
+        let channel_stake = caps.peer_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>();
+        let sum = |f: fn(&Capacity) -> u64| {
+            f(&caps.node) + f(&caps.safe) + caps.peer_allocations.values().map(f).sum::<u64>()
+        };
+        SnapshotTotals {
+            stake: caps.node.stake + caps.safe.stake + channel_stake,
+            channel_stake,
+            expected_messages: sum(|c| c.expected_messages),
+            min_guaranteed_messages: sum(|c| c.min_guaranteed_messages),
+            byte_capacity: sum(|c| c.byte_capacity),
+        }
+    }
+}
+
+/// Keeps the pooled capacity total conserved across the snapshot's non-atomic reads.
+///
+/// Channels are read from the indexer (lags the chain) before the live Safe/EOA
+/// balances, so stake moving Safe→channel is counted nowhere for a poll or two.
+/// The only legitimate *fast* Safe/EOA drop is a transfer toward a channel (usage
+/// drains channel stakes instead), so an unmatched drop is presumed in-flight and
+/// folded back into the published Safe capacity. The fold-in expires after
+/// `PENDING_ALLOCATION_MAX_POLLS` polls so a real spend still surfaces, just late;
+/// a transient over-count decays over the same window.
+#[derive(Debug, Default)]
+pub struct CapacityReconciler {
+    prev: Option<SnapshotTotals>,
+    pending: Option<PendingAllocation>,
+}
+
+impl CapacityReconciler {
+    /// Snapshot to publish: in-flight stake folded into `safe`. Same shape as the
+    /// raw snapshot, so downstream consumers summing components need no protocol change.
+    pub fn reconcile(&mut self, raw: CapacityAllocations) -> CapacityAllocations {
+        let totals = SnapshotTotals::of(&raw);
+        let pending_stake = match &self.prev {
+            Some(prev) => {
+                let carried = self.pending.map(|p| p.stake).unwrap_or_else(Balance::zero);
+                // Channel drops (drainage, closure) are real usage, not in-flight; `-` saturates at zero.
+                let channel_drop = prev.channel_stake - totals.channel_stake;
+                prev.stake + carried - channel_drop - totals.stake
+            }
+            None => Balance::zero(),
+        };
+
+        self.pending = self.next_pending(pending_stake, &totals);
+        self.prev = Some(totals);
+
+        let mut published = raw;
+        if let Some(p) = &self.pending {
+            tracing::info!(stake = %p.stake, polls_left = p.polls_left, "counting in-flight stake toward published capacity");
+            published.safe.stake += p.stake;
+            published.safe.expected_messages += p.expected_messages;
+            published.safe.min_guaranteed_messages += p.min_guaranteed_messages;
+            published.safe.byte_capacity += p.byte_capacity;
+        }
+        published
+    }
+
+    fn next_pending(&self, stake: Balance<WxHOPR>, current: &SnapshotTotals) -> Option<PendingAllocation> {
+        if stake.is_zero() {
+            return None;
+        }
+        let polls_left = match &self.pending {
+            // a further drop restarts the clock; otherwise keep counting down
+            Some(old) if stake > old.stake => PENDING_ALLOCATION_MAX_POLLS,
+            Some(old) => old.polls_left.saturating_sub(1),
+            None => PENDING_ALLOCATION_MAX_POLLS,
+        };
+        if polls_left == 0 {
+            tracing::warn!(%stake, "stake drop never resolved into a channel - accepting the lower total");
+            return None;
+        }
+        let (byte_capacity, expected_messages, min_guaranteed_messages) = self.scaled_capacity(stake, current);
+        Some(PendingAllocation {
+            stake,
+            expected_messages,
+            min_guaranteed_messages,
+            byte_capacity,
+            polls_left,
+        })
+    }
+
+    /// Scaled linearly from the freshest stake→capacity ratio on hand — the client
+    /// holds neither ticket price nor win probability, so it cannot recompute
+    /// capacities. A pending stake guarantees some fallback has non-zero stake.
+    fn scaled_capacity(&self, stake: Balance<WxHOPR>, current: &SnapshotTotals) -> (u64, u64, u64) {
+        let tokens = |b: Balance<WxHOPR>| -> f64 {
+            b.amount_in_base_units().parse().unwrap_or_else(|e| {
+                tracing::warn!(balance = %b, error = %e, "failed to parse balance while scaling pending capacity");
+                0.0
+            })
+        };
+        let scale = |bytes: u64, msgs: u64, min_msgs: u64, base: Balance<WxHOPR>| {
+            let base = tokens(base);
+            (base > 0.0).then(|| {
+                let r = tokens(stake) / base;
+                (
+                    (bytes as f64 * r) as u64,
+                    (msgs as f64 * r) as u64,
+                    (min_msgs as f64 * r) as u64,
+                )
+            })
+        };
+        let of_totals =
+            |t: &SnapshotTotals| scale(t.byte_capacity, t.expected_messages, t.min_guaranteed_messages, t.stake);
+        of_totals(current)
+            .or_else(|| self.prev.as_ref().and_then(of_totals))
+            .or_else(|| {
+                self.pending
+                    .as_ref()
+                    .and_then(|p| scale(p.byte_capacity, p.expected_messages, p.min_guaranteed_messages, p.stake))
+            })
+            .unwrap_or((0, 0, 0))
     }
 }
 
@@ -137,7 +326,11 @@ pub struct BalanceRecommendation {
     /// Total wxHOPR to fund: channel stakes plus the fee to start.
     #[serde(with = "serde_utils::balance")]
     pub wxhopr: Balance<WxHOPR>,
-    /// Recommended xDai balance for gas (flat, one [`Self::xdai_fee_per_tx`]).
+    /// Recommended xDai balance for gas: the total amount to fund the node with.
+    ///
+    /// Not [`Self::xdai_fee_per_tx`], which is a ceiling on a single transaction rather than
+    /// expected spend -- funding one transaction's worth would leave the node unable to finish
+    /// starting up.
     #[serde(with = "serde_utils::balance")]
     pub xdai: Balance<XDai>,
     /// wxHOPR needed to stake the missing channels.
@@ -159,7 +352,7 @@ impl From<edgli::strategy::BalanceRecommendation> for BalanceRecommendation {
     fn from(rec: edgli::strategy::BalanceRecommendation) -> Self {
         BalanceRecommendation {
             wxhopr: rec.total_wxhopr(),
-            xdai: rec.xdai_fee_per_tx,
+            xdai: rec.xdai_fund_amount,
             channel_stakes: rec.channel_stakes,
             fee_to_start: rec.fee_to_start,
             txs_to_start: rec.txs_to_start,
@@ -208,47 +401,59 @@ impl Display for Balances {
     }
 }
 
-pub fn to_funding_issues(
+/// Pools every allocation location so funds sitting unswept on the node EOA still count.
+pub fn to_funding_status(
     ideal: BalanceRecommendation,
-    capacity_allocations: &HashMap<CapacityAllocator, Capacity>,
+    capacity_allocations: &CapacityAllocations,
     node_xdai: Balance<XDai>,
-) -> Vec<FundingIssue> {
-    let mut issues = Vec::new();
+) -> FundingStatus {
+    let peer_stake = capacity_allocations
+        .peer_allocations
+        .values()
+        .map(|c| c.stake)
+        .sum::<Balance<WxHOPR>>();
+    let total_stake = capacity_allocations.node.stake + capacity_allocations.safe.stake + peer_stake;
 
-    let total_stake = capacity_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>();
-    if node_xdai.is_zero() && total_stake.is_zero() {
-        issues.push(FundingIssue::Unfunded);
-        return issues;
-    }
-
-    let channel_messages: u64 = capacity_allocations
-        .iter()
-        .filter_map(|(k, v)| matches!(k, CapacityAllocator::Peer(_)).then_some(v.min_guaranteed_messages))
+    let peer_bytes: u64 = capacity_allocations
+        .peer_allocations
+        .values()
+        .map(|c| c.byte_capacity)
         .sum();
-    if channel_messages < 1 {
-        issues.push(FundingIssue::ChannelsOutOfFunds);
-    }
+    let total_bytes = capacity_allocations.node.byte_capacity + capacity_allocations.safe.byte_capacity + peer_bytes;
 
-    let safe = capacity_allocations.get(&CapacityAllocator::Safe);
-    let safe_messages = safe.map(|c| c.min_guaranteed_messages).unwrap_or(0);
-    if safe_messages < 1 {
-        issues.push(FundingIssue::SafeOutOfFunds);
+    let traffic = if total_bytes <= TRAFFIC_EMPTY_MAX_BYTES {
+        FundingLevel::Empty
+    } else if total_bytes <= TRAFFIC_LOW_MAX_BYTES {
+        FundingLevel::Low
     } else {
-        let safe_stake = safe.map(|c| c.stake).unwrap_or_default();
-        if safe_stake * 2 < ideal.wxhopr {
-            issues.push(FundingIssue::SafeLowOnFunds);
-        }
-    }
+        FundingLevel::Good
+    };
 
-    // 100 Gwei — heuristic threshold below which the node is unlikely to cover the gas cost of a typical transaction
-    let node_xdai_min_gas_threshold = Balance::<XDai>::from(100_000_000_000u64);
-    if node_xdai < node_xdai_min_gas_threshold {
-        issues.push(FundingIssue::NodeUnderfunded);
-    } else if node_xdai < ideal.xdai {
-        issues.push(FundingIssue::NodeLowOnFunds);
-    }
+    let xdai_empty_below = Balance::<XDai>::from(XDAI_EMPTY_BELOW_WEI);
+    let xdai_low_below = Balance::<XDai>::from(XDAI_LOW_BELOW_WEI);
+    let gas = if node_xdai < xdai_empty_below {
+        FundingLevel::Empty
+    } else if node_xdai < xdai_low_below {
+        FundingLevel::Low
+    } else {
+        FundingLevel::Good
+    };
 
-    issues
+    // `-` on Balance saturates at zero; wxhopr_deficit is relative to `ideal` only, which ignores drained stake on already-open channels.
+    let wxhopr_deficit = (traffic != FundingLevel::Good)
+        .then(|| ideal.wxhopr - total_stake)
+        .filter(|d| !d.is_zero());
+    // Floored at xdai_low_below so this can't go None while gas isn't Good, even if `ideal` dips below it.
+    let xdai_deficit = (gas != FundingLevel::Good)
+        .then(|| ideal.xdai.max(xdai_low_below) - node_xdai)
+        .filter(|d| !d.is_zero());
+
+    FundingStatus {
+        traffic,
+        gas,
+        wxhopr_deficit,
+        xdai_deficit,
+    }
 }
 
 #[cfg(test)]
@@ -266,107 +471,97 @@ mod tests {
         }
     }
 
-    fn peer_capacity(stake: u64, msgs: u64) -> Capacity {
+    fn capacity(stake: u64, bytes: u64) -> Capacity {
         Capacity {
             stake: Balance::<WxHOPR>::from(stake),
-            expected_messages: msgs,
-            min_guaranteed_messages: msgs,
-            byte_capacity: 0,
+            expected_messages: 0,
+            min_guaranteed_messages: 0,
+            byte_capacity: bytes,
         }
     }
 
-    fn safe_capacity(stake: u64, msgs: u64) -> Capacity {
-        Capacity {
-            stake: Balance::<WxHOPR>::from(stake),
-            expected_messages: msgs,
-            min_guaranteed_messages: msgs,
-            byte_capacity: 0,
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * MB;
+
+    /// Allocations with at most one open channel (to a fixed peer address).
+    fn allocs(peer: Option<Capacity>, node: Capacity, safe: Capacity) -> CapacityAllocations {
+        CapacityAllocations {
+            peer_allocations: peer.map(|c| (Address::from([1u8; 20]), c)).into_iter().collect(),
+            node,
+            safe,
         }
     }
 
     #[test]
-    fn unfunded_when_xdai_and_stake_are_zero() {
-        let issues = to_funding_issues(ideal(100, 100), &HashMap::new(), Balance::<XDai>::zero());
-        assert_eq!(issues, vec![FundingIssue::Unfunded]);
+    fn traffic_empty_when_no_capacity_anywhere() {
+        let status = to_funding_status(ideal(0, 0), &CapacityAllocations::default(), Balance::<XDai>::zero());
+        assert_eq!(status.traffic, FundingLevel::Empty);
     }
 
     #[test]
-    fn channels_out_of_funds_when_no_peer_messages() {
-        let mut allocs = HashMap::new();
-        allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 5));
-        let issues = to_funding_issues(
-            ideal(100, 100),
-            &allocs,
-            Balance::<XDai>::from(1_000_000_000_000_000_u64),
+    fn traffic_pools_channel_safe_and_node_eoa_bytes() {
+        // 320 MB each, pooled to 960 MB: above the 768 MB Empty bound, within Low.
+        let allocations = allocs(
+            Some(capacity(0, 320 * MB)),
+            capacity(0, 320 * MB),
+            capacity(0, 320 * MB),
         );
-        assert!(issues.contains(&FundingIssue::ChannelsOutOfFunds));
+        let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero());
+        assert_eq!(status.traffic, FundingLevel::Low);
     }
 
     #[test]
-    fn safe_out_of_funds_when_safe_has_no_messages() {
-        let mut allocs = HashMap::new();
-        allocs.insert(
-            CapacityAllocator::Peer(Address::from([1u8; 20])),
-            peer_capacity(100, 10),
-        );
-        allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 0));
-        let issues = to_funding_issues(
-            ideal(100, 100),
-            &allocs,
-            Balance::<XDai>::from(1_000_000_000_000_000_u64),
-        );
-        assert!(issues.contains(&FundingIssue::SafeOutOfFunds));
+    fn traffic_empty_up_to_768mb_inclusive() {
+        let allocations = allocs(None, capacity(0, 768 * MB), Capacity::default());
+        let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero());
+        assert_eq!(status.traffic, FundingLevel::Empty);
     }
 
     #[test]
-    fn safe_low_on_funds_when_stake_below_half_ideal() {
-        let mut allocs = HashMap::new();
-        allocs.insert(
-            CapacityAllocator::Peer(Address::from([1u8; 20])),
-            peer_capacity(100, 10),
-        );
-        // safe stake 30, ideal wxhopr 100 → 30*2=60 < 100 → SafeLowOnFunds
-        allocs.insert(CapacityAllocator::Safe, safe_capacity(30, 5));
-        let issues = to_funding_issues(
-            ideal(100, 100),
-            &allocs,
-            Balance::<XDai>::from(1_000_000_000_000_000_u64),
-        );
-        assert!(issues.contains(&FundingIssue::SafeLowOnFunds));
+    fn traffic_low_between_thresholds_up_to_1536mb_inclusive() {
+        for bytes in [768 * MB + 1, 1536 * MB] {
+            let allocations = allocs(None, capacity(0, bytes), Capacity::default());
+            let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero());
+            assert_eq!(status.traffic, FundingLevel::Low);
+        }
     }
 
     #[test]
-    fn node_underfunded_when_xdai_below_100_gwei() {
-        let mut allocs = HashMap::new();
-        allocs.insert(
-            CapacityAllocator::Peer(Address::from([1u8; 20])),
-            peer_capacity(100, 10),
-        );
-        allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 5));
-        let issues = to_funding_issues(
-            ideal(100, 1_000_000_000_000_u64), // ideal xdai = 1000 Gwei
-            &allocs,
-            Balance::<XDai>::from(50_000_000_000_u64), // 50 Gwei < 100 Gwei threshold
-        );
-        assert!(issues.contains(&FundingIssue::NodeUnderfunded));
-        assert!(!issues.contains(&FundingIssue::NodeLowOnFunds));
+    fn traffic_good_above_1536mb() {
+        // unswept EOA wxHOPR alone counts toward traffic.
+        let allocations = allocs(None, capacity(0, 1536 * MB + 1), Capacity::default());
+        let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero());
+        assert_eq!(status.traffic, FundingLevel::Good);
     }
 
     #[test]
-    fn node_low_on_funds_when_xdai_below_ideal() {
-        let mut allocs = HashMap::new();
-        allocs.insert(
-            CapacityAllocator::Peer(Address::from([1u8; 20])),
-            peer_capacity(100, 10),
+    fn gas_empty_below_threshold() {
+        let status = to_funding_status(
+            ideal(0, 0),
+            &CapacityAllocations::default(),
+            Balance::<XDai>::from(1_000_000_000_000_000_u64), // 0.001 xDAI < 0.0015 threshold
         );
-        allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 5));
-        let issues = to_funding_issues(
-            ideal(100, 1_000_000_000_000_u64), // ideal xdai = 1000 Gwei
-            &allocs,
-            Balance::<XDai>::from(500_000_000_000_u64), // 500 Gwei: above threshold, below ideal
+        assert_eq!(status.gas, FundingLevel::Empty);
+    }
+
+    #[test]
+    fn gas_low_between_thresholds() {
+        let status = to_funding_status(
+            ideal(0, 0),
+            &CapacityAllocations::default(),
+            Balance::<XDai>::from(2_000_000_000_000_000_u64), // 0.002 xDAI
         );
-        assert!(issues.contains(&FundingIssue::NodeLowOnFunds));
-        assert!(!issues.contains(&FundingIssue::NodeUnderfunded));
+        assert_eq!(status.gas, FundingLevel::Low);
+    }
+
+    #[test]
+    fn gas_good_at_or_above_threshold() {
+        let status = to_funding_status(
+            ideal(0, 0),
+            &CapacityAllocations::default(),
+            Balance::<XDai>::from(3_500_000_000_000_000_u64), // 0.0035 xDAI, at the boundary
+        );
+        assert_eq!(status.gas, FundingLevel::Good);
     }
 
     #[test]
@@ -376,10 +571,15 @@ mod tests {
             fee_to_start: Balance::<WxHOPR>::from(10_000u64),
             txs_to_start: 3,
             xdai_fee_per_tx: Balance::<XDai>::from(100u64),
+            xdai_fund_amount: Balance::<XDai>::from(5_000u64),
         };
         let mirrored: BalanceRecommendation = rec.into();
         assert_eq!(mirrored.wxhopr, Balance::<WxHOPR>::from(10_800u64));
-        assert_eq!(mirrored.xdai, Balance::<XDai>::from(100u64));
+        assert_eq!(
+            mirrored.xdai,
+            Balance::<XDai>::from(5_000u64),
+            "xdai must mirror the fund amount, not one transaction's fee ceiling"
+        );
         assert_eq!(mirrored.channel_stakes, Balance::<WxHOPR>::from(800u64));
         assert_eq!(mirrored.fee_to_start, Balance::<WxHOPR>::from(10_000u64));
         assert_eq!(mirrored.txs_to_start, 3);
@@ -387,19 +587,71 @@ mod tests {
     }
 
     #[test]
-    fn no_issues_when_well_funded() {
-        let mut allocs = HashMap::new();
-        allocs.insert(
-            CapacityAllocator::Peer(Address::from([1u8; 20])),
-            peer_capacity(100, 10),
+    fn wxhopr_deficit_none_when_traffic_good() {
+        let allocations = allocs(None, capacity(1_000, 5 * GB), Capacity::default());
+        let status = to_funding_status(ideal(100, 0), &allocations, Balance::<XDai>::zero());
+        assert_eq!(status.traffic, FundingLevel::Good);
+        assert_eq!(status.wxhopr_deficit, None);
+    }
+
+    #[test]
+    fn wxhopr_deficit_reported_when_traffic_not_good() {
+        let allocations = allocs(None, capacity(30, 0), Capacity::default());
+        let status = to_funding_status(ideal(100, 0), &allocations, Balance::<XDai>::zero());
+        assert_eq!(status.traffic, FundingLevel::Empty);
+        assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(70u64)));
+    }
+
+    #[test]
+    fn xdai_deficit_none_when_gas_good() {
+        let status = to_funding_status(
+            ideal(0, 100),
+            &CapacityAllocations::default(),
+            Balance::<XDai>::from(3_500_000_000_000_000_u64),
         );
-        allocs.insert(CapacityAllocator::Safe, safe_capacity(100, 5));
-        let issues = to_funding_issues(
+        assert_eq!(status.gas, FundingLevel::Good);
+        assert_eq!(status.xdai_deficit, None);
+    }
+
+    #[test]
+    fn xdai_deficit_reported_when_gas_not_good() {
+        let status = to_funding_status(
+            ideal(0, 1_000_000_000_000_000_000_u64), // 1 xDAI ideal
+            &CapacityAllocations::default(),
+            Balance::<XDai>::from(1_000_000_000_000_000_u64), // 0.001 xDAI on hand
+        );
+        assert_eq!(status.gas, FundingLevel::Empty);
+        assert_eq!(
+            status.xdai_deficit,
+            Some(Balance::<XDai>::from(999_000_000_000_000_000_u64))
+        );
+    }
+
+    #[test]
+    fn xdai_deficit_reported_even_when_ideal_is_below_low_threshold() {
+        let node_xdai = Balance::<XDai>::from(2_000_000_000_000_000_u64); // 0.002 xDAI, in the Low band
+        let status = to_funding_status(ideal(0, 0), &CapacityAllocations::default(), node_xdai);
+        assert_eq!(status.gas, FundingLevel::Low);
+        assert_eq!(
+            status.xdai_deficit,
+            Some(Balance::<XDai>::from(3_500_000_000_000_000_u64) - node_xdai),
+            "deficit must be floored at the Low threshold, not the (lower) ideal recommendation"
+        );
+    }
+
+    #[test]
+    fn good_traffic_and_gas_when_well_funded() {
+        // 2 GB each on the channel, Safe, and node EOA = 6 GB pooled, above the 5 GB threshold.
+        let allocations = allocs(Some(capacity(100, 2 * GB)), capacity(0, 2 * GB), capacity(100, 2 * GB));
+        let status = to_funding_status(
             ideal(100, 100),
-            &allocs,
-            Balance::<XDai>::from(2_000_000_000_000_000_u64),
+            &allocations,
+            Balance::<XDai>::from(3_500_000_000_000_000_u64), // 0.0035 xDAI — at the Good threshold
         );
-        assert!(issues.is_empty());
+        assert_eq!(status.traffic, FundingLevel::Good);
+        assert_eq!(status.gas, FundingLevel::Good);
+        assert_eq!(status.wxhopr_deficit, None);
+        assert_eq!(status.xdai_deficit, None);
     }
 
     // `Balance::<WxHOPR>::from(n)` takes wei (10^-18 token). The scientific
@@ -454,5 +706,120 @@ mod tests {
     #[test]
     fn wxhopr_scientific_above_threshold_is_none() {
         assert_eq!(wxhopr_scientific(Balance::<WxHOPR>::from(SCI_THRESHOLD_WEI + 1)), None);
+    }
+
+    // ---- CapacityReconciler ----
+    // Fixtures keep byte_capacity = 10 × stake so linear scaling is easy to assert.
+
+    /// stake in wei with bytes pinned at 10 × stake.
+    fn cap10(stake: u64) -> Capacity {
+        capacity(stake, stake * 10)
+    }
+
+    fn total_stake(caps: &CapacityAllocations) -> Balance<WxHOPR> {
+        SnapshotTotals::of(caps).stake
+    }
+
+    fn total_bytes(caps: &CapacityAllocations) -> u64 {
+        SnapshotTotals::of(caps).byte_capacity
+    }
+
+    #[test]
+    fn reconcile_first_snapshot_passes_through() {
+        let mut r = CapacityReconciler::default();
+        let out = r.reconcile(allocs(None, Capacity::default(), cap10(200)));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(200u64));
+        assert_eq!(out.safe.stake, Balance::<WxHOPR>::from(200u64));
+    }
+
+    #[test]
+    fn reconcile_holds_total_while_channel_funding_is_unindexed() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(allocs(None, Capacity::default(), cap10(200)));
+        // safe halved, no channel visible yet: the missing 100 is in flight
+        let out = r.reconcile(allocs(None, Capacity::default(), cap10(100)));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(200u64));
+        assert_eq!(out.safe.stake, Balance::<WxHOPR>::from(200u64));
+        assert_eq!(total_bytes(&out), 2000);
+        // channel indexed: raw is whole again, no fold-in remains
+        let out = r.reconcile(allocs(Some(cap10(100)), Capacity::default(), cap10(100)));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(200u64));
+        assert_eq!(out.safe.stake, Balance::<WxHOPR>::from(100u64));
+    }
+
+    #[test]
+    fn reconcile_recovered_safe_flake_does_not_double_count() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(allocs(None, Capacity::default(), cap10(200)));
+        // safe lookup flaked to zero for one poll
+        let out = r.reconcile(allocs(None, Capacity::default(), cap10(0)));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(200u64));
+        // flake recovered: fold-in must vanish, not stack on top
+        let out = r.reconcile(allocs(None, Capacity::default(), cap10(200)));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(200u64));
+    }
+
+    #[test]
+    fn reconcile_tracks_overlapping_fundings() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(allocs(None, Capacity::default(), cap10(200)));
+        // first 100 sent, unindexed
+        let out = r.reconcile(allocs(None, Capacity::default(), cap10(100)));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(200u64));
+        // second 100 sent while the first arrives: raw total still 100
+        let out = r.reconcile(allocs(Some(cap10(100)), Capacity::default(), cap10(0)));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(200u64));
+        // both indexed
+        let second = (Address::from([2u8; 20]), cap10(100));
+        let mut raw = allocs(Some(cap10(100)), Capacity::default(), cap10(0));
+        raw.peer_allocations.insert(second.0, second.1);
+        let out = r.reconcile(raw);
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(200u64));
+        assert_eq!(out.safe.stake, Balance::<WxHOPR>::zero());
+    }
+
+    #[test]
+    fn reconcile_channel_drainage_passes_through_immediately() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(allocs(Some(cap10(200)), Capacity::default(), Capacity::default()));
+        // tickets spent: channel stake shrinks — that is real usage, not in-flight funds
+        let out = r.reconcile(allocs(Some(cap10(150)), Capacity::default(), Capacity::default()));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(150u64));
+    }
+
+    #[test]
+    fn reconcile_pending_expires_into_the_lower_total() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(allocs(None, Capacity::default(), cap10(200)));
+        let dropped = allocs(None, Capacity::default(), cap10(100));
+        // the drop is masked while polls_left counts down from PENDING_ALLOCATION_MAX_POLLS...
+        for _ in 0..PENDING_ALLOCATION_MAX_POLLS {
+            let out = r.reconcile(dropped.clone());
+            assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(200u64));
+        }
+        // ...then accepted as a real spend
+        let out = r.reconcile(dropped);
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(100u64));
+    }
+
+    #[test]
+    fn reconcile_scales_folded_capacity_from_current_ratio() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(allocs(None, Capacity::default(), cap10(200)));
+        let out = r.reconcile(allocs(None, Capacity::default(), cap10(100)));
+        // fixtures pin bytes at 10 × stake, so the folded-in 100 must carry 1000 bytes
+        assert_eq!(out.safe.byte_capacity, 2000);
+    }
+
+    #[test]
+    fn reconcile_never_dips_on_transient_overcount() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(allocs(None, cap10(100), cap10(100)));
+        // EOA→Safe sweep landed between the two balance reads: briefly counted twice
+        let out = r.reconcile(allocs(None, cap10(100), cap10(200)));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(300u64));
+        // correction back to 200 is masked until expiry (documented trade-off), never below 200
+        let out = r.reconcile(allocs(None, Capacity::default(), cap10(200)));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(300u64));
     }
 }

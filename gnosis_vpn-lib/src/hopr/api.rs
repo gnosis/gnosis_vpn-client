@@ -1,4 +1,5 @@
 use bytesize::ByteSize;
+use edgli::multiaddr;
 use edgli::{BlockchainConnectorConfig, BlokliEndpoint, EdgeNodeApi, EdgliInitState};
 use edgli::{
     Edgli,
@@ -21,7 +22,6 @@ use hopr_utils_session::{
     HopSessionFactory, ListenerId, ListenerJoinHandles, SessionFactory, SessionTargetSpec, create_tcp_client_binding,
     create_udp_client_binding,
 };
-use multiaddr::Protocol;
 use tracing::instrument;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -34,7 +34,7 @@ use crate::peer::{Peer, Peers};
 use crate::{
     balance::{self, Balances},
     hopr::{
-        HoprError,
+        HoprError, PixConfig,
         types::{SessionClientMetadata, SplicedWgSession},
     },
     info::Info,
@@ -72,6 +72,16 @@ impl Hopr {
             edgli: Arc::new(edge_node),
             open_listeners: Default::default(),
         })
+    }
+
+    /// `cfg` with PIX applied. Callers opt in per session kind — see `options::PixOptions`.
+    pub(crate) fn pix_aware_session_cfg(
+        &self,
+        cfg: HoprSessionClientConfig,
+    ) -> Result<HoprSessionClientConfig, HoprError> {
+        self.edgli
+            .with_pix(cfg)
+            .map_err(|e| HoprError::Strategy(format!("failed to apply PIX to session config: {e}")))
     }
 
     // --- session management ---
@@ -340,10 +350,20 @@ impl Hopr {
         self.edgli.status()
     }
 
+    /// Tracks the `gvpn:exit` registry off this node's chain connector, seeded from
+    /// [`edgli::list_exit_nodes`].
+    #[tracing::instrument(skip_all, level = "debug", err)]
+    pub fn watch_exit_nodes(&self, initial: Vec<edgli::ExitNodeInfo>) -> Result<edgli::ExitNodeRegistry, HoprError> {
+        self.edgli
+            .watch_exit_nodes(initial)
+            .map_err(|e| HoprError::ExitNodeWatch(e.to_string()))
+    }
+
     #[tracing::instrument(skip(self), level = "debug", ret)]
     pub async fn start_telemetry_reactor(
         &self,
         sizing: edgli::strategy::IncentiveConfiguration,
+        pix: PixConfig,
     ) -> Result<AbortHandle, HoprError> {
         let mut cfg = edgli::strategy::default_strategy_cfg(&sizing)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
@@ -351,8 +371,15 @@ impl Hopr {
             Some(edgli::strategy::EdgeStrategyKind::ChannelLifecycle(lc)) => {
                 lc.selector = edgli::strategy::SelectorProfile::LowLatency;
             }
+            // Non-exhaustive enum; `default_strategy_cfg` only ever emits `ChannelLifecycle` first, so unreached today.
+            Some(_) => {}
             None => tracing::warn!("default_strategy_cfg returned no strategies; LowLatency selector not applied"),
         }
+        // `default_strategy_cfg` never emits `Pix` on its own; PIX always runs, so add it explicitly.
+        // Drop any pre-existing entry first so a future upstream default can't register it twice.
+        cfg.strategies
+            .retain(|s| !matches!(s, edgli::strategy::EdgeStrategyKind::Pix(_)));
+        cfg.strategies.push(edgli::strategy::EdgeStrategyKind::Pix(pix.into()));
         self.edgli
             .run_reactor_from_cfg(cfg)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))
@@ -418,16 +445,18 @@ impl Hopr {
         Ok(rec.into())
     }
 
+    /// Capacity allocations: open outgoing channels, the unallocated Safe
+    /// balance, and wxHOPR sitting on the node EOA (deposited but not yet
+    /// swept into the Safe) — edgli's struct mirrored into
+    /// [`balance::CapacityAllocations`] for serialization.
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
-    pub async fn capacity_allocations(
-        &self,
-    ) -> Result<HashMap<balance::CapacityAllocator, balance::Capacity>, HoprError> {
+    pub async fn capacity_allocations(&self) -> Result<balance::CapacityAllocations, HoprError> {
         let raw = self
             .edgli
             .describe_current_capacity_allocations()
             .await
             .map_err(|e| HoprError::Strategy(e.to_string()))?;
-        Ok(raw.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
+        Ok(raw.into())
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
@@ -453,7 +482,7 @@ fn extract_ipv4_addrs(multiaddrs: &[multiaddr::Multiaddr]) -> Vec<Ipv4Addr> {
             let mut addr = addr.clone();
             let mut found = vec![];
             while let Some(protocol) = addr.pop() {
-                if let Protocol::Ip4(ipv4) = protocol {
+                if let multiaddr::Protocol::Ip4(ipv4) = protocol {
                     found.push(ipv4);
                 }
             }
