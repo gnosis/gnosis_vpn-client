@@ -1,8 +1,5 @@
-# Last matching rule wins per file; one approval from that rule's owners unblocks the PR.
-# Derived from commit history - re-check quarterly.
-
-# Default: small but staffed, all three have touched every crate.
-* @esterlus @Teebor-Choka @tolbrino
+# Default
+* @esterlus @tolbrino
 
 # Privileged component: runs as root, owns routing and WireGuard devices.
 /gnosis_vpn-root/ @esterlus @Teebor-Choka @tolbrino
