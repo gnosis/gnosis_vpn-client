@@ -63,9 +63,10 @@ jobs:
       id-token: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@711c81d05909e2482d74289084502fb70fecc97b # release-version-v5.3.0
+        uses: hoprnet/hopr-workflows/actions/release-version@ab7f9eafdb4eeb9e60af573611b171381aeb761c # release-version-v5.4.0
         with:
           source_branch: ${{ github.ref_name }}
+          target_commitish: ${{ github.ref_name }}
           file: Cargo.toml
           release_type: ${{ inputs.release_type }}
           cachix_cache_name: gnosis-vpn-client
