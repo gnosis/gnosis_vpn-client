@@ -63,10 +63,32 @@ system-tests test_binary="gnosis_vpn-system_tests":
 
     : "${SYSTEM_TEST_HOPRD_ID:?SYSTEM_TEST_HOPRD_ID must be set to run system tests}"
     : "${SYSTEM_TEST_HOPRD_ID_PASSWORD:?SYSTEM_TEST_HOPRD_ID_PASSWORD must be set to run system tests}"
-    : "${SYSTEM_TEST_SAFE:?SYSTEM_TEST_SAFE must be set to run system tests}"
-    : "${SYSTEM_TEST_CONFIG:?SYSTEM_TEST_CONFIG must be set to run system tests}"
+    : "${SYSTEM_TEST_NETWORK:?SYSTEM_TEST_NETWORK must be set to run system tests (jura-dev|piz-palu-dev)}"
     : "${SYSTEM_TEST_WORKER_BINARY:?SYSTEM_TEST_WORKER_BINARY must be set to run system tests}"
     : "${SYSTEM_TEST_ROOT_BINARY:?SYSTEM_TEST_ROOT_BINARY must be set to run system tests}"
+
+    networks_root="{{ justfile_directory() }}/gnosis_vpn-system_tests/networks"
+
+    # Exact match against the fixture directories, so a traversal value cannot resolve past networks/
+    available="$(cd "${networks_root}" && ls -d */ | tr -d /)"
+    if ! printf '%s\n' "${available}" | grep -qxF "${SYSTEM_TEST_NETWORK}"; then
+        echo "ERROR: unknown network '${SYSTEM_TEST_NETWORK}', available: $(printf '%s\n' "${available}" | tr '\n' ' ')" >&2
+        exit 1
+    fi
+    network_dir="${networks_root}/${SYSTEM_TEST_NETWORK}"
+
+    blokli_url="${SYSTEM_TEST_BLOKLI_URL:-$(cat "${network_dir}/blokli-url")}"
+
+    # Name the resolved target up front so a failed run does not need the secrets UI to explain itself
+    echo "=== system test target ==="
+    echo "  network:   ${SYSTEM_TEST_NETWORK}"
+    echo "  blokli:    ${blokli_url}"
+    grep -o '^\[destinations\.[^]]*\]' "${network_dir}/config.toml" | sed 's/^/  destination: /' || true
+    # Hashing the encrypted keystore leaks nothing but pins which identity ran; a hash matching the other line means the secret ternary fell through
+    echo "  identity:  sha256:$(printf %s "${SYSTEM_TEST_HOPRD_ID}" | sha256sum | cut -c1-12)"
+    echo "  root:      ${SYSTEM_TEST_ROOT_BINARY}"
+    echo "  worker:    ${SYSTEM_TEST_WORKER_BINARY}"
+    echo "=========================="
 
     # Refresh the sudo credential timestamp to avoid password prompt by expiration during long builds
     sudo -v
@@ -104,11 +126,12 @@ system-tests test_binary="gnosis_vpn-system_tests":
     # Create worker home directory
     sudo mkdir -p "${worker_config_dir}" "${config_dir}" "${state_dir}" "${runtime_dir}"
 
-    # Moves the ID, password, safe, and config into the worker's config directory
+    # Moves the ID and password into the worker's config directory
     printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.id" > /dev/null
     printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.pass" > /dev/null
-    printf %s "${SYSTEM_TEST_SAFE}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.safe" > /dev/null
-    printf %s "${SYSTEM_TEST_CONFIG}" | sudo tee "${config_dir}/config.toml" > /dev/null
+
+    # Non-secret per-network data is checked in, so it is copied rather than piped from a secret
+    sudo cp "${network_dir}/config.toml" "${config_dir}/config.toml"
 
     # Copy the worker binary to the worker's home directory
     sudo cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_home}"
@@ -118,4 +141,4 @@ system-tests test_binary="gnosis_vpn-system_tests":
     sudo chmod 0755 "${worker_binary}"
 
     # Run the test binary with the appropriate environment variables
-    sudo CARGO_BIN_EXE_GNOSIS_VPN_ROOT="${SYSTEM_TEST_ROOT_BINARY}" CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" GNOSISVPN_HOME="${worker_home}" GNOSISVPN_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" GNOSISVPN_FORCE_STATIC_ROUTING="true" RUST_LOG="debug" {{ test_binary }} --proxy "http://10.128.0.1:3128"
+    sudo CARGO_BIN_EXE_GNOSIS_VPN_ROOT="${SYSTEM_TEST_ROOT_BINARY}" CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" GNOSISVPN_HOME="${worker_home}" GNOSISVPN_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" GNOSISVPN_FORCE_STATIC_ROUTING="true" RUST_LOG="debug" {{ test_binary }} --blokliUrl "${blokli_url}" --proxy "http://10.128.0.1:3128"
