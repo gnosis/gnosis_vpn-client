@@ -23,8 +23,8 @@ per network (`SYSTEM_TEST_HOPRD_ID_JURA_DEV`, `SYSTEM_TEST_HOPRD_ID_PIZ_PALU_DEV
 
 Both lines publish to the same `gnosis_vpn-client` artifact registry package; only the
 version tells them apart, which is what the reserved `0.100.0` gap buys. Merging a PR
-publishes `<version>+pr.<N>` from the base branch's `Cargo.toml`, so the stable line
-yields `0.96.x+pr.N` and `main` `0.100.x+pr.N`.
+publishes `<version>+pr.<N>` from the base branch's `Cargo.toml`, so `release/hoprdv4`
+yields `< 0.100.0+pr.N` and `main` yields `>= 0.100.0+pr.N`.
 
 "Close release" is dispatched from the branch being released: it builds that branch,
 tags it, and lands the post-release bump on it. Dispatch it from `main` for the
