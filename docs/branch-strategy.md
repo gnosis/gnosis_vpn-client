@@ -19,6 +19,21 @@ the identity at startup. Only the hoprd keystore and its password remain reposit
 per network (`SYSTEM_TEST_HOPRD_ID_JURA_DEV`, `SYSTEM_TEST_HOPRD_ID_PIZ_PALU_DEV`, and their
 `_PASSWORD_` pairs).
 
+## Publishing
+
+Both lines publish to the same `gnosis_vpn-client` artifact registry package; only the
+version tells them apart, which is what the reserved `0.100.0` gap buys. Merging a PR
+publishes `<version>+pr.<N>` from the base branch's `Cargo.toml`, so the stable line
+yields `0.96.x+pr.N` and `main` `0.100.x+pr.N`.
+
+"Close release" is dispatched from the branch being released: it builds that branch,
+tags it, and lands the post-release bump on it. Dispatch it from `main` for the
+experimental line and from `release/hoprdv4` for the stable one.
+
+The installer snapshot dispatch stays `main`-only. `gnosis_vpn` resolves registry
+versions newest-first by upload time rather than by version bound, so it cannot yet
+tell the two lines apart; revisit once it can.
+
 ## Backports
 
 Label a merged `main` PR `backport release/hoprdv4`; `.github/workflows/backport.yaml`
