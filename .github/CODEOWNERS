@@ -1,1 +1,21 @@
-* @gnosis/ext-hopr-admin
+# Default
+* @esterlus @tolbrino
+
+# Privileged component: runs as root, owns routing and WireGuard devices.
+/gnosis_vpn-root/ @esterlus @Teebor-Choka @tolbrino
+
+# CI, release and signing pipeline.
+/.github/ @esterlus @ausias-armesto @mjadach-iv @tolbrino
+
+# Build and dependency surface.
+*.nix      @esterlus @Teebor-Choka @tolbrino
+/nix/      @esterlus @Teebor-Choka @tolbrino
+Cargo.toml @esterlus @Teebor-Choka @tolbrino
+Cargo.lock @esterlus @Teebor-Choka @tolbrino
+
+# Highest-trust artifacts: release signing key and disclosure policy.
+/gnosisvpn-public-key.asc @esterlus @tolbrino
+/SECURITY.md              @esterlus @tolbrino
+
+# Changing ownership itself stays with org admins.
+/.github/CODEOWNERS @gnosis/ext-hopr-admin
