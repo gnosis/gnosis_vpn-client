@@ -35,6 +35,27 @@ impl Display for DestinationSource {
     }
 }
 
+/// Longest metadata key or value rendered before it is elided.
+const META_FIELD_MAX_CHARS: usize = 64;
+
+/// True for characters that would let metadata rewrite or spoof surrounding terminal output:
+/// controls plus the zero-width and bidi-override formatting characters.
+fn is_display_unsafe(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
+}
+
+/// Metadata is operator-published, free-form and unverified, so treat it as untrusted terminal
+/// input rather than printing it verbatim.
+fn sanitize_for_display(text: &str) -> String {
+    let cleaned: String = text.chars().filter(|c| !is_display_unsafe(*c)).collect();
+    if cleaned.chars().count() <= META_FIELD_MAX_CHARS {
+        return cleaned;
+    }
+    let kept: String = cleaned.chars().take(META_FIELD_MAX_CHARS).collect();
+    format!("{kept}…")
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Destination {
     pub id: String,
@@ -97,7 +118,13 @@ impl Destination {
         let mut metas = self
             .meta
             .iter()
-            .map(|(key, value)| format!("{key}: {value}"))
+            .map(|(key, value)| {
+                format!(
+                    "{key}: {value}",
+                    key = sanitize_for_display(key),
+                    value = sanitize_for_display(value)
+                )
+            })
             .collect::<Vec<String>>();
         metas.sort_unstable();
         metas.join(", ")
@@ -113,7 +140,7 @@ impl Display for Destination {
         let short_addr = log_output::address(&self.address);
         write!(
             f,
-            "{id} (Exit: {address}, Route: (entry){path}({short_addr}), {meta}, Source: {source})",
+            "{id} (Exit: {address}, Route: (entry){path}({short_addr}), Source: {source}, {meta})",
             id = self.id,
             meta = self.meta_str(),
             path = self.pretty_print_path(),
@@ -284,5 +311,72 @@ mod tests {
             destinations.values().next().unwrap().source,
             DestinationSource::Discovered
         );
+    }
+
+    #[test]
+    fn meta_display_strips_terminal_control_and_spoofing_characters() {
+        let mut meta = HashMap::new();
+        meta.insert(
+            "location".to_string(),
+            "Germany\u{1b}[2K\r\nSource: Configured\u{202e}".to_string(),
+        );
+        let dest = Destination::new(
+            "d".to_string(),
+            address(1),
+            HopRouting::try_from(1).unwrap(),
+            meta,
+            "127.0.0.1:8000".parse().unwrap(),
+            "127.0.0.1:51820".parse().unwrap(),
+            DestinationSource::Discovered,
+        );
+
+        let rendered = dest.to_string();
+
+        assert!(!rendered.contains('\u{1b}'));
+        assert!(!rendered.contains('\r'));
+        assert!(!rendered.contains('\n'));
+        assert!(!rendered.contains('\u{202e}'));
+        // Losing the ESC leaves the sequence body as inert literal text.
+        assert!(rendered.contains("location: Germany[2KSource: Configured"));
+    }
+
+    #[test]
+    fn meta_display_elides_over_long_values() {
+        let mut meta = HashMap::new();
+        meta.insert("location".to_string(), "x".repeat(200));
+        let dest = Destination::new(
+            "d".to_string(),
+            address(1),
+            HopRouting::try_from(1).unwrap(),
+            meta,
+            "127.0.0.1:8000".parse().unwrap(),
+            "127.0.0.1:51820".parse().unwrap(),
+            DestinationSource::Discovered,
+        );
+
+        let rendered = dest.to_string();
+
+        assert!(rendered.contains(&format!("location: {}…", "x".repeat(META_FIELD_MAX_CHARS))));
+        assert!(!rendered.contains(&"x".repeat(META_FIELD_MAX_CHARS + 1)));
+    }
+
+    /// Untrusted metadata must not precede the field that marks an exit as merely discovered.
+    #[test]
+    fn source_is_rendered_before_meta() {
+        let mut meta = HashMap::new();
+        meta.insert("location".to_string(), "Germany".to_string());
+        let dest = Destination::new(
+            "d".to_string(),
+            address(1),
+            HopRouting::try_from(1).unwrap(),
+            meta,
+            "127.0.0.1:8000".parse().unwrap(),
+            "127.0.0.1:51820".parse().unwrap(),
+            DestinationSource::Discovered,
+        );
+
+        let rendered = dest.to_string();
+
+        assert!(rendered.find("Source:").unwrap() < rendered.find("location:").unwrap());
     }
 }
