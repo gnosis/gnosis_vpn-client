@@ -30,9 +30,10 @@ yields `< 0.100.0+pr.N` and `main` yields `>= 0.100.0+pr.N`.
 tags it, and lands the post-release bump on it. Dispatch it from `main` for the
 experimental line and from `release/hoprdv4` for the stable one.
 
-The installer snapshot dispatch stays `main`-only. `gnosis_vpn` resolves registry
-versions newest-first by upload time rather than by version bound, so it cannot yet
-tell the two lines apart; revisit once it can.
+Label a merged PR `installer-build` and the installer builds the line matching the
+target branch: `experimental_build` from `main`, `snapshot_build` from `release/hoprdv4`.
+`gnosis_vpn` selects client and app versions against the same `0.100.0` boundary, so
+each line only ever picks up components from its own side of the gap.
 
 ## Backports
 
