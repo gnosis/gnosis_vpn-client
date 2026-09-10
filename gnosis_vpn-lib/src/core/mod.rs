@@ -366,130 +366,7 @@ impl Core {
                     }
 
                     WorkerCommand::Status => {
-                        let runmode = match self.phase.clone() {
-                            Phase::Initial { last_error } => RunMode::Init { last_error },
-                            Phase::CheckingSafe {
-                                node_balance,
-                                query_safe,
-                                deploy_safe_error,
-                            } => {
-                                let balance = match node_balance {
-                                    Querying::Success(ref b) => Some(b.clone()),
-                                    _ => None,
-                                };
-                                let mut errors = "".to_string();
-                                if let Querying::Error(err) = node_balance {
-                                    errors = err
-                                };
-                                if let Querying::Error(err) = query_safe {
-                                    errors = format!("{} {}", errors, err);
-                                }
-                                if let Some(deploy_err) = deploy_safe_error {
-                                    errors = format!("{} {}", errors, deploy_err);
-                                }
-                                let funding_tool = match self.funding_tool.clone() {
-                                    balance::FundingTool::NotStarted => None,
-                                    balance::FundingTool::InProgress => Some("Funding tool running".to_string()),
-                                    balance::FundingTool::CompletedSuccess(_) => {
-                                        Some("Funding tool ran successfully".to_string())
-                                    }
-                                    balance::FundingTool::CompletedError(error) => {
-                                        Some(format!("Funding tool error: {error}"))
-                                    }
-                                };
-                                let error = if errors.is_empty() { None } else { Some(errors) };
-                                RunMode::preparing_safe(
-                                    self.node_address,
-                                    &balance,
-                                    funding_tool,
-                                    error,
-                                    self.minimum_balance_recommendation,
-                                )
-                            }
-                            Phase::DeployingSafe {
-                                node_balance: _,
-                                query_safe: _,
-                            } => RunMode::deploying_safe(self.node_address),
-                            Phase::Starting {
-                                edgli_init_state,
-                                last_error,
-                            } => RunMode::warmup(edgli_init_state, None, last_error),
-                            Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status()), None),
-                            Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
-                                let funding_status = match (
-                                    &self.ideal_balance_recommendation,
-                                    &self.capacity_allocations,
-                                    &self.balances,
-                                ) {
-                                    (Some(ideal), Some(allocs), Some(bals)) => {
-                                        Some(balance::to_funding_status(*ideal, allocs, bals.node_xdai))
-                                    }
-                                    _ => None,
-                                };
-                                RunMode::running(self.hopr.as_ref().map(|h| h.status()), funding_status)
-                            }
-                            Phase::ShuttingDown => RunMode::Shutdown,
-                        };
-
-                        let active_conn_phase = match &self.phase {
-                            Phase::Connecting(conn) => {
-                                Some((conn.destination.id.clone(), conn.phase.0, conn.phase.1.clone()))
-                            }
-                            _ => None,
-                        };
-                        let reconnecting = self.reconnecting_since.and_then(|since| {
-                            active_conn_phase
-                                .as_ref()
-                                .map(|(dest_id, _, phase)| command::ReconnectingInfo {
-                                    destination_id: dest_id.clone(),
-                                    since,
-                                    phase: phase.clone(),
-                                })
-                        });
-                        let connecting = if reconnecting.is_some() {
-                            None
-                        } else {
-                            active_conn_phase.map(|(dest_id, since, phase)| command::ConnectingInfo {
-                                destination_id: dest_id,
-                                since,
-                                phase,
-                            })
-                        };
-                        let connected = match &self.phase {
-                            Phase::Connected(conn) => Some(command::ConnectedInfo {
-                                destination_id: conn.destination.id.clone(),
-                                since: conn.phase.0,
-                            }),
-                            _ => None,
-                        };
-                        let disconnecting = self
-                            .ongoing_disconnections
-                            .iter()
-                            .map(|d| command::DisconnectingInfo {
-                                destination_id: d.destination.id.clone(),
-                                since: d.phase.0,
-                                phase: d.phase.1.clone(),
-                            })
-                            .collect();
-                        let mut vals = self.config.destinations.values().collect::<Vec<&Destination>>();
-                        vals.sort_unstable_by(|a, b| a.id.cmp(&b.id));
-                        let destinations = vals
-                            .into_iter()
-                            .map(|v| command::DestinationState {
-                                destination: v.clone(),
-                                route_health: self.route_healths.get(&v.id).map(command::RouteHealthView::from),
-                            })
-                            .collect();
-                        let res = Response::status(command::StatusResponse {
-                            run_mode: runmode,
-                            destinations,
-                            target_destination: self.target_destination.as_ref().map(|d| d.id.clone()),
-                            connecting,
-                            reconnecting,
-                            connected,
-                            disconnecting,
-                        });
-                        let _ = resp.send(res);
+                        let _ = resp.send(Response::status(self.build_status()));
                     }
 
                     WorkerCommand::Connect(id) => match self.config.destinations.clone().get(&id) {
@@ -1623,6 +1500,107 @@ impl Core {
         });
     }
 
+    /// Snapshot of everything `Command::Status` reports.
+    fn build_status(&self) -> command::StatusResponse {
+        let runmode = match self.phase.clone() {
+            Phase::Initial { last_error } => RunMode::Init { last_error },
+            Phase::CheckingSafe {
+                node_balance,
+                query_safe,
+                deploy_safe_error,
+            } => {
+                let balance = match node_balance {
+                    Querying::Success(ref b) => Some(b.clone()),
+                    _ => None,
+                };
+                let mut errors = "".to_string();
+                if let Querying::Error(err) = node_balance {
+                    errors = err
+                };
+                if let Querying::Error(err) = query_safe {
+                    errors = format!("{} {}", errors, err);
+                }
+                if let Some(deploy_err) = deploy_safe_error {
+                    errors = format!("{} {}", errors, deploy_err);
+                }
+                let funding_tool = match self.funding_tool.clone() {
+                    balance::FundingTool::NotStarted => None,
+                    balance::FundingTool::InProgress => Some("Funding tool running".to_string()),
+                    balance::FundingTool::CompletedSuccess(_) => Some("Funding tool ran successfully".to_string()),
+                    balance::FundingTool::CompletedError(error) => Some(format!("Funding tool error: {error}")),
+                };
+                let error = if errors.is_empty() { None } else { Some(errors) };
+                RunMode::preparing_safe(
+                    self.node_address,
+                    &balance,
+                    funding_tool,
+                    error,
+                    self.minimum_balance_recommendation,
+                )
+            }
+            Phase::DeployingSafe {
+                node_balance: _,
+                query_safe: _,
+            } => RunMode::deploying_safe(self.node_address),
+            Phase::Starting {
+                edgli_init_state,
+                last_error,
+            } => RunMode::warmup(edgli_init_state, None, last_error),
+            Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status()), None),
+            Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
+                let funding_status = match (
+                    &self.ideal_balance_recommendation,
+                    &self.capacity_allocations,
+                    &self.balances,
+                ) {
+                    (Some(ideal), Some(allocs), Some(bals)) => {
+                        Some(balance::to_funding_status(*ideal, allocs, bals.node_xdai))
+                    }
+                    _ => None,
+                };
+                RunMode::running(self.hopr.as_ref().map(|h| h.status()), funding_status)
+            }
+            Phase::ShuttingDown => RunMode::Shutdown,
+        };
+
+        let (connecting, reconnecting) =
+            connection_infos(&self.phase, self.reconnecting_since, self.target_destination.as_ref());
+        let connected = match &self.phase {
+            Phase::Connected(conn) => Some(command::ConnectedInfo {
+                destination_id: conn.destination.id.clone(),
+                since: conn.phase.0,
+            }),
+            _ => None,
+        };
+        let disconnecting = self
+            .ongoing_disconnections
+            .iter()
+            .map(|d| command::DisconnectingInfo {
+                destination_id: d.destination.id.clone(),
+                since: d.phase.0,
+                phase: d.phase.1.clone(),
+            })
+            .collect();
+        let mut vals = self.config.destinations.values().collect::<Vec<&Destination>>();
+        vals.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+        let destinations = vals
+            .into_iter()
+            .map(|v| command::DestinationState {
+                destination: v.clone(),
+                route_health: self.route_healths.get(&v.id).map(command::RouteHealthView::from),
+            })
+            .collect();
+        command::StatusResponse {
+            run_mode: runmode,
+            destinations,
+            target_destination: self.target_destination.as_ref().map(|d| d.id.clone()),
+            connecting,
+            reconnecting,
+            connected,
+            disconnecting,
+        }
+    }
+
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     fn act_on_target(&mut self, results_sender: &mpsc::Sender<Results>) {
         tracing::debug!(target = ?self.target_destination, phase = ?self.phase, "acting on target destination");
@@ -1780,9 +1758,120 @@ impl Core {
 /// TUN fd is closed before root tears down routing and drops its own fd. On
 /// Linux the TUN is multi-queue: re-provisioning while a stale fd lives would
 /// attach a second queue to the old device instead of creating a fresh one.
+/// Connecting and reconnecting views of the phase; between attempts a reconnect has no phase.
+fn connection_infos(
+    phase: &Phase,
+    reconnecting_since: Option<SystemTime>,
+    target_destination: Option<&Destination>,
+) -> (Option<command::ConnectingInfo>, Option<command::ReconnectingInfo>) {
+    let reconnecting = reconnecting_since.and_then(|since| {
+        let (destination_id, phase) = match phase {
+            Phase::Connecting(conn) => (conn.destination.id.clone(), Some(conn.phase.1.clone())),
+            // Waiting on route health: the target is the only record of where we are headed.
+            Phase::HoprRunning => (target_destination?.id.clone(), None),
+            _ => return None,
+        };
+        Some(command::ReconnectingInfo {
+            destination_id,
+            since,
+            phase,
+        })
+    });
+    // A reconnect supersedes the plain connecting view of the same attempt.
+    let connecting = match (&reconnecting, phase) {
+        (None, Phase::Connecting(conn)) => Some(command::ConnectingInfo {
+            destination_id: conn.destination.id.clone(),
+            since: conn.phase.0,
+            phase: conn.phase.1.clone(),
+        }),
+        _ => None,
+    };
+    (connecting, reconnecting)
+}
+
 async fn wait_for_pump_stop(pump_tasks: TaskTracker) {
     pump_tasks.close();
     if time::timeout(Duration::from_secs(5), pump_tasks.wait()).await.is_err() {
         tracing::warn!("wg pump did not stop within 5s - proceeding with tunnel teardown");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connection::destination::HopRouting;
+    use crate::connection::up::{Phase as UpPhase, Up};
+
+    fn destination(id: &str) -> Destination {
+        Destination::new(
+            id.to_string(),
+            Address::from([1u8; 20]),
+            HopRouting::try_from(1).expect("conversion cannot fail"),
+            HashMap::new(),
+        )
+    }
+
+    fn attempt(id: &str, phase: UpPhase) -> Up {
+        let mut up = Up::new(destination(id));
+        up.phase = (SystemTime::UNIX_EPOCH, phase);
+        up
+    }
+
+    #[test]
+    fn waiting_on_route_health_reports_a_reconnect_without_a_phase() {
+        let target = destination("exit");
+        let since = SystemTime::UNIX_EPOCH;
+        let (connecting, reconnecting) = connection_infos(&Phase::HoprRunning, Some(since), Some(&target));
+        assert!(connecting.is_none());
+        let info = reconnecting.expect("the reconnect intent must be reported");
+        assert_eq!(info.destination_id, "exit");
+        assert_eq!(info.since, since);
+        assert!(info.phase.is_none());
+    }
+
+    #[test]
+    fn a_first_connect_waiting_on_route_health_is_not_a_reconnect() {
+        let target = destination("exit");
+        let (connecting, reconnecting) = connection_infos(&Phase::HoprRunning, None, Some(&target));
+        assert!(connecting.is_none());
+        assert!(reconnecting.is_none());
+    }
+
+    #[test]
+    fn a_cleared_target_reports_nothing() {
+        let (connecting, reconnecting) = connection_infos(&Phase::HoprRunning, Some(SystemTime::UNIX_EPOCH), None);
+        assert!(connecting.is_none());
+        assert!(reconnecting.is_none());
+    }
+
+    #[test]
+    fn an_attempt_in_flight_reports_its_phase() {
+        let target = destination("exit");
+        let phase = Phase::Connecting(attempt("exit", UpPhase::VerifyPing));
+        let (connecting, reconnecting) = connection_infos(&phase, Some(SystemTime::UNIX_EPOCH), Some(&target));
+        assert!(connecting.is_none());
+        let info = reconnecting.expect("the reconnect must be reported");
+        assert_eq!(info.destination_id, "exit");
+        assert_eq!(info.phase, Some(UpPhase::VerifyPing));
+    }
+
+    // Guards the system tests, which poll `connecting` to follow a fresh connection.
+    #[test]
+    fn a_fresh_connection_still_reports_connecting() {
+        let phase = Phase::Connecting(attempt("exit", UpPhase::VerifyPing));
+        let (connecting, reconnecting) = connection_infos(&phase, None, None);
+        assert!(reconnecting.is_none());
+        let info = connecting.expect("connecting must be reported");
+        assert_eq!(info.destination_id, "exit");
+        assert_eq!(info.phase, UpPhase::VerifyPing);
+    }
+
+    #[test]
+    fn a_live_connection_never_reports_a_reconnect() {
+        let target = destination("exit");
+        let phase = Phase::Connected(attempt("exit", UpPhase::ConnectionEstablished));
+        let (connecting, reconnecting) = connection_infos(&phase, Some(SystemTime::UNIX_EPOCH), Some(&target));
+        assert!(connecting.is_none());
+        assert!(reconnecting.is_none());
     }
 }
