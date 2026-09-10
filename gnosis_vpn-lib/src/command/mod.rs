@@ -315,13 +315,13 @@ pub struct SurbStats {
 
 impl SurbStats {
     fn from_telemetry(text: &str, session_id: &str) -> Option<Self> {
-        use crate::hopr::metrics::gauge_value;
+        use crate::hopr::metrics::{gauge_u64, gauge_value};
         let stats = SurbStats {
-            buffer_estimate: gauge_value(text, "hopr_session_surb_buffer_estimate", session_id).map(|v| v as u64),
-            target_buffer: gauge_value(text, "hopr_session_surb_target_buffer", session_id).map(|v| v as u64),
+            buffer_estimate: gauge_u64(text, "hopr_session_surb_buffer_estimate", session_id),
+            target_buffer: gauge_u64(text, "hopr_session_surb_target_buffer", session_id),
             rate_per_sec: gauge_value(text, "hopr_session_surb_rate_per_sec", session_id),
-            produced: gauge_value(text, "hopr_session_surb_produced_total", session_id).map(|v| v as u64),
-            consumed: gauge_value(text, "hopr_session_surb_consumed_total", session_id).map(|v| v as u64),
+            produced: gauge_u64(text, "hopr_session_surb_produced_total", session_id),
+            consumed: gauge_u64(text, "hopr_session_surb_consumed_total", session_id),
         };
         let counters = [
             stats.buffer_estimate,
