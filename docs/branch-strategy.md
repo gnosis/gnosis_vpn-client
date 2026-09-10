@@ -37,7 +37,8 @@ each line only ever picks up components from its own side of the gap.
 
 ## Backports
 
-Every PR opened against `main` gets the `backport release/hoprdv4` label automatically
-(`.github/workflows/label-backport.yaml`). Keep it and `.github/workflows/backport.yaml`
-cherry-picks the merged PR onto the stable line, opening a PR that runs the same CI as
-any other. Remove the label before merging to keep a change on `main` only.
+Every PR against `main` gets the `backport release/hoprdv4` label automatically
+(`.github/workflows/label-backport.yaml`). If the label is still on the PR when it
+merges, `.github/workflows/backport.yaml` cherry-picks it onto the stable line and opens
+a PR that runs the same CI as any other. Remove the label before merging to keep the
+change on `main` only.

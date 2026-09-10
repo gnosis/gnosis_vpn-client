@@ -3,13 +3,16 @@ on:
   pull_request_target:
     types:
       - opened
+      - edited
 permissions:
   contents: read
 jobs:
   label:
     name: Apply default backport label
-    # opened only, so a label removed on purpose stays removed across reopen and sync.
-    if: github.event.pull_request.base.ref == 'main'
+    # Open or retarget onto main only, so a label removed on purpose stays removed.
+    if: |
+      github.event.pull_request.base.ref == 'main' &&
+      (github.event.action == 'opened' || github.event.changes.base.ref.from != '')
     runs-on: depot-ubuntu-22.04-4
     permissions:
       pull-requests: write
