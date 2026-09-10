@@ -9,7 +9,7 @@ permissions:
 jobs:
   label:
     name: Apply default backport label
-    # Open or retarget onto main only, so a label removed on purpose stays removed.
+    # Open or retarget onto main only, so unrelated edits don't re-add a removed label.
     if: |
       github.event.pull_request.base.ref == 'main' &&
       (github.event.action == 'opened' || github.event.changes.base.ref.from != '')
