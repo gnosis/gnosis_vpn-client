@@ -22,9 +22,10 @@ version = 7
 # [destinations.<id>]
 # exit node address (where the connection should terminate)
 # address = "<exit node address>"
-# additional information about this exit node - any key is kept, and location, flag and
-# description are the ones shown in `gvpn-ctl status`
-# meta = { location = <location>, flag = <two-letter country code>, description = <free text> }
+# additional information about this exit node - any key is kept. `name` becomes the destination's
+# title in `gvpn-ctl status` (bracketing the id above when the two differ), and location, flag and
+# description are shown as labels
+# meta = { name = <title>, location = <location>, flag = <two-letter country code>, description = <free text> }
 # session path: number of intermediate hops (0–3)
 # path = { hops = 1 }
 # override the exit node's own gvpn-server/WireGuard endpoints for this destination instead of

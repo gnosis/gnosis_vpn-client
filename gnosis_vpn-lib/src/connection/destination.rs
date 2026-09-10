@@ -59,6 +59,8 @@ fn sanitize_for_display(text: &str) -> String {
 /// Operator-published labels: the keys we understand, plus everything else as published.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Meta {
+    /// The destination's title; for a discovered exit it is the only human-readable name there is.
+    pub name: Option<String>,
     pub location: Option<String>,
     pub flag: Option<String>,
     pub description: Option<String>,
@@ -70,6 +72,7 @@ impl Meta {
     /// The only place the recognized label names are known.
     pub fn from_map(mut labels: HashMap<String, String>) -> Self {
         Self {
+            name: labels.remove("name"),
             location: labels.remove("location"),
             flag: labels.remove("flag"),
             description: labels.remove("description"),
@@ -153,9 +156,22 @@ impl Destination {
         }
     }
 
-    /// Reads an unrecognized label; `location`, `flag` and `description` are typed fields.
+    /// Reads an unrecognized label; `name`, `location`, `flag` and `description` are typed fields.
     pub fn get_meta(&self, key: &str) -> Option<String> {
         self.meta.other.get(key).cloned()
+    }
+
+    /// The `name` when published, bracketing the key when both differ; a discovered key only
+    /// repeats `Exit:`.
+    fn title(&self) -> String {
+        let Some(name) = self.meta.name.as_deref().map(sanitize_for_display) else {
+            return self.id.clone();
+        };
+        let key_adds_nothing = self.source == DestinationSource::Discovered || name == self.id;
+        if key_adds_nothing {
+            return name;
+        }
+        format!("{name}({id})", id = self.id)
     }
 }
 
@@ -171,7 +187,7 @@ impl Display for Destination {
         write!(
             f,
             "{id} (Exit: {address}, Route: (entry){path}({short_addr}), Source: {source}{labels})",
-            id = self.id,
+            id = self.title(),
             path = self.pretty_print_path(),
             address = self.address.to_checksum(),
             short_addr = short_addr,
@@ -183,13 +199,13 @@ impl Display for Destination {
 /// Merges freshly discovered `gvpn:exit` nodes into `destinations`.
 ///
 /// A discovered address that matches an existing configured destination only flips that
-/// destination's `source` to [`DestinationSource::ConfiguredAndDiscovered`] — the configured
-/// target/meta values keep governing, since discovery there is just a confirmation, not an
-/// override. A discovered address with no configured match is inserted fresh, keyed by its own
-/// checksummed address (no human-chosen id exists for it). A previously discovered destination
-/// whose registration disappeared is removed outright; a previously confirmed
-/// (`ConfiguredAndDiscovered`) one is downgraded back to `Configured` rather than removed, since
-/// it is still valid, statically configured data.
+/// destination's `source` to [`DestinationSource::ConfiguredAndDiscovered`] and adopts the
+/// operator's current `name` — the configured target values keep governing, since discovery there
+/// is just a confirmation, not an override. A discovered address with no configured match is
+/// inserted fresh, keyed by its own checksummed address (no human-chosen id exists for it). A
+/// previously discovered destination whose registration disappeared is removed outright; a
+/// previously confirmed (`ConfiguredAndDiscovered`) one is downgraded back to `Configured` rather
+/// than removed, since it is still valid, statically configured data.
 pub fn merge_discovered(destinations: &mut HashMap<String, Destination>, discovered: &HashMap<Address, ExitNodeInfo>) {
     destinations.retain(|_, dest| match dest.source {
         DestinationSource::Discovered if !discovered.contains_key(&dest.address) => false,
@@ -205,6 +221,8 @@ pub fn merge_discovered(destinations: &mut HashMap<String, Destination>, discove
             if dest.source == DestinationSource::Configured {
                 dest.source = DestinationSource::ConfiguredAndDiscovered;
             }
+            // The discovered name wins: it is the operator's current label for the node.
+            dest.meta.name = Meta::from_map(info.meta.clone()).name;
             continue;
         }
         let id = address.to_checksum();
@@ -345,6 +363,7 @@ mod tests {
     #[test]
     fn meta_from_map_moves_known_keys_out_of_other() {
         let mut labels = HashMap::new();
+        labels.insert("name".to_string(), "london-1".to_string());
         labels.insert("location".to_string(), "London".to_string());
         labels.insert("flag".to_string(), "GB".to_string());
         labels.insert("description".to_string(), "fast".to_string());
@@ -352,6 +371,7 @@ mod tests {
 
         let meta = Meta::from_map(labels);
 
+        assert_eq!(Some("london-1".to_string()), meta.name);
         assert_eq!(Some("London".to_string()), meta.location);
         assert_eq!(Some("GB".to_string()), meta.flag);
         assert_eq!(Some("fast".to_string()), meta.description);
@@ -398,6 +418,7 @@ mod tests {
     #[test]
     fn display_renders_all_three_known_labels() {
         let mut labels = HashMap::new();
+        labels.insert("name".to_string(), "london-1".to_string());
         labels.insert("location".to_string(), "London".to_string());
         labels.insert("flag".to_string(), "GB".to_string());
         labels.insert("description".to_string(), "fast".to_string());
@@ -415,8 +436,94 @@ mod tests {
         let rendered = dest.to_string();
 
         assert!(rendered.contains("location: London, flag: GB, description: fast"));
+        // `name` is the title, so it must not be repeated among the labels.
+        assert!(!rendered.contains("name: london-1"));
         // Unrecognized labels are kept but not displayed for now.
         assert!(!rendered.contains("acme"));
+    }
+
+    fn named(id: &str, name: &str, source: DestinationSource) -> Destination {
+        let mut labels = HashMap::new();
+        labels.insert("name".to_string(), name.to_string());
+        Destination::new(
+            id.to_string(),
+            address(1),
+            HopRouting::try_from(1).unwrap(),
+            Meta::from_map(labels),
+            "127.0.0.1:8000".parse().unwrap(),
+            "127.0.0.1:51820".parse().unwrap(),
+            source,
+        )
+    }
+
+    #[test]
+    fn title_is_the_config_key_without_a_name() {
+        assert_eq!("my-exit", configured("my-exit", address(1)).title());
+    }
+
+    #[test]
+    fn title_brackets_the_config_key_next_to_the_name() {
+        let dest = named("my-exit", "Frankfurt-1", DestinationSource::ConfiguredAndDiscovered);
+
+        assert_eq!("Frankfurt-1(my-exit)", dest.title());
+        assert!(dest.to_string().starts_with("Frankfurt-1(my-exit) (Exit:"));
+    }
+
+    #[test]
+    fn title_is_the_name_alone_for_a_discovered_destination() {
+        // The discovered key is only the checksummed address, already rendered as `Exit:`.
+        let dest = named(&address(1).to_checksum(), "Frankfurt-1", DestinationSource::Discovered);
+
+        assert_eq!("Frankfurt-1", dest.title());
+    }
+
+    #[test]
+    fn title_is_the_checksummed_key_for_a_discovered_destination_without_a_name() {
+        let mut destinations = HashMap::new();
+        let mut discovered = HashMap::new();
+        discovered.insert(address(1), exit_node(address(1)));
+
+        merge_discovered(&mut destinations, &discovered);
+
+        assert_eq!(
+            address(1).to_checksum(),
+            destinations[&address(1).to_checksum()].title()
+        );
+    }
+
+    #[test]
+    fn title_collapses_when_name_and_key_match() {
+        let dest = named("Frankfurt-1", "Frankfurt-1", DestinationSource::ConfiguredAndDiscovered);
+
+        assert_eq!("Frankfurt-1", dest.title());
+    }
+
+    #[test]
+    fn title_sanitizes_and_elides_a_hostile_name() {
+        let hostile = format!("\u{1b}[2K\u{202e}{}", "x".repeat(200));
+        let dest = named("my-exit", &hostile, DestinationSource::Discovered);
+
+        let title = dest.title();
+
+        assert!(!title.contains('\u{1b}'));
+        assert!(!title.contains('\u{202e}'));
+        assert_eq!(format!("[2K{}…", "x".repeat(META_FIELD_MAX_CHARS - 3)), title);
+    }
+
+    #[test]
+    fn configured_and_discovered_destination_adopts_the_operator_name() {
+        let addr = address(1);
+        let mut destinations = HashMap::new();
+        destinations.insert("dest-1".to_string(), configured("dest-1", addr));
+
+        let mut info = exit_node(addr);
+        info.meta.insert("name".to_string(), "Frankfurt-1".to_string());
+        let mut discovered = HashMap::new();
+        discovered.insert(addr, info);
+
+        merge_discovered(&mut destinations, &discovered);
+
+        assert_eq!("Frankfurt-1(dest-1)", destinations["dest-1"].title());
     }
 
     #[test]
@@ -466,7 +573,7 @@ mod tests {
         assert!(!rendered.contains(&"x".repeat(META_FIELD_MAX_CHARS + 1)));
     }
 
-    /// Untrusted metadata must not precede the field that marks an exit as merely discovered.
+    /// No label may precede the source marker; only the title, sanitized and capped alike, may.
     #[test]
     fn source_is_rendered_before_meta() {
         let mut meta = HashMap::new();
