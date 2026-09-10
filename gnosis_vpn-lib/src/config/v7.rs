@@ -22,7 +22,7 @@ use std::time::Duration;
 use std::vec::Vec;
 
 use crate::config;
-use crate::connection::destination::{Destination as ConnDestination, DestinationSource};
+use crate::connection::destination::{Destination as ConnDestination, DestinationSource, Meta};
 use crate::connection::options;
 use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
 use crate::hopr::pix_config::PixConfig;
@@ -873,7 +873,7 @@ pub fn convert_destinations(
             None => HopRouting::try_from(1)?,
         };
 
-        let meta = dest.meta.clone().unwrap_or_default();
+        let meta = Meta::from_map(dest.meta.clone().unwrap_or_default());
         let dest = ConnDestination::new(
             id.to_string(),
             dest.address,

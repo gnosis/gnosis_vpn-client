@@ -11,7 +11,7 @@ use gnosis_vpn_lib::command::{
     RouteHealthView, RunMode, StartClientResponse, StatusResponse, StopClientResponse, TicketStats, TicketStatsStatus,
     WorkerCommand,
 };
-use gnosis_vpn_lib::connection::destination::{Address, Destination, HopRouting};
+use gnosis_vpn_lib::connection::destination::{Address, Destination, HopRouting, Meta};
 use gnosis_vpn_lib::connection::{DownPhase, UpPhase};
 use gnosis_vpn_lib::route_health::{
     ExitHealth, Health, LoadAvg, RouteHealthState, Slots, UnrecoverableReason, Versions,
@@ -54,6 +54,7 @@ fn assert_types_are_accessible() {
     let _: ChannelBalance;
     let _: Info;
     let _: Destination;
+    let _: Meta;
     let _: Address;
     let _: HopRouting;
     let _: UpPhase;

@@ -35,7 +35,7 @@ impl Display for DestinationSource {
     }
 }
 
-/// Longest metadata key or value rendered before it is elided.
+/// Longest label value rendered before it is elided.
 const META_FIELD_MAX_CHARS: usize = 64;
 
 /// True for characters that would let metadata rewrite or spoof surrounding terminal output:
@@ -56,10 +56,49 @@ fn sanitize_for_display(text: &str) -> String {
     format!("{kept}…")
 }
 
+/// Operator-published labels: the keys we understand, plus everything else as published.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Meta {
+    pub location: Option<String>,
+    pub flag: Option<String>,
+    pub description: Option<String>,
+    /// Every unrecognized key, kept so nothing an operator publishes is lost.
+    pub other: HashMap<String, String>,
+}
+
+impl Meta {
+    /// The only place the recognized label names are known.
+    pub fn from_map(mut labels: HashMap<String, String>) -> Self {
+        Self {
+            location: labels.remove("location"),
+            flag: labels.remove("flag"),
+            description: labels.remove("description"),
+            other: labels,
+        }
+    }
+
+    /// The recognized labels sanitized for terminal output, empty when none are set.
+    fn display_str(&self) -> String {
+        [
+            ("location", &self.location),
+            ("flag", &self.flag),
+            ("description", &self.description),
+        ]
+        .into_iter()
+        .filter_map(|(name, value)| {
+            value
+                .as_ref()
+                .map(|value| format!("{name}: {}", sanitize_for_display(value)))
+        })
+        .collect::<Vec<String>>()
+        .join(", ")
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Destination {
     pub id: String,
-    pub meta: HashMap<String, String>,
+    pub meta: Meta,
     #[serde(with = "serde_utils::address")]
     pub address: Address,
     pub routing: HopRouting,
@@ -78,7 +117,7 @@ impl Destination {
         id: String,
         address: Address,
         routing: HopRouting,
-        meta: HashMap<String, String>,
+        meta: Meta,
         gnosis_vpn_server: SocketAddr,
         wireguard_server: SocketAddr,
         source: DestinationSource,
@@ -114,35 +153,25 @@ impl Destination {
         }
     }
 
-    fn meta_str(&self) -> String {
-        let mut metas = self
-            .meta
-            .iter()
-            .map(|(key, value)| {
-                format!(
-                    "{key}: {value}",
-                    key = sanitize_for_display(key),
-                    value = sanitize_for_display(value)
-                )
-            })
-            .collect::<Vec<String>>();
-        metas.sort_unstable();
-        metas.join(", ")
-    }
-
+    /// Reads an unrecognized label; `location`, `flag` and `description` are typed fields.
     pub fn get_meta(&self, key: &str) -> Option<String> {
-        self.meta.get(key).cloned()
+        self.meta.other.get(key).cloned()
     }
 }
 
 impl Display for Destination {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let short_addr = log_output::address(&self.address);
+        let labels = self.meta.display_str();
+        let labels = if labels.is_empty() {
+            String::new()
+        } else {
+            format!(", {labels}")
+        };
         write!(
             f,
-            "{id} (Exit: {address}, Route: (entry){path}({short_addr}), Source: {source}, {meta})",
+            "{id} (Exit: {address}, Route: (entry){path}({short_addr}), Source: {source}{labels})",
             id = self.id,
-            meta = self.meta_str(),
             path = self.pretty_print_path(),
             address = self.address.to_checksum(),
             short_addr = short_addr,
@@ -185,7 +214,7 @@ pub fn merge_discovered(destinations: &mut HashMap<String, Destination>, discove
                 id,
                 *address,
                 HopRouting::try_from(1).expect("1 is always a valid hop count"),
-                info.meta.clone(),
+                Meta::from_map(info.meta.clone()),
                 info.gnosis_vpn_server,
                 info.wireguard_server,
                 DestinationSource::Discovered,
@@ -208,7 +237,7 @@ mod tests {
             id.to_string(),
             addr,
             HopRouting::try_from(1).unwrap(),
-            HashMap::new(),
+            Meta::default(),
             "172.30.0.1:8000".parse().unwrap(),
             "172.30.0.1:51820".parse().unwrap(),
             DestinationSource::Configured,
@@ -314,6 +343,83 @@ mod tests {
     }
 
     #[test]
+    fn meta_from_map_moves_known_keys_out_of_other() {
+        let mut labels = HashMap::new();
+        labels.insert("location".to_string(), "London".to_string());
+        labels.insert("flag".to_string(), "GB".to_string());
+        labels.insert("description".to_string(), "fast".to_string());
+        labels.insert("operator".to_string(), "acme".to_string());
+
+        let meta = Meta::from_map(labels);
+
+        assert_eq!(Some("London".to_string()), meta.location);
+        assert_eq!(Some("GB".to_string()), meta.flag);
+        assert_eq!(Some("fast".to_string()), meta.description);
+        // Each key has exactly one home.
+        assert_eq!(1, meta.other.len());
+        assert_eq!(Some(&"acme".to_string()), meta.other.get("operator"));
+    }
+
+    #[test]
+    fn meta_from_map_keeps_every_unknown_key() {
+        let mut labels = HashMap::new();
+        labels.insert("operator".to_string(), "acme".to_string());
+        labels.insert("port".to_string(), "51820".to_string());
+
+        let meta = Meta::from_map(labels);
+
+        assert_eq!(None, meta.location);
+        assert_eq!(2, meta.other.len());
+    }
+
+    #[test]
+    fn meta_from_empty_map_is_default() {
+        assert_eq!(Meta::default(), Meta::from_map(HashMap::new()));
+    }
+
+    #[test]
+    fn display_omits_the_label_segment_when_there_are_no_labels() {
+        let dest = Destination::new(
+            "d".to_string(),
+            address(1),
+            HopRouting::try_from(1).unwrap(),
+            Meta::default(),
+            "127.0.0.1:8000".parse().unwrap(),
+            "127.0.0.1:51820".parse().unwrap(),
+            DestinationSource::Discovered,
+        );
+
+        let rendered = dest.to_string();
+
+        assert!(rendered.ends_with("Source: Discovered)"));
+        assert!(!rendered.contains(", )"));
+    }
+
+    #[test]
+    fn display_renders_all_three_known_labels() {
+        let mut labels = HashMap::new();
+        labels.insert("location".to_string(), "London".to_string());
+        labels.insert("flag".to_string(), "GB".to_string());
+        labels.insert("description".to_string(), "fast".to_string());
+        labels.insert("operator".to_string(), "acme".to_string());
+        let dest = Destination::new(
+            "d".to_string(),
+            address(1),
+            HopRouting::try_from(1).unwrap(),
+            Meta::from_map(labels),
+            "127.0.0.1:8000".parse().unwrap(),
+            "127.0.0.1:51820".parse().unwrap(),
+            DestinationSource::Discovered,
+        );
+
+        let rendered = dest.to_string();
+
+        assert!(rendered.contains("location: London, flag: GB, description: fast"));
+        // Unrecognized labels are kept but not displayed for now.
+        assert!(!rendered.contains("acme"));
+    }
+
+    #[test]
     fn meta_display_strips_terminal_control_and_spoofing_characters() {
         let mut meta = HashMap::new();
         meta.insert(
@@ -324,7 +430,7 @@ mod tests {
             "d".to_string(),
             address(1),
             HopRouting::try_from(1).unwrap(),
-            meta,
+            Meta::from_map(meta),
             "127.0.0.1:8000".parse().unwrap(),
             "127.0.0.1:51820".parse().unwrap(),
             DestinationSource::Discovered,
@@ -348,7 +454,7 @@ mod tests {
             "d".to_string(),
             address(1),
             HopRouting::try_from(1).unwrap(),
-            meta,
+            Meta::from_map(meta),
             "127.0.0.1:8000".parse().unwrap(),
             "127.0.0.1:51820".parse().unwrap(),
             DestinationSource::Discovered,
@@ -369,7 +475,7 @@ mod tests {
             "d".to_string(),
             address(1),
             HopRouting::try_from(1).unwrap(),
-            meta,
+            Meta::from_map(meta),
             "127.0.0.1:8000".parse().unwrap(),
             "127.0.0.1:51820".parse().unwrap(),
             DestinationSource::Discovered,
