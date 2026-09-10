@@ -22,7 +22,7 @@ pub(crate) fn gauge_value(text: &str, metric: &str, session_id: &str) -> Option<
     None
 }
 
-/// Gauge as a whole number; rejects NaN/negative/out-of-range instead of letting `as` saturate.
+/// Gauge truncated to an integer; rejects NaN/negative/out-of-range instead of letting `as` saturate.
 pub(crate) fn gauge_u64(text: &str, metric: &str, session_id: &str) -> Option<u64> {
     let value = gauge_value(text, metric, session_id)?;
     // exclusive upper bound: `u64::MAX as f64` rounds up to 2^64
