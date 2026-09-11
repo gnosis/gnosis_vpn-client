@@ -33,9 +33,6 @@ pub(super) struct Connection {
     pub(super) ping: Option<PingOptions>,
     pub(super) buffer: Option<BufferOptions>,
     pub(super) max_surb_upstream: Option<MaxSurbUpstreamOptions>,
-    /// Parsed but never consumed — dropped silently when forward-converting into
-    /// `v7::Connection`, exactly as it was silently unused in the runtime conversion before.
-    pub(super) announced_peer_minimum_score: Option<f64>,
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
 }
 
@@ -192,7 +189,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "connection" {
             if let Some(connection) = value.as_table() {
                 for (k, v) in connection.iter() {
-                    if k == "http_timeout" || k == "announced_peer_minimum_score" || k == "lan_lockdown" {
+                    if k == "http_timeout" || k == "lan_lockdown" {
                         continue;
                     }
                     if k == "bridge" || k == "wg" {

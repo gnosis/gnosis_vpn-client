@@ -79,7 +79,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             if let Some(connection) = value.as_table() {
                 for (k, v) in connection.iter() {
                     if k == "http_timeout"
-                        || k == "announced_peer_minimum_score"
                         || k == "lan_lockdown"
                         || k == "probe_local_addresses"
                         || k == "path_planner_min_ack_rate"
