@@ -8,8 +8,8 @@ use gnosis_vpn_lib::command::{
     ActiveSession, BalanceResponse, ChannelBalance, ChannelOut, Command, ConnStats, ConnectResponse, ConnectedInfo,
     ConnectingInfo, DestinationState, DisconnectResponse, DisconnectingInfo, FundingToolResponse, HoprInitStatus,
     HoprStatus, Info, InfoResponse, NerdStatsConnection, NerdStatsResponse, ReconnectingInfo, Response,
-    RouteHealthView, RunMode, StartClientResponse, StatusResponse, StopClientResponse, TicketStats, TicketStatsStatus,
-    WorkerCommand,
+    RouteHealthView, RunMode, StartClientResponse, StatusResponse, StopClientResponse, SurbBalancerSetpoint, SurbStats,
+    TicketStats, TicketStatsStatus, WorkerCommand,
 };
 use gnosis_vpn_lib::connection::destination::{Address, Destination, HopRouting};
 use gnosis_vpn_lib::connection::{DownPhase, UpPhase};
@@ -49,6 +49,8 @@ fn assert_types_are_accessible() {
     let _: WgTunnelStats;
     let _: TunnelStatsSample;
     let _: ActiveSession;
+    let _: SurbStats;
+    let _: SurbBalancerSetpoint;
     let _: BalanceResponse;
     let _: ChannelOut;
     let _: ChannelBalance;

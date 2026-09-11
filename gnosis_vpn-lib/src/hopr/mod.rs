@@ -1,5 +1,6 @@
 pub(crate) mod api;
 pub(crate) mod errors;
+pub(crate) mod metrics;
 pub(crate) mod types;
 pub use edgli::EdgliInitState;
 pub use edgli::hopr_lib;
