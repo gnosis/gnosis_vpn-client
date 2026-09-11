@@ -10,7 +10,7 @@ use edgli::{BlockchainConnectorConfig, EdgliInitState};
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time;
 use url::Url;
 
@@ -259,10 +259,25 @@ pub(crate) async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Send
     let _ = results_sender.send(Results::HoprRunning).await;
 }
 
-pub(crate) async fn peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+/// One peers loop for the node's lifetime; `Core` steers its cadence through `interval`.
+pub(crate) async fn peers(
+    hopr: Arc<Hopr>,
+    results_sender: mpsc::Sender<Results>,
+    mut interval: watch::Receiver<Duration>,
+) {
     tracing::debug!("starting peers runner");
-    let res = hopr.peers().await.map_err(Error::from);
-    let _ = results_sender.send(Results::Peers { res }).await;
+    loop {
+        let res = hopr.peers().await.map_err(Error::from);
+        if results_sender.send(Results::Peers { res }).await.is_err() {
+            return; // Core is gone
+        }
+        let delay = *interval.borrow_and_update();
+        // Wake early when Core shortens the cadence rather than waiting out the old one.
+        tokio::select! {
+            _ = time::sleep(delay) => {}
+            _ = interval.changed() => {}
+        }
+    }
 }
 
 pub(crate) async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>) {

@@ -3,7 +3,7 @@ use edgli::blokli::IncentiveOperations;
 use edgli::hopr_lib::builder::Keypair;
 use futures_util::future::AbortHandle;
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -35,6 +35,10 @@ enum Responder {
 }
 
 const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
+/// Peers cadence while a route still needs peering or a target is pending.
+const PEERS_EAGER_INTERVAL: Duration = Duration::from_secs(10);
+/// Peers cadence once nothing is waiting on them.
+const PEERS_LAZY_INTERVAL: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -74,11 +78,14 @@ pub struct Core {
     cancel_on_shutdown: CancellationToken,
     cancel_presafe_queries: CancellationToken,
     cancel_balances: CancellationToken,
-    cancel_peers: CancellationToken,
     // Tracks the connection's NepTUN pump task so teardown can wait for it to
     // stop (dropping its TUN fd) before asking root to tear down routing;
     // replaced together with cancel_connection.
     wg_pump_tasks: TaskTracker,
+
+    /// The single peers loop and the cadence Core steers it with.
+    peers_interval: watch::Sender<Duration>,
+    peers_loop_running: bool,
 
     // user provided data
     /// The id only - a cached clone goes stale on discovery updates and cannot outlive a restart.
@@ -173,6 +180,7 @@ impl Core {
             );
         }
 
+        let (peers_interval, _) = watch::channel(PEERS_LAZY_INTERVAL);
         let (incoming_sender, incoming_receiver) = mpsc::channel(32);
         let cached_resolved_blokli_ips = worker_params.cached_blokli_ips().to_vec();
         let core = Core {
@@ -191,8 +199,9 @@ impl Core {
             cancel_on_shutdown: cancel_on_shutdown.clone(),
             cancel_presafe_queries: cancel_on_shutdown.child_token(),
             cancel_balances: cancel_on_shutdown.child_token(),
-            cancel_peers: cancel_on_shutdown.child_token(),
             wg_pump_tasks: TaskTracker::new(),
+            peers_interval,
+            peers_loop_running: false,
 
             // user provided data
             target_dest_id,
@@ -536,7 +545,7 @@ impl Core {
                 }
             }
             Results::ExitNodesUpdated { nodes } => {
-                self.merge_discovered_destinations(nodes, results_sender);
+                self.merge_discovered_destinations(nodes);
             }
             Results::ExitNodesRetry { error } => {
                 tracing::warn!(%error, "exit node discovery failed - retrying");
@@ -702,19 +711,19 @@ impl Core {
                         }
 
                         if self.target_dest_id.is_some() || route_health::any_needs_peers(self.route_healths.values()) {
-                            Duration::from_secs(10)
+                            PEERS_EAGER_INTERVAL
                         } else {
-                            Duration::from_secs(90)
+                            PEERS_LAZY_INTERVAL
                         }
                     }
                     Err(err) => {
                         tracing::error!(?err, "failed to fetch peers");
                         // Retry quickly on failure so transient HOPR API errors don't
-                        // leave route health stuck waiting for the lazy 90s poll.
-                        Duration::from_secs(10)
+                        // leave route health stuck waiting for the lazy poll.
+                        PEERS_EAGER_INTERVAL
                     }
                 };
-                self.spawn_peers(results_sender, delay);
+                self.set_peers_interval(delay);
             }
 
             Results::ConnectionEvent(evt) => {
@@ -778,9 +787,7 @@ impl Core {
                     // A spliced session has no local listener to poll; the pump task
                     // reports its own death via WgPumpExited instead of a monitor.
                     self.spawn_tunnel_ping_probe(results_sender);
-                    self.cancel_peers.cancel();
-                    self.cancel_peers = self.cancel_on_shutdown.child_token();
-                    self.spawn_peers(results_sender, Duration::from_secs(10));
+                    self.set_peers_interval(PEERS_EAGER_INTERVAL);
                 }
                 (Ok(_), phase) => {
                     tracing::warn!(?phase, "unawaited connection established successfully");
@@ -1191,11 +1198,7 @@ impl Core {
     /// destination's id disappears here, the live connection (which holds its own cloned
     /// `Destination`) is left running; a later reconnect attempt to that id just hits the
     /// existing "not configured" branch in `WorkerCommand::Connect`.
-    fn merge_discovered_destinations(
-        &mut self,
-        nodes: HashMap<Address, edgli::ExitNodeInfo>,
-        results_sender: &mpsc::Sender<Results>,
-    ) {
+    fn merge_discovered_destinations(&mut self, nodes: HashMap<Address, edgli::ExitNodeInfo>) {
         let before: HashSet<String> = self.config.destinations.keys().cloned().collect();
         let defaults = self.config.default_targets;
         connection::destination::merge_discovered(&mut self.config.destinations, &nodes, defaults);
@@ -1220,11 +1223,9 @@ impl Core {
             }
         }
 
-        // on_hopr_running only starts the peers loop if a route already needs peering; with zero configured destinations discovery must start it
-        if added_any && self.hopr.is_some() {
-            self.cancel_peers.cancel();
-            self.cancel_peers = self.cancel_on_shutdown.child_token();
-            self.spawn_peers(results_sender, Duration::ZERO);
+        // A freshly discovered exit needs peers now, not on the lazy tick.
+        if added_any {
+            self.set_peers_interval(PEERS_EAGER_INTERVAL);
         }
     }
 
@@ -1466,19 +1467,29 @@ impl Core {
         }
     }
 
-    fn spawn_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_peers.clone();
-            let results_sender = results_sender.clone();
-            tokio::spawn(async move {
-                cancel
-                    .run_until_cancelled(async move {
-                        time::sleep(delay).await;
-                        runner::peers(hopr, results_sender).await;
-                    })
-                    .await
-            });
+    /// Store the cadence, waking the loop only when it shortened - a longer one can wait.
+    fn set_peers_interval(&self, delay: Duration) {
+        self.peers_interval.send_if_modified(|current| {
+            let shortened = delay < *current;
+            *current = delay;
+            shortened
+        });
+    }
+
+    fn start_peers_loop(&mut self, results_sender: &mpsc::Sender<Results>) {
+        if self.peers_loop_running {
+            return;
         }
+        let Some(hopr) = self.hopr.clone() else { return };
+        let cancel = self.cancel_on_shutdown.clone();
+        let interval = self.peers_interval.subscribe();
+        let results_sender = results_sender.clone();
+        self.peers_loop_running = true;
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(runner::peers(hopr, results_sender, interval))
+                .await
+        });
     }
 
     fn spawn_connection_runner(
@@ -1759,6 +1770,8 @@ impl Core {
     /// spawns a new connection runner that carries the old public key so the new runner's
     /// background bridge-cleanup task can unregister it.
     async fn force_reconnect(&mut self, conn: connection::up::Up, results_sender: &mpsc::Sender<Results>) {
+        // The connection's own snapshot, never a re-resolved one: the replacement runner
+        // unregisters `prev_public_key` through a bridge to these very endpoints.
         let destination = conn.destination.clone();
         let prev_public_key = conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone());
         let exit_health = self
@@ -1802,9 +1815,8 @@ impl Core {
         self.spawn_ideal_balance_recommendation_runner(results_sender, Duration::ZERO);
         self.spawn_capacity_allocations_runner(results_sender, Duration::ZERO);
         self.spawn_balances_runner(results_sender, Duration::ZERO);
-        if route_health::any_needs_peers(self.route_healths.values()) {
-            self.spawn_peers(results_sender, Duration::ZERO);
-        } else {
+        self.start_peers_loop(results_sender);
+        if !route_health::any_needs_peers(self.route_healths.values()) {
             self.act_on_target(results_sender);
         }
     }
