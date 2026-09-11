@@ -213,11 +213,6 @@ impl Destination {
         }
     }
 
-    /// Reads an unrecognized label; `name`, `location`, `flag` and `description` are typed fields.
-    pub fn get_meta(&self, key: &str) -> Option<String> {
-        self.meta.other.get(key).cloned()
-    }
-
     /// The `name` when published, bracketing the key when both differ; a discovered key only
     /// repeats `Exit:`.
     fn title(&self) -> String {
