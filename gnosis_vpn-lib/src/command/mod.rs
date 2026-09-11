@@ -68,8 +68,7 @@ pub enum WorkerCommand {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
     Status(StatusResponse),
-    /// Boxed to keep the enum from being sized by its one large variant; serializes as the
-    /// bare stats.
+    /// Boxed to keep Response from being sized by this one variant; serializes as bare stats.
     NerdStats(Box<NerdStatsResponse>),
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
