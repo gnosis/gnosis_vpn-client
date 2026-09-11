@@ -173,6 +173,14 @@ impl Destination {
         }
         format!("{name}({id})", id = self.id)
     }
+
+    /// Identity: the exit and the route to it; `meta` and `source` are display state discovery rewrites.
+    pub fn same_exit(&self, other: &Self) -> bool {
+        self.address == other.address
+            && self.routing == other.routing
+            && self.gnosis_vpn_server == other.gnosis_vpn_server
+            && self.wireguard_server == other.wireguard_server
+    }
 }
 
 impl Display for Destination {
@@ -524,6 +532,63 @@ mod tests {
         merge_discovered(&mut destinations, &discovered);
 
         assert_eq!("Frankfurt-1(dest-1)", destinations["dest-1"].title());
+    }
+
+    #[test]
+    fn same_exit_ignores_name_and_source_drift() {
+        let base = configured("dest-1", address(1));
+
+        let mut renamed = base.clone();
+        renamed.meta.name = Some("Frankfurt-1".to_string());
+        renamed.source = DestinationSource::ConfiguredAndDiscovered;
+        assert!(base.same_exit(&renamed));
+
+        let mut unnamed = renamed.clone();
+        unnamed.meta.name = None;
+        assert!(base.same_exit(&unnamed));
+
+        let mut relabelled = base.clone();
+        relabelled.meta.location = Some("Germany".to_string());
+        assert!(base.same_exit(&relabelled));
+    }
+
+    #[test]
+    fn same_exit_separates_a_different_exit_route_or_target() {
+        let base = configured("dest-1", address(1));
+
+        assert!(!base.same_exit(&configured("dest-1", address(2))));
+
+        let mut rerouted = base.clone();
+        rerouted.routing = HopRouting::try_from(3).unwrap();
+        assert!(!base.same_exit(&rerouted));
+
+        let mut other_bridge = base.clone();
+        other_bridge.gnosis_vpn_server = "10.0.0.1:9000".parse().unwrap();
+        assert!(!base.same_exit(&other_bridge));
+
+        let mut other_wg = base.clone();
+        other_wg.wireguard_server = "10.0.0.1:9001".parse().unwrap();
+        assert!(!base.same_exit(&other_wg));
+    }
+
+    /// Without `same_exit` a tick would make the connected exit look like a new one and drop the tunnel.
+    #[test]
+    fn a_discovery_tick_leaves_a_live_connections_identity_intact() {
+        let addr = address(1);
+        let mut destinations = HashMap::new();
+        destinations.insert("dest-1".to_string(), configured("dest-1", addr));
+        let live = destinations["dest-1"].clone();
+
+        let mut info = exit_node(addr);
+        info.meta.insert("name".to_string(), "Frankfurt-1".to_string());
+        let mut discovered = HashMap::new();
+        discovered.insert(addr, info);
+
+        merge_discovered(&mut destinations, &discovered);
+
+        let refreshed = &destinations["dest-1"];
+        assert!(live.same_exit(refreshed));
+        assert_ne!(&live, refreshed);
     }
 
     #[test]

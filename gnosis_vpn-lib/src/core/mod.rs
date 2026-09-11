@@ -373,7 +373,7 @@ impl Core {
                         Some(dest) => {
                             self.reconnecting_since = None;
                             let is_already_active = match &self.phase {
-                                Phase::Connected(conn) | Phase::Connecting(conn) => conn.destination == *dest,
+                                Phase::Connected(conn) | Phase::Connecting(conn) => conn.destination.same_exit(dest),
                                 _ => false,
                             };
                             if is_already_active {
@@ -789,7 +789,7 @@ impl Core {
                         rh.with_error(err.to_string());
                     }
                     if let Some(dest) = self.target_destination.clone()
-                        && dest == conn.destination
+                        && dest.same_exit(&conn.destination)
                     {
                         tracing::info!(%dest, "restarting connection worker process due to final connection error");
                         return false;
@@ -1679,12 +1679,12 @@ impl Core {
                 }
             }
             // Connecting to different destination while already connected
-            (Some(dest), Phase::Connected(conn)) if dest != conn.destination => {
+            (Some(dest), Phase::Connected(conn)) if !dest.same_exit(&conn.destination) => {
                 tracing::info!(current = %conn.destination, new = %dest, "connecting to different destination while connected");
                 self.disconnect_from_connection(&conn, results_sender);
             }
             // Connecting to different destination while already connecting
-            (Some(dest), Phase::Connecting(conn)) if dest != conn.destination => {
+            (Some(dest), Phase::Connecting(conn)) if !dest.same_exit(&conn.destination) => {
                 tracing::info!(current = %conn.destination, new = %dest, "connecting to different destination while already connecting");
                 self.disconnect_from_connection(&conn, results_sender);
             }
@@ -1858,7 +1858,7 @@ async fn wait_for_pump_stop(pump_tasks: TaskTracker) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::destination::HopRouting;
+    use crate::connection::destination::{DestinationSource, HopRouting, Meta};
     use crate::connection::up::{Phase as UpPhase, Up};
 
     fn destination(id: &str) -> Destination {
@@ -1866,7 +1866,10 @@ mod tests {
             id.to_string(),
             Address::from([1u8; 20]),
             HopRouting::try_from(1).expect("conversion cannot fail"),
-            HashMap::new(),
+            Meta::default(),
+            "172.30.0.1:8000".parse().expect("valid socket address"),
+            "172.30.0.1:51820".parse().expect("valid socket address"),
+            DestinationSource::Configured,
         )
     }
 
