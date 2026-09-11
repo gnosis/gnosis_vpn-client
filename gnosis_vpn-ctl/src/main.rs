@@ -435,26 +435,13 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Pong => exitcode::OK,
         Response::Telemetry(Some(_)) => exitcode::OK,
         Response::Telemetry(None) => exitcode::UNAVAILABLE,
-        Response::NerdStats(command::NerdStatsResponse {
-            connection: command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Available(_)),
-            ..
-        }) => exitcode::OK,
-        Response::NerdStats(command::NerdStatsResponse {
-            connection: command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Waiting),
-            ..
-        }) => exitcode::UNAVAILABLE,
-        Response::NerdStats(command::NerdStatsResponse {
-            connection: command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Error(_)),
-            ..
-        }) => exitcode::SOFTWARE,
-        Response::NerdStats(command::NerdStatsResponse {
-            connection: command::NerdStatsConnection::Connecting(..),
-            ..
-        }) => exitcode::OK,
-        Response::NerdStats(command::NerdStatsResponse {
-            connection: command::NerdStatsConnection::Connected(..),
-            ..
-        }) => exitcode::OK,
+        Response::NerdStats(stats) => match &stats.connection {
+            command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Available(_)) => exitcode::OK,
+            command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Waiting) => exitcode::UNAVAILABLE,
+            command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Error(_)) => exitcode::SOFTWARE,
+            command::NerdStatsConnection::Connecting(..) => exitcode::OK,
+            command::NerdStatsConnection::Connected(..) => exitcode::OK,
+        },
         Response::FundingTool(command::FundingToolResponse::WrongPhase) => exitcode::UNAVAILABLE,
         Response::FundingTool(command::FundingToolResponse::Started) => exitcode::OK,
         Response::FundingTool(command::FundingToolResponse::InProgress) => exitcode::OK,

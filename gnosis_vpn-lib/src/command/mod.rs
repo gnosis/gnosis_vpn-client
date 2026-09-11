@@ -68,7 +68,9 @@ pub enum WorkerCommand {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
     Status(StatusResponse),
-    NerdStats(NerdStatsResponse),
+    /// Boxed to keep the enum from being sized by its one large variant; serializes as the
+    /// bare stats.
+    NerdStats(Box<NerdStatsResponse>),
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
     Balance(Result<BalanceResponse, String>),
@@ -497,7 +499,7 @@ impl Response {
     }
 
     pub fn nerd_stats(stats: NerdStatsResponse) -> Self {
-        Response::NerdStats(stats)
+        Response::NerdStats(Box::new(stats))
     }
 
     pub fn status(stat: StatusResponse) -> Self {
