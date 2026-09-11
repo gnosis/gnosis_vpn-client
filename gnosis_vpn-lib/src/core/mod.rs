@@ -1191,15 +1191,22 @@ impl Core {
 
     /// Merges a fresh discovery snapshot into `config.destinations`, then keeps
     /// `route_healths` in sync — inserting a tracker for every id the merge added, removing one
-    /// for every id it dropped. Mirrors the seeding loop in `Core::init`, the only other place
-    /// that constructs a `RouteHealth`.
+    /// for every id it dropped, and rebuilding one whose destination moved out from under it.
+    /// Mirrors the seeding loop in `Core::init`, the only other place that constructs a
+    /// `RouteHealth`.
     ///
     /// Deliberately does not touch the connection state machine: if the active/target
     /// destination's id disappears here, the live connection (which holds its own cloned
     /// `Destination`) is left running; a later reconnect attempt to that id just hits the
     /// existing "not configured" branch in `WorkerCommand::Connect`.
     fn merge_discovered_destinations(&mut self, nodes: HashMap<Address, edgli::ExitNodeInfo>) {
-        let before: HashSet<String> = self.config.destinations.keys().cloned().collect();
+        let targets_before: HashMap<String, (net::SocketAddr, net::SocketAddr)> = self
+            .config
+            .destinations
+            .iter()
+            .map(|(id, dest)| (id.clone(), (dest.gnosis_vpn_server, dest.wireguard_server)))
+            .collect();
+        let before: HashSet<String> = targets_before.keys().cloned().collect();
         let defaults = self.config.default_targets;
         connection::destination::merge_discovered(&mut self.config.destinations, &nodes, defaults);
         let after: HashSet<String> = self.config.destinations.keys().cloned().collect();
@@ -1207,12 +1214,17 @@ impl Core {
         for removed_id in before.difference(&after) {
             self.route_healths.remove(removed_id);
         }
-        let mut added_any = false;
-        for added_id in after.difference(&before) {
-            if let Some(dest) = self.config.destinations.get(added_id) {
-                added_any = true;
+
+        let mut fresh_ids: Vec<String> = after.difference(&before).cloned().collect();
+        fresh_ids.extend(latched_on_a_moved_target(
+            &self.config.destinations,
+            &self.route_healths,
+            &targets_before,
+        ));
+        for id in &fresh_ids {
+            if let Some(dest) = self.config.destinations.get(id) {
                 self.route_healths.insert(
-                    added_id.clone(),
+                    id.clone(),
                     RouteHealth::new(
                         dest,
                         self.worker_params.allow_insecure(),
@@ -1223,8 +1235,8 @@ impl Core {
             }
         }
 
-        // A freshly discovered exit needs peers now, not on the lazy tick.
-        if added_any {
+        // A tracker that just started over needs peers now, not on the lazy tick.
+        if !fresh_ids.is_empty() {
             self.set_peers_interval(PEERS_EAGER_INTERVAL);
         }
     }
@@ -1910,6 +1922,27 @@ async fn wait_for_pump_stop(pump_tasks: TaskTracker) {
     }
 }
 
+/// Trackers that must start over because discovery moved the exit under them: every other state
+/// re-probes whatever destination it is handed next, `Unrecoverable` latches and never retries.
+fn latched_on_a_moved_target(
+    destinations: &HashMap<String, Destination>,
+    route_healths: &HashMap<String, RouteHealth>,
+    targets_before: &HashMap<String, (net::SocketAddr, net::SocketAddr)>,
+) -> Vec<String> {
+    let mut ids = Vec::new();
+    for (id, dest) in destinations {
+        let Some(previous) = targets_before.get(id) else {
+            continue;
+        };
+        let target_moved = *previous != (dest.gnosis_vpn_server, dest.wireguard_server);
+        let latched = route_healths.get(id).is_some_and(RouteHealth::is_unrecoverable);
+        if target_moved && latched {
+            ids.push(id.clone());
+        }
+    }
+    ids
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1928,10 +1961,64 @@ mod tests {
         )
     }
 
+    fn latched_destination(id: &str) -> Destination {
+        let mut dest = destination(id);
+        // 0-hop without `allow_insecure` is the one latch reachable without a live health check.
+        dest.routing = HopRouting::try_from(0).expect("conversion cannot fail");
+        dest
+    }
+
+    fn tracker(dest: &Destination) -> RouteHealth {
+        RouteHealth::new(dest, false, false, CancellationToken::new())
+    }
+
+    fn targets(dest: &Destination) -> HashMap<String, (net::SocketAddr, net::SocketAddr)> {
+        HashMap::from([(dest.id.clone(), (dest.gnosis_vpn_server, dest.wireguard_server))])
+    }
+
     fn attempt(id: &str, phase: UpPhase) -> Up {
         let mut up = Up::new(destination(id));
         up.phase = (SystemTime::UNIX_EPOCH, phase);
         up
+    }
+
+    #[test]
+    fn a_latched_tracker_restarts_once_discovery_moves_its_target() {
+        let mut dest = latched_destination("exit");
+        let before = targets(&dest);
+        let route_healths = HashMap::from([(dest.id.clone(), tracker(&dest))]);
+        dest.gnosis_vpn_server = "10.0.0.1:9000".parse().expect("valid socket address");
+        let destinations = HashMap::from([(dest.id.clone(), dest)]);
+
+        let ids = latched_on_a_moved_target(&destinations, &route_healths, &before);
+
+        assert_eq!(vec!["exit".to_string()], ids);
+    }
+
+    #[test]
+    fn a_latched_tracker_on_an_unchanged_target_is_left_alone() {
+        let dest = latched_destination("exit");
+        let before = targets(&dest);
+        let route_healths = HashMap::from([(dest.id.clone(), tracker(&dest))]);
+        let destinations = HashMap::from([(dest.id.clone(), dest)]);
+
+        let ids = latched_on_a_moved_target(&destinations, &route_healths, &before);
+
+        assert!(ids.is_empty());
+    }
+
+    // A tracker that still probes picks up the new target on its own cadence.
+    #[test]
+    fn a_moved_target_alone_does_not_restart_a_live_tracker() {
+        let mut dest = destination("exit");
+        let before = targets(&dest);
+        let route_healths = HashMap::from([(dest.id.clone(), tracker(&dest))]);
+        dest.wireguard_server = "10.0.0.1:9001".parse().expect("valid socket address");
+        let destinations = HashMap::from([(dest.id.clone(), dest)]);
+
+        let ids = latched_on_a_moved_target(&destinations, &route_healths, &before);
+
+        assert!(ids.is_empty());
     }
 
     #[test]
