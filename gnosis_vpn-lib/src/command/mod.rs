@@ -298,6 +298,53 @@ pub enum ActiveSession {
     Main { bound_host: SocketAddr, id: String },
 }
 
+impl ActiveSession {
+    pub fn id(&self) -> &str {
+        match self {
+            ActiveSession::Bridge { id, .. } | ActiveSession::Ping { id, .. } | ActiveSession::Main { id, .. } => id,
+        }
+    }
+}
+
+/// Live SURB gauges per session from hopr telemetry; refreshed lazily on activity, so possibly stale when idle.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SurbStats {
+    /// Estimated SURB stock at the counterparty (produced - consumed).
+    pub buffer_estimate: Option<u64>,
+    pub target_buffer: Option<u64>,
+    pub rate_per_sec: Option<f64>,
+    pub produced: Option<u64>,
+    pub consumed: Option<u64>,
+}
+
+impl SurbStats {
+    fn from_telemetry(text: &str, session_id: &str) -> Option<Self> {
+        use crate::hopr::metrics::{gauge_u64, gauge_value};
+        let stats = SurbStats {
+            buffer_estimate: gauge_u64(text, "hopr_session_surb_buffer_estimate", session_id),
+            target_buffer: gauge_u64(text, "hopr_session_surb_target_buffer", session_id),
+            rate_per_sec: gauge_value(text, "hopr_session_surb_rate_per_sec", session_id),
+            produced: gauge_u64(text, "hopr_session_surb_produced_total", session_id),
+            consumed: gauge_u64(text, "hopr_session_surb_consumed_total", session_id),
+        };
+        let counters = [
+            stats.buffer_estimate,
+            stats.target_buffer,
+            stats.produced,
+            stats.consumed,
+        ];
+        let has_any = counters.iter().any(Option::is_some) || stats.rate_per_sec.is_some();
+        has_any.then_some(stats)
+    }
+}
+
+/// Serializable mirror of the SURB balancer capacity knobs pushed to a session.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct SurbBalancerSetpoint {
+    pub target_surb_buffer_size: u64,
+    pub max_surbs_per_sec: u64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnStats {
     #[serde(with = "serde_utils::address")]
@@ -312,10 +359,19 @@ pub struct ConnStats {
     /// pump has started. See [`crate::wg_tunnel::TunnelStatsSample`] for why
     /// `rtt_ms`/`time_since_last_handshake` reflect the last handshake, not "now".
     pub wg_stats: Option<crate::wg_tunnel::WgTunnelStats>,
+    #[serde(default)]
+    pub bridge_surb: Option<SurbStats>,
+    #[serde(default)]
+    pub main_surb: Option<SurbStats>,
+    /// SURB balancer setpoint pushed to the session so far; ramps toward `surb_setpoint_target`.
+    #[serde(default)]
+    pub surb_setpoint_applied: Option<SurbBalancerSetpoint>,
+    #[serde(default)]
+    pub surb_setpoint_target: Option<SurbBalancerSetpoint>,
 }
 
 impl ConnStats {
-    pub fn from_conn(conn: &connection::up::Up, node_address: Address) -> Self {
+    pub fn from_conn(conn: &connection::up::Up, node_address: Address, telemetry: Option<&str>) -> Self {
         use connection::up::SessionKind;
         let bridge_session = conn.bridge_session.as_ref().and_then(|meta| {
             let id = meta.active_clients.first()?.to_string();
@@ -330,6 +386,17 @@ impl ConnStats {
                 SessionKind::Main => ActiveSession::Main { bound_host, id },
             })
         });
+        let telemetry = telemetry.unwrap_or_default();
+        let bridge_surb = bridge_session
+            .as_ref()
+            .and_then(|s| SurbStats::from_telemetry(telemetry, s.id()));
+        let main_surb = main_session
+            .as_ref()
+            .and_then(|s| SurbStats::from_telemetry(telemetry, s.id()));
+        let setpoint = |cfg: &edgli::hopr_lib::exports::transport::SurbBalancerConfig| SurbBalancerSetpoint {
+            target_surb_buffer_size: cfg.target_surb_buffer_size,
+            max_surbs_per_sec: cfg.max_surbs_per_sec,
+        };
         ConnStats {
             node_address,
             destination: conn.destination.clone(),
@@ -342,6 +409,10 @@ impl ConnStats {
                 current: conn.wg_stats.back().cloned(),
                 history: conn.wg_stats.iter().cloned().collect(),
             }),
+            bridge_surb,
+            main_surb,
+            surb_setpoint_applied: conn.surb_applied.as_ref().map(setpoint),
+            surb_setpoint_target: conn.surb_target.as_ref().map(setpoint),
         }
     }
 }
@@ -964,5 +1035,62 @@ mod tests {
         assert_eq!(current.rtt_ms, Some(42));
         assert_eq!(current.time_since_last_handshake, Some(Duration::from_secs(5)));
         assert_eq!(populated.history.len(), 1);
+    }
+
+    #[test]
+    fn surb_stats_serializes_to_expected_json_shape() {
+        let empty = serde_json::to_string(&SurbStats::default()).unwrap();
+        assert_eq!(
+            empty,
+            r#"{"buffer_estimate":null,"target_buffer":null,"rate_per_sec":null,"produced":null,"consumed":null}"#
+        );
+
+        let populated = serde_json::to_string(&SurbStats {
+            buffer_estimate: Some(12345),
+            target_buffer: Some(20000),
+            rate_per_sec: Some(512.5),
+            produced: Some(123456),
+            consumed: Some(111111),
+        })
+        .unwrap();
+        assert_eq!(
+            populated,
+            r#"{"buffer_estimate":12345,"target_buffer":20000,"rate_per_sec":512.5,"produced":123456,"consumed":111111}"#
+        );
+    }
+
+    #[test]
+    fn surb_balancer_setpoint_roundtrips_json() {
+        let json = serde_json::to_string(&SurbBalancerSetpoint {
+            target_surb_buffer_size: 20000,
+            max_surbs_per_sec: 5000,
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"target_surb_buffer_size":20000,"max_surbs_per_sec":5000}"#);
+
+        let parsed: SurbBalancerSetpoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.target_surb_buffer_size, 20000);
+        assert_eq!(parsed.max_surbs_per_sec, 5000);
+    }
+
+    #[test]
+    fn surb_stats_from_telemetry_reads_gauges() {
+        let telemetry = concat!(
+            "# TYPE hopr_session_surb_buffer_estimate gauge\n",
+            "hopr_session_surb_buffer_estimate{session_id=\"aabbcc\"} 12345\n",
+            "hopr_session_surb_target_buffer{session_id=\"aabbcc\"} 20000\n",
+            "hopr_session_surb_rate_per_sec{session_id=\"aabbcc\"} 512.5\n",
+            "hopr_session_surb_produced_total{session_id=\"aabbcc\"} 123456\n",
+            "hopr_session_surb_consumed_total{session_id=\"aabbcc\"} 111111\n",
+        );
+        let stats = SurbStats::from_telemetry(telemetry, "aabbcc").expect("gauges present");
+        assert_eq!(stats.buffer_estimate, Some(12345));
+        assert_eq!(stats.target_buffer, Some(20000));
+        assert_eq!(stats.rate_per_sec, Some(512.5));
+        assert_eq!(stats.produced, Some(123456));
+        assert_eq!(stats.consumed, Some(111111));
+
+        assert!(SurbStats::from_telemetry(telemetry, "unknown").is_none());
+        assert!(SurbStats::from_telemetry("", "aabbcc").is_none());
     }
 }

@@ -213,6 +213,13 @@ impl Runner {
                 configurator
                     .update_surb_balancer_config(target)
                     .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
+                // Already converged, so the ramp is a no-op - this only records the setpoint for nerd-stats.
+                let _ = results_sender
+                    .send(progress(Progress::SetSurbTarget {
+                        applied: target,
+                        target,
+                    }))
+                    .await;
             }
             _ => {}
         }

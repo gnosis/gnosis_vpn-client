@@ -1,0 +1,28 @@
+name: Label backport
+on:
+  pull_request_target:
+    types:
+      - opened
+      - edited
+permissions:
+  contents: read
+jobs:
+  label:
+    name: Apply default backport label
+    # Open or retarget onto main only, so unrelated edits don't re-add a removed label.
+    if: |
+      github.event.pull_request.base.ref == 'main' &&
+      (github.event.action == 'opened' || github.event.changes.base.ref.from != '')
+    runs-on: depot-ubuntu-22.04-4
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Add backport label
+        shell: bash
+        env:
+          # GITHUB_TOKEN, not the app token: the app installation has no pull-requests scope.
+          # A GITHUB_TOKEN label write emits no events, so PR CI is not re-triggered.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr edit "${PR}" --add-label 'backport release/hoprdv4'

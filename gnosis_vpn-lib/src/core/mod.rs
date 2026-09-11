@@ -930,13 +930,15 @@ impl Core {
                 resp,
             } => match &self.phase {
                 Phase::Connecting(conn) => {
-                    let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
+                    let telemetry = nerd_stats_telemetry(conn);
+                    let conn_stats = command::ConnStats::from_conn(conn, self.node_address, telemetry.as_deref());
                     let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
                         connection: command::NerdStatsConnection::Connecting(ticket_stats_status, conn_stats),
                     }));
                 }
                 Phase::Connected(conn) => {
-                    let conn_stats = command::ConnStats::from_conn(conn, self.node_address);
+                    let telemetry = nerd_stats_telemetry(conn);
+                    let conn_stats = command::ConnStats::from_conn(conn, self.node_address, telemetry.as_deref());
                     let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
                         connection: command::NerdStatsConnection::Connected(ticket_stats_status, conn_stats),
                     }));
@@ -1866,6 +1868,20 @@ fn connection_infos(
         _ => None,
     };
     (connecting, reconnecting)
+}
+
+/// Best-effort SURB telemetry for nerd stats; the expensive scrape is skipped when no session uses it.
+fn nerd_stats_telemetry(conn: &connection::up::Up) -> Option<String> {
+    if conn.bridge_session.is_none() && conn.ping_session.is_none() {
+        return None;
+    }
+    match hopr::telemetry() {
+        Ok(t) => Some(t),
+        Err(err) => {
+            tracing::warn!(?err, "failed to collect hopr telemetry for nerd stats");
+            None
+        }
+    }
 }
 
 async fn wait_for_pump_stop(pump_tasks: TaskTracker) {
