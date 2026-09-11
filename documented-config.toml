@@ -21,7 +21,11 @@ version = 7
 # A destination is its exit node and its path. Every value below except those two is optional and
 # overrides what the exit node itself publishes, so an entry may be nothing but an address plus the
 # values you want to override. Per value: what you set here wins, else what the exit publishes,
-# else the global default. `gvpn-ctl status` notes any published value an entry overrode.
+# else the global default.
+#
+# `gvpn-ctl status` tags every destination with where it came from - [c] from this file only, [d]
+# discovered on-chain only, [c+d] configured here and discovered too. On a [c+d] entry it also
+# marks (c) each value you set here, whether or not the exit publishes a different one.
 #
 # identifier for a destination and its routing options
 # [destinations.<id>]

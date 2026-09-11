@@ -5,7 +5,7 @@ use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
 use edgli::hopr_lib::exports::transport::SessionTarget;
 use serde::{Deserialize, Serialize};
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::net::SocketAddr;
 
@@ -15,9 +15,9 @@ use crate::serde_utils;
 /// Where a [`Destination`] came from.
 ///
 /// A configured destination whose address discovery also independently reports is tagged
-/// `ConfiguredAndDiscovered` rather than looking identical to a plain `Configured` one — the
-/// configured target values still govern in that case, but the confirmation is worth surfacing
-/// (e.g. in `gvpn-ctl status`) rather than being silently indistinguishable.
+/// `ConfiguredAndDiscovered` rather than looking identical to a plain `Configured` one: it is the
+/// difference between an exit the on-chain registry knows about and one only your config does, so
+/// `gvpn-ctl status` renders it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DestinationSource {
     Configured,
@@ -25,12 +25,13 @@ pub enum DestinationSource {
     ConfiguredAndDiscovered,
 }
 
-impl Display for DestinationSource {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl DestinationSource {
+    /// The origin code rendered beside the title: c is configuration, d is discovery.
+    fn code(&self) -> &'static str {
         match self {
-            DestinationSource::Configured => write!(f, "Configured"),
-            DestinationSource::Discovered => write!(f, "Discovered"),
-            DestinationSource::ConfiguredAndDiscovered => write!(f, "Configured+Discovered"),
+            DestinationSource::Configured => "c",
+            DestinationSource::Discovered => "d",
+            DestinationSource::ConfiguredAndDiscovered => "c+d",
         }
     }
 }
@@ -95,15 +96,13 @@ pub struct DefaultTargets {
     pub wireguard_server: SocketAddr,
 }
 
-/// What configuration pinned - a value it set - plus the discovered values those pins replaced.
+/// What configuration pinned: the values it set itself, whatever discovery goes on to report.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Overrides {
     /// The labels configuration set; every key present is a pin.
     configured_meta: HashMap<String, String>,
     configured_gnosis_vpn_server: Option<SocketAddr>,
     configured_wireguard_server: Option<SocketAddr>,
-    /// Field name to the discovered value a pin replaced, only where the two differ.
-    shadowed: BTreeMap<String, String>,
 }
 
 impl Overrides {
@@ -116,37 +115,14 @@ impl Overrides {
             configured_meta: meta,
             configured_gnosis_vpn_server: gnosis_vpn_server,
             configured_wireguard_server: wireguard_server,
-            shadowed: BTreeMap::new(),
         }
-    }
-
-    /// The discovered values configuration overrode, by field name.
-    pub fn shadowed(&self) -> &BTreeMap<String, String> {
-        &self.shadowed
     }
 
     /// Configuration's labels where it pinned them, the discovered ones elsewhere, per key.
-    fn apply_meta(&mut self, discovered: &HashMap<String, String>) -> Meta {
+    fn apply_meta(&self, discovered: &HashMap<String, String>) -> Meta {
         let mut merged = discovered.clone();
-        for (key, value) in &self.configured_meta {
-            match merged.insert(key.clone(), value.clone()) {
-                Some(replaced) if replaced != *value => {
-                    self.shadowed.insert(key.clone(), replaced);
-                }
-                _ => {}
-            }
-        }
+        merged.extend(self.configured_meta.clone());
         Meta::from_map(merged)
-    }
-
-    fn apply_target(&mut self, field: &str, pinned: Option<SocketAddr>, discovered: SocketAddr) -> SocketAddr {
-        let Some(value) = pinned else {
-            return discovered;
-        };
-        if discovered != value {
-            self.shadowed.insert(field.to_string(), discovered.to_string());
-        }
-        value
     }
 }
 
@@ -196,23 +172,21 @@ impl Destination {
         self
     }
 
-    /// Takes everything discovery reports that configuration did not pin, noting what a pin replaced.
+    /// Takes everything discovery reports that configuration did not pin.
     fn adopt(&mut self, info: &ExitNodeInfo) {
-        self.overrides.shadowed.clear();
         self.meta = self.overrides.apply_meta(&info.meta);
-        let pinned_bridge = self.overrides.configured_gnosis_vpn_server;
-        let pinned_wg = self.overrides.configured_wireguard_server;
-        self.gnosis_vpn_server =
-            self.overrides
-                .apply_target("gnosis_vpn_server", pinned_bridge, info.gnosis_vpn_server);
+        self.gnosis_vpn_server = self
+            .overrides
+            .configured_gnosis_vpn_server
+            .unwrap_or(info.gnosis_vpn_server);
         self.wireguard_server = self
             .overrides
-            .apply_target("wireguard_server", pinned_wg, info.wireguard_server);
+            .configured_wireguard_server
+            .unwrap_or(info.wireguard_server);
     }
 
     /// Falls back to configuration and the global defaults once discovery stops reporting the exit.
     fn forget_discovered(&mut self, defaults: DefaultTargets) {
-        self.overrides.shadowed.clear();
         self.meta = Meta::from_map(self.overrides.configured_meta.clone());
         self.gnosis_vpn_server = self
             .overrides
@@ -268,27 +242,22 @@ impl Destination {
     }
 }
 
-/// Marks a value configuration set in place of the one the exit published.
-const CONFIG_OVERRIDE: &str = " (c)";
+/// Marks a value configuration set itself, where the rest of the entry comes from discovery.
+const CONFIG_VALUE: &str = " (c)";
 
 impl Destination {
-    /// The recognized labels, plus anything overridden that is otherwise never shown.
+    /// The recognized labels, plus any target configuration pinned - never otherwise shown.
     fn labels_str(&self) -> String {
-        let shadowed = self.overrides.shadowed();
-        let mark = |key: &str| {
-            if shadowed.contains_key(key) {
-                CONFIG_OVERRIDE
-            } else {
-                ""
-            }
-        };
+        // On a c-only or d-only entry the origin code already says who set every value.
+        let mixed_origins = self.source == DestinationSource::ConfiguredAndDiscovered;
+        let pinned = |key: &str| mixed_origins && self.overrides.configured_meta.contains_key(key);
 
         let mut parts = Vec::new();
         // The title already carries the name, but not that configuration chose it.
         if let Some(name) = &self.meta.name
-            && shadowed.contains_key("name")
+            && pinned("name")
         {
-            parts.push(format!("name: {}{CONFIG_OVERRIDE}", sanitize_for_display(name)));
+            parts.push(format!("name: {}{CONFIG_VALUE}", sanitize_for_display(name)));
         }
         for (key, value) in [
             ("location", &self.meta.location),
@@ -296,15 +265,24 @@ impl Destination {
             ("description", &self.meta.description),
         ] {
             let Some(value) = value else { continue };
-            parts.push(format!("{key}: {}{}", sanitize_for_display(value), mark(key)));
+            let mark = if pinned(key) { CONFIG_VALUE } else { "" };
+            parts.push(format!("{key}: {}{mark}", sanitize_for_display(value)));
         }
         // Targets are parsed socket addresses rather than operator text, so they need no sanitizing.
-        for (key, value) in [
-            ("gnosis_vpn_server", self.gnosis_vpn_server),
-            ("wireguard_server", self.wireguard_server),
+        for (key, value, configured) in [
+            (
+                "gnosis_vpn_server",
+                self.gnosis_vpn_server,
+                self.overrides.configured_gnosis_vpn_server,
+            ),
+            (
+                "wireguard_server",
+                self.wireguard_server,
+                self.overrides.configured_wireguard_server,
+            ),
         ] {
-            if shadowed.contains_key(key) {
-                parts.push(format!("{key}: {value}{CONFIG_OVERRIDE}"));
+            if mixed_origins && configured.is_some() {
+                parts.push(format!("{key}: {value}{CONFIG_VALUE}"));
             }
         }
         parts.join(", ")
@@ -322,8 +300,9 @@ impl Display for Destination {
         };
         write!(
             f,
-            "{id} (Exit: {address}, Route: (entry){path}({short_addr}){labels})",
+            "{id} [{source}] (Exit: {address}, Route: (entry){path}({short_addr}){labels})",
             id = self.title(),
+            source = self.source.code(),
             path = self.pretty_print_path(),
             address = self.address.to_checksum(),
             short_addr = short_addr,
@@ -472,11 +451,10 @@ mod tests {
 
         assert_eq!(dest.gnosis_vpn_server, info.gnosis_vpn_server);
         assert_eq!(dest.wireguard_server, info.wireguard_server);
-        assert!(dest.overrides.shadowed().is_empty());
     }
 
     #[test]
-    fn a_pinned_target_beats_the_exits_own_endpoint_and_is_recorded() {
+    fn a_pinned_target_beats_the_exits_own_endpoint() {
         let addr = address(1);
         let bridge: SocketAddr = "192.168.0.1:8000".parse().unwrap();
         let info = exit_node(addr);
@@ -485,28 +463,30 @@ mod tests {
 
         assert_eq!(dest.gnosis_vpn_server, bridge);
         assert_eq!(dest.wireguard_server, info.wireguard_server);
-        assert_eq!(
-            Some(&info.gnosis_vpn_server.to_string()),
-            dest.overrides.shadowed().get("gnosis_vpn_server")
-        );
     }
 
+    /// `(c)` says configuration chose the value, not that it disagreed with the exit.
     #[test]
-    fn a_pinned_target_matching_the_exits_own_endpoint_records_nothing() {
+    fn a_pin_agreeing_with_the_exit_is_still_marked() {
         let addr = address(1);
-        let info = exit_node(addr);
+        let mut config_labels = HashMap::new();
+        config_labels.insert("location".to_string(), "Germany".to_string());
+        let mut info = exit_node(addr);
+        info.meta.insert("location".to_string(), "Germany".to_string());
 
         let dest = merged(
-            pinned("dest-1", addr, HashMap::new(), Some(info.gnosis_vpn_server), None),
+            pinned("dest-1", addr, config_labels, Some(info.gnosis_vpn_server), None),
             info.clone(),
         );
+        let rendered = dest.to_string();
 
         assert_eq!(dest.gnosis_vpn_server, info.gnosis_vpn_server);
-        assert!(dest.overrides.shadowed().is_empty());
+        assert!(rendered.contains("location: Germany (c)"));
+        assert!(rendered.contains(&format!("gnosis_vpn_server: {} (c)", info.gnosis_vpn_server)));
     }
 
     #[test]
-    fn configuration_pins_labels_per_key_and_records_what_it_replaced() {
+    fn configuration_pins_labels_per_key() {
         let addr = address(1);
         let mut config_labels = HashMap::new();
         config_labels.insert("flag".to_string(), "DE".to_string());
@@ -524,9 +504,6 @@ mod tests {
         assert_eq!(Some("acme"), dest.meta.other.get("operator").map(String::as_str));
         assert_eq!(Some("FRA-1"), dest.meta.name.as_deref());
         assert_eq!(Some("France"), dest.meta.location.as_deref());
-        assert_eq!(Some(&"FR".to_string()), dest.overrides.shadowed().get("flag"));
-        assert_eq!(Some(&"globex".to_string()), dest.overrides.shadowed().get("operator"));
-        assert_eq!(2, dest.overrides.shadowed().len());
     }
 
     #[test]
@@ -549,7 +526,6 @@ mod tests {
         assert_eq!(Some("DE"), dest.meta.flag.as_deref());
         assert_eq!(None, dest.meta.location.as_deref());
         assert_eq!(dest.gnosis_vpn_server, defaults().gnosis_vpn_server);
-        assert!(dest.overrides.shadowed().is_empty());
     }
 
     #[test]
@@ -605,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_overridden_labels_are_marked() {
+    fn only_configurations_own_labels_are_marked() {
         let addr = address(1);
         let mut config_labels = HashMap::new();
         config_labels.insert("flag".to_string(), "DE".to_string());
@@ -633,13 +609,13 @@ mod tests {
         let dest = merged(pinned("dest-1", addr, config_labels, None, None), info);
         let rendered = dest.to_string();
 
-        assert!(rendered.starts_with("Frankfurt-1(dest-1) (Exit:"));
+        assert!(rendered.starts_with("Frankfurt-1(dest-1) [c+d] (Exit:"));
         assert!(rendered.contains("name: Frankfurt-1 (c)"));
     }
 
-    /// Targets are never rendered otherwise, so an override of one would be invisible.
+    /// Targets are never rendered otherwise, so a pinned one would be invisible.
     #[test]
-    fn an_overridden_target_is_rendered_only_when_it_was_overridden() {
+    fn a_target_is_rendered_only_when_configuration_pinned_it() {
         let addr = address(1);
         let bridge: SocketAddr = "192.168.0.1:8000".parse().unwrap();
         let info = exit_node(addr);
@@ -657,10 +633,34 @@ mod tests {
     }
 
     #[test]
-    fn the_source_is_no_longer_rendered() {
-        let dest = configured("dest-1", address(1));
+    fn every_origin_renders_its_own_code() {
+        let codes = [
+            (DestinationSource::Configured, "[c]"),
+            (DestinationSource::Discovered, "[d]"),
+            (DestinationSource::ConfiguredAndDiscovered, "[c+d]"),
+        ];
 
-        assert!(!dest.to_string().contains("Source:"));
+        for (source, code) in codes {
+            let mut dest = configured("dest-1", address(1));
+            dest.source = source;
+
+            assert!(dest.to_string().starts_with(&format!("dest-1 {code} (Exit:")));
+        }
+    }
+
+    /// A config-only entry is all configuration by definition, so `[c]` is the whole story.
+    #[test]
+    fn a_config_only_entry_marks_no_individual_value() {
+        let mut config_labels = HashMap::new();
+        config_labels.insert("location".to_string(), "Germany".to_string());
+        let bridge: SocketAddr = "192.168.0.1:8000".parse().unwrap();
+
+        let dest = pinned("dest-1", address(1), config_labels, Some(bridge), None);
+        let rendered = dest.to_string();
+
+        assert!(rendered.contains("location: Germany)"));
+        assert!(!rendered.contains("(c)"));
+        assert!(!rendered.contains("gnosis_vpn_server:"));
     }
 
     #[test]
@@ -837,7 +837,7 @@ mod tests {
         let dest = named("my-exit", "Frankfurt-1", DestinationSource::ConfiguredAndDiscovered);
 
         assert_eq!("Frankfurt-1(my-exit)", dest.title());
-        assert!(dest.to_string().starts_with("Frankfurt-1(my-exit) (Exit:"));
+        assert!(dest.to_string().starts_with("Frankfurt-1(my-exit) [c+d] (Exit:"));
     }
 
     #[test]
@@ -906,7 +906,7 @@ mod tests {
 
         assert_eq!(
             json,
-            r#"{"id":"dest-1","meta":{"name":null,"location":null,"flag":null,"description":null,"other":{}},"address":"0x0101010101010101010101010101010101010101","routing":1,"gnosis_vpn_server":"172.30.0.1:8000","wireguard_server":"172.30.0.1:51820","source":"Configured","overrides":{"configured_meta":{},"configured_gnosis_vpn_server":null,"configured_wireguard_server":null,"shadowed":{}}}"#
+            r#"{"id":"dest-1","meta":{"name":null,"location":null,"flag":null,"description":null,"other":{}},"address":"0x0101010101010101010101010101010101010101","routing":1,"gnosis_vpn_server":"172.30.0.1:8000","wireguard_server":"172.30.0.1:51820","source":"Configured","overrides":{"configured_meta":{},"configured_gnosis_vpn_server":null,"configured_wireguard_server":null}}"#
         );
     }
 
@@ -1030,9 +1030,9 @@ mod tests {
         assert!(!rendered.contains(&"x".repeat(META_FIELD_MAX_CHARS + 1)));
     }
 
-    /// No label may precede the source marker; only the title, sanitized and capped alike, may.
+    /// No label may precede the origin code; only the title, sanitized and capped alike, may.
     #[test]
-    fn source_is_rendered_before_meta() {
+    fn the_origin_code_is_rendered_before_meta() {
         let mut meta = HashMap::new();
         meta.insert("location".to_string(), "Germany".to_string());
         let dest = Destination::new(
@@ -1047,6 +1047,7 @@ mod tests {
 
         let rendered = dest.to_string();
 
+        assert!(rendered.find("[d]").unwrap() < rendered.find("location:").unwrap());
         assert!(rendered.find("Route:").unwrap() < rendered.find("location:").unwrap());
     }
 }
