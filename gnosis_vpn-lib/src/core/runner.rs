@@ -369,6 +369,7 @@ pub(crate) async fn watch_exit_nodes(
             return; // Core is gone
         }
         if registry.changed().await.is_err() {
+            // Nothing to preserve: the only error here is the watch channel's content-free "closed".
             let _ = results_sender
                 .send(Results::ExitNodesRetry {
                     error: "exit node registry task ended unexpectedly".to_string(),
