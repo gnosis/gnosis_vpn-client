@@ -791,10 +791,10 @@ impl Core {
                     if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
                         rh.with_error(err.to_string());
                     }
-                    if let Some(dest) = self.target_destination().cloned()
-                        && dest.same_exit(&conn.destination)
-                    {
-                        tracing::info!(%dest, "restarting connection worker process due to final connection error");
+                    // By id: a dropped target must still restart the worker, not stick in Connecting.
+                    let failed_the_target = self.target_dest_id.as_deref() == Some(conn.destination.id.as_str());
+                    if failed_the_target {
+                        tracing::info!(id = %conn.destination.id, "restarting connection worker process due to final connection error");
                         return false;
                     }
                 }
@@ -1676,11 +1676,6 @@ impl Core {
             connected,
             disconnecting,
         }
-    }
-
-    /// Resolved live, never cached: discovery rewrites endpoints and removes entries.
-    fn target_destination(&self) -> Option<&Destination> {
-        self.config.destinations.get(self.target_dest_id.as_ref()?)
     }
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
