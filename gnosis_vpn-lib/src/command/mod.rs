@@ -106,10 +106,11 @@ pub struct ConnectingInfo {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReconnectingInfo {
     pub destination_id: String,
-    /// When the WAN change that triggered the reconnect was detected.
+    /// When the reconnect intent was recorded - a tunnel drop, ping failures or a WAN change.
     #[serde(with = "serde_utils::system_time")]
     pub since: SystemTime,
-    pub phase: connection::up::Phase,
+    /// None between attempts, when the route is not healthy enough to try again yet.
+    pub phase: Option<connection::up::Phase>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -583,12 +584,16 @@ impl Display for ConnectingInfo {
 
 impl Display for ReconnectingInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let progress = match &self.phase {
+            Some(phase) => format!("phase {phase}"),
+            None => "waiting for route health".to_string(),
+        };
         write!(
             f,
-            "Reconnecting to {} (since {}, phase {})",
+            "Reconnecting to {} (since {}, {})",
             self.destination_id,
             log_output::elapsed(&self.since),
-            self.phase
+            progress
         )
     }
 }
@@ -706,6 +711,34 @@ mod tests {
             "172.30.0.1:51820".parse().unwrap(),
             DestinationSource::Configured,
         )
+    }
+
+    fn reconnecting(phase: Option<connection::up::Phase>) -> ReconnectingInfo {
+        ReconnectingInfo {
+            destination_id: "test-destination".to_string(),
+            since: SystemTime::UNIX_EPOCH,
+            phase,
+        }
+    }
+
+    #[test]
+    fn reconnecting_info_display_names_the_wait_when_no_attempt_is_in_flight() {
+        let waiting = reconnecting(None).to_string();
+        assert!(waiting.contains("waiting for route health"), "{waiting}");
+        assert!(!waiting.contains("phase"), "{waiting}");
+
+        let phase = connection::up::Phase::VerifyPing;
+        let in_flight = reconnecting(Some(phase.clone())).to_string();
+        assert!(in_flight.contains(&format!("phase {phase}")), "{in_flight}");
+    }
+
+    // The app rejects a status it cannot parse, so the null shape is part of the contract.
+    #[test]
+    fn reconnecting_info_serializes_a_missing_phase_as_null() {
+        let json = serde_json::to_string(&reconnecting(None)).expect("serialization cannot fail");
+        assert!(json.contains("\"phase\":null"), "{json}");
+        let back: ReconnectingInfo = serde_json::from_str(&json).expect("deserialization cannot fail");
+        assert!(back.phase.is_none());
     }
 
     fn route_health_state() -> RouteHealthState {
