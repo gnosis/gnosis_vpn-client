@@ -269,7 +269,7 @@ impl Destination {
 }
 
 /// Marks a value configuration set in place of the one the exit published.
-const CONFIG_OVERRIDE: &str = " (CO)";
+const CONFIG_OVERRIDE: &str = " (c)";
 
 impl Destination {
     /// The recognized labels, plus anything overridden that is otherwise never shown.
@@ -598,7 +598,7 @@ mod tests {
         let dest = merged(pinned("dest-1", addr, config_labels, None, None), info);
         let rendered = dest.to_string();
 
-        assert!(rendered.contains("location: Germany (CO)"));
+        assert!(rendered.contains("location: Germany (c)"));
         assert!(!rendered.contains("xx"));
         assert!(!rendered.contains('\u{1b}'));
         assert!(!rendered.contains('\u{202e}'));
@@ -616,9 +616,9 @@ mod tests {
         let dest = merged(pinned("dest-1", addr, config_labels, None, None), info);
         let rendered = dest.to_string();
 
-        assert!(rendered.contains("flag: DE (CO)"));
+        assert!(rendered.contains("flag: DE (c)"));
         assert!(rendered.contains("location: France,") || rendered.contains("location: France)"));
-        assert!(!rendered.contains("location: France (CO)"));
+        assert!(!rendered.contains("location: France (c)"));
     }
 
     /// The title carries the name but not that configuration chose it.
@@ -634,7 +634,7 @@ mod tests {
         let rendered = dest.to_string();
 
         assert!(rendered.starts_with("Frankfurt-1(dest-1) (Exit:"));
-        assert!(rendered.contains("name: Frankfurt-1 (CO)"));
+        assert!(rendered.contains("name: Frankfurt-1 (c)"));
     }
 
     /// Targets are never rendered otherwise, so an override of one would be invisible.
@@ -650,7 +650,7 @@ mod tests {
         assert!(
             overridden
                 .to_string()
-                .contains("gnosis_vpn_server: 192.168.0.1:8000 (CO)")
+                .contains("gnosis_vpn_server: 192.168.0.1:8000 (c)")
         );
         assert!(!overridden.to_string().contains("wireguard_server:"));
         assert!(!inherited.to_string().contains("gnosis_vpn_server:"));
