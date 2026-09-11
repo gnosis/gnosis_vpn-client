@@ -12,12 +12,7 @@ use std::net::SocketAddr;
 use crate::log_output;
 use crate::serde_utils;
 
-/// Where a [`Destination`] came from.
-///
-/// A configured destination whose address discovery also independently reports is tagged
-/// `ConfiguredAndDiscovered` rather than looking identical to a plain `Configured` one: it is the
-/// difference between an exit the on-chain registry knows about and one only your config does, so
-/// `gvpn-ctl status` renders it.
+/// Where a [`Destination`] came from - the registry knows this exit, or only your config does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DestinationSource {
     Configured,
