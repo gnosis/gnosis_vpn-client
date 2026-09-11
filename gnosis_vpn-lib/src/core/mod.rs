@@ -1922,8 +1922,7 @@ async fn wait_for_pump_stop(pump_tasks: TaskTracker) {
     }
 }
 
-/// Trackers that must start over because discovery moved the exit under them: every other state
-/// re-probes whatever destination it is handed next, `Unrecoverable` latches and never retries.
+/// Trackers to restart: every state re-probes the destination it is next handed, `Unrecoverable` latches.
 fn latched_on_a_moved_target(
     destinations: &HashMap<String, Destination>,
     route_healths: &HashMap<String, RouteHealth>,
