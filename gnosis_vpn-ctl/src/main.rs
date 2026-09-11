@@ -544,6 +544,7 @@ fn print_connecting_stats(stats: &command::ConnStats) {
         .as_str(),
     );
     str_resp.push_str(&print_wg_tunnel_stats(stats));
+    str_resp.push_str(&print_surb_stats(stats));
     println!("{str_resp}");
 }
 
@@ -564,6 +565,7 @@ fn print_connected_stats(stats: &command::ConnStats) {
         str_resp.push_str(format!("---\nExit WireGuard Public Key: {}\n", wg_pubkey).as_str());
     }
     str_resp.push_str(&print_wg_tunnel_stats(stats));
+    str_resp.push_str(&print_surb_stats(stats));
     println!("{str_resp}");
 }
 
@@ -595,6 +597,57 @@ fn print_wg_tunnel_stats(stats: &command::ConnStats) -> String {
         ByteSize(current.rx_bytes),
         current.estimated_loss * 100.0,
     )
+}
+
+/// Render SURB balancer insights, if any session has them; gauges can be stale on idle tunnels.
+fn print_surb_stats(stats: &command::ConnStats) -> String {
+    let mut lines = String::new();
+    if let (Some(session), Some(surb)) = (&stats.bridge_session, &stats.bridge_surb) {
+        lines.push_str(&print_session_surb(session_label(session), surb));
+    }
+    if let (Some(session), Some(surb)) = (&stats.main_session, &stats.main_surb) {
+        lines.push_str(&print_session_surb(session_label(session), surb));
+    }
+    let has_setpoint = stats.surb_setpoint_applied.is_some() || stats.surb_setpoint_target.is_some();
+    if has_setpoint {
+        let fmt = |sp: Option<command::SurbBalancerSetpoint>| {
+            sp.map(|s| format!("{} @ {}/s", s.target_surb_buffer_size, s.max_surbs_per_sec))
+                .unwrap_or("--".to_string())
+        };
+        lines.push_str(&format!(
+            "SURB setpoint: applied {} -> target {}\n",
+            fmt(stats.surb_setpoint_applied),
+            fmt(stats.surb_setpoint_target),
+        ));
+    }
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!("---\n{lines}")
+}
+
+fn print_session_surb(label: &str, surb: &command::SurbStats) -> String {
+    let fmt = |v: Option<u64>| v.map(|v| v.to_string()).unwrap_or("--".to_string());
+    let rate = surb
+        .rate_per_sec
+        .map(|r| format!("{r:.1}/s"))
+        .unwrap_or("--".to_string());
+    format!(
+        "{label} SURB buffer (est. at exit): {} / target {}\n{label} SURB upstream rate: {rate}\n{label} SURBs produced: {}, consumed: {}\n",
+        fmt(surb.buffer_estimate),
+        fmt(surb.target_buffer),
+        fmt(surb.produced),
+        fmt(surb.consumed),
+    )
+}
+
+fn session_label(session: &command::ActiveSession) -> &'static str {
+    use command::ActiveSession;
+    match session {
+        ActiveSession::Bridge { .. } => "Bridge",
+        ActiveSession::Ping { .. } => "Ping",
+        ActiveSession::Main { .. } => "Main",
+    }
 }
 
 fn print_session(session: &command::ActiveSession) -> String {
