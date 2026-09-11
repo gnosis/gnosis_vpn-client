@@ -1188,7 +1188,8 @@ impl Core {
     /// existing "not configured" branch in `WorkerCommand::Connect`.
     fn merge_discovered_destinations(&mut self, nodes: HashMap<Address, edgli::ExitNodeInfo>) {
         let before: HashSet<String> = self.config.destinations.keys().cloned().collect();
-        connection::destination::merge_discovered(&mut self.config.destinations, &nodes);
+        let defaults = self.config.default_targets;
+        connection::destination::merge_discovered(&mut self.config.destinations, &nodes, defaults);
         let after: HashSet<String> = self.config.destinations.keys().cloned().collect();
 
         for removed_id in before.difference(&after) {

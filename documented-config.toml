@@ -18,19 +18,26 @@ version = 7
 
 [destinations]
 
+# A destination is its exit node and its path. Every value below except those two is optional and
+# overrides what the exit node itself publishes, so an entry may be nothing but an address plus the
+# values you want to override. Per value: what you set here wins, else what the exit publishes,
+# else the global default. `gvpn-ctl status` notes any published value an entry overrode.
+#
 # identifier for a destination and its routing options
 # [destinations.<id>]
 # exit node address (where the connection should terminate)
 # address = "<exit node address>"
-# additional information about this exit node - any key is kept. `name` becomes the destination's
-# title in `gvpn-ctl status` (bracketing the id above when the two differ), and location, flag and
-# description are shown as labels
+# additional information about this exit node - any key is kept, and overrides the exit's own label
+# of the same name. `name` becomes the destination's title in `gvpn-ctl status` (bracketing the id
+# above when the two differ), and location, flag and description are shown as labels
 # meta = { name = <title>, location = <location>, flag = <two-letter country code>, description = <free text> }
-# session path: number of intermediate hops (0–3)
+# session path: number of intermediate hops (0–3). Not an override: a discovered exit is always
+# reachable at 1 hop, so an entry at another path is an additional destination beside it. Two
+# entries for the same exit at the same path are rejected.
 # path = { hops = 1 }
-# override the exit node's own gvpn-server/WireGuard endpoints for this destination instead of
-# the global [connection.bridge]/[connection.wg] target defaults below. Optional — omit to use
-# the global defaults, same as before version 7.
+# override the exit node's own gvpn-server/WireGuard endpoints for this destination. Optional —
+# omit to use whatever the exit node publishes, falling back to the global
+# [connection.bridge]/[connection.wg] targets below when it is not discovered at all.
 # gnosis_vpn_server = "172.30.0.1:8000"
 # wireguard_server = "172.30.0.1:51820"
 

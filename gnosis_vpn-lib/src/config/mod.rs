@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use tokio::fs;
 
-use crate::connection::{destination::Destination, options::Options as ConnectionOptions};
+use crate::connection::{
+    destination::{DefaultTargets, Destination},
+    options::Options as ConnectionOptions,
+};
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::pix_config::PixConfig;
 use crate::hopr::strategy_config::StrategyConfig;
@@ -25,6 +28,8 @@ pub const ENV_VAR: &str = "GNOSISVPN_CONFIG_PATH";
 pub struct Config {
     pub connection: ConnectionOptions,
     pub destinations: HashMap<String, Destination>,
+    /// Needed past load time: a destination that discovery stops reporting falls back to these.
+    pub default_targets: DefaultTargets,
     pub wireguard: WireGuardConfig,
     pub blokli: BlokliConfig,
     pub strategy: StrategyConfig,
@@ -47,6 +52,15 @@ pub enum Error {
     SurbBalancingMismatch,
     #[error("Error in hopr-lib: {0}")]
     HoprGeneral(#[from] GeneralError),
+    #[error(
+        "destinations {first} and {second} are both {address} at {hops} hops - a destination is its exit and its path, so one of them must go"
+    )]
+    DuplicateDestination {
+        first: String,
+        second: String,
+        address: String,
+        hops: usize,
+    },
 }
 
 pub async fn read(path: &Path) -> Result<Config, Error> {

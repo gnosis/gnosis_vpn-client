@@ -22,7 +22,9 @@ use std::time::Duration;
 use std::vec::Vec;
 
 use crate::config;
-use crate::connection::destination::{Destination as ConnDestination, DestinationSource, Meta};
+use crate::connection::destination::{
+    DEFAULT_HOPS, DefaultTargets, Destination as ConnDestination, DestinationSource, Meta, Overrides,
+};
 use crate::connection::options;
 use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
 use crate::hopr::pix_config::PixConfig;
@@ -839,8 +841,11 @@ impl TryFrom<Config> for config::Config {
         if connection.surb_balancing.ping.enabled != connection.surb_balancing.main.enabled {
             return Err(config::Error::SurbBalancingMismatch);
         }
-        let destinations =
-            convert_destinations(value.destinations, default_gnosis_vpn_server, default_wireguard_server)?;
+        let default_targets = DefaultTargets {
+            gnosis_vpn_server: default_gnosis_vpn_server,
+            wireguard_server: default_wireguard_server,
+        };
+        let destinations = convert_destinations(value.destinations, default_targets)?;
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
         let strategy = value.strategy.into();
@@ -848,6 +853,7 @@ impl TryFrom<Config> for config::Config {
         Ok(config::Config {
             connection,
             destinations,
+            default_targets,
             wireguard,
             blokli,
             strategy,
@@ -856,33 +862,42 @@ impl TryFrom<Config> for config::Config {
     }
 }
 
-/// Unlike v3–v6, an absent or empty `[destinations]` table is valid — it converts to an empty
-/// map rather than erroring. Discovery is expected to be the only source of destinations for a
-/// config that configures none.
+/// The per-destination `Option`s survive as the pins; discovery fills in what they leave open.
 pub fn convert_destinations(
     value: Option<HashMap<String, Destination>>,
-    default_gnosis_vpn_server: SocketAddr,
-    default_wireguard_server: SocketAddr,
+    defaults: DefaultTargets,
 ) -> Result<HashMap<String, ConnDestination>, config::Error> {
     let config_dests = value.unwrap_or_default();
 
     let mut result = HashMap::new();
+    let mut seen: HashMap<(Address, usize), String> = HashMap::new();
     for (id, dest) in config_dests.iter() {
         let path = match dest.path {
             Some(DestinationPath::Hops(h)) => HopRouting::try_from(h as usize)?,
-            None => HopRouting::try_from(1)?,
+            None => HopRouting::try_from(DEFAULT_HOPS)?,
         };
+        if let Some(other) = seen.insert((dest.address, path.hop_count()), id.to_string()) {
+            return Err(config::Error::DuplicateDestination {
+                first: other,
+                second: id.to_string(),
+                address: dest.address.to_checksum(),
+                hops: path.hop_count(),
+            });
+        }
 
-        let meta = Meta::from_map(dest.meta.clone().unwrap_or_default());
+        let labels = dest.meta.clone().unwrap_or_default();
+        let meta = Meta::from_map(labels.clone());
+        let overrides = Overrides::from_config(labels, dest.gnosis_vpn_server, dest.wireguard_server);
         let dest = ConnDestination::new(
             id.to_string(),
             dest.address,
             path,
             meta,
-            dest.gnosis_vpn_server.unwrap_or(default_gnosis_vpn_server),
-            dest.wireguard_server.unwrap_or(default_wireguard_server),
+            dest.gnosis_vpn_server.unwrap_or(defaults.gnosis_vpn_server),
+            dest.wireguard_server.unwrap_or(defaults.wireguard_server),
             DestinationSource::Configured,
-        );
+        )
+        .with_overrides(overrides);
         result.insert(id.to_string(), dest);
     }
     Ok(result)
@@ -891,8 +906,8 @@ pub fn convert_destinations(
 #[cfg(test)]
 mod tests {
     use super::{
-        ChannelAllowlistConfig, Config, Connection, DestinationSource, Strategy, WireGuardConfig, convert_destinations,
-        wrong_keys,
+        ChannelAllowlistConfig, Config, Connection, DefaultTargets, DestinationSource, Strategy, WireGuardConfig,
+        convert_destinations, wrong_keys,
     };
     use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
     use crate::hopr::pix_config::PixConfig;
@@ -912,8 +927,10 @@ mod tests {
     ) -> HashMap<String, super::ConnDestination> {
         convert_destinations(
             value,
-            Connection::default_bridge_socket(),
-            Connection::default_wg_socket(),
+            DefaultTargets {
+                gnosis_vpn_server: Connection::default_bridge_socket(),
+                wireguard_server: Connection::default_wg_socket(),
+            },
         )
         .expect("should succeed")
     }
@@ -995,6 +1012,58 @@ version = 7
         );
         let result = convert_with_defaults(cfg.destinations);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn the_same_exit_at_the_same_path_under_two_ids_is_rejected() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { hops = 2 }
+
+[destinations.Frankfurt]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { hops = 2 }
+"#####,
+        );
+
+        let err = convert_destinations(
+            cfg.destinations,
+            DefaultTargets {
+                gnosis_vpn_server: Connection::default_bridge_socket(),
+                wireguard_server: Connection::default_wg_socket(),
+            },
+        )
+        .expect_err("a duplicate exit and path is rejected");
+
+        assert!(matches!(
+            err,
+            crate::config::Error::DuplicateDestination { hops: 2, .. }
+        ));
+    }
+
+    #[test]
+    fn the_same_exit_at_two_paths_is_two_destinations() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { hops = 1 }
+
+[destinations.GermanyLongRoute]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { hops = 3 }
+"#####,
+        );
+
+        let result = convert_with_defaults(cfg.destinations);
+
+        assert_eq!(2, result.len());
     }
 
     #[test]
