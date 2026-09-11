@@ -1770,8 +1770,7 @@ impl Core {
     /// spawns a new connection runner that carries the old public key so the new runner's
     /// background bridge-cleanup task can unregister it.
     async fn force_reconnect(&mut self, conn: connection::up::Up, results_sender: &mpsc::Sender<Results>) {
-        // The connection's own snapshot, never a re-resolved one: the replacement runner
-        // unregisters `prev_public_key` through a bridge to these very endpoints.
+        // The connection's own snapshot: the replacement runner unregisters prev_public_key here.
         let destination = conn.destination.clone();
         let prev_public_key = conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone());
         let exit_health = self
