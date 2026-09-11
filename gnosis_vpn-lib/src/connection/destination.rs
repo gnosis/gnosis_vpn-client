@@ -174,12 +174,9 @@ impl Destination {
         format!("{name}({id})", id = self.id)
     }
 
-    /// Identity: the exit and the route to it; `meta` and `source` are display state discovery rewrites.
+    /// Identity: the exit and the path to it; every other field is resolved or display state.
     pub fn same_exit(&self, other: &Self) -> bool {
-        self.address == other.address
-            && self.routing == other.routing
-            && self.gnosis_vpn_server == other.gnosis_vpn_server
-            && self.wireguard_server == other.wireguard_server
+        self.address == other.address && self.routing == other.routing
     }
 }
 
@@ -553,7 +550,7 @@ mod tests {
     }
 
     #[test]
-    fn same_exit_separates_a_different_exit_route_or_target() {
+    fn same_exit_separates_a_different_exit_or_path() {
         let base = configured("dest-1", address(1));
 
         assert!(!base.same_exit(&configured("dest-1", address(2))));
@@ -561,14 +558,20 @@ mod tests {
         let mut rerouted = base.clone();
         rerouted.routing = HopRouting::try_from(3).unwrap();
         assert!(!base.same_exit(&rerouted));
+    }
+
+    /// Targets resolve from discovery, so a tick filling them in must not read as a new exit.
+    #[test]
+    fn same_exit_ignores_the_session_targets() {
+        let base = configured("dest-1", address(1));
 
         let mut other_bridge = base.clone();
         other_bridge.gnosis_vpn_server = "10.0.0.1:9000".parse().unwrap();
-        assert!(!base.same_exit(&other_bridge));
+        assert!(base.same_exit(&other_bridge));
 
         let mut other_wg = base.clone();
         other_wg.wireguard_server = "10.0.0.1:9001".parse().unwrap();
-        assert!(!base.same_exit(&other_wg));
+        assert!(base.same_exit(&other_wg));
     }
 
     /// Without `same_exit` a tick would make the connected exit look like a new one and drop the tunnel.
