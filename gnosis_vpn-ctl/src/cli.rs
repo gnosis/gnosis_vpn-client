@@ -104,7 +104,7 @@ pub enum Command {
     #[command(hide = true)]
     Completions { shell: clap_complete::Shell },
 
-    /// List configured destination IDs, one per line
+    /// List destination IDs, configured and discovered alike, one per line
     #[command(hide = true)]
     Destinations {},
 }

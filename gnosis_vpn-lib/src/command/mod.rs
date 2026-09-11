@@ -45,7 +45,7 @@ pub enum Command {
     StartClient(Duration),
     /// Stop a running worker process and edge client
     StopClient,
-    /// List configured destination IDs
+    /// List destination IDs, configured and discovered alike
     Destinations,
 }
 
@@ -58,6 +58,8 @@ pub enum WorkerCommand {
     Balance,
     FundingTool(String),
     Telemetry,
+    /// The worker answers this one because only it holds the discovery merge.
+    Destinations,
     /// Reconnect the current HOPR session without clearing the target or disabling the killswitch.
     /// Used by the root process when a WAN interface change is detected.
     ForceReconnect,
@@ -666,10 +668,9 @@ impl TryFrom<Command> for WorkerCommand {
             Command::Balance => Ok(WorkerCommand::Balance),
             Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
             Command::Telemetry => Ok(WorkerCommand::Telemetry),
+            Command::Destinations => Ok(WorkerCommand::Destinations),
             // Commands that are not relevant for the worker
-            Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient | Command::Destinations => {
-                Err(())
-            }
+            Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient => Err(()),
         }
     }
 }
@@ -730,6 +731,24 @@ mod tests {
         let phase = connection::up::Phase::VerifyPing;
         let in_flight = reconnecting(Some(phase.clone())).to_string();
         assert!(in_flight.contains(&format!("phase {phase}")), "{in_flight}");
+    }
+
+    /// Shell completion for `connect` lists these, so it must reach the merged map, not the config.
+    #[test]
+    fn listing_destinations_is_routed_to_the_worker() {
+        assert_eq!(Ok(WorkerCommand::Destinations), Command::Destinations.try_into());
+    }
+
+    #[test]
+    fn commands_root_answers_itself_never_reach_the_worker() {
+        for cmd in [
+            Command::Info,
+            Command::Ping,
+            Command::StartClient(Duration::from_secs(1)),
+            Command::StopClient,
+        ] {
+            assert!(WorkerCommand::try_from(cmd).is_err());
+        }
     }
 
     // The app rejects a status it cannot parse, so the null shape is part of the contract.

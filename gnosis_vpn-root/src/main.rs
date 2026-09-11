@@ -904,8 +904,7 @@ impl DaemonState {
                         .send(KeepAliveInstruction::Restart)
                         .await;
                     Ok(())
-                } else if matches!(w_cmd, WorkerCommand::Status) {
-                    let response = self.status_response_offline();
+                } else if let Some(response) = self.offline_response(&w_cmd) {
                     let _ = resp.send(response).map_err(|error| {
                         tracing::error!(?error, "socket command response channel closed");
                     });
@@ -969,6 +968,22 @@ impl DaemonState {
         }
     }
 
+    /// What root can still answer from the config file alone once the worker is gone.
+    fn offline_response(&self, cmd: &WorkerCommand) -> Option<Response> {
+        match cmd {
+            WorkerCommand::Status => Some(self.status_response_offline()),
+            WorkerCommand::Destinations => Some(Response::Destinations(self.configured_destination_ids())),
+            _ => None,
+        }
+    }
+
+    /// Only what the config file names; the worker's answer also carries whatever discovery found.
+    fn configured_destination_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.config.destinations.keys().cloned().collect();
+        ids.sort_unstable();
+        ids
+    }
+
     fn status_response_offline(&self) -> Response {
         let mut vals: Vec<&Destination> = self.config.destinations.values().collect();
         vals.sort_unstable_by(|a, b| a.id.cmp(&b.id));
@@ -1007,11 +1022,7 @@ impl DaemonState {
                 _ => Response::WorkerOffline,
             }),
             LibCommand::Ping => Ok(Response::Pong),
-            LibCommand::Destinations => {
-                let mut ids: Vec<String> = self.config.destinations.keys().cloned().collect();
-                ids.sort_unstable();
-                Ok(Response::Destinations(ids))
-            }
+            LibCommand::Destinations => Ok(Response::Destinations(self.configured_destination_ids())),
             LibCommand::Info => {
                 let package_version = fs::read_to_string("/etc/gnosisvpn/version.txt")
                     .await

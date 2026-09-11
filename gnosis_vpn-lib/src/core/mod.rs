@@ -369,6 +369,12 @@ impl Core {
                         let _ = resp.send(Response::status(self.build_status()));
                     }
 
+                    WorkerCommand::Destinations => {
+                        let mut ids: Vec<String> = self.config.destinations.keys().cloned().collect();
+                        ids.sort_unstable();
+                        let _ = resp.send(Response::Destinations(ids));
+                    }
+
                     WorkerCommand::Connect(id) => match self.config.destinations.clone().get(&id) {
                         Some(dest) => {
                             self.reconnecting_since = None;
