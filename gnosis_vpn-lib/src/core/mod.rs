@@ -1221,8 +1221,7 @@ impl Core {
             }
         }
 
-        // The peers loop is only started at on_hopr_running when something already needs
-        // peering, so with zero configured destinations discovery has to start it itself.
+        // on_hopr_running only starts the peers loop if a route already needs peering; with zero configured destinations discovery must start it
         if added_any && self.hopr.is_some() {
             self.cancel_peers.cancel();
             self.cancel_peers = self.cancel_on_shutdown.child_token();
