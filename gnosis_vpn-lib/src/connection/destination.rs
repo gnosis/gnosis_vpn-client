@@ -133,8 +133,6 @@ pub struct Destination {
     /// The WireGuard-session target, resolved by the same precedence as `gnosis_vpn_server`.
     pub wireguard_server: SocketAddr,
     pub source: DestinationSource,
-    /// Absent from an older daemon's payload, where nothing was overridable.
-    #[serde(default)]
     pub overrides: Overrides,
 }
 
@@ -887,7 +885,7 @@ mod tests {
         assert_eq!("Frankfurt-1(dest-1)", destinations["dest-1"].title());
     }
 
-    /// `Destination` crosses the socket whole and ctl never negotiates a version - pin the shape.
+    /// Daemon and ctl ship as one version, so this pins the socket shape against accidental drift.
     #[test]
     fn destination_serializes_to_the_expected_json_shape() {
         let dest = configured("dest-1", address(1));
@@ -898,16 +896,6 @@ mod tests {
             json,
             r#"{"id":"dest-1","meta":{"name":null,"location":null,"flag":null,"description":null,"other":{}},"address":"0x0101010101010101010101010101010101010101","routing":1,"gnosis_vpn_server":"172.30.0.1:8000","wireguard_server":"172.30.0.1:51820","source":"Configured","overrides":{"configured_meta":{},"configured_gnosis_vpn_server":null,"configured_wireguard_server":null}}"#
         );
-    }
-
-    /// An older daemon's payload carries no `overrides`; a newer ctl must still read it.
-    #[test]
-    fn a_destination_without_overrides_deserializes() {
-        let json = r#"{"id":"dest-1","meta":{"name":null,"location":null,"flag":null,"description":null,"other":{}},"address":"0x0101010101010101010101010101010101010101","routing":1,"gnosis_vpn_server":"172.30.0.1:8000","wireguard_server":"172.30.0.1:51820","source":"Configured"}"#;
-
-        let dest: Destination = serde_json::from_str(json).expect("an older payload still parses");
-
-        assert_eq!(Overrides::default(), dest.overrides);
     }
 
     #[test]
