@@ -17,7 +17,9 @@ pub(crate) fn gauge_value(text: &str, metric: &str, session_id: &str) -> Option<
         if !labels.split(',').any(|pair| pair.trim() == label) {
             continue;
         }
-        return value.trim().parse().ok();
+        let value: f64 = value.trim().parse().ok()?;
+        // exporters legitimately emit NaN/+Inf; neither is a usable reading
+        return value.is_finite().then_some(value);
     }
     None
 }
@@ -42,6 +44,8 @@ hopr_session_surb_rate_per_sec{session_id="aabbcc"} 512.5
 hopr_session_surb_produced_total{session_id="aabbcc",other="x"} 123456
 hopr_session_surb_consumed_total{peer_session_id="aabbcc"} 999
 hopr_session_surb_target_buffer{session_id="aabbcc"} -1
+hopr_session_surb_rate_per_sec{session_id="ddeeff"} NaN
+hopr_session_surb_target_buffer{session_id="ddeeff"} +Inf
 "#;
 
     #[test]
@@ -73,6 +77,12 @@ hopr_session_surb_target_buffer{session_id="aabbcc"} -1
     #[test]
     fn ignores_label_keys_merely_ending_in_session_id() {
         assert_eq!(gauge_value(FIXTURE, "hopr_session_surb_consumed_total", "aabbcc"), None);
+    }
+
+    #[test]
+    fn rejects_non_finite_values() {
+        assert_eq!(gauge_value(FIXTURE, "hopr_session_surb_rate_per_sec", "ddeeff"), None);
+        assert_eq!(gauge_value(FIXTURE, "hopr_session_surb_target_buffer", "ddeeff"), None);
     }
 
     #[test]
