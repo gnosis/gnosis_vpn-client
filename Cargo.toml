@@ -25,7 +25,7 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.6", features = ["derive", "env"] }
 clap_complete = "~4.6.9"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "d3da1f618cd282ad19725871021fa1920d2a52ba", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "aec3623b64f6c8414524f14d714fb3020e6322ae", features = [
   "blokli",
   "pix",
   "pix-test",
@@ -39,7 +39,7 @@ futures-util = "~0.3.34"
 # commits -- mixing the two builds hoprnet twice and fails with `expected
 # hopr_lib::HoprSessionClientConfig, found HoprSessionClientConfig`. Keep both entries in the
 # same form and pointed at the same commit as edgli's own `hopr-lib` pin.
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "87f0e07d505527253b278fc7372b9601afb921d2", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "85e698a726710e205e8f76f4df7ad52debd2ff86", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"

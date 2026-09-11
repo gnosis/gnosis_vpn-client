@@ -10,7 +10,7 @@ use edgli::{BlockchainConnectorConfig, EdgliInitState};
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time;
 use url::Url;
 
@@ -67,6 +67,12 @@ pub(crate) enum Results {
         res: Result<Arc<dyn IncentiveOperations>, Error>,
     },
     IncentiveOperationsRetry {
+        error: String,
+    },
+    ExitNodesUpdated {
+        nodes: std::collections::HashMap<Address, edgli::ExitNodeInfo>,
+    },
+    ExitNodesRetry {
         error: String,
     },
     NodeWxhoprWithdraw {
@@ -253,10 +259,25 @@ pub(crate) async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Send
     let _ = results_sender.send(Results::HoprRunning).await;
 }
 
-pub(crate) async fn peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+/// One peers loop for the node's lifetime; `Core` steers its cadence through `interval`.
+pub(crate) async fn peers(
+    hopr: Arc<Hopr>,
+    results_sender: mpsc::Sender<Results>,
+    mut interval: watch::Receiver<Duration>,
+) {
     tracing::debug!("starting peers runner");
-    let res = hopr.peers().await.map_err(Error::from);
-    let _ = results_sender.send(Results::Peers { res }).await;
+    loop {
+        let res = hopr.peers().await.map_err(Error::from);
+        if results_sender.send(Results::Peers { res }).await.is_err() {
+            return; // Core is gone
+        }
+        let delay = *interval.borrow_and_update();
+        // Wake early when Core shortens the cadence rather than waiting out the old one.
+        tokio::select! {
+            _ = time::sleep(delay) => {}
+            _ = interval.changed() => {}
+        }
+    }
 }
 
 pub(crate) async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Results>) {
@@ -300,6 +321,63 @@ pub(crate) async fn create_incentive_operations(
 ) {
     let res = run_create_incentive_operations(worker_params, blokli_config, results_sender.clone()).await;
     let _ = results_sender.send(Results::IncentiveOperations { res }).await;
+}
+
+/// Watches registered `gvpn:exit` nodes for as long as `Core` keeps re-spawning this task.
+///
+/// Two steps because upstream splits them: the snapshot needs only a Blokli endpoint, the live
+/// event stream behind it needs `hopr`'s connected chain connector.
+///
+/// Unlike [`create_incentive_operations`], a failure here must never end `Core` — configured
+/// destinations have to keep working even with no Blokli reachable at all — so this reports
+/// failure and returns rather than retrying with a bounded backoff; `Core` re-spawns it on a
+/// fixed delay, the same way it does for every other transient runner failure.
+pub(crate) async fn watch_exit_nodes(
+    worker_params: &WorkerParams,
+    blokli_config: BlokliConfig,
+    hopr: Arc<Hopr>,
+    results_sender: mpsc::Sender<Results>,
+) {
+    let blokli_endpoint = worker_params.blokli_endpoint(blokli_config.request_timeout);
+    let initial = match edgli::list_exit_nodes(blokli_endpoint).await {
+        Ok(nodes) => nodes,
+        Err(err) => {
+            let _ = results_sender
+                .send(Results::ExitNodesRetry { error: err.to_string() })
+                .await;
+            return;
+        }
+    };
+    // Held for the whole loop: dropping the registry aborts the upstream watch task.
+    let mut registry = match hopr.watch_exit_nodes(initial) {
+        Ok(registry) => registry,
+        Err(err) => {
+            let _ = results_sender
+                .send(Results::ExitNodesRetry { error: err.to_string() })
+                .await;
+            return;
+        }
+    };
+    loop {
+        if results_sender
+            .send(Results::ExitNodesUpdated {
+                nodes: registry.nodes(),
+            })
+            .await
+            .is_err()
+        {
+            return; // Core is gone
+        }
+        if registry.changed().await.is_err() {
+            // Nothing to preserve: the only error here is the watch channel's content-free "closed".
+            let _ = results_sender
+                .send(Results::ExitNodesRetry {
+                    error: "exit node registry task ended unexpectedly".to_string(),
+                })
+                .await;
+            return;
+        }
+    }
 }
 
 async fn run_node_wxhopr_withdraw(
@@ -610,6 +688,12 @@ impl Display for Results {
             },
             Results::IncentiveOperationsRetry { error } => {
                 write!(f, "IncentiveOperationsRetry: Error({})", error)
+            }
+            Results::ExitNodesUpdated { nodes } => {
+                write!(f, "ExitNodesUpdated: {} node(s)", nodes.len())
+            }
+            Results::ExitNodesRetry { error } => {
+                write!(f, "ExitNodesRetry: Error({})", error)
             }
             Results::HoprRunning => write!(f, "HoprRunning: Node is running"),
             Results::ConnectionEvent(evt) => {

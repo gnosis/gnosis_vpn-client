@@ -3,12 +3,12 @@ use edgli::blokli::IncentiveOperations;
 use edgli::hopr_lib::builder::Keypair;
 use futures_util::future::AbortHandle;
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -35,6 +35,10 @@ enum Responder {
 }
 
 const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
+/// Peers cadence while a route still needs peering or a target is pending.
+const PEERS_EAGER_INTERVAL: Duration = Duration::from_secs(10);
+/// Peers cadence once nothing is waiting on them.
+const PEERS_LAZY_INTERVAL: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -74,14 +78,18 @@ pub struct Core {
     cancel_on_shutdown: CancellationToken,
     cancel_presafe_queries: CancellationToken,
     cancel_balances: CancellationToken,
-    cancel_peers: CancellationToken,
     // Tracks the connection's NepTUN pump task so teardown can wait for it to
     // stop (dropping its TUN fd) before asking root to tear down routing;
     // replaced together with cancel_connection.
     wg_pump_tasks: TaskTracker,
 
+    /// The single peers loop and the cadence Core steers it with.
+    peers_interval: watch::Sender<Duration>,
+    peers_loop_running: bool,
+
     // user provided data
-    target_destination: Option<Destination>,
+    /// The id only - a cached clone goes stale on discovery updates and cannot outlive a restart.
+    target_dest_id: Option<String>,
 
     // runtime data
     phase: Phase,
@@ -172,8 +180,7 @@ impl Core {
             );
         }
 
-        let target_destination = target_dest_id.and_then(|id| config.destinations.get(&id).cloned());
-
+        let (peers_interval, _) = watch::channel(PEERS_LAZY_INTERVAL);
         let (incoming_sender, incoming_receiver) = mpsc::channel(32);
         let cached_resolved_blokli_ips = worker_params.cached_blokli_ips().to_vec();
         let core = Core {
@@ -192,11 +199,12 @@ impl Core {
             cancel_on_shutdown: cancel_on_shutdown.clone(),
             cancel_presafe_queries: cancel_on_shutdown.child_token(),
             cancel_balances: cancel_on_shutdown.child_token(),
-            cancel_peers: cancel_on_shutdown.child_token(),
             wg_pump_tasks: TaskTracker::new(),
+            peers_interval,
+            peers_loop_running: false,
 
             // user provided data
-            target_destination,
+            target_dest_id,
 
             // runtime data
             phase: Phase::Initial { last_error: None },
@@ -369,11 +377,17 @@ impl Core {
                         let _ = resp.send(Response::status(self.build_status()));
                     }
 
+                    WorkerCommand::Destinations => {
+                        let mut ids: Vec<String> = self.config.destinations.keys().cloned().collect();
+                        ids.sort_unstable();
+                        let _ = resp.send(Response::Destinations(ids));
+                    }
+
                     WorkerCommand::Connect(id) => match self.config.destinations.clone().get(&id) {
                         Some(dest) => {
                             self.reconnecting_since = None;
                             let is_already_active = match &self.phase {
-                                Phase::Connected(conn) | Phase::Connecting(conn) => conn.destination == *dest,
+                                Phase::Connected(conn) | Phase::Connecting(conn) => conn.destination.same_exit(dest),
                                 _ => false,
                             };
                             if is_already_active {
@@ -384,7 +398,7 @@ impl Core {
                                 if rh.is_ready_to_connect() {
                                     let _ = resp
                                         .send(Response::connect(command::ConnectResponse::connecting(dest.clone())));
-                                    self.target_destination = Some(dest.clone());
+                                    self.target_dest_id = Some(dest.id.clone());
                                     self.act_on_target(results_sender);
                                 } else if rh.is_unrecoverable() {
                                     let _ = resp.send(Response::connect(command::ConnectResponse::unable(
@@ -396,7 +410,7 @@ impl Core {
                                         dest.clone(),
                                         rh.state().clone(),
                                     )));
-                                    self.target_destination = Some(dest.clone());
+                                    self.target_dest_id = Some(dest.id.clone());
                                 }
                             } else {
                                 tracing::warn!(%id, "no route health found for destination - this should not happen");
@@ -410,7 +424,7 @@ impl Core {
                     },
 
                     WorkerCommand::Disconnect => {
-                        self.target_destination = None;
+                        self.target_dest_id = None;
                         self.reconnecting_since = None;
                         self.cached_resolved_blokli_ips = Vec::new();
                         match self.phase.clone() {
@@ -529,6 +543,13 @@ impl Core {
                         last_error: Some(error),
                     };
                 }
+            }
+            Results::ExitNodesUpdated { nodes } => {
+                self.merge_discovered_destinations(nodes);
+            }
+            Results::ExitNodesRetry { error } => {
+                tracing::warn!(%error, "exit node discovery failed - retrying");
+                self.spawn_exit_node_discovery_runner(results_sender, Duration::from_secs(30));
             }
             Results::HoprConstruction(edgli_state) => {
                 if matches!(self.phase, Phase::Starting { .. }) {
@@ -689,22 +710,20 @@ impl Core {
                             }
                         }
 
-                        if self.target_destination.is_some()
-                            || route_health::any_needs_peers(self.route_healths.values())
-                        {
-                            Duration::from_secs(10)
+                        if self.target_dest_id.is_some() || route_health::any_needs_peers(self.route_healths.values()) {
+                            PEERS_EAGER_INTERVAL
                         } else {
-                            Duration::from_secs(90)
+                            PEERS_LAZY_INTERVAL
                         }
                     }
                     Err(err) => {
                         tracing::error!(?err, "failed to fetch peers");
                         // Retry quickly on failure so transient HOPR API errors don't
-                        // leave route health stuck waiting for the lazy 90s poll.
-                        Duration::from_secs(10)
+                        // leave route health stuck waiting for the lazy poll.
+                        PEERS_EAGER_INTERVAL
                     }
                 };
-                self.spawn_peers(results_sender, delay);
+                self.set_peers_interval(delay);
             }
 
             Results::ConnectionEvent(evt) => {
@@ -768,9 +787,7 @@ impl Core {
                     // A spliced session has no local listener to poll; the pump task
                     // reports its own death via WgPumpExited instead of a monitor.
                     self.spawn_tunnel_ping_probe(results_sender);
-                    self.cancel_peers.cancel();
-                    self.cancel_peers = self.cancel_on_shutdown.child_token();
-                    self.spawn_peers(results_sender, Duration::from_secs(10));
+                    self.set_peers_interval(PEERS_EAGER_INTERVAL);
                 }
                 (Ok(_), phase) => {
                     tracing::warn!(?phase, "unawaited connection established successfully");
@@ -781,10 +798,10 @@ impl Core {
                     if let Some(rh) = self.route_healths.get_mut(&conn.destination.id) {
                         rh.with_error(err.to_string());
                     }
-                    if let Some(dest) = self.target_destination.clone()
-                        && dest == conn.destination
-                    {
-                        tracing::info!(%dest, "restarting connection worker process due to final connection error");
+                    // By id: a dropped target must still restart the worker, not stick in Connecting.
+                    let failed_the_target = self.target_dest_id.as_deref() == Some(conn.destination.id.as_str());
+                    if failed_the_target {
+                        tracing::info!(id = %conn.destination.id, "restarting connection worker process due to final connection error");
                         return false;
                     }
                 }
@@ -1153,6 +1170,77 @@ impl Core {
         });
     }
 
+    /// Only runs once the node is up, since tracking the registry needs its chain connector — so a
+    /// config with no `[destinations]` has none until then. The guard also stops the
+    /// `ExitNodesRetry` re-spawn from resurrecting discovery outside that window.
+    fn spawn_exit_node_discovery_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let Some(hopr) = self.hopr.clone() else { return };
+        let cancel = self.cancel_on_shutdown.clone();
+        let worker_params = self.worker_params.clone();
+        let blokli_config = self.config.blokli.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    runner::watch_exit_nodes(&worker_params, blokli_config, hopr, results_sender).await;
+                })
+                .await
+        });
+    }
+
+    /// Merges a fresh discovery snapshot into `config.destinations`, then keeps
+    /// `route_healths` in sync — inserting a tracker for every id the merge added, removing one
+    /// for every id it dropped, and rebuilding one whose destination moved out from under it.
+    /// Mirrors the seeding loop in `Core::init`, the only other place that constructs a
+    /// `RouteHealth`.
+    ///
+    /// Deliberately does not touch the connection state machine: if the active/target
+    /// destination's id disappears here, the live connection (which holds its own cloned
+    /// `Destination`) is left running; a later reconnect attempt to that id just hits the
+    /// existing "not configured" branch in `WorkerCommand::Connect`.
+    fn merge_discovered_destinations(&mut self, nodes: HashMap<Address, edgli::ExitNodeInfo>) {
+        let targets_before: HashMap<String, (net::SocketAddr, net::SocketAddr)> = self
+            .config
+            .destinations
+            .iter()
+            .map(|(id, dest)| (id.clone(), (dest.gnosis_vpn_server, dest.wireguard_server)))
+            .collect();
+        let before: HashSet<String> = targets_before.keys().cloned().collect();
+        let defaults = self.config.default_targets;
+        connection::destination::merge_discovered(&mut self.config.destinations, &nodes, defaults);
+        let after: HashSet<String> = self.config.destinations.keys().cloned().collect();
+
+        for removed_id in before.difference(&after) {
+            self.route_healths.remove(removed_id);
+        }
+
+        let mut fresh_ids: Vec<String> = after.difference(&before).cloned().collect();
+        fresh_ids.extend(latched_on_a_moved_target(
+            &self.config.destinations,
+            &self.route_healths,
+            &targets_before,
+        ));
+        for id in &fresh_ids {
+            if let Some(dest) = self.config.destinations.get(id) {
+                self.route_healths.insert(
+                    id.clone(),
+                    RouteHealth::new(
+                        dest,
+                        self.worker_params.allow_insecure(),
+                        self.worker_params.allow_experimental(),
+                        self.cancel_on_shutdown.clone(),
+                    ),
+                );
+            }
+        }
+
+        // A tracker that just started over needs peers now, not on the lazy tick.
+        if !fresh_ids.is_empty() {
+            self.set_peers_interval(PEERS_EAGER_INTERVAL);
+        }
+    }
+
     async fn determine_next_phase_from_safe_disk_query(&mut self, results_sender: &mpsc::Sender<Results>) {
         let res = hopr_config::read_safe(self.worker_params.state_home()).await;
         match res {
@@ -1391,19 +1479,29 @@ impl Core {
         }
     }
 
-    fn spawn_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        if let Some(hopr) = self.hopr.clone() {
-            let cancel = self.cancel_peers.clone();
-            let results_sender = results_sender.clone();
-            tokio::spawn(async move {
-                cancel
-                    .run_until_cancelled(async move {
-                        time::sleep(delay).await;
-                        runner::peers(hopr, results_sender).await;
-                    })
-                    .await
-            });
+    /// Store the cadence, waking the loop only when it shortened - a longer one can wait.
+    fn set_peers_interval(&self, delay: Duration) {
+        self.peers_interval.send_if_modified(|current| {
+            let shortened = delay < *current;
+            *current = delay;
+            shortened
+        });
+    }
+
+    fn start_peers_loop(&mut self, results_sender: &mpsc::Sender<Results>) {
+        if self.peers_loop_running {
+            return;
         }
+        let Some(hopr) = self.hopr.clone() else { return };
+        let cancel = self.cancel_on_shutdown.clone();
+        let interval = self.peers_interval.subscribe();
+        let results_sender = results_sender.clone();
+        self.peers_loop_running = true;
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(runner::peers(hopr, results_sender, interval))
+                .await
+        });
     }
 
     fn spawn_connection_runner(
@@ -1566,7 +1664,7 @@ impl Core {
         };
 
         let (connecting, reconnecting) =
-            connection_infos(&self.phase, self.reconnecting_since, self.target_destination.as_ref());
+            connection_infos(&self.phase, self.reconnecting_since, self.target_dest_id.as_deref());
         let connected = match &self.phase {
             Phase::Connected(conn) => Some(command::ConnectedInfo {
                 destination_id: conn.destination.id.clone(),
@@ -1595,7 +1693,7 @@ impl Core {
         command::StatusResponse {
             run_mode: runmode,
             destinations,
-            target_destination: self.target_destination.as_ref().map(|d| d.id.clone()),
+            target_destination: self.target_dest_id.clone(),
             connecting,
             reconnecting,
             connected,
@@ -1605,10 +1703,31 @@ impl Core {
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     fn act_on_target(&mut self, results_sender: &mpsc::Sender<Results>) {
-        tracing::debug!(target = ?self.target_destination, phase = ?self.phase, "acting on target destination");
-        match (self.target_destination.clone(), self.phase.clone()) {
+        tracing::debug!(target = ?self.target_dest_id, phase = ?self.phase, "acting on target destination");
+
+        // Only an absent target means disconnect; an unresolved id still waits for discovery.
+        let Some(target_id) = self.target_dest_id.clone() else {
+            match self.phase.clone() {
+                Phase::Connected(conn) => {
+                    tracing::info!(current = %conn.destination, "disconnecting from destination");
+                    self.disconnect_from_connection(&conn, results_sender);
+                }
+                Phase::Connecting(conn) => {
+                    tracing::info!(current = %conn.destination, "disconnecting from ongoing connection attempt");
+                    self.disconnect_from_connection(&conn, results_sender);
+                }
+                _ => {}
+            }
+            return;
+        };
+        let Some(dest) = self.config.destinations.get(&target_id).cloned() else {
+            tracing::debug!(%target_id, "target destination not known yet - waiting for discovery");
+            return;
+        };
+
+        match self.phase.clone() {
             // Connecting from ready
-            (Some(dest), Phase::HoprRunning) => {
+            Phase::HoprRunning => {
                 if let Some(rh) = self.route_healths.get(&dest.id) {
                     if let Some(exit) = rh.ready_to_connect() {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
@@ -1623,23 +1742,13 @@ impl Core {
                 }
             }
             // Connecting to different destination while already connected
-            (Some(dest), Phase::Connected(conn)) if dest != conn.destination => {
+            Phase::Connected(conn) if !dest.same_exit(&conn.destination) => {
                 tracing::info!(current = %conn.destination, new = %dest, "connecting to different destination while connected");
                 self.disconnect_from_connection(&conn, results_sender);
             }
             // Connecting to different destination while already connecting
-            (Some(dest), Phase::Connecting(conn)) if dest != conn.destination => {
+            Phase::Connecting(conn) if !dest.same_exit(&conn.destination) => {
                 tracing::info!(current = %conn.destination, new = %dest, "connecting to different destination while already connecting");
-                self.disconnect_from_connection(&conn, results_sender);
-            }
-            // Disconnecting from established connection
-            (None, Phase::Connected(conn)) => {
-                tracing::info!(current = %conn.destination, "disconnecting from destination");
-                self.disconnect_from_connection(&conn, results_sender);
-            }
-            // Disconnecting while establishing connection
-            (None, Phase::Connecting(conn)) => {
-                tracing::info!(current = %conn.destination, "disconnecting from ongoing connection attempt");
                 self.disconnect_from_connection(&conn, results_sender);
             }
             // No action needed
@@ -1673,6 +1782,7 @@ impl Core {
     /// spawns a new connection runner that carries the old public key so the new runner's
     /// background bridge-cleanup task can unregister it.
     async fn force_reconnect(&mut self, conn: connection::up::Up, results_sender: &mpsc::Sender<Results>) {
+        // The connection's own snapshot: the replacement runner unregisters prev_public_key here.
         let destination = conn.destination.clone();
         let prev_public_key = conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone());
         let exit_health = self
@@ -1712,12 +1822,12 @@ impl Core {
 
     fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
         self.phase = Phase::HoprRunning;
+        self.spawn_exit_node_discovery_runner(results_sender, Duration::ZERO);
         self.spawn_ideal_balance_recommendation_runner(results_sender, Duration::ZERO);
         self.spawn_capacity_allocations_runner(results_sender, Duration::ZERO);
         self.spawn_balances_runner(results_sender, Duration::ZERO);
-        if route_health::any_needs_peers(self.route_healths.values()) {
-            self.spawn_peers(results_sender, Duration::ZERO);
-        } else {
+        self.start_peers_loop(results_sender);
+        if !route_health::any_needs_peers(self.route_healths.values()) {
             self.act_on_target(results_sender);
         }
     }
@@ -1764,13 +1874,13 @@ impl Core {
 fn connection_infos(
     phase: &Phase,
     reconnecting_since: Option<SystemTime>,
-    target_destination: Option<&Destination>,
+    target_dest_id: Option<&str>,
 ) -> (Option<command::ConnectingInfo>, Option<command::ReconnectingInfo>) {
     let reconnecting = reconnecting_since.and_then(|since| {
         let (destination_id, phase) = match phase {
             Phase::Connecting(conn) => (conn.destination.id.clone(), Some(conn.phase.1.clone())),
             // Waiting on route health: the target is the only record of where we are headed.
-            Phase::HoprRunning => (target_destination?.id.clone(), None),
+            Phase::HoprRunning => (target_dest_id?.to_string(), None),
             _ => return None,
         };
         Some(command::ReconnectingInfo {
@@ -1812,10 +1922,30 @@ async fn wait_for_pump_stop(pump_tasks: TaskTracker) {
     }
 }
 
+/// Trackers to restart: every state re-probes the destination it is next handed, `Unrecoverable` latches.
+fn latched_on_a_moved_target(
+    destinations: &HashMap<String, Destination>,
+    route_healths: &HashMap<String, RouteHealth>,
+    targets_before: &HashMap<String, (net::SocketAddr, net::SocketAddr)>,
+) -> Vec<String> {
+    let mut ids = Vec::new();
+    for (id, dest) in destinations {
+        let Some(previous) = targets_before.get(id) else {
+            continue;
+        };
+        let target_moved = *previous != (dest.gnosis_vpn_server, dest.wireguard_server);
+        let latched = route_healths.get(id).is_some_and(RouteHealth::is_unrecoverable);
+        if target_moved && latched {
+            ids.push(id.clone());
+        }
+    }
+    ids
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::destination::HopRouting;
+    use crate::connection::destination::{DestinationSource, HopRouting, Meta};
     use crate::connection::up::{Phase as UpPhase, Up};
 
     fn destination(id: &str) -> Destination {
@@ -1823,8 +1953,26 @@ mod tests {
             id.to_string(),
             Address::from([1u8; 20]),
             HopRouting::try_from(1).expect("conversion cannot fail"),
-            HashMap::new(),
+            Meta::default(),
+            "172.30.0.1:8000".parse().expect("valid socket address"),
+            "172.30.0.1:51820".parse().expect("valid socket address"),
+            DestinationSource::Configured,
         )
+    }
+
+    fn latched_destination(id: &str) -> Destination {
+        let mut dest = destination(id);
+        // 0-hop without `allow_insecure` is the one latch reachable without a live health check.
+        dest.routing = HopRouting::try_from(0).expect("conversion cannot fail");
+        dest
+    }
+
+    fn tracker(dest: &Destination) -> RouteHealth {
+        RouteHealth::new(dest, false, false, CancellationToken::new())
+    }
+
+    fn targets(dest: &Destination) -> HashMap<String, (net::SocketAddr, net::SocketAddr)> {
+        HashMap::from([(dest.id.clone(), (dest.gnosis_vpn_server, dest.wireguard_server))])
     }
 
     fn attempt(id: &str, phase: UpPhase) -> Up {
@@ -1834,10 +1982,48 @@ mod tests {
     }
 
     #[test]
+    fn a_latched_tracker_restarts_once_discovery_moves_its_target() {
+        let mut dest = latched_destination("exit");
+        let before = targets(&dest);
+        let route_healths = HashMap::from([(dest.id.clone(), tracker(&dest))]);
+        dest.gnosis_vpn_server = "10.0.0.1:9000".parse().expect("valid socket address");
+        let destinations = HashMap::from([(dest.id.clone(), dest)]);
+
+        let ids = latched_on_a_moved_target(&destinations, &route_healths, &before);
+
+        assert_eq!(vec!["exit".to_string()], ids);
+    }
+
+    #[test]
+    fn a_latched_tracker_on_an_unchanged_target_is_left_alone() {
+        let dest = latched_destination("exit");
+        let before = targets(&dest);
+        let route_healths = HashMap::from([(dest.id.clone(), tracker(&dest))]);
+        let destinations = HashMap::from([(dest.id.clone(), dest)]);
+
+        let ids = latched_on_a_moved_target(&destinations, &route_healths, &before);
+
+        assert!(ids.is_empty());
+    }
+
+    // A tracker that still probes picks up the new target on its own cadence.
+    #[test]
+    fn a_moved_target_alone_does_not_restart_a_live_tracker() {
+        let mut dest = destination("exit");
+        let before = targets(&dest);
+        let route_healths = HashMap::from([(dest.id.clone(), tracker(&dest))]);
+        dest.wireguard_server = "10.0.0.1:9001".parse().expect("valid socket address");
+        let destinations = HashMap::from([(dest.id.clone(), dest)]);
+
+        let ids = latched_on_a_moved_target(&destinations, &route_healths, &before);
+
+        assert!(ids.is_empty());
+    }
+
+    #[test]
     fn waiting_on_route_health_reports_a_reconnect_without_a_phase() {
-        let target = destination("exit");
         let since = SystemTime::UNIX_EPOCH;
-        let (connecting, reconnecting) = connection_infos(&Phase::HoprRunning, Some(since), Some(&target));
+        let (connecting, reconnecting) = connection_infos(&Phase::HoprRunning, Some(since), Some("exit"));
         assert!(connecting.is_none());
         let info = reconnecting.expect("the reconnect intent must be reported");
         assert_eq!(info.destination_id, "exit");
@@ -1847,10 +2033,19 @@ mod tests {
 
     #[test]
     fn a_first_connect_waiting_on_route_health_is_not_a_reconnect() {
-        let target = destination("exit");
-        let (connecting, reconnecting) = connection_infos(&Phase::HoprRunning, None, Some(&target));
+        let (connecting, reconnecting) = connection_infos(&Phase::HoprRunning, None, Some("exit"));
         assert!(connecting.is_none());
         assert!(reconnecting.is_none());
+    }
+
+    // After a worker restart the target can name a discovered exit the config has never seen.
+    #[test]
+    fn a_target_not_yet_published_by_discovery_is_still_reported() {
+        let since = SystemTime::UNIX_EPOCH;
+        let (connecting, reconnecting) = connection_infos(&Phase::HoprRunning, Some(since), Some("0xdiscovered"));
+        assert!(connecting.is_none());
+        let info = reconnecting.expect("the reconnect intent must survive an unresolved target");
+        assert_eq!(info.destination_id, "0xdiscovered");
     }
 
     #[test]
@@ -1862,9 +2057,8 @@ mod tests {
 
     #[test]
     fn an_attempt_in_flight_reports_its_phase() {
-        let target = destination("exit");
         let phase = Phase::Connecting(attempt("exit", UpPhase::VerifyPing));
-        let (connecting, reconnecting) = connection_infos(&phase, Some(SystemTime::UNIX_EPOCH), Some(&target));
+        let (connecting, reconnecting) = connection_infos(&phase, Some(SystemTime::UNIX_EPOCH), Some("exit"));
         assert!(connecting.is_none());
         let info = reconnecting.expect("the reconnect must be reported");
         assert_eq!(info.destination_id, "exit");
@@ -1884,9 +2078,8 @@ mod tests {
 
     #[test]
     fn a_live_connection_never_reports_a_reconnect() {
-        let target = destination("exit");
         let phase = Phase::Connected(attempt("exit", UpPhase::ConnectionEstablished));
-        let (connecting, reconnecting) = connection_infos(&phase, Some(SystemTime::UNIX_EPOCH), Some(&target));
+        let (connecting, reconnecting) = connection_infos(&phase, Some(SystemTime::UNIX_EPOCH), Some("exit"));
         assert!(connecting.is_none());
         assert!(reconnecting.is_none());
     }

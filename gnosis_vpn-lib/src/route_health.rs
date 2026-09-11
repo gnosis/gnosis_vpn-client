@@ -723,6 +723,13 @@ impl RouteHealth {
     }
 }
 
+/// A removed tracker must not keep checking and hand a stale outcome to whatever reclaims its id.
+impl Drop for RouteHealth {
+    fn drop(&mut self) {
+        self.health_check_cancel.cancel();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Health check runner (async, runs in spawned task)
 // ---------------------------------------------------------------------------
@@ -915,13 +922,7 @@ impl HealthSession {
         };
         tracing::debug!(%destination, "opening TCP session for health check");
         let meta = hopr
-            .open_session(
-                destination.address,
-                options.sessions.bridge.target.clone(),
-                None,
-                None,
-                cfg,
-            )
+            .open_session(destination.address, destination.bridge_target(), None, None, cfg)
             .await?;
         Ok(Self {
             hopr,
@@ -1197,18 +1198,34 @@ mod tests {
 
     // --- failure_backoff ---
 
-    fn backoff_at(failures: u32) -> Duration {
-        use crate::connection::destination::{Destination, HopRouting};
-        use tokio_util::sync::CancellationToken;
-        let dest = Destination::new(
+    fn tracked_destination() -> crate::connection::destination::Destination {
+        use crate::connection::destination::{Destination, DestinationSource, HopRouting};
+        Destination::new(
             "test".to_string(),
             addr(1),
             HopRouting::try_from(1).unwrap(),
             Default::default(),
-        );
-        let mut rh = RouteHealth::new(&dest, false, false, CancellationToken::new());
+            "172.30.0.1:8000".parse().unwrap(),
+            "172.30.0.1:51820".parse().unwrap(),
+            DestinationSource::Configured,
+        )
+    }
+
+    fn backoff_at(failures: u32) -> Duration {
+        use tokio_util::sync::CancellationToken;
+        let mut rh = RouteHealth::new(&tracked_destination(), false, false, CancellationToken::new());
         rh.exit_failures = failures;
         rh.failure_backoff()
+    }
+
+    #[test]
+    fn dropping_a_tracker_cancels_its_in_flight_health_check() {
+        use tokio_util::sync::CancellationToken;
+        let rh = RouteHealth::new(&tracked_destination(), false, false, CancellationToken::new());
+        let spawned_task_token = rh.health_check_cancel.clone();
+        assert!(!spawned_task_token.is_cancelled());
+        drop(rh);
+        assert!(spawned_task_token.is_cancelled());
     }
 
     #[test]

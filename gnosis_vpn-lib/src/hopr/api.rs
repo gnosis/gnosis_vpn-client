@@ -350,6 +350,15 @@ impl Hopr {
         self.edgli.status()
     }
 
+    /// Tracks the `gvpn:exit` registry off this node's chain connector, seeded from
+    /// [`edgli::list_exit_nodes`].
+    #[tracing::instrument(skip_all, level = "debug", err)]
+    pub fn watch_exit_nodes(&self, initial: Vec<edgli::ExitNodeInfo>) -> Result<edgli::ExitNodeRegistry, HoprError> {
+        self.edgli
+            .watch_exit_nodes(initial)
+            .map_err(|e| HoprError::ExitNodeWatch(e.to_string()))
+    }
+
     #[tracing::instrument(skip(self), level = "debug", ret)]
     pub async fn start_telemetry_reactor(
         &self,

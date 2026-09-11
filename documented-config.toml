@@ -6,21 +6,44 @@
 ###
 
 # general config file version
-version = 6
+version = 7
 
 ###
 ## destinations section - configure available target destinations
+#
+# This whole section is optional as of version 7: gnosis_vpn-lib can discover exit nodes
+# registered on-chain instead, so a config with no [destinations] at all is valid. Configuring a
+# destination here still works exactly as before, and is the right place to pin a specific,
+# trusted exit node.
 
 [destinations]
 
+# A destination is its exit node and its path. Every value below except those two is optional and
+# overrides what the exit node itself publishes, so an entry may be nothing but an address plus the
+# values you want to override. Per value: what you set here wins, else what the exit publishes,
+# else the global default.
+#
+# `gvpn-ctl status` tags every destination with where it came from - [c] from this file only, [d]
+# discovered on-chain only, [c+d] configured here and discovered too. On a [c+d] entry it also
+# marks (c) each value you set here, whether or not the exit publishes a different one.
+#
 # identifier for a destination and its routing options
 # [destinations.<id>]
 # exit node address (where the connection should terminate)
 # address = "<exit node address>"
-# additional information about this exit node
-# meta = { location = <location> }
-# session path: number of intermediate hops (0–3)
+# additional information about this exit node - any key is kept, and overrides the exit's own label
+# of the same name. `name` becomes the destination's title in `gvpn-ctl status` (bracketing the id
+# above when the two differ), and location, flag and description are shown as labels
+# meta = { name = <title>, location = <location>, flag = <two-letter country code>, description = <free text> }
+# session path: number of intermediate hops (0–3). Not an override: a discovered exit is always
+# reachable at 1 hop, so an entry at another path is an additional destination beside it. Two
+# entries for the same exit at the same path are rejected.
 # path = { hops = 1 }
+# override the exit node's own gvpn-server/WireGuard endpoints for this destination. Optional —
+# omit to use whatever the exit node publishes, falling back to the global
+# [connection.bridge]/[connection.wg] targets below when it is not discovered at all.
+# gnosis_vpn_server = "172.30.0.1:8000"
+# wireguard_server = "172.30.0.1:51820"
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"

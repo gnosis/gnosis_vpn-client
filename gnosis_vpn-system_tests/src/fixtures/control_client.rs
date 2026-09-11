@@ -233,7 +233,7 @@ impl ControlClient {
                         .destinations
                         .iter()
                         .find(|d| d.destination.id == destination.id)
-                        .and_then(|d| d.destination.get_meta("location"))
+                        .and_then(|d| d.destination.meta.location.clone())
                         .unwrap_or_else(|| "<unknown>".to_string());
 
                     let is_connected = status

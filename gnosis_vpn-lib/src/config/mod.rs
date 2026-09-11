@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use tokio::fs;
 
-use crate::connection::{destination::Destination, options::Options as ConnectionOptions};
+use crate::connection::{
+    destination::{DefaultTargets, Destination},
+    options::Options as ConnectionOptions,
+};
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::pix_config::PixConfig;
 use crate::hopr::strategy_config::StrategyConfig;
@@ -16,6 +19,7 @@ mod v3;
 mod v4;
 mod v5;
 mod v6;
+mod v7;
 
 pub const DEFAULT_PATH: &str = "/etc/gnosisvpn/config.toml";
 pub const ENV_VAR: &str = "GNOSISVPN_CONFIG_PATH";
@@ -24,6 +28,8 @@ pub const ENV_VAR: &str = "GNOSISVPN_CONFIG_PATH";
 pub struct Config {
     pub connection: ConnectionOptions,
     pub destinations: HashMap<String, Destination>,
+    /// Needed past load time: a destination that discovery stops reporting falls back to these.
+    pub default_targets: DefaultTargets,
     pub wireguard: WireGuardConfig,
     pub blokli: BlokliConfig,
     pub strategy: StrategyConfig,
@@ -42,12 +48,19 @@ pub enum Error {
     TomlDeserialization(#[from] toml::de::Error),
     #[error("Unsupported config version: {0}")]
     VersionMismatch(u8),
-    #[error("No destinations")]
-    NoDestinations,
     #[error("ping and main sessions must both have surb_balancing enabled or both disabled")]
     SurbBalancingMismatch,
     #[error("Error in hopr-lib: {0}")]
     HoprGeneral(#[from] GeneralError),
+    #[error(
+        "destinations {first} and {second} are both {address} at {hops} hops - a destination is its exit and its path, so one of them must go"
+    )]
+    DuplicateDestination {
+        first: String,
+        second: String,
+        address: String,
+        hops: usize,
+    },
 }
 
 pub async fn read(path: &Path) -> Result<Config, Error> {
@@ -72,6 +85,7 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
             for key in wrong_keys.iter() {
                 tracing::warn!(%key, "ignoring unsupported key in configuration file");
             }
+            let res: v7::Config = res.try_into()?;
             res.try_into()
         }
         4 => {
@@ -80,6 +94,7 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
             for key in wrong_keys.iter() {
                 tracing::warn!(%key, "ignoring unsupported key in configuration file");
             }
+            let res: v7::Config = res.try_into()?;
             res.try_into()
         }
         5 => {
@@ -88,11 +103,21 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
             for key in wrong_keys.iter() {
                 tracing::warn!(%key, "ignoring unsupported key in configuration file");
             }
+            let res: v7::Config = res.try_into()?;
             res.try_into()
         }
         6 => {
             let res = toml::from_str::<v6::Config>(&content)?;
             let wrong_keys = v6::wrong_keys(&table);
+            for key in wrong_keys.iter() {
+                tracing::warn!(%key, "ignoring unsupported key in configuration file");
+            }
+            let res: v7::Config = res.try_into()?;
+            res.try_into()
+        }
+        7 => {
+            let res = toml::from_str::<v7::Config>(&content)?;
+            let wrong_keys = v7::wrong_keys(&table);
             for key in wrong_keys.iter() {
                 tracing::warn!(%key, "ignoring unsupported key in configuration file");
             }
