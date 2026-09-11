@@ -79,23 +79,6 @@ impl Meta {
             other: labels,
         }
     }
-
-    /// The recognized labels sanitized for terminal output, empty when none are set.
-    fn display_str(&self) -> String {
-        [
-            ("location", &self.location),
-            ("flag", &self.flag),
-            ("description", &self.description),
-        ]
-        .into_iter()
-        .filter_map(|(name, value)| {
-            value
-                .as_ref()
-                .map(|value| format!("{name}: {}", sanitize_for_display(value)))
-        })
-        .collect::<Vec<String>>()
-        .join(", ")
-    }
 }
 
 /// Discovery publishes no path, so every discovered exit sits at this one.
@@ -164,15 +147,6 @@ impl Overrides {
             self.shadowed.insert(field.to_string(), discovered.to_string());
         }
         value
-    }
-
-    /// The overridden values sanitized for terminal output, empty when nothing was overridden.
-    fn display_str(&self) -> String {
-        self.shadowed
-            .iter()
-            .map(|(field, value)| format!("{field}: {}", sanitize_for_display(value)))
-            .collect::<Vec<String>>()
-            .join(", ")
     }
 }
 
@@ -294,29 +268,65 @@ impl Destination {
     }
 }
 
+/// Marks a value configuration set in place of the one the exit published.
+const CONFIG_OVERRIDE: &str = " (CO)";
+
+impl Destination {
+    /// The recognized labels, plus anything overridden that is otherwise never shown.
+    fn labels_str(&self) -> String {
+        let shadowed = self.overrides.shadowed();
+        let mark = |key: &str| {
+            if shadowed.contains_key(key) {
+                CONFIG_OVERRIDE
+            } else {
+                ""
+            }
+        };
+
+        let mut parts = Vec::new();
+        // The title already carries the name, but not that configuration chose it.
+        if let Some(name) = &self.meta.name
+            && shadowed.contains_key("name")
+        {
+            parts.push(format!("name: {}{CONFIG_OVERRIDE}", sanitize_for_display(name)));
+        }
+        for (key, value) in [
+            ("location", &self.meta.location),
+            ("flag", &self.meta.flag),
+            ("description", &self.meta.description),
+        ] {
+            let Some(value) = value else { continue };
+            parts.push(format!("{key}: {}{}", sanitize_for_display(value), mark(key)));
+        }
+        // Targets are parsed socket addresses rather than operator text, so they need no sanitizing.
+        for (key, value) in [
+            ("gnosis_vpn_server", self.gnosis_vpn_server),
+            ("wireguard_server", self.wireguard_server),
+        ] {
+            if shadowed.contains_key(key) {
+                parts.push(format!("{key}: {value}{CONFIG_OVERRIDE}"));
+            }
+        }
+        parts.join(", ")
+    }
+}
+
 impl Display for Destination {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let short_addr = log_output::address(&self.address);
-        let labels = self.meta.display_str();
+        let labels = self.labels_str();
         let labels = if labels.is_empty() {
             String::new()
         } else {
             format!(", {labels}")
         };
-        let overridden = self.overrides.display_str();
-        let overridden = if overridden.is_empty() {
-            String::new()
-        } else {
-            format!(", overridden ({overridden})")
-        };
         write!(
             f,
-            "{id} (Exit: {address}, Route: (entry){path}({short_addr}), Source: {source}{labels}{overridden})",
+            "{id} (Exit: {address}, Route: (entry){path}({short_addr}){labels})",
             id = self.title(),
             path = self.pretty_print_path(),
             address = self.address.to_checksum(),
             short_addr = short_addr,
-            source = self.source,
         )
     }
 }
@@ -575,8 +585,9 @@ mod tests {
         assert_eq!(address(2), destinations[&addr.to_checksum()].address);
     }
 
+    /// Overriding a label also keeps the operator's version of it off the terminal entirely.
     #[test]
-    fn an_overridden_value_is_sanitized_and_elided_in_the_display() {
+    fn an_overridden_label_shows_the_configured_value_and_never_the_published_one() {
         let addr = address(1);
         let mut config_labels = HashMap::new();
         config_labels.insert("location".to_string(), "Germany".to_string());
@@ -587,10 +598,69 @@ mod tests {
         let dest = merged(pinned("dest-1", addr, config_labels, None, None), info);
         let rendered = dest.to_string();
 
-        assert!(rendered.contains("overridden (location: [2K"));
+        assert!(rendered.contains("location: Germany (CO)"));
+        assert!(!rendered.contains("xx"));
         assert!(!rendered.contains('\u{1b}'));
         assert!(!rendered.contains('\u{202e}'));
-        assert!(!rendered.contains(&"x".repeat(META_FIELD_MAX_CHARS + 1)));
+    }
+
+    #[test]
+    fn only_the_overridden_labels_are_marked() {
+        let addr = address(1);
+        let mut config_labels = HashMap::new();
+        config_labels.insert("flag".to_string(), "DE".to_string());
+        let mut info = exit_node(addr);
+        info.meta.insert("flag".to_string(), "FR".to_string());
+        info.meta.insert("location".to_string(), "France".to_string());
+
+        let dest = merged(pinned("dest-1", addr, config_labels, None, None), info);
+        let rendered = dest.to_string();
+
+        assert!(rendered.contains("flag: DE (CO)"));
+        assert!(rendered.contains("location: France,") || rendered.contains("location: France)"));
+        assert!(!rendered.contains("location: France (CO)"));
+    }
+
+    /// The title carries the name but not that configuration chose it.
+    #[test]
+    fn an_overridden_name_is_marked_beside_the_title() {
+        let addr = address(1);
+        let mut config_labels = HashMap::new();
+        config_labels.insert("name".to_string(), "Frankfurt-1".to_string());
+        let mut info = exit_node(addr);
+        info.meta.insert("name".to_string(), "FRA-1".to_string());
+
+        let dest = merged(pinned("dest-1", addr, config_labels, None, None), info);
+        let rendered = dest.to_string();
+
+        assert!(rendered.starts_with("Frankfurt-1(dest-1) (Exit:"));
+        assert!(rendered.contains("name: Frankfurt-1 (CO)"));
+    }
+
+    /// Targets are never rendered otherwise, so an override of one would be invisible.
+    #[test]
+    fn an_overridden_target_is_rendered_only_when_it_was_overridden() {
+        let addr = address(1);
+        let bridge: SocketAddr = "192.168.0.1:8000".parse().unwrap();
+        let info = exit_node(addr);
+
+        let overridden = merged(pinned("dest-1", addr, HashMap::new(), Some(bridge), None), info.clone());
+        let inherited = merged(pinned("dest-1", addr, HashMap::new(), None, None), info);
+
+        assert!(
+            overridden
+                .to_string()
+                .contains("gnosis_vpn_server: 192.168.0.1:8000 (CO)")
+        );
+        assert!(!overridden.to_string().contains("wireguard_server:"));
+        assert!(!inherited.to_string().contains("gnosis_vpn_server:"));
+    }
+
+    #[test]
+    fn the_source_is_no_longer_rendered() {
+        let dest = configured("dest-1", address(1));
+
+        assert!(!dest.to_string().contains("Source:"));
     }
 
     #[test]
@@ -712,7 +782,7 @@ mod tests {
 
         let rendered = dest.to_string();
 
-        assert!(rendered.ends_with("Source: Discovered)"));
+        assert!(rendered.ends_with("))"));
         assert!(!rendered.contains(", )"));
     }
 
@@ -977,6 +1047,6 @@ mod tests {
 
         let rendered = dest.to_string();
 
-        assert!(rendered.find("Source:").unwrap() < rendered.find("location:").unwrap());
+        assert!(rendered.find("Route:").unwrap() < rendered.find("location:").unwrap());
     }
 }
