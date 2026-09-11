@@ -537,7 +537,7 @@ impl Core {
                 }
             }
             Results::ExitNodesUpdated { nodes } => {
-                self.merge_discovered_destinations(nodes);
+                self.merge_discovered_destinations(nodes, results_sender);
             }
             Results::ExitNodesRetry { error } => {
                 tracing::warn!(%error, "exit node discovery failed - retrying");
@@ -1192,7 +1192,11 @@ impl Core {
     /// destination's id disappears here, the live connection (which holds its own cloned
     /// `Destination`) is left running; a later reconnect attempt to that id just hits the
     /// existing "not configured" branch in `WorkerCommand::Connect`.
-    fn merge_discovered_destinations(&mut self, nodes: HashMap<Address, edgli::ExitNodeInfo>) {
+    fn merge_discovered_destinations(
+        &mut self,
+        nodes: HashMap<Address, edgli::ExitNodeInfo>,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
         let before: HashSet<String> = self.config.destinations.keys().cloned().collect();
         let defaults = self.config.default_targets;
         connection::destination::merge_discovered(&mut self.config.destinations, &nodes, defaults);
@@ -1201,8 +1205,10 @@ impl Core {
         for removed_id in before.difference(&after) {
             self.route_healths.remove(removed_id);
         }
+        let mut added_any = false;
         for added_id in after.difference(&before) {
             if let Some(dest) = self.config.destinations.get(added_id) {
+                added_any = true;
                 self.route_healths.insert(
                     added_id.clone(),
                     RouteHealth::new(
@@ -1213,6 +1219,14 @@ impl Core {
                     ),
                 );
             }
+        }
+
+        // The peers loop is only started at on_hopr_running when something already needs
+        // peering, so with zero configured destinations discovery has to start it itself.
+        if added_any && self.hopr.is_some() {
+            self.cancel_peers.cancel();
+            self.cancel_peers = self.cancel_on_shutdown.child_token();
+            self.spawn_peers(results_sender, Duration::ZERO);
         }
     }
 
