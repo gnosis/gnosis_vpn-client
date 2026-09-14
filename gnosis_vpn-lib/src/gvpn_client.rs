@@ -82,6 +82,7 @@ pub struct Health {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Slots {
+    pub total: u32,
     pub available: u32,
     pub connected: u32,
 }
@@ -251,12 +252,13 @@ impl Display for Registration {
 
 impl Display for Slots {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "connected {}/{} total",
-            self.connected,
-            self.available + self.connected
-        )
+        // whatever is neither in use nor free is held by a registration still settling
+        let pending = self.total.saturating_sub(self.connected + self.available);
+        write!(f, "slots: {}", self.connected)?;
+        if pending > 0 {
+            write!(f, "({pending} pending)")?;
+        }
+        write!(f, " / {}", self.total)
     }
 }
 
@@ -282,5 +284,31 @@ impl Display for Versions {
 impl Display for Health {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}, {}", self.load_avg, self.slots)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn slots(connected: u32, available: u32, total: u32) -> String {
+        Slots {
+            total,
+            available,
+            connected,
+        }
+        .to_string()
+    }
+
+    #[test]
+    fn slots_name_the_ones_a_registration_still_holds() {
+        assert_eq!("slots: 1 / 16", slots(1, 15, 16));
+        assert_eq!("slots: 1(5 pending) / 16", slots(1, 10, 16));
+    }
+
+    /// A server reporting more in use than it has must not panic the status output.
+    #[test]
+    fn slots_beyond_the_total_report_none_pending() {
+        assert_eq!("slots: 9 / 8", slots(9, 4, 8));
     }
 }
