@@ -1124,6 +1124,16 @@ impl DaemonState {
         if matches!(resp, Response::ForceReconnectAcknowledged) {
             return Ok(());
         }
+        // Only an accepted connect sets the target, and as the connect id, not the typed token.
+        if let Response::Connect(
+            command::ConnectResponse::Connecting { destination }
+            | command::ConnectResponse::WaitingToConnect { destination, .. }
+            | command::ConnectResponse::AlreadyConnected { destination },
+        ) = &resp
+        {
+            tracing::debug!(id = %destination.connect_id, "remembering target destination from connect response");
+            self.target_dest_id = Some(destination.connect_id.clone());
+        }
         if let Some(resp_sender) = self.pending_responses.remove(&id) {
             if resp_sender.send(resp).is_err() {
                 tracing::error!(id, "unexpected channel closure");
@@ -1508,9 +1518,7 @@ impl DaemonState {
 
     async fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {
         match cmd {
-            WorkerCommand::Connect(id) => {
-                tracing::debug!(?id, "remembering target destination from connect command");
-                self.target_dest_id = Some(id.clone());
+            WorkerCommand::Connect(_) => {
                 let _ = self
                     .keep_alive_instruction_sender
                     .send(KeepAliveInstruction::Suspend)

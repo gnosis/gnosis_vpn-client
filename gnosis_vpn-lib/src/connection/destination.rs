@@ -528,17 +528,14 @@ impl Destinations {
                 .and_then(slug)
                 .unwrap_or_else(|| key.address.to_checksum());
 
-            let connect_id = if taken.contains(&candidate) {
-                let suffixed = format!("{candidate}-{}", key.discriminator());
-                // The key's own form is the last resort - unique because it is the identity.
-                if taken.contains(&suffixed) {
-                    key.to_string()
-                } else {
-                    suffixed
-                }
-            } else {
-                candidate
-            };
+            // Configured ids are arbitrary, so even the key's own form is checked before use.
+            let suffixed = format!("{candidate}-{}", key.discriminator());
+            let numbered = (2..).map(|n| format!("{key}-{n}"));
+            let connect_id = [candidate, suffixed, key.to_string()]
+                .into_iter()
+                .chain(numbered)
+                .find(|id| !taken.contains(id))
+                .expect("the numbered candidates never run out");
             taken.insert(connect_id.clone());
             if let Some(dest) = self.by_exit.get_mut(&key) {
                 dest.connect_id = connect_id;
@@ -1276,6 +1273,38 @@ mod tests {
         destinations.merge_discovered(&HashMap::from([(addr, info)]), defaults());
 
         assert_eq!(addr, destinations.by_connect_id(&key.to_string()).unwrap().address);
+    }
+
+    /// The key's form is a legal configured id too, so the fallback has to keep going past it.
+    #[test]
+    fn a_configured_id_spelling_the_key_pushes_the_fallback_to_a_numbered_one() {
+        let addr = address(1);
+        let key = ExitKey {
+            address: addr,
+            routing: default_path(),
+        };
+        let mut destinations = Destinations::default();
+        destinations.insert(configured("berlin", address(2)));
+        destinations.insert(configured(&format!("berlin-{}", key.discriminator()), address(3)));
+        destinations.insert(configured(&key.to_string(), address(4)));
+
+        let mut info = exit_node(addr);
+        info.meta.insert("name".to_string(), "Berlin".to_string());
+        destinations.merge_discovered(&HashMap::from([(addr, info)]), defaults());
+
+        assert_eq!(addr, destinations.by_connect_id(&format!("{key}-2")).unwrap().address);
+    }
+
+    /// A restarted worker holds a discovered exit's id before discovery has run again.
+    #[test]
+    fn a_discovered_id_resolves_only_once_discovery_has_published_it() {
+        let addr = address(1);
+        let mut destinations = Destinations::default();
+        assert!(destinations.by_connect_id("berlin").is_none());
+
+        destinations.merge_discovered(&HashMap::from([(addr, named_exit(addr, "Berlin"))]), defaults());
+
+        assert_eq!(addr, destinations.by_connect_id("berlin").unwrap().address);
     }
 
     #[test]

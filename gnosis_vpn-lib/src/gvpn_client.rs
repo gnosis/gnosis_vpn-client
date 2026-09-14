@@ -253,7 +253,7 @@ impl Display for Registration {
 impl Display for Slots {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // whatever is neither in use nor free is held by a registration still settling
-        let pending = self.total.saturating_sub(self.connected + self.available);
+        let pending = self.total.saturating_sub(self.connected.saturating_add(self.available));
         write!(f, "slots: {}", self.connected)?;
         if pending > 0 {
             write!(f, "({pending} pending)")?;

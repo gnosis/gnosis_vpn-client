@@ -88,8 +88,8 @@ pub struct Core {
     peers_loop_running: bool,
 
     // user provided data
-    /// The identity only - a clone goes stale on a discovery tick, and a connect id can be reassigned.
-    target: Option<ExitKey>,
+    /// The connect id, resolved live - a cached clone goes stale on a discovery tick and cannot outlive a restart.
+    target: Option<String>,
 
     // runtime data
     phase: Phase,
@@ -180,11 +180,8 @@ impl Core {
             );
         }
 
-        // Root replays the token the user typed; an unresolvable one just waits for discovery.
-        let target = target_dest_id
-            .as_deref()
-            .and_then(|token| config.destinations.resolve(token).ok())
-            .map(|dest| dest.key());
+        // Root replays the connect id; one discovery has not published yet just waits for it.
+        let target = target_dest_id;
 
         let (peers_interval, _) = watch::channel(PEERS_LAZY_INTERVAL);
         let (incoming_sender, incoming_receiver) = mpsc::channel(32);
@@ -402,7 +399,7 @@ impl Core {
                                 if rh.is_ready_to_connect() {
                                     let _ = resp
                                         .send(Response::connect(command::ConnectResponse::connecting(dest.clone())));
-                                    self.target = Some(dest.key());
+                                    self.target = Some(dest.connect_id.clone());
                                     self.act_on_target(results_sender);
                                 } else if rh.is_unrecoverable() {
                                     let _ = resp.send(Response::connect(command::ConnectResponse::unable(
@@ -414,7 +411,7 @@ impl Core {
                                         dest.clone(),
                                         rh.state().clone(),
                                     )));
-                                    self.target = Some(dest.key());
+                                    self.target = Some(dest.connect_id.clone());
                                 }
                             } else {
                                 tracing::warn!(key = %dest.key(), "no route health found for destination - this should not happen");
@@ -807,7 +804,7 @@ impl Core {
                         rh.with_error(err.to_string());
                     }
                     // By identity: a dropped target must still restart the worker, not stick in Connecting.
-                    let failed_the_target = self.target == Some(conn.destination.key());
+                    let failed_the_target = self.target.as_deref() == Some(conn.destination.connect_id.as_str());
                     if failed_the_target {
                         tracing::info!(id = %conn.destination.connect_id, "restarting connection worker process due to final connection error");
                         return false;
@@ -1664,13 +1661,7 @@ impl Core {
             Phase::ShuttingDown => RunMode::Shutdown,
         };
 
-        // The wire carries connect ids, so the target key is resolved back to one here.
-        let target_connect_id = self
-            .target
-            .and_then(|key| self.config.destinations.get(&key))
-            .map(|dest| dest.connect_id.clone());
-        let (connecting, reconnecting) =
-            connection_infos(&self.phase, self.reconnecting_since, target_connect_id.as_deref());
+        let (connecting, reconnecting) = connection_infos(&self.phase, self.reconnecting_since, self.target.as_deref());
         let connected = match &self.phase {
             Phase::Connected(conn) => Some(command::ConnectedInfo {
                 destination_id: conn.destination.connect_id.clone(),
@@ -1699,7 +1690,7 @@ impl Core {
         command::StatusResponse {
             run_mode: runmode,
             destinations,
-            target_destination: target_connect_id,
+            target_destination: self.target.clone(),
             connecting,
             reconnecting,
             connected,
@@ -1709,10 +1700,10 @@ impl Core {
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     fn act_on_target(&mut self, results_sender: &mpsc::Sender<Results>) {
-        tracing::debug!(target = ?self.target.map(|k| k.to_string()), phase = ?self.phase, "acting on target destination");
+        tracing::debug!(target = ?self.target, phase = ?self.phase, "acting on target destination");
 
         // Only an absent target means disconnect; an unresolved one still waits for discovery.
-        let Some(target) = self.target else {
+        let Some(target) = self.target.clone() else {
             match self.phase.clone() {
                 Phase::Connected(conn) => {
                     tracing::info!(current = %conn.destination, "disconnecting from destination");
@@ -1726,7 +1717,7 @@ impl Core {
             }
             return;
         };
-        let Some(dest) = self.config.destinations.get(&target).cloned() else {
+        let Some(dest) = self.config.destinations.by_connect_id(&target).cloned() else {
             tracing::debug!(%target, "target destination not known yet - waiting for discovery");
             return;
         };
