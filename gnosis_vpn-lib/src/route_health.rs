@@ -679,6 +679,8 @@ impl RouteHealth {
         if !is_checking_state {
             return;
         }
+        // Whatever is in flight probed a destination that may be gone; one probe per tracker at a time.
+        self.cancel_health_check();
 
         let intervals = &options.health_check_intervals;
         let cycle = self.check_cycle;

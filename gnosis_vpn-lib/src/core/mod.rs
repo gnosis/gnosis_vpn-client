@@ -911,15 +911,21 @@ impl Core {
 
             Results::HealthCheck { key, endpoint, outcome } => {
                 tracing::info!(%key, ?outcome, "received health check");
-                let current_endpoint = self.config.destinations.get(&key).map(|dest| dest.gnosis_vpn_server);
-                if current_endpoint != Some(endpoint) {
-                    tracing::debug!(%key, %endpoint, "dropping health check of an endpoint discovery moved");
-                } else if let Some(rh) = self.route_healths.get_mut(&key) {
-                    let was_ready = rh.is_ready_to_connect();
-                    rh.health_check_result(outcome, &self.config.connection, results_sender);
-                    // Trigger connection if we just became ready
-                    if !was_ready && rh.is_ready_to_connect() {
-                        self.act_on_target(results_sender);
+                if let Some(dest) = self.config.destinations.get(&key)
+                    && let Some(rh) = self.route_healths.get_mut(&key)
+                    && let Some(hopr) = self.hopr.as_ref()
+                {
+                    // Each outcome arms the next check, so a stale one is replaced by a probe of the current endpoint.
+                    if dest.gnosis_vpn_server != endpoint {
+                        tracing::debug!(%key, %endpoint, "re-probing an endpoint discovery moved");
+                        rh.start_health_check(hopr, dest, &self.config.connection, results_sender);
+                    } else {
+                        let was_ready = rh.is_ready_to_connect();
+                        rh.health_check_result(outcome, &self.config.connection, results_sender);
+                        // Trigger connection if we just became ready
+                        if !was_ready && rh.is_ready_to_connect() {
+                            self.act_on_target(results_sender);
+                        }
                     }
                 }
             }
