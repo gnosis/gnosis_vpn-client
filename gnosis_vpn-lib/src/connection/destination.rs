@@ -92,9 +92,24 @@ pub struct ExitKey {
 }
 
 impl ExitKey {
-    /// The first address digits, enough to tell two exits apart in a connect id.
-    fn short(&self) -> String {
-        self.address.to_checksum()[2..6].to_ascii_lowercase()
+    /// Tells two exits publishing one name apart; FNV-1a by hand, as `DefaultHasher` drifts per rustc.
+    fn discriminator(&self) -> String {
+        const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+        const ALPHABET: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+
+        let mut hash = OFFSET;
+        for byte in self.to_string().as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(PRIME);
+        }
+        (0..4)
+            .map(|_| {
+                let c = ALPHABET[(hash % ALPHABET.len() as u64) as usize] as char;
+                hash /= ALPHABET.len() as u64;
+                c
+            })
+            .collect()
     }
 
     /// `HopRouting` is not `Ord`, and unstable key order would shuffle connect ids between ticks.
@@ -508,12 +523,19 @@ impl Destinations {
         for key in discovered {
             let dest = &self.by_exit[&key];
             let name = dest.meta.name.as_deref().map(sanitize_for_display);
-            let checksum = key.address.to_checksum();
-            let candidate = name.as_deref().and_then(slug).unwrap_or_else(|| checksum.clone());
+            let candidate = name
+                .as_deref()
+                .and_then(slug)
+                .unwrap_or_else(|| key.address.to_checksum());
 
             let connect_id = if taken.contains(&candidate) {
-                let suffixed = format!("{candidate}-{}", key.short());
-                if taken.contains(&suffixed) { checksum } else { suffixed }
+                let suffixed = format!("{candidate}-{}", key.discriminator());
+                // The key's own form is the last resort - unique because it is the identity.
+                if taken.contains(&suffixed) {
+                    key.to_string()
+                } else {
+                    suffixed
+                }
             } else {
                 candidate
             };
@@ -1192,6 +1214,60 @@ mod tests {
             Unresolved::Ambiguous(vec!["my-exit".to_string(), "my-exit-far".to_string()]),
             err
         );
+    }
+
+    /// The address alone cannot express this, which is why the discriminator hashes the key.
+    #[test]
+    fn one_exit_at_two_paths_gets_two_discriminators() {
+        let addr = address(1);
+        let one = ExitKey {
+            address: addr,
+            routing: HopRouting::try_from(1).unwrap(),
+        };
+        let three = ExitKey {
+            address: addr,
+            routing: HopRouting::try_from(3).unwrap(),
+        };
+
+        assert_ne!(one.discriminator(), three.discriminator());
+    }
+
+    /// Pins the hash: connect ids may churn on an update, but never silently.
+    #[test]
+    fn the_discriminator_of_a_known_key_does_not_drift() {
+        let key = ExitKey {
+            address: address(1),
+            routing: HopRouting::try_from(1).unwrap(),
+        };
+
+        let discriminator = key.discriminator();
+
+        assert_eq!(4, discriminator.len());
+        assert!(
+            discriminator
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        );
+        assert_eq!("yqak", discriminator);
+    }
+
+    /// Every earlier candidate is taken, so the key itself has to carry the entry.
+    #[test]
+    fn the_key_itself_is_the_last_resort_connect_id() {
+        let addr = address(1);
+        let key = ExitKey {
+            address: addr,
+            routing: default_path(),
+        };
+        let mut destinations = Destinations::default();
+        destinations.insert(configured("berlin", address(2)));
+        destinations.insert(configured(&format!("berlin-{}", key.discriminator()), address(3)));
+
+        let mut info = exit_node(addr);
+        info.meta.insert("name".to_string(), "Berlin".to_string());
+        destinations.merge_discovered(&HashMap::from([(addr, info)]), defaults());
+
+        assert_eq!(addr, destinations.by_connect_id(&key.to_string()).unwrap().address);
     }
 
     #[test]
