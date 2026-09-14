@@ -65,7 +65,11 @@ pub async fn read_safe(state_home: PathBuf) -> Result<SafeModule, Error> {
     serde_saphyr::from_str::<SafeModule>(&content).map_err(Into::into)
 }
 
-pub async fn generate(safe_module: &SafeModule, path_planner_min_ack_rate: f64) -> Result<HoprLibConfig, Error> {
+pub async fn generate(
+    safe_module: &SafeModule,
+    path_planner_min_ack_rate: f64,
+    path_planner: crate::connection::options::PathPlannerOptions,
+) -> Result<HoprLibConfig, Error> {
     let mut cfg = HoprLibConfig::default();
     cfg.safe_module.safe_address = safe_module
         .safe_address
@@ -82,6 +86,8 @@ pub async fn generate(safe_module: &SafeModule, path_planner_min_ack_rate: f64) 
     cfg.protocol.probe.interval = Duration::from_secs(3);
     cfg.protocol.probe.recheck_threshold = Duration::from_secs(3);
     cfg.protocol.path_planner = edgli::latency_path_planner_config(path_planner_min_ack_rate);
+    // Layer user overrides on top of the latency preset; unset fields keep the preset value.
+    path_planner.apply(&mut cfg.protocol.path_planner);
     Ok(cfg)
 }
 
