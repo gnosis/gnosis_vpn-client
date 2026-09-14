@@ -1764,6 +1764,9 @@ impl Core {
         let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
         self.responders.clear();
         self.phase = Phase::HoprRunning;
+        // Discovery may have dropped this exit mid-connection; its tracker was kept only for the tunnel pings.
+        let configured = &self.config.destinations;
+        self.route_healths.retain(|key, _| configured.contains_key(key));
         if let Some(rh) = self.route_healths.get_mut(&conn.destination.key()) {
             rh.disconnecting(results_sender);
         }
