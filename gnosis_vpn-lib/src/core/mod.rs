@@ -595,14 +595,9 @@ impl Core {
                     tracing::info!(%caps, "received capacity allocations");
                     let has_channels = !caps.peer_allocations.is_empty();
                     self.capacity_allocations = Some(caps);
-                    if has_channels && let Some(hopr) = self.hopr.clone() {
-                        let dest_ids: Vec<ExitKey> = self.route_healths.keys().copied().collect();
-                        for id in &dest_ids {
-                            if let (Some(rh), Some(dest)) =
-                                (self.route_healths.get_mut(id), self.config.destinations.get(id))
-                            {
-                                rh.any_channel_available(&hopr, dest, &self.config.connection, results_sender);
-                            }
+                    if has_channels {
+                        for rh in self.route_healths.values_mut() {
+                            rh.any_channel_available(results_sender);
                         }
                     }
                     let delay = if route_health::any_needs_channel(self.route_healths.values()) {
@@ -693,24 +688,14 @@ impl Core {
                             .as_ref()
                             .is_some_and(|caps| !caps.peer_allocations.is_empty());
                         for (idx, id) in dest_ids.into_iter().enumerate() {
-                            if let Some(dest) = self.config.destinations.get(&id).cloned()
-                                && let Some(rh) = self.route_healths.get_mut(&id)
-                                && let Some(hopr) = self.hopr.clone()
-                            {
+                            if let Some(rh) = self.route_healths.get_mut(&id) {
                                 let stagger = Duration::from_millis((idx as u64).saturating_mul(500));
-                                rh.peers(
-                                    &connected,
-                                    &hopr,
-                                    &dest,
-                                    &self.config.connection,
-                                    results_sender,
-                                    stagger,
-                                );
+                                rh.peers(&connected, results_sender, stagger);
                                 // If peers just moved this route into NeedsChannel and capacity
                                 // allocations already show open channels, complete the transition
                                 // immediately rather than waiting for the next capacity tick.
                                 if channels_already_available && rh.needs_channel() {
-                                    rh.any_channel_available(&hopr, &dest, &self.config.connection, results_sender);
+                                    rh.any_channel_available(results_sender);
                                 }
                             }
                         }
@@ -915,14 +900,23 @@ impl Core {
                 }
             },
 
-            Results::HealthCheck { key, outcome } => {
-                tracing::info!(%key, ?outcome, "received health check");
-                if let Some(dest) = self.config.destinations.get(&key).cloned()
+            Results::HealthCheckDue { key } => {
+                if let Some(dest) = self.config.destinations.get(&key)
                     && let Some(rh) = self.route_healths.get_mut(&key)
                     && let Some(hopr) = self.hopr.as_ref()
                 {
+                    rh.start_health_check(hopr, dest, &self.config.connection, results_sender);
+                }
+            }
+
+            Results::HealthCheck { key, endpoint, outcome } => {
+                tracing::info!(%key, ?outcome, "received health check");
+                let current_endpoint = self.config.destinations.get(&key).map(|dest| dest.gnosis_vpn_server);
+                if current_endpoint != Some(endpoint) {
+                    tracing::debug!(%key, %endpoint, "dropping health check of an endpoint discovery moved");
+                } else if let Some(rh) = self.route_healths.get_mut(&key) {
                     let was_ready = rh.is_ready_to_connect();
-                    rh.health_check_result(outcome, hopr, &dest, &self.config.connection, results_sender);
+                    rh.health_check_result(outcome, &self.config.connection, results_sender);
                     // Trigger connection if we just became ready
                     if !was_ready && rh.is_ready_to_connect() {
                         self.act_on_target(results_sender);
@@ -1536,7 +1530,7 @@ impl Core {
             );
             let results_sender = results_sender.clone();
             if let Some(rh) = self.route_healths.get_mut(&destination.key()) {
-                rh.connecting(&hopr, &destination, exit, &self.config.connection, &results_sender);
+                rh.connecting(exit, &self.config.connection, &results_sender);
             }
             self.phase = Phase::Connecting(conn);
             tokio::spawn(async move {
@@ -1759,11 +1753,8 @@ impl Core {
         let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
         self.responders.clear();
         self.phase = Phase::HoprRunning;
-        if let Some(dest) = self.config.destinations.get(&conn.destination.key()).cloned()
-            && let Some(rh) = self.route_healths.get_mut(&conn.destination.key())
-            && let Some(hopr) = self.hopr.as_ref()
-        {
-            rh.disconnecting(hopr, &dest, &self.config.connection, results_sender);
+        if let Some(rh) = self.route_healths.get_mut(&conn.destination.key()) {
+            rh.disconnecting(results_sender);
         }
         if let Ok(disconn) = conn.try_into() {
             self.spawn_disconnection_runner(&disconn, pump_tasks, results_sender);

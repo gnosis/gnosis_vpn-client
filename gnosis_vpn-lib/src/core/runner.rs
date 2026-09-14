@@ -15,6 +15,7 @@ use tokio::time;
 use url::Url;
 
 use std::fmt::{self, Display};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -107,8 +108,14 @@ pub(crate) enum Results {
     },
     /// A new WireGuard telemetry sample from the running pump.
     WgStatsSample(crate::wg_tunnel::TunnelStatsSample),
+    /// A health check timer fired; Core resolves the destination as it is now and runs the probe.
+    HealthCheckDue {
+        key: ExitKey,
+    },
     HealthCheck {
         key: ExitKey,
+        /// The gnosis_vpn_server probed, so an outcome for an endpoint discovery moved is dropped.
+        endpoint: SocketAddr,
         outcome: HealthCheckOutcome,
     },
     RetryReactor,
@@ -727,7 +734,10 @@ impl Display for Results {
                 Ok(None) => write!(f, "QuerySafe: No safe found"),
                 Err(err) => write!(f, "QuerySafe: Error({})", err),
             },
-            Results::HealthCheck { key, outcome } => write!(f, "HealthCheck ({}): {:?}", key, outcome),
+            Results::HealthCheckDue { key } => write!(f, "HealthCheckDue ({key})"),
+            Results::HealthCheck { key, endpoint, outcome } => {
+                write!(f, "HealthCheck ({key} @ {endpoint}): {outcome:?}")
+            }
             Results::RetryReactor => write!(f, "RetryReactor"),
             Results::NerdStatsTicketStats { .. } => write!(f, "NerdStatsTicketStats"),
         }

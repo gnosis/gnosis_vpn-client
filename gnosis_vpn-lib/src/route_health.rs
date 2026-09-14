@@ -356,9 +356,6 @@ impl RouteHealth {
     pub(crate) fn peers(
         &mut self,
         addresses: &HashSet<Address>,
-        hopr: &Arc<Hopr>,
-        dest: &Destination,
-        options: &Options,
         sender: &mpsc::Sender<Results>,
         initial_delay: Duration,
     ) {
@@ -381,7 +378,7 @@ impl RouteHealth {
                 if skip_channel_wait {
                     tracing::debug!(destination = %self.key, "peers available → Routable");
                     self.state = RouteHealthState::Routable;
-                    self.spawn_health_check(initial_delay, hopr, dest, options, sender);
+                    self.spawn_health_check(initial_delay, sender);
                 } else {
                     tracing::debug!(destination = %self.key, "peers available → NeedsChannel");
                     self.state = RouteHealthState::NeedsChannel;
@@ -419,19 +416,13 @@ impl RouteHealth {
     ///
     /// Routes in `NeedsChannel` become routable and schedule their first
     /// health check immediately. No-op for routes in any other state.
-    pub(crate) fn any_channel_available(
-        &mut self,
-        hopr: &Arc<Hopr>,
-        dest: &Destination,
-        options: &Options,
-        sender: &mpsc::Sender<Results>,
-    ) {
+    pub(crate) fn any_channel_available(&mut self, sender: &mpsc::Sender<Results>) {
         if !matches!(self.state, RouteHealthState::NeedsChannel) {
             return;
         }
         tracing::debug!(destination = %self.key, "channel available → Routable");
         self.state = RouteHealthState::Routable;
-        self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
+        self.spawn_health_check(Duration::ZERO, sender);
     }
 
     /// Consume an outcome from a background health-check cycle and schedule
@@ -455,8 +446,6 @@ impl RouteHealth {
     pub(crate) fn health_check_result(
         &mut self,
         outcome: HealthCheckOutcome,
-        hopr: &Arc<Hopr>,
-        dest: &Destination,
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
@@ -493,7 +482,7 @@ impl RouteHealth {
                 };
                 // spawn from linear failure backoff
                 let delay = self.failure_backoff();
-                self.spawn_health_check(delay, hopr, dest, options, sender);
+                self.spawn_health_check(delay, sender);
             }
 
             HealthCheckOutcome::Completed {
@@ -552,7 +541,7 @@ impl RouteHealth {
                     _ => options.health_check_intervals.ping,
                 };
 
-                self.spawn_health_check(delay, hopr, dest, options, sender);
+                self.spawn_health_check(delay, sender);
             }
         }
     }
@@ -564,14 +553,7 @@ impl RouteHealth {
     /// check cadence: only an exit-health query runs in each cycle, on top
     /// of the tunnel-level ping Core performs. Other states are left
     /// unchanged so this is safe to call speculatively.
-    pub(crate) fn connecting(
-        &mut self,
-        hopr: &Arc<Hopr>,
-        dest: &Destination,
-        exit: ExitHealth,
-        options: &Options,
-        sender: &mpsc::Sender<Results>,
-    ) {
+    pub(crate) fn connecting(&mut self, exit: ExitHealth, options: &Options, sender: &mpsc::Sender<Results>) {
         self.checking_since = None;
         self.exit_failures = 0;
         self.exit_last_error = None;
@@ -583,7 +565,7 @@ impl RouteHealth {
             tunnel_ping_rtt: None,
         };
         let delay = options.health_check_intervals.ping;
-        self.spawn_health_check(delay, hopr, dest, options, sender);
+        self.spawn_health_check(delay, sender);
     }
 
     /// Leave `Connecting` and resume normal health checking.
@@ -592,13 +574,7 @@ impl RouteHealth {
     /// healthy: no recent failures → `ReadyToConnect` with the last known
     /// `ExitHealth`; otherwise fall back to `Routable` and rebuild from the
     /// next check. A fresh cycle is scheduled immediately.
-    pub(crate) fn disconnecting(
-        &mut self,
-        hopr: &Arc<Hopr>,
-        dest: &Destination,
-        options: &Options,
-        sender: &mpsc::Sender<Results>,
-    ) {
+    pub(crate) fn disconnecting(&mut self, sender: &mpsc::Sender<Results>) {
         if let RouteHealthState::Connecting { exit, .. } = &self.state {
             let exit = exit.clone();
             if self.exit_failures == 0 {
@@ -609,7 +585,7 @@ impl RouteHealth {
                 self.check_cycle = 0;
                 self.state = RouteHealthState::Routable;
             }
-            self.spawn_health_check(Duration::ZERO, hopr, dest, options, sender);
+            self.spawn_health_check(Duration::ZERO, sender);
         }
     }
 
@@ -670,19 +646,42 @@ impl RouteHealth {
     /// `delay`. The check scope (which fields to fetch) is decided here from `check_cycle` and
     /// whether we are in `Connecting`. Called both by internal transitions
     /// and externally when a cycle completes.
-    fn spawn_health_check(
+    /// Only the key crosses the delay, so the probe later runs against the destination as it is then.
+    fn spawn_health_check(&mut self, delay: Duration, sender: &mpsc::Sender<Results>) {
+        self.cancel_health_check();
+
+        let key = self.key;
+        let token = self.health_check_cancel.clone();
+        let sender = sender.clone();
+
+        tokio::spawn(async move {
+            token
+                .run_until_cancelled(async {
+                    time::sleep(jitter(delay)).await;
+                    let _ = sender.send(Results::HealthCheckDue { key }).await;
+                })
+                .await;
+        });
+    }
+
+    /// Runs the probe Core resolved a current destination for; a stale timer finds no state to probe.
+    pub(crate) fn start_health_check(
         &mut self,
-        delay: Duration,
         hopr: &Arc<Hopr>,
         dest: &Destination,
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        self.cancel_health_check();
+        let is_checking_state = matches!(
+            self.state,
+            RouteHealthState::Routable | RouteHealthState::ReadyToConnect { .. } | RouteHealthState::Connecting { .. }
+        );
+        if !is_checking_state {
+            return;
+        }
 
         let intervals = &options.health_check_intervals;
         let cycle = self.check_cycle;
-
         let is_connecting = matches!(self.state, RouteHealthState::Connecting { .. });
         // during connecting we always only run health checks. the interval was increased
         // accordingly on task spawn
@@ -707,7 +706,6 @@ impl RouteHealth {
         tokio::spawn(async move {
             token
                 .run_until_cancelled(async {
-                    time::sleep(jitter(delay)).await;
                     run_health_check(hopr, &dest, &options, &scope, &sender).await;
                 })
                 .await;
@@ -749,11 +747,13 @@ async fn run_health_check(
     sender: &mpsc::Sender<Results>,
 ) {
     let key = destination.key();
+    let endpoint = destination.gnosis_vpn_server;
     let checked_at = SystemTime::now();
     tracing::info!(%key, %scope, "starting health check");
     let _ = sender
         .send(Results::HealthCheck {
             key,
+            endpoint,
             outcome: HealthCheckOutcome::Started { since: checked_at },
         })
         .await;
@@ -765,6 +765,7 @@ async fn run_health_check(
             let _ = sender
                 .send(Results::HealthCheck {
                     key,
+                    endpoint,
                     outcome: HealthCheckOutcome::Failed {
                         checked_at,
                         error: format!("Session creation error: {err}"),
@@ -792,6 +793,7 @@ async fn run_health_check(
                     let _ = sender
                         .send(Results::HealthCheck {
                             key,
+                            endpoint,
                             outcome: HealthCheckOutcome::Unrecoverable {
                                 reason: UnrecoverableReason::IncompatibleApiVersion {
                                     server_versions: v.versions.clone(),
@@ -809,6 +811,7 @@ async fn run_health_check(
                 let _ = sender
                     .send(Results::HealthCheck {
                         key,
+                        endpoint,
                         outcome: HealthCheckOutcome::Failed {
                             checked_at,
                             error: format!("Version check error: {err}"),
@@ -834,6 +837,7 @@ async fn run_health_check(
                 let _ = sender
                     .send(Results::HealthCheck {
                         key,
+                        endpoint,
                         outcome: HealthCheckOutcome::Failed {
                             checked_at,
                             error: format!("Health request error: {err}"),
@@ -858,6 +862,7 @@ async fn run_health_check(
             let _ = sender
                 .send(Results::HealthCheck {
                     key,
+                    endpoint,
                     outcome: HealthCheckOutcome::Completed {
                         checked_at,
                         versions,
@@ -872,6 +877,7 @@ async fn run_health_check(
             let _ = sender
                 .send(Results::HealthCheck {
                     key,
+                    endpoint,
                     outcome: HealthCheckOutcome::Failed {
                         checked_at,
                         error: format!("Ping error: {err}"),
