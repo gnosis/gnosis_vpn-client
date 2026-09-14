@@ -819,6 +819,7 @@ mod tests {
                 ping_rtt: Duration::from_millis(100),
                 health: gvpn_client::Health {
                     slots: gvpn_client::Slots {
+                        total: 16,
                         available: 10,
                         connected: 1,
                     },
