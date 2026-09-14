@@ -79,3 +79,11 @@ jobs:
             git commit --amend --no-edit
             git push --force origin "HEAD:refs/heads/${branch}"
           done
+      # The action only comments on cherry-pick and push failures, and still exits 0.
+      - name: Fail if a backport did not land
+        if: steps.backport.outputs.was_successful != 'true'
+        env:
+          BY_TARGET: ${{ steps.backport.outputs.was_successful_by_target }}
+        run: |
+          echo "::error::Backport did not land: ${BY_TARGET}"
+          exit 1
