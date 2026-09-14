@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use crate::command::{self, Response};
 use crate::compat::SafeModule;
+use crate::connection::destination::ExitKey;
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config};
@@ -107,7 +108,7 @@ pub(crate) enum Results {
     /// A new WireGuard telemetry sample from the running pump.
     WgStatsSample(crate::wg_tunnel::TunnelStatsSample),
     HealthCheck {
-        id: String,
+        key: ExitKey,
         outcome: HealthCheckOutcome,
     },
     RetryReactor,
@@ -726,7 +727,7 @@ impl Display for Results {
                 Ok(None) => write!(f, "QuerySafe: No safe found"),
                 Err(err) => write!(f, "QuerySafe: Error({})", err),
             },
-            Results::HealthCheck { id, outcome } => write!(f, "HealthCheck ({}): {:?}", id, outcome),
+            Results::HealthCheck { key, outcome } => write!(f, "HealthCheck ({}): {:?}", key, outcome),
             Results::RetryReactor => write!(f, "RetryReactor"),
             Results::NerdStatsTicketStats { .. } => write!(f, "NerdStatsTicketStats"),
         }

@@ -207,6 +207,12 @@ fn pretty_print(resp: &Response) {
         Response::Connect(command::ConnectResponse::DestinationNotFound) => {
             eprintln!("Destination not found");
         }
+        Response::Connect(command::ConnectResponse::DestinationAmbiguous(ids)) => {
+            eprintln!(
+                "That exit is reachable by several paths - connect to one of: {}",
+                ids.join(", ")
+            );
+        }
         Response::Disconnect(command::DisconnectResponse::Disconnecting(dest)) => {
             println!("Disconnecting from {dest}");
         }
@@ -255,7 +261,7 @@ fn pretty_print(resp: &Response) {
             for dest_state in destinations {
                 str_resp.push_str(&format!("---\n{}\n", dest_state.destination));
                 if let Some(rh) = &dest_state.route_health {
-                    str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.id, rh,));
+                    str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.connect_id, rh,));
                 }
             }
             println!("{str_resp}");
@@ -425,6 +431,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Connect(command::ConnectResponse::AlreadyConnected(..)) => exitcode::OK,
         Response::Connect(command::ConnectResponse::Connecting(..)) => exitcode::OK,
         Response::Connect(command::ConnectResponse::DestinationNotFound) => exitcode::UNAVAILABLE,
+        Response::Connect(command::ConnectResponse::DestinationAmbiguous(..)) => exitcode::USAGE,
         Response::Connect(command::ConnectResponse::WaitingToConnect(..)) => exitcode::OK,
         Response::Connect(command::ConnectResponse::UnableToConnect(..)) => exitcode::UNAVAILABLE,
         Response::Disconnect(command::DisconnectResponse::Disconnecting(..)) => exitcode::OK,
@@ -670,7 +677,7 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
                 "{node_addr}(me) -{title}-DIRECTLY--> {addr}({exit})\n",
                 node_addr = stats.node_address.to_checksum(),
                 addr = stats.destination.address.to_checksum(),
-                exit = stats.destination.id,
+                exit = stats.destination.connect_id,
             ));
         }
         1 => {
@@ -678,7 +685,7 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
                 "{node_addr}(me) -{title}-VIA--1HOP--> {addr}({exit})\n",
                 node_addr = stats.node_address.to_checksum(),
                 addr = stats.destination.address.to_checksum(),
-                exit = stats.destination.id,
+                exit = stats.destination.connect_id,
             ));
         }
         nr => {
@@ -686,7 +693,7 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
                 "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n",
                 node_addr = stats.node_address.to_checksum(),
                 addr = stats.destination.address.to_checksum(),
-                exit = stats.destination.id,
+                exit = stats.destination.connect_id,
             ));
         }
     }

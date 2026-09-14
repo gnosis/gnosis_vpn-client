@@ -2,12 +2,11 @@ use edgli::hopr_lib::api::types::primitive::errors::GeneralError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use std::collections::HashMap;
 use std::path::Path;
 use tokio::fs;
 
 use crate::connection::{
-    destination::{DefaultTargets, Destination},
+    destination::{DefaultTargets, Destinations},
     options::Options as ConnectionOptions,
 };
 use crate::hopr::blokli_config::BlokliConfig;
@@ -27,7 +26,7 @@ pub const ENV_VAR: &str = "GNOSISVPN_CONFIG_PATH";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     pub connection: ConnectionOptions,
-    pub destinations: HashMap<String, Destination>,
+    pub destinations: Destinations,
     /// Needed past load time: a destination that discovery stops reporting falls back to these.
     pub default_targets: DefaultTargets,
     pub wireguard: WireGuardConfig,

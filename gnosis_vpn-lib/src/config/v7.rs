@@ -23,7 +23,7 @@ use std::vec::Vec;
 
 use crate::config;
 use crate::connection::destination::{
-    DEFAULT_HOPS, DefaultTargets, Destination as ConnDestination, DestinationSource, Meta, Overrides,
+    DEFAULT_HOPS, DefaultTargets, Destination as ConnDestination, DestinationSource, Destinations, Meta, Overrides,
 };
 use crate::connection::options;
 use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
@@ -865,24 +865,15 @@ impl TryFrom<Config> for config::Config {
 pub fn convert_destinations(
     value: Option<HashMap<String, Destination>>,
     defaults: DefaultTargets,
-) -> Result<HashMap<String, ConnDestination>, config::Error> {
+) -> Result<Destinations, config::Error> {
     let config_dests = value.unwrap_or_default();
 
-    let mut result = HashMap::new();
-    let mut seen: HashMap<(Address, usize), String> = HashMap::new();
+    let mut result = Destinations::default();
     for (id, dest) in config_dests.iter() {
         let path = match dest.path {
             Some(DestinationPath::Hops(h)) => HopRouting::try_from(h as usize)?,
             None => HopRouting::try_from(DEFAULT_HOPS)?,
         };
-        if let Some(other) = seen.insert((dest.address, path.hop_count()), id.to_string()) {
-            return Err(config::Error::DuplicateDestination {
-                first: other,
-                second: id.to_string(),
-                address: dest.address.to_checksum(),
-                hops: path.hop_count(),
-            });
-        }
 
         let labels = dest.meta.clone().unwrap_or_default();
         let meta = Meta::from_map(labels.clone());
@@ -897,7 +888,16 @@ pub fn convert_destinations(
             DestinationSource::Configured,
         )
         .with_overrides(overrides);
-        result.insert(id.to_string(), dest);
+        // Keying by identity makes a duplicate exit-and-path structurally impossible, so the
+        // entry this displaces is the duplicate.
+        if let Some(other) = result.insert(dest) {
+            return Err(config::Error::DuplicateDestination {
+                first: other.connect_id,
+                second: id.to_string(),
+                address: other.address.to_checksum(),
+                hops: other.routing.hop_count(),
+            });
+        }
     }
     Ok(result)
 }
@@ -921,9 +921,7 @@ mod tests {
         toml::from_str(toml).expect("valid TOML")
     }
 
-    fn convert_with_defaults(
-        value: Option<HashMap<String, super::Destination>>,
-    ) -> HashMap<String, super::ConnDestination> {
+    fn convert_with_defaults(value: Option<HashMap<String, super::Destination>>) -> super::Destinations {
         convert_destinations(
             value,
             DefaultTargets {

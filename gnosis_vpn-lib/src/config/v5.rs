@@ -341,7 +341,7 @@ path = { hops = 2 }
 "#####,
         );
         let result = forward_convert(cfg);
-        let d = result.destinations.get("Germany").unwrap();
+        let d = result.destinations.by_connect_id("Germany").unwrap();
         assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
     }
 
@@ -356,7 +356,7 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 "#####,
         );
         let result = forward_convert(cfg);
-        let d = result.destinations.get("Germany").unwrap();
+        let d = result.destinations.by_connect_id("Germany").unwrap();
         assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
     }
 
@@ -372,7 +372,7 @@ path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA", "0x25865
 "#####,
         );
         let result = forward_convert(cfg);
-        let d = result.destinations.get("Germany").unwrap();
+        let d = result.destinations.by_connect_id("Germany").unwrap();
         assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
     }
 
@@ -388,7 +388,7 @@ path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA", "0x25865
 "#####,
         );
         let result = forward_convert(cfg);
-        let d = result.destinations.get("Germany").unwrap();
+        let d = result.destinations.by_connect_id("Germany").unwrap();
         assert_eq!(d.routing, HopRouting::try_from(3).unwrap());
     }
 

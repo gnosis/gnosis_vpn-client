@@ -5,7 +5,7 @@ use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
 use edgli::hopr_lib::exports::transport::SessionTarget;
 use serde::{Deserialize, Serialize};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display};
 use std::net::SocketAddr;
 
@@ -84,6 +84,71 @@ pub fn default_path() -> HopRouting {
     HopRouting::try_from(DEFAULT_HOPS).expect("the default hop count is always valid")
 }
 
+/// A destination's identity; every other field is display state a discovery tick may rewrite.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ExitKey {
+    pub address: Address,
+    pub routing: HopRouting,
+}
+
+impl ExitKey {
+    /// The first address digits, enough to tell two exits apart in a connect id.
+    fn short(&self) -> String {
+        self.address.to_checksum()[2..6].to_ascii_lowercase()
+    }
+
+    /// `HopRouting` is not `Ord`, and unstable key order would shuffle connect ids between ticks.
+    fn sort_key(&self) -> (String, usize) {
+        (self.address.to_checksum(), self.routing.hop_count())
+    }
+}
+
+impl Display for ExitKey {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}@{}", self.address.to_checksum(), self.routing.hop_count())
+    }
+}
+
+impl std::str::FromStr for ExitKey {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (address, hops) = s.split_once('@').ok_or_else(|| format!("not an exit key: {s}"))?;
+        Ok(Self {
+            address: address.parse::<Address>().map_err(|e| e.to_string())?,
+            routing: hops
+                .parse::<usize>()
+                .map_err(|e| e.to_string())
+                .and_then(|h| HopRouting::try_from(h).map_err(|e| e.to_string()))?,
+        })
+    }
+}
+
+/// Longest connect id minted from a published name.
+const SLUG_MAX_CHARS: usize = 32;
+
+/// A published name as one shell-safe token, or `None` when nothing usable is left - bash
+/// completion splits connect ids on whitespace.
+fn slug(name: &str) -> Option<String> {
+    let mut out = String::new();
+    for c in name.chars() {
+        if out.len() >= SLUG_MAX_CHARS {
+            break;
+        }
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let slug = out.trim_matches('-');
+    // A `0x…` slug would shadow the address handle in `Destinations::resolve`.
+    if slug.is_empty() || slug.starts_with("0x") {
+        return None;
+    }
+    Some(slug.to_string())
+}
+
 /// Session targets for a destination that neither configuration nor discovery names.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DefaultTargets {
@@ -123,7 +188,9 @@ impl Overrides {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Destination {
-    pub id: String,
+    /// The handle `status` shows and `connect` accepts; still `id` on the wire that ctl and the app read.
+    #[serde(rename = "id")]
+    pub connect_id: String,
     pub meta: Meta,
     #[serde(with = "serde_utils::address")]
     pub address: Address,
@@ -139,7 +206,7 @@ pub struct Destination {
 impl Destination {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        id: String,
+        connect_id: String,
         address: Address,
         routing: HopRouting,
         meta: Meta,
@@ -148,7 +215,7 @@ impl Destination {
         source: DestinationSource,
     ) -> Self {
         Self {
-            id,
+            connect_id,
             address,
             routing,
             meta,
@@ -211,22 +278,16 @@ impl Destination {
         }
     }
 
-    /// The `name` when published, bracketing the key when both differ; a discovered key only
-    /// repeats `Exit:`.
-    fn title(&self) -> String {
-        let Some(name) = self.meta.name.as_deref().map(sanitize_for_display) else {
-            return self.id.clone();
-        };
-        let key_adds_nothing = self.source == DestinationSource::Discovered || name == self.id;
-        if key_adds_nothing {
-            return name;
+    /// Identity: the exit and the path to it; every other field is resolved or display state.
+    pub fn key(&self) -> ExitKey {
+        ExitKey {
+            address: self.address,
+            routing: self.routing,
         }
-        format!("{name}({id})", id = self.id)
     }
 
-    /// Identity: the exit and the path to it; every other field is resolved or display state.
     pub fn same_exit(&self, other: &Self) -> bool {
-        self.address == other.address && self.routing == other.routing
+        self.key() == other.key()
     }
 }
 
@@ -241,11 +302,14 @@ impl Destination {
         let pinned = |key: &str| mixed_origins && self.overrides.configured_meta.contains_key(key);
 
         let mut parts = Vec::new();
-        // The title already carries the name, but not that configuration chose it.
-        if let Some(name) = &self.meta.name
-            && pinned("name")
-        {
-            parts.push(format!("name: {}{CONFIG_VALUE}", sanitize_for_display(name)));
+        if let Some(name) = &self.meta.name {
+            let shown = sanitize_for_display(name);
+            // Usually the id is this name slugged; print it only when it says more, or was pinned.
+            let adds_nothing = slug(&shown).as_deref() == Some(self.connect_id.as_str());
+            if pinned("name") || !adds_nothing {
+                let mark = if pinned("name") { CONFIG_VALUE } else { "" };
+                parts.push(format!("name: {shown}{mark}"));
+            }
         }
         for (key, value) in [
             ("location", &self.meta.location),
@@ -289,7 +353,7 @@ impl Display for Destination {
         write!(
             f,
             "{id} [{source}] (Exit: {address}, Route: (entry){path}({short_addr}){labels})",
-            id = self.title(),
+            id = self.connect_id,
             source = self.source.code(),
             path = self.pretty_print_path(),
             address = self.address.to_checksum(),
@@ -298,54 +362,201 @@ impl Display for Destination {
     }
 }
 
-/// Merges freshly discovered `gvpn:exit` nodes into `destinations`.
-///
-/// Joined on `(address, path)`, so an entry at another path is a separate destination, left alone.
-pub fn merge_discovered(
-    destinations: &mut HashMap<String, Destination>,
-    discovered: &HashMap<Address, ExitNodeInfo>,
-    defaults: DefaultTargets,
-) {
-    let default_path = default_path();
-    let is_discovered = |dest: &Destination| dest.routing == default_path && discovered.contains_key(&dest.address);
+/// Why a connect token named no single destination.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Unresolved {
+    NotFound,
+    /// One exit reached by several paths - the caller must pick a connect id.
+    Ambiguous(Vec<String>),
+}
 
-    destinations.retain(|_, dest| match dest.source {
-        DestinationSource::Discovered if !is_discovered(dest) => false,
-        DestinationSource::ConfiguredAndDiscovered if !is_discovered(dest) => {
-            dest.source = DestinationSource::Configured;
-            dest.forget_discovered(defaults);
-            true
+/// The destinations the client knows, keyed by identity and addressed by `connect_id` - one type,
+/// so the identity and the handle cannot drift apart.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Destinations {
+    by_exit: HashMap<ExitKey, Destination>,
+}
+
+impl Destinations {
+    pub fn get(&self, key: &ExitKey) -> Option<&Destination> {
+        self.by_exit.get(key)
+    }
+
+    pub fn get_mut(&mut self, key: &ExitKey) -> Option<&mut Destination> {
+        self.by_exit.get_mut(key)
+    }
+
+    pub fn by_connect_id(&self, connect_id: &str) -> Option<&Destination> {
+        self.by_exit.values().find(|d| d.connect_id == connect_id)
+    }
+
+    /// Returns the entry this one replaced, which is how a duplicate is detected at config load.
+    pub fn insert(&mut self, dest: Destination) -> Option<Destination> {
+        self.by_exit.insert(dest.key(), dest)
+    }
+
+    pub fn contains_key(&self, key: &ExitKey) -> bool {
+        self.by_exit.contains_key(key)
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &ExitKey> {
+        self.by_exit.keys()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &Destination> {
+        self.by_exit.values()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&ExitKey, &Destination)> {
+        self.by_exit.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_exit.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_exit.is_empty()
+    }
+
+    /// Connect ids in a stable order, for `gvpn-ctl destinations` and shell completion.
+    pub fn connect_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.by_exit.values().map(|d| d.connect_id.clone()).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// A connect id, or a bare exit address when it names just one destination - the address handle
+    /// is what keeps a checksum saved earlier working.
+    pub fn resolve(&self, token: &str) -> Result<&Destination, Unresolved> {
+        if let Some(dest) = self.by_exit.values().find(|d| d.connect_id == token) {
+            return Ok(dest);
         }
-        _ => true,
-    });
-
-    for (address, info) in discovered {
-        if let Some(dest) = destinations
-            .values_mut()
-            .find(|d| d.address == *address && d.routing == default_path)
-        {
-            if dest.source == DestinationSource::Configured {
-                dest.source = DestinationSource::ConfiguredAndDiscovered;
+        let Ok(address) = token.parse::<Address>() else {
+            return Err(Unresolved::NotFound);
+        };
+        let mut matched: Vec<&Destination> = self.by_exit.values().filter(|d| d.address == address).collect();
+        match matched.len() {
+            0 => Err(Unresolved::NotFound),
+            1 => Ok(matched.remove(0)),
+            _ => {
+                let mut ids: Vec<String> = matched.iter().map(|d| d.connect_id.clone()).collect();
+                ids.sort_unstable();
+                Err(Unresolved::Ambiguous(ids))
             }
+        }
+    }
+
+    /// Merges freshly discovered `gvpn:exit` nodes in, joined on `(address, path)` - so a configured
+    /// entry at another path is a separate destination and the discovered one lands beside it.
+    pub fn merge_discovered(&mut self, discovered: &HashMap<Address, ExitNodeInfo>, defaults: DefaultTargets) {
+        let default_path = default_path();
+        let is_discovered = |dest: &Destination| dest.routing == default_path && discovered.contains_key(&dest.address);
+
+        self.by_exit.retain(|_, dest| match dest.source {
+            DestinationSource::Discovered if !is_discovered(dest) => false,
+            DestinationSource::ConfiguredAndDiscovered if !is_discovered(dest) => {
+                dest.source = DestinationSource::Configured;
+                dest.forget_discovered(defaults);
+                true
+            }
+            _ => true,
+        });
+
+        for (address, info) in discovered {
+            let key = ExitKey {
+                address: *address,
+                routing: default_path,
+            };
+            if let Some(dest) = self.by_exit.get_mut(&key) {
+                if dest.source == DestinationSource::Configured {
+                    dest.source = DestinationSource::ConfiguredAndDiscovered;
+                }
+                dest.adopt(info);
+                continue;
+            }
+            let mut dest = Destination::new(
+                address.to_checksum(),
+                *address,
+                default_path,
+                Meta::default(),
+                defaults.gnosis_vpn_server,
+                defaults.wireguard_server,
+                DestinationSource::Discovered,
+            );
             dest.adopt(info);
-            continue;
+            self.by_exit.insert(key, dest);
         }
-        let id = address.to_checksum();
-        if destinations.contains_key(&id) {
-            tracing::warn!(%id, "configured destination id collides with a discovered exit address - skipping");
-            continue;
+
+        self.assign_connect_ids();
+    }
+
+    /// Gives every discovered entry a unique handle. Configured ids win: published metadata is
+    /// unverified, so it must never take an id the user chose themselves.
+    fn assign_connect_ids(&mut self) {
+        let mut taken: HashSet<String> = self
+            .by_exit
+            .values()
+            .filter(|d| d.source != DestinationSource::Discovered)
+            .map(|d| d.connect_id.clone())
+            .collect();
+
+        // Sorted, because HashMap order would shuffle which entry keeps the unsuffixed slug.
+        let mut discovered: Vec<ExitKey> = self
+            .by_exit
+            .iter()
+            .filter(|(_, d)| d.source == DestinationSource::Discovered)
+            .map(|(key, _)| *key)
+            .collect();
+        discovered.sort_unstable_by_key(|key| key.sort_key());
+
+        for key in discovered {
+            let dest = &self.by_exit[&key];
+            let name = dest.meta.name.as_deref().map(sanitize_for_display);
+            let checksum = key.address.to_checksum();
+            let candidate = name.as_deref().and_then(slug).unwrap_or_else(|| checksum.clone());
+
+            let connect_id = if taken.contains(&candidate) {
+                let suffixed = format!("{candidate}-{}", key.short());
+                if taken.contains(&suffixed) { checksum } else { suffixed }
+            } else {
+                candidate
+            };
+            taken.insert(connect_id.clone());
+            if let Some(dest) = self.by_exit.get_mut(&key) {
+                dest.connect_id = connect_id;
+            }
         }
-        let mut dest = Destination::new(
-            id.clone(),
-            *address,
-            default_path,
-            Meta::default(),
-            defaults.gnosis_vpn_server,
-            defaults.wireguard_server,
-            DestinationSource::Discovered,
-        );
-        dest.adopt(info);
-        destinations.insert(id, dest);
+    }
+}
+
+impl Serialize for Destinations {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut m = s.serialize_map(Some(self.by_exit.len()))?;
+        for (key, dest) in &self.by_exit {
+            m.serialize_entry(&key.to_string(), dest)?;
+        }
+        m.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Destinations {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = HashMap::<String, Destination>::deserialize(d)?;
+        let by_exit = raw
+            .into_iter()
+            .map(|(key, dest)| Ok((key.parse::<ExitKey>().map_err(serde::de::Error::custom)?, dest)))
+            .collect::<Result<_, D::Error>>()?;
+        Ok(Self { by_exit })
+    }
+}
+
+impl FromIterator<Destination> for Destinations {
+    fn from_iter<I: IntoIterator<Item = Destination>>(iter: I) -> Self {
+        Self {
+            by_exit: iter.into_iter().map(|dest| (dest.key(), dest)).collect(),
+        }
     }
 }
 
@@ -411,14 +622,14 @@ mod tests {
 
     fn merged(dest: Destination, info: ExitNodeInfo) -> Destination {
         let addr = dest.address;
-        let mut destinations = HashMap::new();
-        destinations.insert(dest.id.clone(), dest);
+        let mut destinations = Destinations::default();
+        destinations.insert(dest);
         let mut discovered = HashMap::new();
         discovered.insert(addr, info);
 
-        merge_discovered(&mut destinations, &discovered, defaults());
+        destinations.merge_discovered(&discovered, defaults());
 
-        destinations.into_values().next().expect("the destination survives")
+        destinations.values().next().expect("the destination survives").clone()
     }
 
     #[test]
@@ -499,17 +710,17 @@ mod tests {
         let addr = address(1);
         let mut config_labels = HashMap::new();
         config_labels.insert("flag".to_string(), "DE".to_string());
-        let mut destinations = HashMap::new();
-        destinations.insert("dest-1".to_string(), pinned("dest-1", addr, config_labels, None, None));
+        let mut destinations = Destinations::default();
+        destinations.insert(pinned("dest-1", addr, config_labels, None, None));
         let mut info = exit_node(addr);
         info.meta.insert("location".to_string(), "France".to_string());
         let mut discovered = HashMap::new();
         discovered.insert(addr, info);
-        merge_discovered(&mut destinations, &discovered, defaults());
+        destinations.merge_discovered(&discovered, defaults());
 
-        merge_discovered(&mut destinations, &HashMap::new(), defaults());
+        destinations.merge_discovered(&HashMap::new(), defaults());
 
-        let dest = &destinations["dest-1"];
+        let dest = &destinations.by_connect_id("dest-1").unwrap();
         assert_eq!(dest.source, DestinationSource::Configured);
         assert_eq!(Some("DE"), dest.meta.flag.as_deref());
         assert_eq!(None, dest.meta.location.as_deref());
@@ -521,32 +732,46 @@ mod tests {
         let addr = address(1);
         let mut three_hops = configured("dest-1", addr);
         three_hops.routing = HopRouting::try_from(3).unwrap();
-        let mut destinations = HashMap::new();
-        destinations.insert("dest-1".to_string(), three_hops);
+        let mut destinations = Destinations::default();
+        destinations.insert(three_hops);
         let mut discovered = HashMap::new();
         discovered.insert(addr, exit_node(addr));
 
-        merge_discovered(&mut destinations, &discovered, defaults());
+        destinations.merge_discovered(&discovered, defaults());
 
         assert_eq!(2, destinations.len());
-        assert_eq!(DestinationSource::Configured, destinations["dest-1"].source);
-        let found = &destinations[&addr.to_checksum()];
+        assert_eq!(
+            DestinationSource::Configured,
+            destinations.by_connect_id("dest-1").unwrap().source
+        );
+        let found = &destinations.by_connect_id(&addr.to_checksum()).unwrap();
         assert_eq!(DestinationSource::Discovered, found.source);
         assert_eq!(default_path(), found.routing);
     }
 
+    /// Keyed by identity, a configured id spelling another exit's address no longer hides it.
     #[test]
-    fn a_configured_id_matching_another_exits_address_is_not_clobbered() {
+    fn a_configured_id_spelling_another_exits_address_no_longer_hides_it() {
         let addr = address(1);
-        let mut destinations = HashMap::new();
-        destinations.insert(addr.to_checksum(), configured(&addr.to_checksum(), address(2)));
+        let mut destinations = Destinations::default();
+        destinations.insert(configured(&addr.to_checksum(), address(2)));
         let mut discovered = HashMap::new();
         discovered.insert(addr, exit_node(addr));
 
-        merge_discovered(&mut destinations, &discovered, defaults());
+        destinations.merge_discovered(&discovered, defaults());
 
-        assert_eq!(1, destinations.len());
-        assert_eq!(address(2), destinations[&addr.to_checksum()].address);
+        assert_eq!(2, destinations.len());
+        // The configured entry keeps the id it was given, so the discovered exit takes a suffix.
+        assert_eq!(
+            address(2),
+            destinations.by_connect_id(&addr.to_checksum()).unwrap().address
+        );
+        let discovered = destinations
+            .values()
+            .find(|d| d.source == DestinationSource::Discovered)
+            .expect("the discovered exit survives");
+        assert_eq!(addr, discovered.address);
+        assert_ne!(addr.to_checksum(), discovered.connect_id);
     }
 
     /// Overriding a label also keeps the operator's version of it off the terminal entirely.
@@ -585,9 +810,9 @@ mod tests {
         assert!(!rendered.contains("location: France (c)"));
     }
 
-    /// The title carries the name but not that configuration chose it.
+    /// The connect id leads the line; the name says which value configuration chose.
     #[test]
-    fn an_overridden_name_is_marked_beside_the_title() {
+    fn an_overridden_name_is_marked_beside_the_connect_id() {
         let addr = address(1);
         let mut config_labels = HashMap::new();
         config_labels.insert("name".to_string(), "Frankfurt-1".to_string());
@@ -597,7 +822,7 @@ mod tests {
         let dest = merged(pinned("dest-1", addr, config_labels, None, None), info);
         let rendered = dest.to_string();
 
-        assert!(rendered.starts_with("Frankfurt-1(dest-1) [c+d] (Exit:"));
+        assert!(rendered.starts_with("dest-1 [c+d] (Exit:"), "{rendered}");
         assert!(rendered.contains("name: Frankfurt-1 (c)"));
     }
 
@@ -654,16 +879,16 @@ mod tests {
     #[test]
     fn discovery_only_address_is_inserted_fresh() {
         let addr = address(2);
-        let mut destinations = HashMap::new();
+        let mut destinations = Destinations::default();
         let mut discovered = HashMap::new();
         let info = exit_node(addr);
         discovered.insert(addr, info.clone());
 
-        merge_discovered(&mut destinations, &discovered, defaults());
+        destinations.merge_discovered(&discovered, defaults());
 
         assert_eq!(destinations.len(), 1);
         let dest = destinations.values().next().unwrap();
-        assert_eq!(dest.id, addr.to_checksum());
+        assert_eq!(dest.connect_id, addr.to_checksum());
         assert_eq!(dest.source, DestinationSource::Discovered);
         assert_eq!(dest.routing, HopRouting::try_from(1).unwrap());
         assert_eq!(dest.gnosis_vpn_server, info.gnosis_vpn_server);
@@ -673,44 +898,47 @@ mod tests {
     #[test]
     fn discovered_only_entry_is_removed_once_deregistered() {
         let addr = address(3);
-        let mut destinations = HashMap::new();
+        let mut destinations = Destinations::default();
         let mut discovered = HashMap::new();
         discovered.insert(addr, exit_node(addr));
-        merge_discovered(&mut destinations, &discovered, defaults());
+        destinations.merge_discovered(&discovered, defaults());
         assert_eq!(destinations.len(), 1);
 
-        merge_discovered(&mut destinations, &HashMap::new(), defaults());
+        destinations.merge_discovered(&HashMap::new(), defaults());
         assert!(destinations.is_empty());
     }
 
     #[test]
     fn confirmed_entry_downgrades_to_configured_once_deregistered() {
         let addr = address(4);
-        let mut destinations = HashMap::new();
-        destinations.insert("dest-4".to_string(), configured("dest-4", addr));
+        let mut destinations = Destinations::default();
+        destinations.insert(configured("dest-4", addr));
         let mut discovered = HashMap::new();
         discovered.insert(addr, exit_node(addr));
-        merge_discovered(&mut destinations, &discovered, defaults());
+        destinations.merge_discovered(&discovered, defaults());
         assert_eq!(
-            destinations["dest-4"].source,
+            destinations.by_connect_id("dest-4").unwrap().source,
             DestinationSource::ConfiguredAndDiscovered
         );
 
-        merge_discovered(&mut destinations, &HashMap::new(), defaults());
+        destinations.merge_discovered(&HashMap::new(), defaults());
         assert_eq!(destinations.len(), 1);
-        assert_eq!(destinations["dest-4"].source, DestinationSource::Configured);
+        assert_eq!(
+            destinations.by_connect_id("dest-4").unwrap().source,
+            DestinationSource::Configured
+        );
     }
 
     #[test]
     fn repeated_merge_with_unchanged_discovered_map_is_idempotent() {
         let addr = address(5);
-        let mut destinations = HashMap::new();
+        let mut destinations = Destinations::default();
         let mut discovered = HashMap::new();
         discovered.insert(addr, exit_node(addr));
 
-        merge_discovered(&mut destinations, &discovered, defaults());
-        merge_discovered(&mut destinations, &discovered, defaults());
-        merge_discovered(&mut destinations, &discovered, defaults());
+        destinations.merge_discovered(&discovered, defaults());
+        destinations.merge_discovered(&discovered, defaults());
+        destinations.merge_discovered(&discovered, defaults());
 
         assert_eq!(destinations.len(), 1);
         assert_eq!(
@@ -783,7 +1011,7 @@ mod tests {
         labels.insert("description".to_string(), "fast".to_string());
         labels.insert("operator".to_string(), "acme".to_string());
         let dest = Destination::new(
-            "d".to_string(),
+            "london-1".to_string(),
             address(1),
             HopRouting::try_from(1).unwrap(),
             Meta::from_map(labels),
@@ -795,7 +1023,7 @@ mod tests {
         let rendered = dest.to_string();
 
         assert!(rendered.contains("location: London, flag: GB, description: fast"));
-        // `name` is the title, so it must not be repeated among the labels.
+        // The connect id is this name slugged, so repeating it among the labels would be noise.
         assert!(!rendered.contains("name: london-1"));
         // Unrecognized labels are kept but not displayed for now.
         assert!(!rendered.contains("acme"));
@@ -816,73 +1044,169 @@ mod tests {
     }
 
     #[test]
-    fn title_is_the_config_key_without_a_name() {
-        assert_eq!("my-exit", configured("my-exit", address(1)).title());
+    fn the_connect_id_leads_the_line() {
+        let dest = configured("my-exit", address(1));
+
+        assert!(dest.to_string().starts_with("my-exit [c] (Exit:"));
     }
 
     #[test]
-    fn title_brackets_the_config_key_next_to_the_name() {
+    fn a_name_the_connect_id_does_not_already_say_is_shown_beside_it() {
         let dest = named("my-exit", "Frankfurt-1", DestinationSource::ConfiguredAndDiscovered);
 
-        assert_eq!("Frankfurt-1(my-exit)", dest.title());
-        assert!(dest.to_string().starts_with("Frankfurt-1(my-exit) [c+d] (Exit:"));
+        let rendered = dest.to_string();
+        assert!(rendered.starts_with("my-exit [c+d] (Exit:"));
+        assert!(rendered.contains("name: Frankfurt-1"), "{rendered}");
+    }
+
+    /// The connect id is the name slugged, so repeating the name would be noise.
+    #[test]
+    fn a_name_the_connect_id_already_says_is_not_repeated() {
+        let dest = named("frankfurt-1", "Frankfurt-1", DestinationSource::Discovered);
+
+        assert!(!dest.to_string().contains("name:"), "{dest}");
     }
 
     #[test]
-    fn title_is_the_name_alone_for_a_discovered_destination() {
-        // The discovered key is only the checksummed address, already rendered as `Exit:`.
-        let dest = named(&address(1).to_checksum(), "Frankfurt-1", DestinationSource::Discovered);
+    fn a_discovered_name_becomes_the_connect_id() {
+        let addr = address(1);
+        let mut info = exit_node(addr);
+        info.meta.insert("name".to_string(), "Frankfurt 1".to_string());
+        let mut destinations = Destinations::default();
 
-        assert_eq!("Frankfurt-1", dest.title());
+        destinations.merge_discovered(&HashMap::from([(addr, info)]), defaults());
+
+        assert_eq!(vec!["frankfurt-1".to_string()], destinations.connect_ids());
     }
 
     #[test]
-    fn title_is_the_checksummed_key_for_a_discovered_destination_without_a_name() {
-        let mut destinations = HashMap::new();
-        let mut discovered = HashMap::new();
-        discovered.insert(address(1), exit_node(address(1)));
+    fn a_discovered_exit_without_a_name_is_addressed_by_its_address() {
+        let addr = address(1);
+        let mut destinations = Destinations::default();
 
-        merge_discovered(&mut destinations, &discovered, defaults());
+        destinations.merge_discovered(&HashMap::from([(addr, exit_node(addr))]), defaults());
+
+        assert_eq!(vec![addr.to_checksum()], destinations.connect_ids());
+    }
+
+    /// A published name is attacker-controlled; none of it may reach the terminal or shell.
+    #[test]
+    fn a_hostile_name_cannot_shape_the_connect_id() {
+        let hostile = format!("\u{1b}[2K\u{202e} rm -rf / {}", "x".repeat(200));
+
+        let slug = slug(&sanitize_for_display(&hostile)).expect("something usable is left");
+
+        assert!(slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'), "{slug}");
+        assert!(slug.len() <= SLUG_MAX_CHARS);
+    }
+
+    #[test]
+    fn a_name_that_slugs_to_nothing_falls_back_to_the_address() {
+        assert_eq!(None, slug("!!!"));
+        assert_eq!(None, slug(""));
+    }
+
+    /// `0x…` is the address handle, so a name may not mint one and shadow a real exit.
+    #[test]
+    fn a_name_may_not_slug_into_something_that_looks_like_an_address() {
+        assert_eq!(None, slug("0xdeadbeef"));
+    }
+
+    fn named_exit(addr: Address, name: &str) -> ExitNodeInfo {
+        let mut info = exit_node(addr);
+        info.meta.insert("name".to_string(), name.to_string());
+        info
+    }
+
+    #[test]
+    fn two_exits_publishing_one_name_get_told_apart() {
+        let (first, second) = (address(1), address(2));
+        let mut destinations = Destinations::default();
+
+        destinations.merge_discovered(
+            &HashMap::from([
+                (first, named_exit(first, "Berlin")),
+                (second, named_exit(second, "Berlin")),
+            ]),
+            defaults(),
+        );
+
+        let ids = destinations.connect_ids();
+        assert_eq!(2, ids.len());
+        assert_ne!(ids[0], ids[1]);
+        assert!(ids.contains(&"berlin".to_string()), "{ids:?}");
+    }
+
+    /// The unsuffixed slug must not hop between exits from one tick to the next.
+    #[test]
+    fn which_exit_keeps_the_bare_name_does_not_depend_on_discovery_order() {
+        let (first, second) = (address(1), address(2));
+        let one = HashMap::from([
+            (first, named_exit(first, "Berlin")),
+            (second, named_exit(second, "Berlin")),
+        ]);
+        let other = HashMap::from([
+            (second, named_exit(second, "Berlin")),
+            (first, named_exit(first, "Berlin")),
+        ]);
+
+        let mut a = Destinations::default();
+        a.merge_discovered(&one, defaults());
+        let mut b = Destinations::default();
+        b.merge_discovered(&other, defaults());
 
         assert_eq!(
-            address(1).to_checksum(),
-            destinations[&address(1).to_checksum()].title()
+            a.by_connect_id("berlin").unwrap().address,
+            b.by_connect_id("berlin").unwrap().address
+        );
+    }
+
+    /// Exit metadata is attacker-controlled, so a published name may never take a configured id.
+    #[test]
+    fn a_published_name_cannot_take_a_configured_id() {
+        let (mine, theirs) = (address(1), address(2));
+        let mut destinations = Destinations::default();
+        destinations.insert(configured("berlin", mine));
+
+        destinations.merge_discovered(&HashMap::from([(theirs, named_exit(theirs, "Berlin"))]), defaults());
+
+        assert_eq!(mine, destinations.by_connect_id("berlin").unwrap().address);
+    }
+
+    #[test]
+    fn an_exit_resolves_by_connect_id_and_by_its_address() {
+        let addr = address(1);
+        let destinations = Destinations::from_iter([configured("my-exit", addr)]);
+
+        assert_eq!(addr, destinations.resolve("my-exit").unwrap().address);
+        assert_eq!(addr, destinations.resolve(&addr.to_checksum()).unwrap().address);
+        assert_eq!(Err(Unresolved::NotFound), destinations.resolve("nope").map(|_| ()));
+    }
+
+    /// One exit at two paths is two destinations, so its bare address names neither.
+    #[test]
+    fn an_address_reached_by_two_paths_resolves_to_neither() {
+        let addr = address(1);
+        let mut far = configured("my-exit-far", addr);
+        far.routing = HopRouting::try_from(3).unwrap();
+        let destinations = Destinations::from_iter([configured("my-exit", addr), far]);
+
+        let err = destinations.resolve(&addr.to_checksum()).map(|_| ()).unwrap_err();
+
+        assert_eq!(
+            Unresolved::Ambiguous(vec!["my-exit".to_string(), "my-exit-far".to_string()]),
+            err
         );
     }
 
     #[test]
-    fn title_collapses_when_name_and_key_match() {
-        let dest = named("Frankfurt-1", "Frankfurt-1", DestinationSource::ConfiguredAndDiscovered);
+    fn an_exit_key_survives_a_round_trip_through_its_string_form() {
+        let key = ExitKey {
+            address: address(1),
+            routing: HopRouting::try_from(3).unwrap(),
+        };
 
-        assert_eq!("Frankfurt-1", dest.title());
-    }
-
-    #[test]
-    fn title_sanitizes_and_elides_a_hostile_name() {
-        let hostile = format!("\u{1b}[2K\u{202e}{}", "x".repeat(200));
-        let dest = named("my-exit", &hostile, DestinationSource::Discovered);
-
-        let title = dest.title();
-
-        assert!(!title.contains('\u{1b}'));
-        assert!(!title.contains('\u{202e}'));
-        assert_eq!(format!("[2K{}…", "x".repeat(META_FIELD_MAX_CHARS - 3)), title);
-    }
-
-    #[test]
-    fn configured_and_discovered_destination_adopts_the_operator_name() {
-        let addr = address(1);
-        let mut destinations = HashMap::new();
-        destinations.insert("dest-1".to_string(), configured("dest-1", addr));
-
-        let mut info = exit_node(addr);
-        info.meta.insert("name".to_string(), "Frankfurt-1".to_string());
-        let mut discovered = HashMap::new();
-        discovered.insert(addr, info);
-
-        merge_discovered(&mut destinations, &discovered, defaults());
-
-        assert_eq!("Frankfurt-1(dest-1)", destinations["dest-1"].title());
+        assert_eq!(Ok(key), key.to_string().parse::<ExitKey>());
     }
 
     /// Daemon and ctl ship as one version, so this pins the socket shape against accidental drift.
@@ -945,18 +1269,18 @@ mod tests {
     #[test]
     fn a_discovery_tick_leaves_a_live_connections_identity_intact() {
         let addr = address(1);
-        let mut destinations = HashMap::new();
-        destinations.insert("dest-1".to_string(), configured("dest-1", addr));
-        let live = destinations["dest-1"].clone();
+        let mut destinations = Destinations::default();
+        destinations.insert(configured("dest-1", addr));
+        let live = destinations.by_connect_id("dest-1").unwrap().clone();
 
         let mut info = exit_node(addr);
         info.meta.insert("name".to_string(), "Frankfurt-1".to_string());
         let mut discovered = HashMap::new();
         discovered.insert(addr, info);
 
-        merge_discovered(&mut destinations, &discovered, defaults());
+        destinations.merge_discovered(&discovered, defaults());
 
-        let refreshed = &destinations["dest-1"];
+        let refreshed = destinations.by_connect_id("dest-1").unwrap();
         assert!(live.same_exit(refreshed));
         assert_ne!(&live, refreshed);
     }

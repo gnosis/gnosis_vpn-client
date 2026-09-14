@@ -328,7 +328,10 @@ path = { hops = 2 }
         );
         let result = runtime_config(cfg);
 
-        let dest = result.destinations.get("Germany").expect("destination present");
+        let dest = result
+            .destinations
+            .by_connect_id("Germany")
+            .expect("destination present");
         assert_eq!(dest.routing, edgli::hopr_lib::HopRouting::try_from(2).unwrap());
         assert_eq!(
             dest.gnosis_vpn_server,

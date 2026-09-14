@@ -27,13 +27,16 @@ version = 7
 # discovered on-chain only, [c+d] configured here and discovered too. On a [c+d] entry it also
 # marks (c) each value you set here, whether or not the exit publishes a different one.
 #
-# identifier for a destination and its routing options
+# the handle you connect by: `gvpn-ctl status` shows it and `gvpn-ctl connect` accepts it. An exit
+# discovered on-chain gets one made from the `name` it publishes, or its address when it publishes
+# none; a handle you set here always wins over a published name. `gvpn-ctl connect` also takes a
+# bare exit address, as long as you have not configured that exit at more than one path.
 # [destinations.<id>]
 # exit node address (where the connection should terminate)
 # address = "<exit node address>"
 # additional information about this exit node - any key is kept, and overrides the exit's own label
-# of the same name. `name` becomes the destination's title in `gvpn-ctl status` (bracketing the id
-# above when the two differ), and location, flag and description are shown as labels
+# of the same name. `name`, location, flag and description are shown as labels in `gvpn-ctl status`;
+# `name` is left out when the id above already says the same thing
 # meta = { name = <title>, location = <location>, flag = <two-letter country code>, description = <free text> }
 # session path: number of intermediate hops (0–3). Not an override: a discovered exit is always
 # reachable at 1 hop, so an entry at another path is an additional destination beside it. Two

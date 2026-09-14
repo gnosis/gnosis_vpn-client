@@ -232,6 +232,8 @@ pub enum ConnectResponse {
     WaitingToConnect(Destination, RouteHealthState),
     UnableToConnect(Destination, RouteHealthState),
     DestinationNotFound,
+    /// One exit reached by several paths - the candidate connect ids, for the user to pick from.
+    DestinationAmbiguous(Vec<String>),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -475,6 +477,9 @@ impl ConnectResponse {
     }
     pub fn destination_not_found() -> Self {
         ConnectResponse::DestinationNotFound
+    }
+    pub fn ambiguous(connect_ids: Vec<String>) -> Self {
+        ConnectResponse::DestinationAmbiguous(connect_ids)
     }
 }
 

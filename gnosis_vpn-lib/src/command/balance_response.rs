@@ -6,7 +6,7 @@ use std::{
 };
 
 pub use crate::info::Info;
-use crate::{balance, connection::destination::Destination, serde_utils};
+use crate::{balance, connection::destination::Destinations, serde_utils};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChannelOut {
@@ -43,7 +43,7 @@ impl BalanceResponse {
     pub fn build(
         info: &Info,
         balances: &balance::Balances,
-        destinations: &HashMap<String, Destination>,
+        destinations: &Destinations,
         capacity_allocations: Option<&balance::CapacityAllocations>,
         ideal_balance: Option<balance::BalanceRecommendation>,
         funding_status: Option<balance::FundingStatus>,
@@ -68,12 +68,16 @@ impl BalanceResponse {
 
 fn from_balances<'a>(
     channels_out: impl Iterator<Item = (&'a Address, &'a Balance<WxHOPR>)>,
-    destinations: &HashMap<String, Destination>,
+    destinations: &Destinations,
 ) -> Vec<ChannelOut> {
-    let addr_to_id: HashMap<Address, &str> = destinations
-        .iter()
-        .map(|(id, dest)| (dest.address, id.as_str()))
-        .collect();
+    // Several destinations share one channel when they share an exit; the first id names it stably.
+    let mut addr_to_id: HashMap<Address, &str> = HashMap::new();
+    for dest in destinations.values() {
+        let entry = addr_to_id.entry(dest.address).or_insert(&dest.connect_id);
+        if dest.connect_id.as_str() < *entry {
+            *entry = &dest.connect_id;
+        }
+    }
     channels_out
         .map(|(address, balance)| ChannelOut {
             address: *address,
@@ -107,7 +111,7 @@ impl Display for ChannelBalance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::destination::{Destination, DestinationSource, HopRouting, Meta};
+    use crate::connection::destination::{Destination, DestinationSource, Destinations, HopRouting, Meta};
 
     fn address(byte: u8) -> Address {
         Address::from([byte; 20])
@@ -129,8 +133,8 @@ mod tests {
     fn from_balances_sets_matched_exit_when_address_matches_destination() {
         let addr = address(1);
         let balance = Balance::<WxHOPR>::from(100u64);
-        let mut destinations = HashMap::new();
-        destinations.insert("dest-1".to_string(), destination("dest-1", addr));
+        let mut destinations = Destinations::default();
+        destinations.insert(destination("dest-1", addr));
 
         let result = from_balances(std::iter::once((&addr, &balance)), &destinations);
 
@@ -145,7 +149,7 @@ mod tests {
         let addr = address(2);
         let balance = Balance::<WxHOPR>::from(50u64);
 
-        let result = from_balances(std::iter::once((&addr, &balance)), &HashMap::new());
+        let result = from_balances(std::iter::once((&addr, &balance)), &Destinations::default());
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].address, addr);

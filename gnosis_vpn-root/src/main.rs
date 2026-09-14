@@ -979,14 +979,12 @@ impl DaemonState {
 
     /// Only what the config file names; the worker's answer also carries whatever discovery found.
     fn configured_destination_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self.config.destinations.keys().cloned().collect();
-        ids.sort_unstable();
-        ids
+        self.config.destinations.connect_ids()
     }
 
     fn status_response_offline(&self) -> Response {
         let mut vals: Vec<&Destination> = self.config.destinations.values().collect();
-        vals.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+        vals.sort_unstable_by(|a, b| a.connect_id.cmp(&b.connect_id));
         let destinations = vals
             .into_iter()
             .map(|dest| command::DestinationState {
