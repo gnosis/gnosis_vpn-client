@@ -30,6 +30,24 @@ jobs:
         uses: korthout/backport-action@2e830a1d0b8269505846ddd407a70876913ad1f8 # v4.6.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Conflicts open a PR instead of vanishing into a comment on a green run.
+          experimental: |
+            {
+              "conflict_resolution": "draft_commit_conflicts"
+            }
+      # The action forces conflict PRs to draft; a real PR is harder to ignore.
+      - name: Mark the backport pull requests ready for review
+        if: steps.backport.outputs.created_pull_numbers != ''
+        shell: bash
+        env:
+          # GITHUB_TOKEN, not the app token: the app installation has no pull-requests scope.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBERS: ${{ steps.backport.outputs.created_pull_numbers }}
+        run: |
+          for pr in ${PR_NUMBERS}; do
+            gh pr ready "${pr}"
+          done
       # App lacks pull-requests scope; GITHUB_TOKEN's PRs skip CI, so re-push as the app.
       - name: Generate GitHub App token
         id: bot-token
