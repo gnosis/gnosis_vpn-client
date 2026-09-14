@@ -1204,7 +1204,8 @@ impl Core {
             .iter()
             .map(|(key, dest)| (*key, (dest.gnosis_vpn_server, dest.wireguard_server)))
             .collect();
-        let before: HashSet<ExitKey> = targets_before.keys().copied().collect();
+        // Trackers are what is synced, so one kept past its exit is still seen by the next merge.
+        let before: HashSet<ExitKey> = self.route_healths.keys().copied().collect();
         let defaults = self.config.default_targets;
         self.config.destinations.merge_discovered(&nodes, defaults);
         let after: HashSet<ExitKey> = self.config.destinations.keys().copied().collect();
@@ -1998,6 +1999,16 @@ mod tests {
         let after = HashSet::new();
 
         let dropped = trackers_to_drop(&before, &after, Some(live));
+
+        assert_eq!(vec![gone], dropped);
+    }
+
+    #[test]
+    fn a_kept_tracker_is_dropped_once_its_connection_is_over() {
+        let gone = destination("gone").key();
+        let before = HashSet::from([gone]);
+
+        let dropped = trackers_to_drop(&before, &HashSet::new(), None);
 
         assert_eq!(vec![gone], dropped);
     }
