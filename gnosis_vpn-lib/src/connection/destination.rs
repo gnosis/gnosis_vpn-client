@@ -92,7 +92,7 @@ pub struct ExitKey {
 }
 
 impl ExitKey {
-    /// Tells two exits publishing one name apart; FNV-1a by hand, as `DefaultHasher` drifts per rustc.
+    /// Pins a discovered id to its key so no later same-named exit can take it; FNV-1a by hand, as `DefaultHasher` drifts per rustc.
     fn discriminator(&self) -> String {
         const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
         const PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -318,8 +318,10 @@ impl Destination {
         let mut parts = Vec::new();
         if let Some(name) = &self.meta.name {
             let shown = sanitize_for_display(name);
-            // The id is this name slugged, so only a name spelled exactly like it says nothing new.
-            let adds_nothing = shown == self.connect_id;
+            // A discovered id is this name slugged plus the key hash, so only a name spelled like it says nothing new.
+            let key_hash = format!("-{}", self.key().discriminator());
+            let own_id = self.connect_id.strip_suffix(&key_hash).unwrap_or(&self.connect_id);
+            let adds_nothing = shown == own_id;
             if pinned("name") || !adds_nothing {
                 let mark = if pinned("name") { CONFIG_VALUE } else { "" };
                 parts.push(format!("name: {shown}{mark}"));
@@ -511,7 +513,7 @@ impl Destinations {
             .map(|d| d.connect_id.clone())
             .collect();
 
-        // Sorted, because HashMap order would shuffle which entry keeps the unsuffixed slug.
+        // Sorted, because HashMap order would shuffle which entry gets which numbered fallback.
         let mut discovered: Vec<ExitKey> = self
             .by_exit
             .iter()
@@ -528,10 +530,11 @@ impl Destinations {
                 .and_then(slug)
                 .unwrap_or_else(|| key.address.to_checksum());
 
+            // The key hash pins the id to this exit, so a same-named exit found later cannot take it.
+            let pinned = format!("{candidate}-{}", key.discriminator());
             // Configured ids are arbitrary, so even the key's own form is checked before use.
-            let suffixed = format!("{candidate}-{}", key.discriminator());
             let numbered = (2..).map(|n| format!("{key}-{n}"));
-            let connect_id = [candidate, suffixed, key.to_string()]
+            let connect_id = [pinned, key.to_string()]
                 .into_iter()
                 .chain(numbered)
                 .find(|id| !taken.contains(id))
@@ -758,7 +761,9 @@ mod tests {
             DestinationSource::Configured,
             destinations.by_connect_id("dest-1").unwrap().source
         );
-        let found = &destinations.by_connect_id(&addr.to_checksum()).unwrap();
+        let found = &destinations
+            .by_connect_id(&pinned_id(addr, &addr.to_checksum()))
+            .unwrap();
         assert_eq!(DestinationSource::Discovered, found.source);
         assert_eq!(default_path(), found.routing);
     }
@@ -902,7 +907,7 @@ mod tests {
 
         assert_eq!(destinations.len(), 1);
         let dest = destinations.values().next().unwrap();
-        assert_eq!(dest.connect_id, addr.to_checksum());
+        assert_eq!(dest.connect_id, pinned_id(addr, &addr.to_checksum()));
         assert_eq!(dest.source, DestinationSource::Discovered);
         assert_eq!(dest.routing, HopRouting::try_from(1).unwrap());
         assert_eq!(dest.gnosis_vpn_server, info.gnosis_vpn_server);
@@ -1098,17 +1103,26 @@ mod tests {
 
         destinations.merge_discovered(&HashMap::from([(addr, info)]), defaults());
 
-        assert_eq!(vec!["frankfurt-1".to_string()], destinations.connect_ids());
+        assert_eq!(vec![pinned_id(addr, "frankfurt-1")], destinations.connect_ids());
     }
 
     #[test]
-    fn a_discovered_exit_without_a_name_is_addressed_by_its_address() {
+    fn a_discovered_exit_without_a_name_is_addressed_by_its_address_and_key_hash() {
         let addr = address(1);
         let mut destinations = Destinations::default();
 
         destinations.merge_discovered(&HashMap::from([(addr, exit_node(addr))]), defaults());
 
-        assert_eq!(vec![addr.to_checksum()], destinations.connect_ids());
+        assert_eq!(vec![pinned_id(addr, &addr.to_checksum())], destinations.connect_ids());
+    }
+
+    /// The id a discovered exit gets on the default path: its slug pinned by the key hash.
+    fn pinned_id(addr: Address, slug: &str) -> String {
+        let key = ExitKey {
+            address: addr,
+            routing: default_path(),
+        };
+        format!("{slug}-{}", key.discriminator())
     }
 
     /// A published name is attacker-controlled; none of it may reach the terminal or shell.
@@ -1153,34 +1167,26 @@ mod tests {
             defaults(),
         );
 
-        let ids = destinations.connect_ids();
-        assert_eq!(2, ids.len());
-        assert_ne!(ids[0], ids[1]);
-        assert!(ids.contains(&"berlin".to_string()), "{ids:?}");
+        let mut expected = vec![pinned_id(first, "berlin"), pinned_id(second, "berlin")];
+        expected.sort_unstable();
+        assert_eq!(expected, destinations.connect_ids());
     }
 
-    /// The unsuffixed slug must not hop between exits from one tick to the next.
+    /// A stored target must keep naming the exit it connected to when a same-named exit appears at a lower address.
     #[test]
-    fn which_exit_keeps_the_bare_name_does_not_depend_on_discovery_order() {
-        let (first, second) = (address(1), address(2));
-        let one = HashMap::from([
-            (first, named_exit(first, "Berlin")),
-            (second, named_exit(second, "Berlin")),
-        ]);
-        let other = HashMap::from([
-            (second, named_exit(second, "Berlin")),
-            (first, named_exit(first, "Berlin")),
-        ]);
+    fn a_same_named_exit_arriving_later_cannot_take_an_id() {
+        let (later, mine) = (address(1), address(2));
+        let mut destinations = Destinations::default();
+        destinations.merge_discovered(&HashMap::from([(mine, named_exit(mine, "Berlin"))]), defaults());
+        let id = destinations.connect_ids().remove(0);
 
-        let mut a = Destinations::default();
-        a.merge_discovered(&one, defaults());
-        let mut b = Destinations::default();
-        b.merge_discovered(&other, defaults());
-
-        assert_eq!(
-            a.by_connect_id("berlin").unwrap().address,
-            b.by_connect_id("berlin").unwrap().address
+        destinations.merge_discovered(
+            &HashMap::from([(mine, named_exit(mine, "Berlin")), (later, named_exit(later, "Berlin"))]),
+            defaults(),
         );
+
+        assert_eq!(pinned_id(mine, "berlin"), id);
+        assert_eq!(mine, destinations.by_connect_id(&id).unwrap().address);
     }
 
     /// Exit metadata is attacker-controlled, so a published name may never take a configured id.
@@ -1256,7 +1262,7 @@ mod tests {
         assert_eq!("yqak", discriminator);
     }
 
-    /// Every earlier candidate is taken, so the key itself has to carry the entry.
+    /// The pinned id is taken, so the key itself has to carry the entry.
     #[test]
     fn the_key_itself_is_the_last_resort_connect_id() {
         let addr = address(1);
@@ -1265,7 +1271,6 @@ mod tests {
             routing: default_path(),
         };
         let mut destinations = Destinations::default();
-        destinations.insert(configured("berlin", address(2)));
         destinations.insert(configured(&format!("berlin-{}", key.discriminator()), address(3)));
 
         let mut info = exit_node(addr);
@@ -1284,7 +1289,6 @@ mod tests {
             routing: default_path(),
         };
         let mut destinations = Destinations::default();
-        destinations.insert(configured("berlin", address(2)));
         destinations.insert(configured(&format!("berlin-{}", key.discriminator()), address(3)));
         destinations.insert(configured(&key.to_string(), address(4)));
 
@@ -1300,11 +1304,12 @@ mod tests {
     fn a_discovered_id_resolves_only_once_discovery_has_published_it() {
         let addr = address(1);
         let mut destinations = Destinations::default();
-        assert!(destinations.by_connect_id("berlin").is_none());
+        let id = pinned_id(addr, "berlin");
+        assert!(destinations.by_connect_id(&id).is_none());
 
         destinations.merge_discovered(&HashMap::from([(addr, named_exit(addr, "Berlin"))]), defaults());
 
-        assert_eq!(addr, destinations.by_connect_id("berlin").unwrap().address);
+        assert_eq!(addr, destinations.by_connect_id(&id).unwrap().address);
     }
 
     #[test]
