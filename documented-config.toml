@@ -79,9 +79,9 @@ path    = { hops = 1 }
 # edge_penalty - multiplier [0.0, 1.0] down-weighting edges without probe observations.
 # edge_penalty = 0.5
 # min_paths_anonymity_floor - candidate count below which no latency pruning happens
-# (the anonymity floor); min(found, floor) semantics. The preset uses 0, which disables
-# pruning entirely (every relayer is kept); raise it to prune down to the best paths.
-# min_paths_anonymity_floor = 0
+# (the anonymity floor); min(found, floor) semantics. Defaults to 3; set 0 to disable
+# pruning entirely (keep every relayer), or raise it to keep more candidate paths.
+# min_paths_anonymity_floor = 3
 # latency_halflife - path latency at which the latency weight factor equals 0.5;
 # larger values make selection less latency-sensitive (humantime).
 # latency_halflife = "100ms"

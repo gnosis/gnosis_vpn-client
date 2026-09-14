@@ -86,11 +86,47 @@ pub async fn generate(
     cfg.protocol.probe.interval = Duration::from_secs(3);
     cfg.protocol.probe.recheck_threshold = Duration::from_secs(3);
     cfg.protocol.path_planner = edgli::latency_path_planner_config(path_planner_min_ack_rate);
-    // Layer user overrides on top of the latency preset; unset fields keep the preset value.
+    // Client baseline for the anonymity floor, overriding the edge-client preset.
+    cfg.protocol.path_planner.min_paths_anonymity_floor =
+        crate::connection::options::DEFAULT_PATH_PLANNER_MIN_PATHS_ANONYMITY_FLOOR;
+    // Layer user overrides on top; unset fields keep the preset (or the baseline above).
     path_planner.apply(&mut cfg.protocol.path_planner);
     Ok(cfg)
 }
 
 pub fn safe_file(state_home: PathBuf) -> PathBuf {
     dirs::config_dir(state_home, SAFE_FILE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connection::options::PathPlannerOptions;
+
+    fn safe_module() -> SafeModule {
+        SafeModule {
+            safe_address: "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739".to_string(),
+            module_address: "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn default_anonymity_floor_is_three() {
+        let cfg = generate(&safe_module(), 0.1, PathPlannerOptions::default())
+            .await
+            .expect("generate should succeed");
+        assert_eq!(cfg.protocol.path_planner.min_paths_anonymity_floor, 3);
+    }
+
+    #[tokio::test]
+    async fn table_overrides_anonymity_floor() {
+        let overrides = PathPlannerOptions {
+            min_paths_anonymity_floor: Some(7),
+            ..PathPlannerOptions::default()
+        };
+        let cfg = generate(&safe_module(), 0.1, overrides)
+            .await
+            .expect("generate should succeed");
+        assert_eq!(cfg.protocol.path_planner.min_paths_anonymity_floor, 7);
+    }
 }

@@ -1,4 +1,8 @@
 pub const DEFAULT_PATH_PLANNER_MIN_ACK_RATE: f64 = 0.1;
+/// Client baseline for the path-planner anonymity floor, applied when
+/// `[connection.path_planner].min_paths_anonymity_floor` is unset. Overrides the
+/// edge-client preset so a small floor is kept by default; 0 would disable pruning.
+pub const DEFAULT_PATH_PLANNER_MIN_PATHS_ANONYMITY_FLOOR: usize = 3;
 
 use bytesize::ByteSize;
 use edgli::PathPlannerConfig;
