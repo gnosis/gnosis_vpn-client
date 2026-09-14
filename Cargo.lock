@@ -854,7 +854,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -865,7 +865,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2947,7 +2947,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "4.1.1"
-source = "git+https://github.com/hoprnet/edge-client.git?branch=release%2F4.1#1e2114196b6739f7349aaf9d67737e38a526a774"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=release%2F4.1#e19adcf1f6d4df248780509dc4523449ced0b202"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -3118,7 +3118,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4172,7 +4172,7 @@ dependencies = [
 [[package]]
 name = "hopr-crypto-packet"
 version = "1.4.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#08d777e442c251bbd2dc55e36434dbd4999b0165"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#33624711663e6943cc28bd6cf11670a63db462ae"
 dependencies = [
  "bimap",
  "const-hex",
@@ -4208,7 +4208,7 @@ dependencies = [
 [[package]]
 name = "hopr-lib"
 version = "4.0.4"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#08d777e442c251bbd2dc55e36434dbd4999b0165"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#33624711663e6943cc28bd6cf11670a63db462ae"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -4260,7 +4260,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-app"
 version = "1.0.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#08d777e442c251bbd2dc55e36434dbd4999b0165"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#33624711663e6943cc28bd6cf11670a63db462ae"
 dependencies = [
  "hopr-crypto-packet",
  "hopr-types",
@@ -4272,8 +4272,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-protocol-hopr"
-version = "6.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#08d777e442c251bbd2dc55e36434dbd4999b0165"
+version = "6.1.1"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#33624711663e6943cc28bd6cf11670a63db462ae"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4302,7 +4302,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-session"
 version = "1.5.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#08d777e442c251bbd2dc55e36434dbd4999b0165"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#33624711663e6943cc28bd6cf11670a63db462ae"
 dependencies = [
  "aquamarine",
  "asynchronous-codec",
@@ -4333,7 +4333,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-start"
 version = "1.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#08d777e442c251bbd2dc55e36434dbd4999b0165"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#33624711663e6943cc28bd6cf11670a63db462ae"
 dependencies = [
  "aquamarine",
  "flagset",
@@ -4399,8 +4399,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport"
-version = "0.48.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#08d777e442c251bbd2dc55e36434dbd4999b0165"
+version = "0.48.3"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#33624711663e6943cc28bd6cf11670a63db462ae"
 dependencies = [
  "ahash",
  "anyhow",
@@ -4443,7 +4443,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-mixer"
 version = "0.4.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#08d777e442c251bbd2dc55e36434dbd4999b0165"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#33624711663e6943cc28bd6cf11670a63db462ae"
 dependencies = [
  "futures",
  "futures-timer",
@@ -4482,7 +4482,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-probe"
 version = "0.8.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#08d777e442c251bbd2dc55e36434dbd4999b0165"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#33624711663e6943cc28bd6cf11670a63db462ae"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4508,7 +4508,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-session"
 version = "0.29.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#08d777e442c251bbd2dc55e36434dbd4999b0165"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#33624711663e6943cc28bd6cf11670a63db462ae"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4540,7 +4540,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-tag-allocator"
 version = "0.1.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#08d777e442c251bbd2dc55e36434dbd4999b0165"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#33624711663e6943cc28bd6cf11670a63db462ae"
 dependencies = [
  "hopr-protocol-app",
  "serde",
@@ -4650,7 +4650,7 @@ dependencies = [
 [[package]]
 name = "hopr-utils-session"
 version = "1.2.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#08d777e442c251bbd2dc55e36434dbd4999b0165"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#33624711663e6943cc28bd6cf11670a63db462ae"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6375,7 +6375,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7307,7 +7307,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.5",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7319,7 +7319,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "socket2 0.6.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7807,7 +7807,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7866,7 +7866,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -8495,7 +8495,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -8730,7 +8730,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -9533,7 +9533,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
