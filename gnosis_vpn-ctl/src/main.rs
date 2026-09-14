@@ -192,28 +192,34 @@ fn yaml_print(resp: &Response) {
 
 fn pretty_print(resp: &Response) {
     match resp {
-        Response::Connect(command::ConnectResponse::AlreadyConnected(dest)) => {
+        Response::Connect(command::ConnectResponse::AlreadyConnected { destination: dest }) => {
             println!("Already connected to {dest}");
         }
-        Response::Connect(command::ConnectResponse::Connecting(dest)) => {
+        Response::Connect(command::ConnectResponse::Connecting { destination: dest }) => {
             println!("Connecting to {dest}");
         }
-        Response::Connect(command::ConnectResponse::WaitingToConnect(dest, route_health)) => {
+        Response::Connect(command::ConnectResponse::WaitingToConnect {
+            destination: dest,
+            route_health,
+        }) => {
             println!("Waiting to connect to {dest} once possible: {route_health}")
         }
-        Response::Connect(command::ConnectResponse::UnableToConnect(dest, route_health)) => {
+        Response::Connect(command::ConnectResponse::UnableToConnect {
+            destination: dest,
+            route_health,
+        }) => {
             eprintln!("Unable to connect to {dest}: {route_health}");
         }
         Response::Connect(command::ConnectResponse::DestinationNotFound) => {
             eprintln!("Destination not found");
         }
-        Response::Connect(command::ConnectResponse::DestinationAmbiguous(ids)) => {
+        Response::Connect(command::ConnectResponse::DestinationAmbiguous { connect_ids: ids }) => {
             eprintln!(
                 "That exit is reachable by several paths - connect to one of: {}",
                 ids.join(", ")
             );
         }
-        Response::Disconnect(command::DisconnectResponse::Disconnecting(dest)) => {
+        Response::Disconnect(command::DisconnectResponse::Disconnecting { destination: dest }) => {
             println!("Disconnecting from {dest}");
         }
         Response::Disconnect(command::DisconnectResponse::NotConnected) => {
@@ -428,13 +434,13 @@ fn human_msgs(msgs: u64) -> String {
 
 fn determine_exitcode(resp: &Response) -> ExitCode {
     match resp {
-        Response::Connect(command::ConnectResponse::AlreadyConnected(..)) => exitcode::OK,
-        Response::Connect(command::ConnectResponse::Connecting(..)) => exitcode::OK,
+        Response::Connect(command::ConnectResponse::AlreadyConnected { .. }) => exitcode::OK,
+        Response::Connect(command::ConnectResponse::Connecting { .. }) => exitcode::OK,
         Response::Connect(command::ConnectResponse::DestinationNotFound) => exitcode::UNAVAILABLE,
-        Response::Connect(command::ConnectResponse::DestinationAmbiguous(..)) => exitcode::USAGE,
-        Response::Connect(command::ConnectResponse::WaitingToConnect(..)) => exitcode::OK,
-        Response::Connect(command::ConnectResponse::UnableToConnect(..)) => exitcode::UNAVAILABLE,
-        Response::Disconnect(command::DisconnectResponse::Disconnecting(..)) => exitcode::OK,
+        Response::Connect(command::ConnectResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
+        Response::Connect(command::ConnectResponse::WaitingToConnect { .. }) => exitcode::OK,
+        Response::Connect(command::ConnectResponse::UnableToConnect { .. }) => exitcode::UNAVAILABLE,
+        Response::Disconnect(command::DisconnectResponse::Disconnecting { .. }) => exitcode::OK,
         Response::Disconnect(command::DisconnectResponse::NotConnected) => exitcode::PROTOCOL,
         Response::Status(..) => exitcode::OK,
         Response::Balance(Ok(..)) => exitcode::OK,

@@ -270,7 +270,7 @@ impl ControlClient {
         lib::wait_for_condition("disconnection", timeout, Duration::from_secs(2), || async {
             match self.disconnect().await {
                 Ok(response) => match response {
-                    DisconnectResponse::Disconnecting(address) => {
+                    DisconnectResponse::Disconnecting { destination: address } => {
                         info!("disconnecting from destination {address}");
                         Ok(ConditionCheck::Pending)
                     }

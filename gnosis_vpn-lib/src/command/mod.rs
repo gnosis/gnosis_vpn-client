@@ -226,21 +226,36 @@ pub enum HoprInitStatus {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum ConnectResponse {
-    AlreadyConnected(Destination),
-    Connecting(Destination),
-    WaitingToConnect(Destination, RouteHealthState),
-    UnableToConnect(Destination, RouteHealthState),
+    AlreadyConnected {
+        destination: Destination,
+    },
+    Connecting {
+        destination: Destination,
+    },
+    WaitingToConnect {
+        destination: Destination,
+        route_health: RouteHealthState,
+    },
+    UnableToConnect {
+        destination: Destination,
+        route_health: RouteHealthState,
+    },
     DestinationNotFound,
     /// One exit reached by several paths - the candidate connect ids, for the user to pick from.
-    DestinationAmbiguous(Vec<String>),
+    DestinationAmbiguous {
+        connect_ids: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
 pub enum DisconnectResponse {
-    /// Boxed to keep the enum from being sized by its one large variant; serializes as the
-    /// bare destination.
-    Disconnecting(Box<Destination>),
+    /// Boxed to keep the enum from being sized by its one large variant.
+    Disconnecting {
+        destination: Box<Destination>,
+    },
     NotConnected,
 }
 
@@ -464,28 +479,36 @@ impl RunMode {
 
 impl ConnectResponse {
     pub fn already_connected(destination: Destination) -> Self {
-        ConnectResponse::AlreadyConnected(destination)
+        ConnectResponse::AlreadyConnected { destination }
     }
     pub fn connecting(destination: Destination) -> Self {
-        ConnectResponse::Connecting(destination)
+        ConnectResponse::Connecting { destination }
     }
-    pub fn waiting(destination: Destination, health: RouteHealthState) -> Self {
-        ConnectResponse::WaitingToConnect(destination, health)
+    pub fn waiting(destination: Destination, route_health: RouteHealthState) -> Self {
+        ConnectResponse::WaitingToConnect {
+            destination,
+            route_health,
+        }
     }
-    pub fn unable(destination: Destination, health: RouteHealthState) -> Self {
-        ConnectResponse::UnableToConnect(destination, health)
+    pub fn unable(destination: Destination, route_health: RouteHealthState) -> Self {
+        ConnectResponse::UnableToConnect {
+            destination,
+            route_health,
+        }
     }
     pub fn destination_not_found() -> Self {
         ConnectResponse::DestinationNotFound
     }
     pub fn ambiguous(connect_ids: Vec<String>) -> Self {
-        ConnectResponse::DestinationAmbiguous(connect_ids)
+        ConnectResponse::DestinationAmbiguous { connect_ids }
     }
 }
 
 impl DisconnectResponse {
     pub fn new(destination: Destination) -> Self {
-        DisconnectResponse::Disconnecting(Box::new(destination))
+        DisconnectResponse::Disconnecting {
+            destination: Box::new(destination),
+        }
     }
 
     pub fn not_connected() -> Self {
@@ -890,16 +913,34 @@ mod tests {
     }
 
     #[test]
+    fn tagged_connect_responses_all_serialize_as_objects_with_a_type() {
+        let not_found = serde_json::to_string(&ConnectResponse::destination_not_found()).unwrap();
+        assert_eq!(r#"{"type":"DestinationNotFound"}"#, not_found);
+
+        let ambiguous = serde_json::to_string(&ConnectResponse::ambiguous(vec!["a".into(), "b".into()])).unwrap();
+        assert_eq!(r#"{"type":"DestinationAmbiguous","connect_ids":["a","b"]}"#, ambiguous);
+
+        let disconnecting = serde_json::to_string(&DisconnectResponse::new(destination())).unwrap();
+        assert!(
+            disconnecting.starts_with(r#"{"type":"Disconnecting","destination":{"#),
+            "{disconnecting}"
+        );
+
+        let not_connected = serde_json::to_string(&DisconnectResponse::not_connected()).unwrap();
+        assert_eq!(r#"{"type":"NotConnected"}"#, not_connected);
+    }
+
+    #[test]
     fn connect_response_helpers_cover_all_variants() -> anyhow::Result<()> {
         let dest = destination();
         let resp = ConnectResponse::connecting(dest.clone());
-        assert!(matches!(resp, ConnectResponse::Connecting(_)));
+        assert!(matches!(resp, ConnectResponse::Connecting { .. }));
 
         let waiting = ConnectResponse::waiting(dest.clone(), route_health_state());
-        assert!(matches!(waiting, ConnectResponse::WaitingToConnect(_, _)));
+        assert!(matches!(waiting, ConnectResponse::WaitingToConnect { .. }));
 
         let unable = ConnectResponse::unable(dest.clone(), route_health_state());
-        assert!(matches!(unable, ConnectResponse::UnableToConnect(_, _)));
+        assert!(matches!(unable, ConnectResponse::UnableToConnect { .. }));
 
         assert!(matches!(
             ConnectResponse::destination_not_found(),
