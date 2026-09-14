@@ -683,8 +683,7 @@ impl RouteHealth {
         let intervals = &options.health_check_intervals;
         let cycle = self.check_cycle;
         let is_connecting = matches!(self.state, RouteHealthState::Connecting { .. });
-        // during connecting we always only run health checks. the interval was increased
-        // accordingly on task spawn
+        // While connecting only the exit health is probed; the longer cadence was set on the spawn.
         let scope = if is_connecting {
             CheckScope {
                 version: false,
