@@ -318,8 +318,8 @@ impl Destination {
         let mut parts = Vec::new();
         if let Some(name) = &self.meta.name {
             let shown = sanitize_for_display(name);
-            // Usually the id is this name slugged; print it only when it says more, or was pinned.
-            let adds_nothing = slug(&shown).as_deref() == Some(self.connect_id.as_str());
+            // The id is this name slugged, so only a name spelled exactly like it says nothing new.
+            let adds_nothing = shown == self.connect_id;
             if pinned("name") || !adds_nothing {
                 let mark = if pinned("name") { CONFIG_VALUE } else { "" };
                 parts.push(format!("name: {shown}{mark}"));
@@ -1076,12 +1076,20 @@ mod tests {
         assert!(rendered.contains("name: Frankfurt-1"), "{rendered}");
     }
 
-    /// The connect id is the name slugged, so repeating the name would be noise.
+    /// Only a name spelled exactly like the connect id is noise; anything else is the operator's.
     #[test]
     fn a_name_the_connect_id_already_says_is_not_repeated() {
-        let dest = named("frankfurt-1", "Frankfurt-1", DestinationSource::Discovered);
+        let dest = named("frankfurt-1", "frankfurt-1", DestinationSource::Discovered);
 
         assert!(!dest.to_string().contains("name:"), "{dest}");
+    }
+
+    #[test]
+    fn a_name_the_connect_id_only_slugs_keeps_its_casing_and_spacing() {
+        let dest = named("frankfurt-1", "Frankfurt 1", DestinationSource::Discovered);
+
+        let rendered = dest.to_string();
+        assert!(rendered.contains("name: Frankfurt 1"), "{rendered}");
     }
 
     #[test]
