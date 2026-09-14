@@ -45,7 +45,7 @@ pub enum Command {
     StartClient(Duration),
     /// Stop a running worker process and edge client
     StopClient,
-    /// List configured destination IDs
+    /// List destination IDs, configured and discovered alike
     Destinations,
 }
 
@@ -58,6 +58,8 @@ pub enum WorkerCommand {
     Balance,
     FundingTool(String),
     Telemetry,
+    /// The worker answers this one because only it holds the discovery merge.
+    Destinations,
     /// Reconnect the current HOPR session without clearing the target or disabling the killswitch.
     /// Used by the root process when a WAN interface change is detected.
     ForceReconnect,
@@ -66,7 +68,8 @@ pub enum WorkerCommand {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
     Status(StatusResponse),
-    NerdStats(NerdStatsResponse),
+    /// Boxed to keep Response from being sized by this one variant; serializes as bare stats.
+    NerdStats(Box<NerdStatsResponse>),
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
     Balance(Result<BalanceResponse, String>),
@@ -223,17 +226,36 @@ pub enum HoprInitStatus {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum ConnectResponse {
-    AlreadyConnected(Destination),
-    Connecting(Destination),
-    WaitingToConnect(Destination, RouteHealthState),
-    UnableToConnect(Destination, RouteHealthState),
+    AlreadyConnected {
+        destination: Destination,
+    },
+    Connecting {
+        destination: Destination,
+    },
+    WaitingToConnect {
+        destination: Destination,
+        route_health: RouteHealthState,
+    },
+    UnableToConnect {
+        destination: Destination,
+        route_health: RouteHealthState,
+    },
     DestinationNotFound,
+    /// One exit reached by several paths - the candidate connect ids, for the user to pick from.
+    DestinationAmbiguous {
+        connect_ids: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
 pub enum DisconnectResponse {
-    Disconnecting(Destination),
+    /// Boxed to keep the enum from being sized by its one large variant.
+    Disconnecting {
+        destination: Box<Destination>,
+    },
     NotConnected,
 }
 
@@ -457,25 +479,36 @@ impl RunMode {
 
 impl ConnectResponse {
     pub fn already_connected(destination: Destination) -> Self {
-        ConnectResponse::AlreadyConnected(destination)
+        ConnectResponse::AlreadyConnected { destination }
     }
     pub fn connecting(destination: Destination) -> Self {
-        ConnectResponse::Connecting(destination)
+        ConnectResponse::Connecting { destination }
     }
-    pub fn waiting(destination: Destination, health: RouteHealthState) -> Self {
-        ConnectResponse::WaitingToConnect(destination, health)
+    pub fn waiting(destination: Destination, route_health: RouteHealthState) -> Self {
+        ConnectResponse::WaitingToConnect {
+            destination,
+            route_health,
+        }
     }
-    pub fn unable(destination: Destination, health: RouteHealthState) -> Self {
-        ConnectResponse::UnableToConnect(destination, health)
+    pub fn unable(destination: Destination, route_health: RouteHealthState) -> Self {
+        ConnectResponse::UnableToConnect {
+            destination,
+            route_health,
+        }
     }
     pub fn destination_not_found() -> Self {
         ConnectResponse::DestinationNotFound
+    }
+    pub fn ambiguous(connect_ids: Vec<String>) -> Self {
+        ConnectResponse::DestinationAmbiguous { connect_ids }
     }
 }
 
 impl DisconnectResponse {
     pub fn new(destination: Destination) -> Self {
-        DisconnectResponse::Disconnecting(destination)
+        DisconnectResponse::Disconnecting {
+            destination: Box::new(destination),
+        }
     }
 
     pub fn not_connected() -> Self {
@@ -493,7 +526,7 @@ impl Response {
     }
 
     pub fn nerd_stats(stats: NerdStatsResponse) -> Self {
-        Response::NerdStats(stats)
+        Response::NerdStats(Box::new(stats))
     }
 
     pub fn status(stat: StatusResponse) -> Self {
@@ -735,10 +768,9 @@ impl TryFrom<Command> for WorkerCommand {
             Command::Balance => Ok(WorkerCommand::Balance),
             Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
             Command::Telemetry => Ok(WorkerCommand::Telemetry),
+            Command::Destinations => Ok(WorkerCommand::Destinations),
             // Commands that are not relevant for the worker
-            Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient | Command::Destinations => {
-                Err(())
-            }
+            Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient => Err(()),
         }
     }
 }
@@ -762,10 +794,9 @@ impl Display for RouteHealthView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::destination::HopRouting;
+    use crate::connection::destination::{DestinationSource, HopRouting, Meta};
     use crate::gvpn_client;
     use crate::route_health::ExitHealth;
-    use std::collections::HashMap;
 
     fn address(byte: u8) -> Address {
         Address::from([byte; 20])
@@ -776,7 +807,10 @@ mod tests {
             "test-destination".to_string(),
             address(1),
             HopRouting::try_from(1).expect("conversion cannot fail"),
-            HashMap::new(),
+            Meta::default(),
+            "172.30.0.1:8000".parse().unwrap(),
+            "172.30.0.1:51820".parse().unwrap(),
+            DestinationSource::Configured,
         )
     }
 
@@ -797,6 +831,24 @@ mod tests {
         let phase = connection::up::Phase::VerifyPing;
         let in_flight = reconnecting(Some(phase.clone())).to_string();
         assert!(in_flight.contains(&format!("phase {phase}")), "{in_flight}");
+    }
+
+    /// Shell completion for `connect` lists these, so it must reach the merged map, not the config.
+    #[test]
+    fn listing_destinations_is_routed_to_the_worker() {
+        assert_eq!(Ok(WorkerCommand::Destinations), Command::Destinations.try_into());
+    }
+
+    #[test]
+    fn commands_root_answers_itself_never_reach_the_worker() {
+        for cmd in [
+            Command::Info,
+            Command::Ping,
+            Command::StartClient(Duration::from_secs(1)),
+            Command::StopClient,
+        ] {
+            assert!(WorkerCommand::try_from(cmd).is_err());
+        }
     }
 
     // The app rejects a status it cannot parse, so the null shape is part of the contract.
@@ -861,16 +913,34 @@ mod tests {
     }
 
     #[test]
+    fn tagged_connect_responses_all_serialize_as_objects_with_a_type() {
+        let not_found = serde_json::to_string(&ConnectResponse::destination_not_found()).unwrap();
+        assert_eq!(r#"{"type":"DestinationNotFound"}"#, not_found);
+
+        let ambiguous = serde_json::to_string(&ConnectResponse::ambiguous(vec!["a".into(), "b".into()])).unwrap();
+        assert_eq!(r#"{"type":"DestinationAmbiguous","connect_ids":["a","b"]}"#, ambiguous);
+
+        let disconnecting = serde_json::to_string(&DisconnectResponse::new(destination())).unwrap();
+        assert!(
+            disconnecting.starts_with(r#"{"type":"Disconnecting","destination":{"#),
+            "{disconnecting}"
+        );
+
+        let not_connected = serde_json::to_string(&DisconnectResponse::not_connected()).unwrap();
+        assert_eq!(r#"{"type":"NotConnected"}"#, not_connected);
+    }
+
+    #[test]
     fn connect_response_helpers_cover_all_variants() -> anyhow::Result<()> {
         let dest = destination();
         let resp = ConnectResponse::connecting(dest.clone());
-        assert!(matches!(resp, ConnectResponse::Connecting(_)));
+        assert!(matches!(resp, ConnectResponse::Connecting { .. }));
 
         let waiting = ConnectResponse::waiting(dest.clone(), route_health_state());
-        assert!(matches!(waiting, ConnectResponse::WaitingToConnect(_, _)));
+        assert!(matches!(waiting, ConnectResponse::WaitingToConnect { .. }));
 
         let unable = ConnectResponse::unable(dest.clone(), route_health_state());
-        assert!(matches!(unable, ConnectResponse::UnableToConnect(_, _)));
+        assert!(matches!(unable, ConnectResponse::UnableToConnect { .. }));
 
         assert!(matches!(
             ConnectResponse::destination_not_found(),
