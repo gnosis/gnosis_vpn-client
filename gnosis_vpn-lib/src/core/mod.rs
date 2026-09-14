@@ -1203,8 +1203,12 @@ impl Core {
         self.config.destinations.merge_discovered(&nodes, defaults);
         let after: HashSet<ExitKey> = self.config.destinations.keys().copied().collect();
 
-        for removed in before.difference(&after) {
-            self.route_healths.remove(removed);
+        let active = match &self.phase {
+            Phase::Connected(conn) | Phase::Connecting(conn) => Some(conn.destination.key()),
+            _ => None,
+        };
+        for removed in trackers_to_drop(&before, &after, active) {
+            self.route_healths.remove(&removed);
         }
 
         let mut fresh: Vec<ExitKey> = after.difference(&before).copied().collect();
@@ -1930,6 +1934,15 @@ fn latched_on_a_moved_target(
     keys
 }
 
+/// The live connection keeps its tracker, since tunnel pings are judged through it, until the merge after it ends.
+fn trackers_to_drop(before: &HashSet<ExitKey>, after: &HashSet<ExitKey>, active: Option<ExitKey>) -> Vec<ExitKey> {
+    before
+        .difference(after)
+        .copied()
+        .filter(|key| Some(*key) != active)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1967,6 +1980,20 @@ mod tests {
         let mut up = Up::new(destination(id));
         up.phase = (SystemTime::UNIX_EPOCH, phase);
         up
+    }
+
+    #[test]
+    fn a_vanished_exit_keeps_its_tracker_while_it_is_the_live_connection() {
+        let live = destination("live").key();
+        let mut far = destination("gone");
+        far.routing = HopRouting::try_from(3).expect("conversion cannot fail");
+        let gone = far.key();
+        let before = HashSet::from([live, gone]);
+        let after = HashSet::new();
+
+        let dropped = trackers_to_drop(&before, &after, Some(live));
+
+        assert_eq!(vec![gone], dropped);
     }
 
     #[test]
