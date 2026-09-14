@@ -324,6 +324,14 @@ impl RouteHealth {
         matches!(self.state, RouteHealthState::ReadyToConnect { .. })
     }
 
+    /// The states that probe the exit; only they start checks or accept their outcomes.
+    pub(crate) fn is_checking_state(&self) -> bool {
+        matches!(
+            self.state,
+            RouteHealthState::Routable | RouteHealthState::ReadyToConnect { .. } | RouteHealthState::Connecting { .. }
+        )
+    }
+
     /// Returns the cached exit health from either `ReadyToConnect` or `Connecting` state.
     /// Used by force-reconnect to reuse the last known good health without going through a
     /// full disconnect/reconnect cycle.
@@ -449,6 +457,11 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
+        // Cancelling a task cannot recall an outcome already queued behind the state change.
+        if !self.is_checking_state() {
+            tracing::debug!(destination = %self.key, state = ?self.state, ?outcome, "dropping outcome of a stale health check");
+            return;
+        }
         match outcome {
             HealthCheckOutcome::Started { since } => {
                 self.checking_since = Some(since);
@@ -672,11 +685,7 @@ impl RouteHealth {
         options: &Options,
         sender: &mpsc::Sender<Results>,
     ) {
-        let is_checking_state = matches!(
-            self.state,
-            RouteHealthState::Routable | RouteHealthState::ReadyToConnect { .. } | RouteHealthState::Connecting { .. }
-        );
-        if !is_checking_state {
+        if !self.is_checking_state() {
             return;
         }
         // Whatever is in flight probed a destination that may be gone; one probe per tracker at a time.
@@ -1223,6 +1232,21 @@ mod tests {
         let mut rh = RouteHealth::new(&tracked_destination(), false, false, CancellationToken::new());
         rh.exit_failures = failures;
         rh.failure_backoff()
+    }
+
+    /// A queued outcome outlives the cancel, so the state alone must decide whether it is applied.
+    #[tokio::test]
+    async fn losing_peers_leaves_a_state_that_accepts_no_outcome() {
+        use tokio_util::sync::CancellationToken;
+        let (sender, _receiver) = mpsc::channel(1);
+        let mut rh = RouteHealth::new(&tracked_destination(), false, false, CancellationToken::new());
+        rh.state = RouteHealthState::Routable;
+        assert!(rh.is_checking_state());
+
+        rh.peers(&HashSet::new(), &sender, Duration::ZERO);
+
+        assert!(matches!(rh.state, RouteHealthState::NeedsPeering { .. }));
+        assert!(!rh.is_checking_state());
     }
 
     #[test]
