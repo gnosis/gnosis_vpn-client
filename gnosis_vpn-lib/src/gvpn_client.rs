@@ -82,6 +82,7 @@ pub struct Health {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Slots {
+    pub total: u32,
     pub available: u32,
     pub connected: u32,
 }
@@ -251,12 +252,8 @@ impl Display for Registration {
 
 impl Display for Slots {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "connected {}/{} total",
-            self.connected,
-            self.available + self.connected
-        )
+        // connected + free may fall short of total: pending registrations hold the rest
+        write!(f, "{}(c) + {}(f) / {}", self.connected, self.available, self.total)
     }
 }
 

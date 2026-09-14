@@ -249,6 +249,9 @@ fn pretty_print(resp: &Response) {
             for info in disconnecting {
                 str_resp.push_str(&format!("---\n{info}\n"));
             }
+            if !destinations.is_empty() {
+                str_resp.push_str("---\nDestinations | slots: (c)onnected + (f)ree / total\n");
+            }
             for dest_state in destinations {
                 str_resp.push_str(&format!("---\n{}\n", dest_state.destination));
                 if let Some(rh) = &dest_state.route_health {
