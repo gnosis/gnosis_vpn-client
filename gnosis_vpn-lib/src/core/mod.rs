@@ -1197,16 +1197,9 @@ impl Core {
         });
     }
 
-    /// Merges a fresh discovery snapshot into `config.destinations`, then keeps
-    /// `route_healths` in sync — inserting a tracker for every exit the merge added, removing one
-    /// for every exit it dropped, and rebuilding one whose destination moved out from under it.
-    /// Mirrors the seeding loop in `Core::init`, the only other place that constructs a
-    /// `RouteHealth`.
+    /// Merges a discovery snapshot in and keeps `route_healths` in step, mirroring `Core::init`.
     ///
-    /// Deliberately does not touch the connection state machine: if the active/target
-    /// destination disappears here, the live connection (which holds its own cloned
-    /// `Destination`) is left running; a later reconnect attempt just hits the existing
-    /// "not known" branch in `WorkerCommand::Connect`.
+    /// Leaves the state machine alone: a live connection holds its own `Destination` regardless.
     fn merge_discovered_destinations(&mut self, nodes: HashMap<Address, edgli::ExitNodeInfo>) {
         let targets_before: HashMap<ExitKey, (net::SocketAddr, net::SocketAddr)> = self
             .config

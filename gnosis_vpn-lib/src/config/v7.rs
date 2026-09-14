@@ -888,8 +888,7 @@ pub fn convert_destinations(
             DestinationSource::Configured,
         )
         .with_overrides(overrides);
-        // Keying by identity makes a duplicate exit-and-path structurally impossible, so the
-        // entry this displaces is the duplicate.
+        // Keyed by identity, the entry this displaces is the duplicate.
         if let Some(other) = result.insert(dest) {
             return Err(config::Error::DuplicateDestination {
                 first: other.connect_id,

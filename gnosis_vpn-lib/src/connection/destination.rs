@@ -127,8 +127,7 @@ impl std::str::FromStr for ExitKey {
 /// Longest connect id minted from a published name.
 const SLUG_MAX_CHARS: usize = 32;
 
-/// A published name as one shell-safe token, or `None` when nothing usable is left - bash
-/// completion splits connect ids on whitespace.
+/// A published name as one shell-safe token - bash completion splits connect ids on whitespace.
 fn slug(name: &str) -> Option<String> {
     let mut out = String::new();
     for c in name.chars() {
@@ -370,8 +369,7 @@ pub enum Unresolved {
     Ambiguous(Vec<String>),
 }
 
-/// The destinations the client knows, keyed by identity and addressed by `connect_id` - one type,
-/// so the identity and the handle cannot drift apart.
+/// Keyed by identity, addressed by `connect_id` - one type, so the two cannot drift apart.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Destinations {
     by_exit: HashMap<ExitKey, Destination>,
@@ -426,8 +424,7 @@ impl Destinations {
         ids
     }
 
-    /// A connect id, or a bare exit address when it names just one destination - the address handle
-    /// is what keeps a checksum saved earlier working.
+    /// A connect id, or a bare exit address when it names one destination - so a saved checksum works.
     pub fn resolve(&self, token: &str) -> Result<&Destination, Unresolved> {
         if let Some(dest) = self.by_exit.values().find(|d| d.connect_id == token) {
             return Ok(dest);
@@ -447,8 +444,7 @@ impl Destinations {
         }
     }
 
-    /// Merges freshly discovered `gvpn:exit` nodes in, joined on `(address, path)` - so a configured
-    /// entry at another path is a separate destination and the discovered one lands beside it.
+    /// Joined on `(address, path)`, so a configured entry at another path keeps its own destination.
     pub fn merge_discovered(&mut self, discovered: &HashMap<Address, ExitNodeInfo>, defaults: DefaultTargets) {
         let default_path = default_path();
         let is_discovered = |dest: &Destination| dest.routing == default_path && discovered.contains_key(&dest.address);
@@ -491,8 +487,7 @@ impl Destinations {
         self.assign_connect_ids();
     }
 
-    /// Gives every discovered entry a unique handle. Configured ids win: published metadata is
-    /// unverified, so it must never take an id the user chose themselves.
+    /// Configured ids win: published metadata is unverified and must never take a user's own id.
     fn assign_connect_ids(&mut self) {
         let mut taken: HashSet<String> = self
             .by_exit
