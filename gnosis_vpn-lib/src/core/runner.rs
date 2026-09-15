@@ -3,6 +3,7 @@
 
 use backon::{ExponentialBuilder, Retryable};
 use edgli::blokli::{IncentiveOperations, make_incentive_operations};
+use edgli::hopr_lib::HopRouting;
 use edgli::hopr_lib::api::node::HoprState;
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use edgli::hopr_lib::builder::Keypair;
@@ -10,12 +11,12 @@ use edgli::{BlockchainConnectorConfig, EdgliInitState};
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use url::Url;
 
+use std::collections::HashMap;
 use std::fmt::{self, Display};
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,9 +27,12 @@ use crate::connection::destination::ExitKey;
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config};
-use crate::route_health::{self, HealthCheckOutcome};
+use crate::probe;
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, connection, event, peer, ping, remote_data};
+
+/// Announced peers only feed killswitch exemptions, which tolerate a slow refresh.
+const ANNOUNCED_PEERS_INTERVAL: Duration = Duration::from_secs(90);
 
 /// Results indicate events that arise from concurrent runners.
 /// These runners are usually spawned and want to report data or progress back to the core application loop.
@@ -80,8 +84,12 @@ pub(crate) enum Results {
     NodeWxhoprWithdraw {
         res: Result<(), Error>,
     },
-    Peers {
-        res: Result<peer::Peers, Error>,
+    AnnouncedPeers {
+        res: Result<HashMap<Address, peer::Peer>, Error>,
+    },
+    /// One graph walk over every configured destination.
+    Routability {
+        map: HashMap<ExitKey, bool>,
     },
     HoprConstruction(EdgliInitState),
     HoprRunning,
@@ -108,15 +116,10 @@ pub(crate) enum Results {
     },
     /// A new WireGuard telemetry sample from the running pump.
     WgStatsSample(crate::wg_tunnel::TunnelStatsSample),
-    /// A health check timer fired; Core resolves the destination as it is now and runs the probe.
-    HealthCheckDue {
-        key: ExitKey,
-    },
-    HealthCheck {
-        key: ExitKey,
-        /// The gnosis_vpn_server probed, so an outcome for an endpoint discovery moved is dropped.
-        endpoint: SocketAddr,
-        outcome: HealthCheckOutcome,
+    /// `generation` names the probe that sent it, so a replaced probe's events are dropped.
+    Probe {
+        generation: u64,
+        event: probe::Event,
     },
     RetryReactor,
     NerdStatsTicketStats {
@@ -267,24 +270,42 @@ pub(crate) async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Send
     let _ = results_sender.send(Results::HoprRunning).await;
 }
 
-/// One peers loop for the node's lifetime; `Core` steers its cadence through `interval`.
-pub(crate) async fn peers(
-    hopr: Arc<Hopr>,
-    results_sender: mpsc::Sender<Results>,
-    mut interval: watch::Receiver<Duration>,
-) {
-    tracing::debug!("starting peers runner");
+pub(crate) async fn announced_peers_loop(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+    tracing::debug!("starting announced peers runner");
     loop {
-        let res = hopr.peers().await.map_err(Error::from);
-        if results_sender.send(Results::Peers { res }).await.is_err() {
+        let res = hopr.announced_peers().await.map_err(Error::from);
+        if results_sender.send(Results::AnnouncedPeers { res }).await.is_err() {
             return; // Core is gone
         }
-        let delay = *interval.borrow_and_update();
-        // Wake early when Core shortens the cadence rather than waiting out the old one.
-        tokio::select! {
-            _ = time::sleep(delay) => {}
-            _ = interval.changed() => {}
+        time::sleep(ANNOUNCED_PEERS_INTERVAL).await;
+    }
+}
+
+/// Walks the graph once for every target; a failed walk counts as not routable.
+pub(crate) async fn routability(
+    hopr: Arc<Hopr>,
+    targets: Vec<(ExitKey, Address, HopRouting)>,
+    results_sender: mpsc::Sender<Results>,
+) {
+    // simple_paths is synchronous and may be slow on a large graph; keep it off the async threads.
+    let walk = tokio::task::spawn_blocking(move || {
+        targets
+            .into_iter()
+            .map(|(key, address, routing)| {
+                let routable = hopr.is_routable(address, routing).unwrap_or_else(|err| {
+                    tracing::warn!(%key, ?err, "graph walk failed - treating as not routable");
+                    false
+                });
+                (key, routable)
+            })
+            .collect::<HashMap<_, _>>()
+    })
+    .await;
+    match walk {
+        Ok(map) => {
+            let _ = results_sender.send(Results::Routability { map }).await;
         }
+        Err(err) => tracing::error!(?err, "graph walk task panicked"),
     }
 }
 
@@ -298,7 +319,7 @@ pub(crate) async fn tunnel_ping_loop(interval: Duration, sender: mpsc::Sender<Re
     tracing::debug!(?interval, "starting tunnel ping probe");
 
     loop {
-        time::sleep(route_health::jitter(interval)).await;
+        time::sleep(probe::jitter(interval)).await;
 
         let (tx, rx) = oneshot::channel();
         let request = Results::ConnectionRequestToRoot(event::RunnerToRoot::Ping {
@@ -681,15 +702,14 @@ impl Display for Results {
                 Ok(()) => write!(f, "NodeWxhoprWithdraw: Success"),
                 Err(err) => write!(f, "NodeWxhoprWithdraw: Error({})", err),
             },
-            Results::Peers { res } => match res {
-                Ok(peers) => write!(
-                    f,
-                    "Peers: {} announced, {} connected",
-                    peers.announced.len(),
-                    peers.connected.len()
-                ),
-                Err(err) => write!(f, "Peers: Error({})", err),
+            Results::AnnouncedPeers { res } => match res {
+                Ok(peers) => write!(f, "AnnouncedPeers: {}", peers.len()),
+                Err(err) => write!(f, "AnnouncedPeers: Error({})", err),
             },
+            Results::Routability { map } => {
+                let routable = map.values().filter(|r| **r).count();
+                write!(f, "Routability: {routable}/{} routable", map.len())
+            }
             Results::IncentiveOperations { res } => match res {
                 Ok(_) => write!(f, "IncentiveOperations: Created Successfully"),
                 Err(err) => write!(f, "IncentiveOperations: Error({})", err),
@@ -734,10 +754,7 @@ impl Display for Results {
                 Ok(None) => write!(f, "QuerySafe: No safe found"),
                 Err(err) => write!(f, "QuerySafe: Error({})", err),
             },
-            Results::HealthCheckDue { key } => write!(f, "HealthCheckDue ({key})"),
-            Results::HealthCheck { key, endpoint, outcome } => {
-                write!(f, "HealthCheck ({key} @ {endpoint}): {outcome:?}")
-            }
+            Results::Probe { generation, event } => write!(f, "Probe (gen {generation}): {event:?}"),
             Results::RetryReactor => write!(f, "RetryReactor"),
             Results::NerdStatsTicketStats { .. } => write!(f, "NerdStatsTicketStats"),
         }

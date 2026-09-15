@@ -85,11 +85,11 @@ pub(super) struct PingOptions {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct HealthCheckIntervalOptions {
     #[serde(default, with = "humantime_serde::option")]
+    pub(super) version: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
     pub(super) ping: Option<Duration>,
-    #[serde(default, deserialize_with = "validate_n_pings")]
-    pub(super) health_every_n_pings: Option<u32>,
-    #[serde(default, deserialize_with = "validate_n_pings")]
-    pub(super) version_every_n_pings: Option<u32>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) load: Option<Duration>,
     #[serde(default, with = "humantime_serde::option")]
     pub(super) tunnel_ping: Option<Duration>,
     #[serde(default, deserialize_with = "validate_tunnel_ping_max_failures")]
@@ -110,7 +110,6 @@ pub(super) struct SurbBalancingConfig {
     pub(super) ping: Option<SessionSurbConfig>,
     pub(super) main: Option<SessionSurbConfig>,
     pub(super) bridge: Option<SessionSurbConfig>,
-    pub(super) health_check: Option<SessionSurbConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -122,7 +121,6 @@ pub(super) struct SessionPixConfig {
 pub(super) struct PixOptionsConfig {
     ping_main: Option<SessionPixConfig>,
     bridge: Option<SessionPixConfig>,
-    health_check: Option<SessionPixConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -165,18 +163,6 @@ where
             "path_planner_min_ack_rate must be in the range [0.0, 1.0]",
         )),
         other => Ok(other),
-    }
-}
-
-fn validate_n_pings<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<u32>::deserialize(deserializer)?;
-    if value == Some(0) {
-        Err(serde::de::Error::custom("value must be greater than zero"))
-    } else {
-        Ok(value)
     }
 }
 
@@ -331,7 +317,6 @@ impl From<Option<Connection>> for options::Options {
             ping: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.ping.clone()), def.ping),
             main: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.main.clone()), def.main),
             bridge: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.bridge.clone()), def.bridge),
-            health_check: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.health_check.clone()), def.health_check),
         };
 
         let pix_cfg = connection.and_then(|c| c.pix.clone());
@@ -339,10 +324,6 @@ impl From<Option<Connection>> for options::Options {
         let pix = options::PixOptions {
             ping_main: apply_session_pix(pix_cfg.as_ref().and_then(|s| s.ping_main.clone()), def_pix.ping_main),
             bridge: apply_session_pix(pix_cfg.as_ref().and_then(|s| s.bridge.clone()), def_pix.bridge),
-            health_check: apply_session_pix(
-                pix_cfg.as_ref().and_then(|s| s.health_check.clone()),
-                def_pix.health_check,
-            ),
         };
 
         let http_timeout = connection
@@ -355,9 +336,9 @@ impl From<Option<Connection>> for options::Options {
         let health_check_intervals = connection
             .and_then(|c| c.health_check_intervals.as_ref())
             .map(|h| options::HealthCheckIntervals {
+                version: h.version.unwrap_or(def_intervals.version),
                 ping: h.ping.unwrap_or(def_intervals.ping),
-                health_every_n_pings: h.health_every_n_pings.unwrap_or(def_intervals.health_every_n_pings),
-                version_every_n_pings: h.version_every_n_pings.unwrap_or(def_intervals.version_every_n_pings),
+                load: h.load.unwrap_or(def_intervals.load),
                 tunnel_ping: h.tunnel_ping.unwrap_or(def_intervals.tunnel_ping),
                 tunnel_ping_max_failures: h
                     .tunnel_ping_max_failures
@@ -660,7 +641,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "surb_balancing" {
                         if let Some(surb) = v.as_table() {
                             for (k2, v2) in surb.iter() {
-                                if k2 == "ping" || k2 == "main" || k2 == "bridge" || k2 == "health_check" {
+                                if k2 == "ping" || k2 == "main" || k2 == "bridge" {
                                     if let Some(session) = v2.as_table() {
                                         for (k3, _) in session.iter() {
                                             if k3 == "enabled"
@@ -683,7 +664,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "pix" {
                         if let Some(pix) = v.as_table() {
                             for (k2, v2) in pix.iter() {
-                                if k2 == "ping_main" || k2 == "bridge" || k2 == "health_check" {
+                                if k2 == "ping_main" || k2 == "bridge" {
                                     if let Some(session) = v2.as_table() {
                                         for (k3, _) in session.iter() {
                                             if k3 == "enabled" {
@@ -702,9 +683,9 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "health_check_intervals" {
                         if let Some(hci) = v.as_table() {
                             for (k2, _) in hci.iter() {
-                                if k2 == "ping"
-                                    || k2 == "health_every_n_pings"
-                                    || k2 == "version_every_n_pings"
+                                if k2 == "version"
+                                    || k2 == "ping"
+                                    || k2 == "load"
                                     || k2 == "tunnel_ping"
                                     || k2 == "tunnel_ping_max_failures"
                                 {
@@ -1652,7 +1633,6 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
         let result: crate::config::Config = cfg.try_into().expect("should succeed");
         assert!(result.connection.pix.ping_main.enabled);
         assert!(!result.connection.pix.bridge.enabled);
-        assert!(!result.connection.pix.health_check.enabled);
     }
 
     #[test]
@@ -1674,8 +1654,6 @@ enabled = false
         let result: crate::config::Config = cfg.try_into().expect("should succeed");
         assert!(result.connection.pix.bridge.enabled);
         assert!(!result.connection.pix.ping_main.enabled);
-        // untouched key keeps its default
-        assert!(!result.connection.pix.health_check.enabled);
     }
 
     #[test]
@@ -1688,14 +1666,46 @@ enabled = false
 
 [connection.pix.ping_main]
 enabled = true
-
-[connection.pix.health_check]
-enabled = false
 "#####
             .parse::<toml::Table>()
             .expect("valid TOML");
 
         assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn legacy_health_check_keys_are_reported_as_wrong() {
+        let table = r#####"
+version = 7
+
+[connection.health_check_intervals]
+ping = "10s"
+health_every_n_pings = 4
+version_every_n_pings = 20
+
+[connection.pix.health_check]
+enabled = false
+
+[connection.surb_balancing.health_check]
+enabled = false
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        let wrong = wrong_keys(&table);
+        assert!(
+            wrong.contains(&"connection.health_check_intervals.health_every_n_pings".to_string()),
+            "{wrong:?}"
+        );
+        assert!(
+            wrong.contains(&"connection.health_check_intervals.version_every_n_pings".to_string()),
+            "{wrong:?}"
+        );
+        assert!(wrong.contains(&"connection.pix.health_check".to_string()), "{wrong:?}");
+        assert!(
+            wrong.contains(&"connection.surb_balancing.health_check".to_string()),
+            "{wrong:?}"
+        );
     }
 
     #[test]

@@ -55,7 +55,7 @@ pub(super) struct MaxSurbUpstreamOptions {
 
 /// Maps v5's separate `buffer`/`max_surb_upstream` sections onto v7's unified `surb_balancing`
 /// shape. `enabled`/`always_max_out_surbs` are left to v7's own defaults (`ping`/`main` on,
-/// `bridge`/`health_check` off) since v5 never had per-session enable flags.
+/// `bridge` off) since v5 never had per-session enable flags.
 fn to_surb_balancing_config(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstreamOptions>) -> SurbBalancingConfig {
     let buf = buf.unwrap_or(BufferOptions {
         bridge: None,
@@ -77,7 +77,6 @@ fn to_surb_balancing_config(buf: Option<BufferOptions>, surbs: Option<MaxSurbUps
         ping: Some(session(buf.ping, surbs.ping)),
         main: Some(session(buf.main, surbs.main)),
         bridge: Some(session(buf.bridge, surbs.bridge)),
-        health_check: None,
     }
 }
 
@@ -239,9 +238,9 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "health_check_intervals" {
                         if let Some(hci) = v.as_table() {
                             for (k2, _v) in hci.iter() {
-                                if k2 == "ping"
-                                    || k2 == "health_every_n_pings"
-                                    || k2 == "version_every_n_pings"
+                                if k2 == "version"
+                                    || k2 == "ping"
+                                    || k2 == "load"
                                     || k2 == "tunnel_ping"
                                     || k2 == "tunnel_ping_max_failures"
                                 {

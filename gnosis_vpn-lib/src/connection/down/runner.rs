@@ -22,11 +22,23 @@ pub(crate) struct Runner {
     down: connection::down::Down,
     hopr: Arc<Hopr>,
     options: Options,
+    /// The probe's session to unregister over; without it the runner opens and closes its own bridge.
+    reuse: Option<SessionClientMetadata>,
 }
 
 impl Runner {
-    pub(crate) fn new(down: connection::down::Down, hopr: Arc<Hopr>, options: Options) -> Self {
-        Self { down, hopr, options }
+    pub(crate) fn new(
+        down: connection::down::Down,
+        hopr: Arc<Hopr>,
+        options: Options,
+        reuse: Option<SessionClientMetadata>,
+    ) -> Self {
+        Self {
+            down,
+            hopr,
+            options,
+            reuse,
+        }
     }
 
     pub(crate) async fn start(&self, results_sender: mpsc::Sender<Results>) {
@@ -42,15 +54,20 @@ impl Runner {
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<(), Error> {
         // 0. disconnect wg tunnel done from root - already happens in spawning process
 
-        // 1. open bridge session
-        let _ = results_sender
-            .send(Results::DisconnectionEvent {
-                wg_public_key: self.down.wg_public_key.clone(),
-                evt: Event::OpenBridge,
-            })
-            .await;
-        let bridge_surb = surb_config_for(&self.options.surb_balancing.bridge)?;
-        let bridge_session = open_bridge_session(&self.hopr, &self.down, &self.options, bridge_surb).await?;
+        // 1. reuse the probe session or open a bridge of our own
+        let bridge_session = match &self.reuse {
+            Some(session) => session.clone(),
+            None => {
+                let _ = results_sender
+                    .send(Results::DisconnectionEvent {
+                        wg_public_key: self.down.wg_public_key.clone(),
+                        evt: Event::OpenBridge,
+                    })
+                    .await;
+                let bridge_surb = surb_config_for(&self.options.surb_balancing.bridge)?;
+                open_bridge_session(&self.hopr, &self.down, &self.options, bridge_surb).await?
+            }
+        };
 
         // 2. unregister wg public key
         let _ = results_sender
@@ -69,14 +86,16 @@ impl Runner {
             }
         }
 
-        // 3. close bridge session
+        // 3. close only a bridge we opened ourselves
         let _ = results_sender
             .send(Results::DisconnectionEvent {
                 wg_public_key: self.down.wg_public_key.clone(),
                 evt: Event::CloseBridge,
             })
             .await;
-        close_bridge_session(&self.hopr, &bridge_session).await?;
+        if self.reuse.is_none() {
+            close_bridge_session(&self.hopr, &bridge_session).await?;
+        }
 
         Ok(())
     }

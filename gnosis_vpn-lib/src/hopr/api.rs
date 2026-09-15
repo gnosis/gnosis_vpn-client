@@ -4,9 +4,10 @@ use edgli::{BlockchainConnectorConfig, BlokliEndpoint, EdgeNodeApi, EdgliInitSta
 use edgli::{
     Edgli,
     hopr_lib::{
-        HoprSessionClientConfig,
+        HopRouting, HoprSessionClientConfig,
         api::{
-            chain::{AccountSelector, ChainReadAccountOperations},
+            chain::{AccountSelector, ChainKeyOperations, ChainReadAccountOperations},
+            graph::{NetworkGraphTraverse, NetworkGraphView, function::EdgeValueFn},
             node::HasChainApi,
             types::{internal::channels::ChannelStatus, primitive::prelude::Address},
         },
@@ -24,13 +25,14 @@ use hopr_utils_session::{
 };
 use tracing::instrument;
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
+use std::num::NonZeroUsize;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
 };
 
-use crate::peer::{Peer, Peers};
+use crate::peer::Peer;
 use crate::{
     balance::{self, Balances},
     hopr::{
@@ -412,24 +414,31 @@ impl Hopr {
         Ok(peers)
     }
 
-    #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub async fn connected_peers(&self) -> Result<HashSet<Address>, HoprError> {
-        tracing::debug!("query hopr connected peers");
-        let addresses = self.edgli.connected_peer_addresses().await?;
-        Ok(addresses.into_iter().collect())
-    }
-
-    /// Fetches announced (on-chain) and connected (transport-level) peers in
-    /// one combined tick. The two are fundamentally different data sources
-    /// fetched independently, then bundled for a single result.
-    #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub async fn peers(&self) -> Result<Peers, HoprError> {
-        tracing::debug!("query hopr peers");
-        let (announced, connected) = tokio::join!(self.announced_peers(), self.connected_peers());
-        Ok(Peers {
-            announced: announced?,
-            connected: connected?,
-        })
+    /// Walks the channel graph with the path planner's own selector: routable iff a session to
+    /// `dest` over `routing.hop_count()` hops could be planned right now.
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
+    pub fn is_routable(&self, dest: Address, routing: HopRouting) -> Result<bool, HoprError> {
+        let dest_key = self
+            .edgli
+            .chain_api()
+            .chain_key_to_packet_key(&dest)
+            .map_err(|e| HoprError::HoprLib(HoprLibError::GeneralError(e.to_string())))?;
+        let Some(dest_key) = dest_key else {
+            tracing::debug!(%dest, "destination has no packet key on chain - not routable");
+            return Ok(false);
+        };
+        let graph = self.edgli.graph();
+        let length = NonZeroUsize::new(routing.hop_count() + 1).expect("hops + 1 is at least 1");
+        let planner = &self.edgli.config().protocol.path_planner;
+        let selector = EdgeValueFn::forward(
+            length,
+            planner.edge_penalty,
+            planner.min_ack_rate,
+            graph.ticket_face_value(),
+        );
+        // The selector prunes paths below its floor, so any survivor is a plannable route.
+        let paths = graph.simple_paths(graph.identity(), &dest_key, length.get(), Some(1), selector);
+        Ok(!paths.is_empty())
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret, err)]

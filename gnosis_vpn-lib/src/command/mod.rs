@@ -12,7 +12,9 @@ use std::time::{Duration, SystemTime};
 use crate::balance;
 use crate::connection;
 use crate::connection::destination::{Address, Destination};
+use crate::hopr::types::SessionClientMetadata;
 use crate::log_output;
+use crate::probe::{Health, ProbeState, Versions};
 use crate::route_health::{RouteHealth, RouteHealthState};
 use crate::serde_utils;
 pub use crate::ticket_stats::TicketStats;
@@ -47,6 +49,10 @@ pub enum Command {
     StopClient,
     /// List destination IDs, configured and discovered alike
     Destinations,
+    /// Open the one long-lived probe session to a destination and keep checking it
+    Probe(String),
+    /// Close the probe session
+    Unprobe,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -60,6 +66,8 @@ pub enum WorkerCommand {
     Telemetry,
     /// The worker answers this one because only it holds the discovery merge.
     Destinations,
+    Probe(String),
+    Unprobe,
     /// Reconnect the current HOPR session without clearing the target or disabling the killswitch.
     /// Used by the root process when a WAN interface change is detected.
     ForceReconnect,
@@ -83,6 +91,8 @@ pub enum Response {
     StartClient(StartClientResponse),
     StopClient(StopClientResponse),
     Destinations(Vec<String>),
+    Probe(ProbeResponse),
+    Unprobe(UnprobeResponse),
     WorkerOffline,
     WorkerRestarting,
 }
@@ -96,6 +106,8 @@ pub struct StatusResponse {
     pub reconnecting: Option<ReconnectingInfo>,
     pub connected: Option<ConnectedInfo>,
     pub disconnecting: Vec<DisconnectingInfo>,
+    /// The one probe session, if any.
+    pub probe: Option<ProbeView>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -121,6 +133,9 @@ pub struct ConnectedInfo {
     pub destination_id: String,
     #[serde(with = "serde_utils::system_time")]
     pub since: SystemTime,
+    /// Latest ICMP round trip through the tunnel.
+    #[serde(with = "serde_utils::opt_duration_ms")]
+    pub tunnel_ping_rtt: Option<Duration>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -269,12 +284,81 @@ pub enum FundingToolResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ProbeResponse {
+    Probing {
+        destination: Destination,
+    },
+    /// Only one probe exists; this one took the place of `previous`. Boxed to keep the enum small.
+    Replaced {
+        destination: Destination,
+        previous: Box<Destination>,
+    },
+    AlreadyProbing {
+        destination: Destination,
+    },
+    UnableToProbe {
+        destination: Destination,
+        route_health: RouteHealthState,
+    },
+    /// The edge client is not running yet.
+    NotReady,
+    DestinationNotFound,
+    DestinationAmbiguous {
+        connect_ids: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum UnprobeResponse {
+    Closing {
+        destination: Box<Destination>,
+    },
+    /// A connection attempt is registering over the session right now.
+    InUse {
+        destination: Box<Destination>,
+    },
+    NotProbing,
+}
+
+impl UnprobeResponse {
+    pub fn closing(destination: Destination) -> Self {
+        UnprobeResponse::Closing {
+            destination: Box::new(destination),
+        }
+    }
+
+    pub fn in_use(destination: Destination) -> Self {
+        UnprobeResponse::InUse {
+            destination: Box::new(destination),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProbeView {
+    pub destination_id: String,
+    pub state: ProbeState,
+    #[serde(with = "serde_utils::opt_system_time")]
+    pub session_since: Option<SystemTime>,
+    pub versions: Option<Versions>,
+    /// The API version this client selected from `versions`; None means incompatible.
+    pub api_version: Option<String>,
+    #[serde(with = "serde_utils::opt_duration_ms")]
+    pub ping_rtt: Option<Duration>,
+    pub load: Option<Health>,
+    /// When the most recent check succeeded.
+    #[serde(with = "serde_utils::opt_system_time")]
+    pub checked_at: Option<SystemTime>,
+    pub consecutive_failures: u32,
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RouteHealthView {
     pub state: RouteHealthState,
     pub last_error: Option<String>,
-    #[serde(with = "serde_utils::opt_system_time")]
-    pub checking_since: Option<SystemTime>,
-    pub consecutive_failures: u32,
 }
 
 impl From<&RouteHealth> for RouteHealthView {
@@ -282,8 +366,6 @@ impl From<&RouteHealth> for RouteHealthView {
         RouteHealthView {
             state: rh.state().clone(),
             last_error: rh.last_error().map(str::to_owned),
-            checking_since: rh.checking_since(),
-            consecutive_failures: rh.consecutive_failures(),
         }
     }
 }
@@ -389,9 +471,15 @@ pub struct ConnStats {
 }
 
 impl ConnStats {
-    pub fn from_conn(conn: &connection::up::Up, node_address: Address, telemetry: Option<&str>) -> Self {
+    /// `bridge` is the probe session the connection registered over, if it is still around.
+    pub fn from_conn(
+        conn: &connection::up::Up,
+        node_address: Address,
+        telemetry: Option<&str>,
+        bridge: Option<&SessionClientMetadata>,
+    ) -> Self {
         use connection::up::SessionKind;
-        let bridge_session = conn.bridge_session.as_ref().and_then(|meta| {
+        let bridge_session = bridge.and_then(|meta| {
             let id = meta.active_clients.first()?.to_string();
             let bound_host = meta.bound_host;
             Some(ActiveSession::Bridge { bound_host, id })
@@ -707,7 +795,41 @@ impl Display for ConnectedInfo {
             "Connected to {} (since {})",
             self.destination_id,
             log_output::elapsed(&self.since)
-        )
+        )?;
+        if let Some(rtt) = self.tunnel_ping_rtt {
+            write!(f, ", tunnel ping RTT {:.2} s", rtt.as_secs_f32())?;
+        }
+        Ok(())
+    }
+}
+
+impl Display for ProbeView {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Probing {} - {}", self.destination_id, self.state)?;
+        if let Some(since) = &self.session_since {
+            write!(f, " (session since {})", log_output::elapsed(since))?;
+        }
+        if let Some(rtt) = self.ping_rtt {
+            write!(f, ", ping RTT {:.2} s", rtt.as_secs_f32())?;
+        }
+        if let Some(load) = &self.load {
+            write!(f, ", {load}")?;
+        }
+        match (&self.versions, &self.api_version) {
+            (Some(versions), Some(api)) => write!(f, ", API {api} ({versions})")?,
+            (Some(versions), None) => write!(f, ", no compatible API ({versions})")?,
+            (None, _) => {}
+        }
+        if let Some(checked_at) = &self.checked_at {
+            write!(f, ", last check {} ago", log_output::elapsed(checked_at))?;
+        }
+        if self.consecutive_failures > 0 {
+            write!(f, " ({} consecutive failures)", self.consecutive_failures)?;
+        }
+        if let Some(err) = &self.last_error {
+            write!(f, " (last error: {err})")?;
+        }
+        Ok(())
     }
 }
 
@@ -769,6 +891,8 @@ impl TryFrom<Command> for WorkerCommand {
             Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
             Command::Telemetry => Ok(WorkerCommand::Telemetry),
             Command::Destinations => Ok(WorkerCommand::Destinations),
+            Command::Probe(dest) => Ok(WorkerCommand::Probe(dest)),
+            Command::Unprobe => Ok(WorkerCommand::Unprobe),
             // Commands that are not relevant for the worker
             Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient => Err(()),
         }
@@ -778,12 +902,6 @@ impl TryFrom<Command> for WorkerCommand {
 impl Display for RouteHealthView {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.state)?;
-        if let Some(since) = &self.checking_since {
-            write!(f, " (checking since {})", crate::log_output::elapsed(since))?;
-        }
-        if self.consecutive_failures > 0 {
-            write!(f, " ({} consecutive failures)", self.consecutive_failures)?;
-        }
         if let Some(err) = &self.last_error {
             write!(f, " (last error: {err})")?;
         }
@@ -795,8 +913,6 @@ impl Display for RouteHealthView {
 mod tests {
     use super::*;
     use crate::connection::destination::{DestinationSource, HopRouting, Meta};
-    use crate::gvpn_client;
-    use crate::route_health::ExitHealth;
 
     fn address(byte: u8) -> Address {
         Address::from([byte; 20])
@@ -840,6 +956,33 @@ mod tests {
     }
 
     #[test]
+    fn probe_commands_are_routed_to_the_worker() {
+        assert_eq!(
+            Ok(WorkerCommand::Probe("exit".into())),
+            Command::Probe("exit".into()).try_into()
+        );
+        assert_eq!(Ok(WorkerCommand::Unprobe), Command::Unprobe.try_into());
+    }
+
+    #[test]
+    fn tagged_probe_responses_all_serialize_as_objects_with_a_type() {
+        let not_ready = serde_json::to_string(&ProbeResponse::NotReady).unwrap();
+        assert_eq!(r#"{"type":"NotReady"}"#, not_ready);
+
+        let probing = serde_json::to_string(&ProbeResponse::Probing {
+            destination: destination(),
+        })
+        .unwrap();
+        assert!(probing.starts_with(r#"{"type":"Probing","destination":{"#), "{probing}");
+
+        let not_probing = serde_json::to_string(&UnprobeResponse::NotProbing).unwrap();
+        assert_eq!(r#"{"type":"NotProbing"}"#, not_probing);
+
+        let closing = serde_json::to_string(&UnprobeResponse::closing(destination())).unwrap();
+        assert!(closing.starts_with(r#"{"type":"Closing","destination":{"#), "{closing}");
+    }
+
+    #[test]
     fn commands_root_answers_itself_never_reach_the_worker() {
         for cmd in [
             Command::Info,
@@ -861,29 +1004,7 @@ mod tests {
     }
 
     fn route_health_state() -> RouteHealthState {
-        RouteHealthState::ReadyToConnect {
-            exit: ExitHealth {
-                checked_at: SystemTime::now(),
-                versions: gvpn_client::Versions {
-                    versions: vec!["v1".to_string()],
-                    latest: "v1".to_string(),
-                },
-                ping_rtt: Duration::from_millis(100),
-                health: gvpn_client::Health {
-                    slots: gvpn_client::Slots {
-                        total: 16,
-                        available: 10,
-                        connected: 1,
-                    },
-                    load_avg: gvpn_client::LoadAvg {
-                        one: 0.1,
-                        five: 0.2,
-                        fifteen: 0.3,
-                        nproc: 4,
-                    },
-                },
-            },
-        }
+        RouteHealthState::Routable
     }
 
     #[test]

@@ -29,15 +29,15 @@ pub struct Options {
     pub path_planner_min_ack_rate: f64,
 }
 
-/// Controls how often each tier of health check runs.
-/// Ping runs every cycle. Health and version piggyback every Nth cycle.
+/// Cadence of each check the probe session runs, plus the tunnel's own ICMP ping.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HealthCheckIntervals {
+    /// Exit API version check.
+    pub version: Duration,
+    /// Exit ping for latency.
     pub ping: Duration,
-    /// Run exit health check every Nth ping cycle.
-    pub health_every_n_pings: u32,
-    /// Run version check every Nth ping cycle.
-    pub version_every_n_pings: u32,
+    /// Exit load (slots, load average).
+    pub load: Duration,
     /// Interval between ICMP tunnel ping probes when connected.
     pub tunnel_ping: Duration,
     /// Consecutive tunnel ping failures before triggering reconnect.
@@ -75,7 +75,6 @@ pub struct SurbBalancing {
     pub ping: SessionSurbOptions,
     pub main: SessionSurbOptions,
     pub bridge: SessionSurbOptions,
-    pub health_check: SessionSurbOptions,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -88,7 +87,6 @@ pub struct SessionPixOptions {
 pub struct PixOptions {
     pub ping_main: SessionPixOptions,
     pub bridge: SessionPixOptions,
-    pub health_check: SessionPixOptions,
 }
 
 impl SessionParameters {
@@ -111,9 +109,9 @@ impl SessionSurbOptions {
 impl Default for HealthCheckIntervals {
     fn default() -> Self {
         Self {
-            ping: Duration::from_secs(15),
-            health_every_n_pings: 4,
-            version_every_n_pings: 20,
+            version: Duration::from_secs(60 * 60),
+            ping: Duration::from_secs(10),
+            load: Duration::from_secs(15),
             tunnel_ping: Duration::from_secs(10),
             tunnel_ping_max_failures: 3,
         }
@@ -127,7 +125,6 @@ impl Default for SurbBalancing {
             // maximum allowed buffer size is 10 MB
             main: SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(16)),
             bridge: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
-            health_check: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
         }
     }
 }
@@ -137,7 +134,6 @@ impl Default for PixOptions {
         Self {
             ping_main: SessionPixOptions { enabled: true },
             bridge: SessionPixOptions { enabled: false },
-            health_check: SessionPixOptions { enabled: false },
         }
     }
 }

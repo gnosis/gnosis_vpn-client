@@ -119,6 +119,7 @@ The idle countdown behaves as follows:
 
 - **Idle**: countdown runs; worker shuts down when it reaches zero.
 - **Connected**: countdown is suspended for the lifetime of the VPN tunnel.
+- **Probing**: `probe <id>` suspends the countdown like a connection; `unprobe` resumes it unless a connection target is still set.
 - **Disconnected**: countdown resumes from the full duration.
 - Any other command to the worker (e.g. status) resets the countdown.
 
