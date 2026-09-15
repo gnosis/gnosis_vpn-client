@@ -40,14 +40,16 @@ const SCRATCH_LEN: usize = super::MAX_FRAME + WG_DATA_OVERHEAD;
 /// session (handshake responses and any packets flushed by the post-handshake
 /// drain). `to_tun` holds decrypted IP packets destined for the local TUN device
 /// whose source address passed the allowed-IPs check. `decap_failed` records that
-/// the inbound datagram was dropped by a WireGuard error (bad tag, replay, no
-/// current session) so the pump can watch for a stream that has desynced - e.g. a
-/// transport that coalesced two datagrams into one read.
+/// the inbound datagram was dropped by a WireGuard error (bad tag, replay, garbage)
+/// so the pump can watch for a stream that has desynced - e.g. a transport that
+/// coalesced two datagrams into one read. `stale_receiver` marks a datagram for a
+/// session index this tunnel never issued (a previous incarnation's straggler).
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Outputs {
     pub to_network: Vec<Vec<u8>>,
     pub to_tun: Vec<Vec<u8>>,
     pub decap_failed: bool,
+    pub stale_receiver: bool,
 }
 
 /// The result of a timer tick: WireGuard datagrams to send (handshake
@@ -83,6 +85,8 @@ enum Step {
     Done,
     /// The datagram was dropped by a WireGuard decapsulation error.
     Failed,
+    /// The datagram was addressed to a session index this tunnel never issued.
+    Stale,
     Network(Vec<u8>),
     Tunnel(Vec<u8>, IpAddr),
 }
@@ -112,8 +116,17 @@ impl WgTunnel {
             Some(psk) => Some(wireguard::decode_key32(psk)?),
             None => None,
         };
-        let tunn =
-            Tunn::new(secret, peer, preshared_key, Some(WG_PERSISTENT_KEEPALIVE_SECS), 0, None).map_err(Error::Tunn)?;
+        // Random 24-bit seed so a reconnected tunnel never shares session indices with its predecessor.
+        let index_seed = rand::random::<u32>() & 0x00ff_ffff;
+        let tunn = Tunn::new(
+            secret,
+            peer,
+            preshared_key,
+            Some(WG_PERSISTENT_KEEPALIVE_SECS),
+            index_seed,
+            None,
+        )
+        .map_err(Error::Tunn)?;
         Ok(Self {
             tunn,
             scratch: vec![0u8; SCRATCH_LEN].into_boxed_slice(),
@@ -131,14 +144,15 @@ impl WgTunnel {
             TunnResult::Done => Step::Done,
             TunnResult::WriteToNetwork(buf) => Step::Network(buf.to_vec()),
             TunnResult::WriteToTunnel(buf, src) => Step::Tunnel(buf.to_vec(), src),
+            TunnResult::Err(e @ (WireGuardError::WrongIndex | WireGuardError::NoCurrentSession)) => {
+                tracing::debug!(
+                    ?e,
+                    "dropping inbound datagram: addressed to a session this tunnel never issued"
+                );
+                Step::Stale
+            }
             TunnResult::Err(e) => {
-                // A decapsulation error is a per-datagram drop, never a teardown.
-                // Over a reordering/duplicating mixnet, DuplicateCounter (replay
-                // window) and NoCurrentSession (post-rekey stragglers) are
-                // routine, and malformed/undecryptable datagrams must not kill
-                // the tunnel. This mirrors NepTUN's own device driver
-                // (log-and-continue); a persistently failing peer still
-                // self-heals via the handshake-expiry path in `update_timers`.
+                // Per-datagram drop, never a teardown: replays and garbage are routine over the mixnet.
                 tracing::debug!(?e, "dropping inbound datagram: wireguard decapsulate error");
                 Step::Failed
             }
@@ -179,6 +193,10 @@ impl TunnelEngine for WgTunnel {
                 Step::Done => break,
                 Step::Failed => {
                     outputs.decap_failed = true;
+                    break;
+                }
+                Step::Stale => {
+                    outputs.stale_receiver = true;
                     break;
                 }
                 Step::Network(datagram) => {
@@ -236,16 +254,18 @@ mod tests {
     use super::*;
     use base64::prelude::{BASE64_STANDARD, Engine as _};
 
+    /// A fresh base64 (private, public) WireGuard key pair.
+    fn key_pair() -> (String, String) {
+        let secret = StaticSecret::random();
+        let public = BASE64_STANDARD.encode(PublicKey::from(&secret).to_bytes());
+        (BASE64_STANDARD.encode(secret.to_bytes()), public)
+    }
+
     /// A client/server WgTunnel pair keyed to each other, with the server
     /// accepting the given allowed-IPs range from the client.
     fn tunnel_pair(server_allowed: &[IpNetwork]) -> (WgTunnel, WgTunnel) {
-        let client_secret = StaticSecret::random();
-        let server_secret = StaticSecret::random();
-        let client_pub = BASE64_STANDARD.encode(PublicKey::from(&client_secret).to_bytes());
-        let server_pub = BASE64_STANDARD.encode(PublicKey::from(&server_secret).to_bytes());
-        let client_priv = BASE64_STANDARD.encode(client_secret.to_bytes());
-        let server_priv = BASE64_STANDARD.encode(server_secret.to_bytes());
-
+        let (client_priv, client_pub) = key_pair();
+        let (server_priv, server_pub) = key_pair();
         let all_v4 = ["0.0.0.0/0".parse().unwrap()];
         let client = WgTunnel::new(&client_priv, &server_pub, None, &all_v4).expect("client");
         let server = WgTunnel::new(&server_priv, &client_pub, None, server_allowed).expect("server");
@@ -401,6 +421,63 @@ mod tests {
             .decapsulate(&[0xde, 0xad, 0xbe, 0xef, 0x00, 0x11, 0x22, 0x33])
             .expect("no teardown");
         assert!(out.to_tun.is_empty() && out.to_network.is_empty());
+        assert!(out.decap_failed && !out.stale_receiver, "garbage counts as a failure");
+    }
+
+    #[test]
+    fn decapsulate_of_tampered_datagram_is_failed_not_stale() {
+        // Bad tag on the right session is the genuine failure the desync guard watches.
+        let (mut client, mut server) = tunnel_pair(&["10.0.0.0/24".parse().unwrap()]);
+        complete_handshake(&mut client, &mut server);
+
+        let pkt = ipv4_packet([10, 0, 0, 2], [10, 128, 0, 1]);
+        let mut ct = client.encapsulate(&pkt).expect("encap").expect("dg");
+        *ct.last_mut().unwrap() ^= 0xff;
+
+        let out = server.decapsulate(&ct).expect("no teardown");
+        assert!(out.to_tun.is_empty());
+        assert!(out.decap_failed && !out.stale_receiver);
+    }
+
+    #[test]
+    fn decapsulate_of_previous_incarnation_datagram_is_stale_not_failed() {
+        // Post-reconnect stragglers are stale, never failures, with or without own sessions.
+        let (client_priv, client_pub) = key_pair();
+        let (server_priv, server_pub) = key_pair();
+        let all_v4: [IpNetwork; 1] = ["0.0.0.0/0".parse().unwrap()];
+
+        let mut old_client = WgTunnel::new(&client_priv, &server_pub, None, &all_v4).expect("old client");
+        let mut server = WgTunnel::new(&server_priv, &client_pub, None, &all_v4).expect("server");
+        complete_handshake(&mut old_client, &mut server);
+        let up = ipv4_packet([10, 0, 0, 2], [10, 128, 0, 1]);
+        let ct = old_client.encapsulate(&up).expect("encap").expect("dg");
+        server.decapsulate(&ct).expect("server decap");
+        let down = ipv4_packet([10, 128, 0, 1], [10, 0, 0, 2]);
+        let straggler = server.encapsulate(&down).expect("encap").expect("dg");
+
+        let mut new_client = WgTunnel::new(&client_priv, &server_pub, None, &all_v4).expect("new client");
+        let out = new_client.decapsulate(&straggler).expect("no teardown");
+        assert!(out.to_tun.is_empty() && out.to_network.is_empty());
+        assert!(out.stale_receiver && !out.decap_failed, "fresh tunnel: {out:?}");
+
+        // Same verdict once the new incarnation has its own live session.
+        let mut new_server = WgTunnel::new(&server_priv, &client_pub, None, &all_v4).expect("new server");
+        complete_handshake(&mut new_client, &mut new_server);
+        let out = new_client.decapsulate(&straggler).expect("no teardown");
+        assert!(out.stale_receiver && !out.decap_failed, "handshaken tunnel: {out:?}");
+    }
+
+    #[test]
+    fn fresh_tunnels_use_distinct_session_indices() {
+        // Sender index sits at bytes 4..8 of a handshake initiation.
+        let (client_priv, _) = key_pair();
+        let (_, server_pub) = key_pair();
+        let all_v4: [IpNetwork; 1] = ["0.0.0.0/0".parse().unwrap()];
+        let mut a = WgTunnel::new(&client_priv, &server_pub, None, &all_v4).expect("a");
+        let mut b = WgTunnel::new(&client_priv, &server_pub, None, &all_v4).expect("b");
+        let init_a = a.handshake_initiation().expect("init a");
+        let init_b = b.handshake_initiation().expect("init b");
+        assert_ne!(init_a[4..8], init_b[4..8]);
     }
 
     #[test]

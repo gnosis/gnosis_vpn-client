@@ -197,9 +197,12 @@ where
                     Some(n) => {
                         debug_assert!(n <= net_buf.len(), "NetworkReceiver reported oversized read");
                         let outputs = engine.decapsulate(&net_buf[..n])?;
-                        decap_window_total += 1;
-                        if outputs.decap_failed {
-                            decap_window_failures += 1;
+                        // Stragglers for a previous incarnation say nothing about this stream's health.
+                        if !outputs.stale_receiver {
+                            decap_window_total += 1;
+                            if outputs.decap_failed {
+                                decap_window_failures += 1;
+                            }
                         }
                         if decap_window_total >= DECAP_FAILURE_WINDOW {
                             if decap_window_failures * DECAP_FAILURE_MAJORITY_DIVISOR > decap_window_total {
@@ -338,6 +341,8 @@ mod tests {
         /// When set, every `decapsulate` reports a dropped datagram, standing in for
         /// a desynced/coalesced session stream.
         decap_always_fails: bool,
+        /// When set, every `decapsulate` reports a previous incarnation's straggler.
+        decap_always_stale: bool,
     }
     impl TunnelEngine for ScriptedEngine {
         fn handshake_initiation(&mut self) -> Result<Vec<u8>, Error> {
@@ -352,6 +357,12 @@ mod tests {
             if self.decap_always_fails {
                 return Ok(Outputs {
                     decap_failed: true,
+                    ..Default::default()
+                });
+            }
+            if self.decap_always_stale {
+                return Ok(Outputs {
+                    stale_receiver: true,
                     ..Default::default()
                 });
             }
@@ -521,6 +532,38 @@ mod tests {
         }
         let exit = handle.await.expect("pump task joins").expect("pump ok");
         assert_eq!(exit, PumpExit::DecapStalled);
+    }
+
+    #[tokio::test]
+    async fn pump_ignores_stale_receiver_datagrams_in_failure_guard() {
+        // A full window of stragglers must neither trip the guard nor stop the pump.
+        let engine = ScriptedEngine {
+            init: vec![1],
+            decap_always_stale: true,
+            ..Default::default()
+        };
+        let (net_tx, mut net_out) = channel(8);
+        let (tun_out_tx, _tun_out) = channel(8);
+        let (net_in_tx, net_in) = channel::<Vec<u8>>(512);
+        let (tun_in_tx, tun_in) = channel::<Vec<u8>>(8);
+
+        let handle = tokio::spawn(run(
+            engine,
+            ChannelTx(net_tx),
+            ChannelRx(net_in),
+            ChannelTx(tun_out_tx),
+            ChannelRx(tun_in),
+            stats_sender(),
+        ));
+        assert_eq!(net_out.recv().await, Some(vec![1])); // handshake init
+        for _ in 0..(super::DECAP_FAILURE_WINDOW + 16) {
+            net_in_tx.send(vec![0xde, 0xad]).await.expect("pump still reading");
+        }
+        // Still alive: a subsequent outbound packet is encapsulated as usual.
+        let packet = ipv4_packet([10, 0, 0, 2], [10, 128, 0, 1]);
+        tun_in_tx.send(packet.clone()).await.unwrap();
+        assert_eq!(net_out.recv().await, Some(packet));
+        handle.abort();
     }
 
     #[tokio::test]
