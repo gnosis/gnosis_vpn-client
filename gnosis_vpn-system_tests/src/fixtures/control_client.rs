@@ -232,18 +232,18 @@ impl ControlClient {
                     let location = status
                         .destinations
                         .iter()
-                        .find(|d| d.destination.id == destination.id)
-                        .and_then(|d| d.destination.get_meta("location"))
+                        .find(|d| d.destination.connect_id == destination.connect_id)
+                        .and_then(|d| d.destination.meta.location.clone())
                         .unwrap_or_else(|| "<unknown>".to_string());
 
                     let is_connected = status
                         .connected
                         .as_ref()
-                        .is_some_and(|c| c.destination_id == destination.id);
+                        .is_some_and(|c| c.destination_id == destination.connect_id);
                     let connecting_phase = status
                         .connecting
                         .as_ref()
-                        .filter(|c| c.destination_id == destination.id)
+                        .filter(|c| c.destination_id == destination.connect_id)
                         .map(|c| &c.phase);
 
                     if is_connected {
@@ -270,7 +270,7 @@ impl ControlClient {
         lib::wait_for_condition("disconnection", timeout, Duration::from_secs(2), || async {
             match self.disconnect().await {
                 Ok(response) => match response {
-                    DisconnectResponse::Disconnecting(address) => {
+                    DisconnectResponse::Disconnecting { destination: address } => {
                         info!("disconnecting from destination {address}");
                         Ok(ConditionCheck::Pending)
                     }

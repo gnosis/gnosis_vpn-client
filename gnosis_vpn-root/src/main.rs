@@ -904,8 +904,7 @@ impl DaemonState {
                         .send(KeepAliveInstruction::Restart)
                         .await;
                     Ok(())
-                } else if matches!(w_cmd, WorkerCommand::Status) {
-                    let response = self.status_response_offline();
+                } else if let Some(response) = self.offline_response(&w_cmd) {
                     let _ = resp.send(response).map_err(|error| {
                         tracing::error!(?error, "socket command response channel closed");
                     });
@@ -969,9 +968,23 @@ impl DaemonState {
         }
     }
 
+    /// What root can still answer from the config file alone once the worker is gone.
+    fn offline_response(&self, cmd: &WorkerCommand) -> Option<Response> {
+        match cmd {
+            WorkerCommand::Status => Some(self.status_response_offline()),
+            WorkerCommand::Destinations => Some(Response::Destinations(self.configured_destination_ids())),
+            _ => None,
+        }
+    }
+
+    /// Only what the config file names; the worker's answer also carries whatever discovery found.
+    fn configured_destination_ids(&self) -> Vec<String> {
+        self.config.destinations.connect_ids()
+    }
+
     fn status_response_offline(&self) -> Response {
         let mut vals: Vec<&Destination> = self.config.destinations.values().collect();
-        vals.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+        vals.sort_unstable_by(|a, b| a.connect_id.cmp(&b.connect_id));
         let destinations = vals
             .into_iter()
             .map(|dest| command::DestinationState {
@@ -1007,11 +1020,7 @@ impl DaemonState {
                 _ => Response::WorkerOffline,
             }),
             LibCommand::Ping => Ok(Response::Pong),
-            LibCommand::Destinations => {
-                let mut ids: Vec<String> = self.config.destinations.keys().cloned().collect();
-                ids.sort_unstable();
-                Ok(Response::Destinations(ids))
-            }
+            LibCommand::Destinations => Ok(Response::Destinations(self.configured_destination_ids())),
             LibCommand::Info => {
                 let package_version = fs::read_to_string("/etc/gnosisvpn/version.txt")
                     .await
@@ -1114,6 +1123,16 @@ impl DaemonState {
         // ForceReconnect is fire-and-forget (id=0), no pending response entry
         if matches!(resp, Response::ForceReconnectAcknowledged) {
             return Ok(());
+        }
+        // Only an accepted connect sets the target, and as the connect id, not the typed token.
+        if let Response::Connect(
+            command::ConnectResponse::Connecting { destination }
+            | command::ConnectResponse::WaitingToConnect { destination, .. }
+            | command::ConnectResponse::AlreadyConnected { destination },
+        ) = &resp
+        {
+            tracing::debug!(id = %destination.connect_id, "remembering target destination from connect response");
+            self.target_dest_id = Some(destination.connect_id.clone());
         }
         if let Some(resp_sender) = self.pending_responses.remove(&id) {
             if resp_sender.send(resp).is_err() {
@@ -1499,9 +1518,7 @@ impl DaemonState {
 
     async fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {
         match cmd {
-            WorkerCommand::Connect(id) => {
-                tracing::debug!(?id, "remembering target destination from connect command");
-                self.target_dest_id = Some(id.clone());
+            WorkerCommand::Connect(_) => {
                 let _ = self
                     .keep_alive_instruction_sender
                     .send(KeepAliveInstruction::Suspend)

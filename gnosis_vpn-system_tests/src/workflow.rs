@@ -61,14 +61,14 @@ impl SystemTestWorkflow {
         let mut readiness_report = ReportTable::new("destination", &[]);
         for destination in readiness.ready() {
             readiness_report.add_row(
-                destination.get_meta("location").unwrap_or("<unknown>".to_string()),
+                destination.meta.location.clone().unwrap_or("<unknown>".to_string()),
                 RowStatus::Ready,
                 Vec::new(),
             );
         }
         for destination in readiness.not_ready() {
             readiness_report.add_row(
-                destination.get_meta("location").unwrap_or("<unknown>".to_string()),
+                destination.meta.location.clone().unwrap_or("<unknown>".to_string()),
                 RowStatus::NotReady,
                 Vec::new(),
             );
@@ -120,7 +120,7 @@ impl SystemTestWorkflow {
                 Ok(_) => {
                     info!(dest = %destination, "connection established");
                     report.add_row(
-                        destination.get_meta("location").unwrap_or("<unknown>".to_string()),
+                        destination.meta.location.clone().unwrap_or("<unknown>".to_string()),
                         RowStatus::Success,
                         Vec::new(),
                     );
@@ -129,7 +129,7 @@ impl SystemTestWorkflow {
                 Err(error) => {
                     error!(dest = %destination, ?error, "failed to establish connection");
                     report.add_row(
-                        destination.get_meta("location").unwrap_or("<unknown>".to_string()),
+                        destination.meta.location.clone().unwrap_or("<unknown>".to_string()),
                         RowStatus::Failure(format!("{error:?}")),
                         Vec::new(),
                     );
@@ -143,7 +143,7 @@ impl SystemTestWorkflow {
     async fn try_connect(&self, destination: &Destination, timeout: Duration) -> Result<()> {
         info!(
             dest = %destination,
-            state = ?self.client.connect(destination.id.clone()).await?,
+            state = ?self.client.connect(destination.connect_id.clone()).await?,
             "initiated connection",
         );
 

@@ -86,7 +86,8 @@ pub async fn generate(
     cfg.protocol.probe.interval = Duration::from_secs(3);
     cfg.protocol.probe.recheck_threshold = Duration::from_secs(3);
     cfg.protocol.path_planner = edgli::latency_path_planner_config(path_planner_min_ack_rate);
-    // Client baseline for the anonymity floor, overriding the edge-client preset.
+    // Deliberately re-enables the latency pruning edgli's preset disables (floor 0): a cap of 3
+    // keeps candidate sets small at some cost to the relayer retention its degradation detector wants.
     cfg.protocol.path_planner.min_paths_anonymity_floor =
         crate::connection::options::DEFAULT_PATH_PLANNER_MIN_PATHS_ANONYMITY_FLOOR;
     // Layer user overrides on top; unset fields keep the preset (or the baseline above).

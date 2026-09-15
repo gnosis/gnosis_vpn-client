@@ -34,4 +34,7 @@ pub enum HoprError {
 
     #[error("Strategy error: {0}")]
     Strategy(String),
+
+    #[error("Failed to watch exit node registry: {0}")]
+    ExitNodeWatch(String),
 }

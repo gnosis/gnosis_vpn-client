@@ -192,22 +192,34 @@ fn yaml_print(resp: &Response) {
 
 fn pretty_print(resp: &Response) {
     match resp {
-        Response::Connect(command::ConnectResponse::AlreadyConnected(dest)) => {
+        Response::Connect(command::ConnectResponse::AlreadyConnected { destination: dest }) => {
             println!("Already connected to {dest}");
         }
-        Response::Connect(command::ConnectResponse::Connecting(dest)) => {
+        Response::Connect(command::ConnectResponse::Connecting { destination: dest }) => {
             println!("Connecting to {dest}");
         }
-        Response::Connect(command::ConnectResponse::WaitingToConnect(dest, route_health)) => {
+        Response::Connect(command::ConnectResponse::WaitingToConnect {
+            destination: dest,
+            route_health,
+        }) => {
             println!("Waiting to connect to {dest} once possible: {route_health}")
         }
-        Response::Connect(command::ConnectResponse::UnableToConnect(dest, route_health)) => {
+        Response::Connect(command::ConnectResponse::UnableToConnect {
+            destination: dest,
+            route_health,
+        }) => {
             eprintln!("Unable to connect to {dest}: {route_health}");
         }
         Response::Connect(command::ConnectResponse::DestinationNotFound) => {
             eprintln!("Destination not found");
         }
-        Response::Disconnect(command::DisconnectResponse::Disconnecting(dest)) => {
+        Response::Connect(command::ConnectResponse::DestinationAmbiguous { connect_ids: ids }) => {
+            eprintln!(
+                "That exit is reachable by several paths - connect to one of: {}",
+                ids.join(", ")
+            );
+        }
+        Response::Disconnect(command::DisconnectResponse::Disconnecting { destination: dest }) => {
             println!("Disconnecting from {dest}");
         }
         Response::Disconnect(command::DisconnectResponse::NotConnected) => {
@@ -250,12 +262,12 @@ fn pretty_print(resp: &Response) {
                 str_resp.push_str(&format!("---\n{info}\n"));
             }
             if !destinations.is_empty() {
-                str_resp.push_str("---\nDestinations | slots: (c)onnected + (f)ree / total\n");
+                str_resp.push_str("---\nDestinations - [c] configured, [d] discovered, (c) value from config\n");
             }
             for dest_state in destinations {
                 str_resp.push_str(&format!("---\n{}\n", dest_state.destination));
                 if let Some(rh) = &dest_state.route_health {
-                    str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.id, rh,));
+                    str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.connect_id, rh,));
                 }
             }
             println!("{str_resp}");
@@ -422,12 +434,13 @@ fn human_msgs(msgs: u64) -> String {
 
 fn determine_exitcode(resp: &Response) -> ExitCode {
     match resp {
-        Response::Connect(command::ConnectResponse::AlreadyConnected(..)) => exitcode::OK,
-        Response::Connect(command::ConnectResponse::Connecting(..)) => exitcode::OK,
+        Response::Connect(command::ConnectResponse::AlreadyConnected { .. }) => exitcode::OK,
+        Response::Connect(command::ConnectResponse::Connecting { .. }) => exitcode::OK,
         Response::Connect(command::ConnectResponse::DestinationNotFound) => exitcode::UNAVAILABLE,
-        Response::Connect(command::ConnectResponse::WaitingToConnect(..)) => exitcode::OK,
-        Response::Connect(command::ConnectResponse::UnableToConnect(..)) => exitcode::UNAVAILABLE,
-        Response::Disconnect(command::DisconnectResponse::Disconnecting(..)) => exitcode::OK,
+        Response::Connect(command::ConnectResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
+        Response::Connect(command::ConnectResponse::WaitingToConnect { .. }) => exitcode::OK,
+        Response::Connect(command::ConnectResponse::UnableToConnect { .. }) => exitcode::UNAVAILABLE,
+        Response::Disconnect(command::DisconnectResponse::Disconnecting { .. }) => exitcode::OK,
         Response::Disconnect(command::DisconnectResponse::NotConnected) => exitcode::PROTOCOL,
         Response::Status(..) => exitcode::OK,
         Response::Balance(Ok(..)) => exitcode::OK,
@@ -435,26 +448,13 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Pong => exitcode::OK,
         Response::Telemetry(Some(_)) => exitcode::OK,
         Response::Telemetry(None) => exitcode::UNAVAILABLE,
-        Response::NerdStats(command::NerdStatsResponse {
-            connection: command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Available(_)),
-            ..
-        }) => exitcode::OK,
-        Response::NerdStats(command::NerdStatsResponse {
-            connection: command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Waiting),
-            ..
-        }) => exitcode::UNAVAILABLE,
-        Response::NerdStats(command::NerdStatsResponse {
-            connection: command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Error(_)),
-            ..
-        }) => exitcode::SOFTWARE,
-        Response::NerdStats(command::NerdStatsResponse {
-            connection: command::NerdStatsConnection::Connecting(..),
-            ..
-        }) => exitcode::OK,
-        Response::NerdStats(command::NerdStatsResponse {
-            connection: command::NerdStatsConnection::Connected(..),
-            ..
-        }) => exitcode::OK,
+        Response::NerdStats(stats) => match &stats.connection {
+            command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Available(_)) => exitcode::OK,
+            command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Waiting) => exitcode::UNAVAILABLE,
+            command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Error(_)) => exitcode::SOFTWARE,
+            command::NerdStatsConnection::Connecting(..) => exitcode::OK,
+            command::NerdStatsConnection::Connected(..) => exitcode::OK,
+        },
         Response::FundingTool(command::FundingToolResponse::WrongPhase) => exitcode::UNAVAILABLE,
         Response::FundingTool(command::FundingToolResponse::Started) => exitcode::OK,
         Response::FundingTool(command::FundingToolResponse::InProgress) => exitcode::OK,
@@ -683,7 +683,7 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
                 "{node_addr}(me) -{title}-DIRECTLY--> {addr}({exit})\n",
                 node_addr = stats.node_address.to_checksum(),
                 addr = stats.destination.address.to_checksum(),
-                exit = stats.destination.id,
+                exit = stats.destination.connect_id,
             ));
         }
         1 => {
@@ -691,7 +691,7 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
                 "{node_addr}(me) -{title}-VIA--1HOP--> {addr}({exit})\n",
                 node_addr = stats.node_address.to_checksum(),
                 addr = stats.destination.address.to_checksum(),
-                exit = stats.destination.id,
+                exit = stats.destination.connect_id,
             ));
         }
         nr => {
@@ -699,7 +699,7 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
                 "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n",
                 node_addr = stats.node_address.to_checksum(),
                 addr = stats.destination.address.to_checksum(),
-                exit = stats.destination.id,
+                exit = stats.destination.connect_id,
             ));
         }
     }
