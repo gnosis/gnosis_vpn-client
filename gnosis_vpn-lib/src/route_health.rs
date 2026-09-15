@@ -1,8 +1,4 @@
-//! Per-destination routability: can the HOPR channel graph carry a session to this exit?
-//!
-//! Core walks the graph periodically and feeds the answer in through `set_routable`. Exit
-//! health lives in [`crate::probe`]; the only exit-side fact tracked here is an incompatible API
-//! version, which latches the route as `Unrecoverable` until a later version check clears it.
+//! Per-destination routability from Core's graph walks; exit health lives in [`crate::probe`].
 use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};

@@ -414,8 +414,7 @@ impl Hopr {
         Ok(peers)
     }
 
-    /// Walks the channel graph with the path planner's own selector: routable iff a session to
-    /// `dest` over `routing.hop_count()` hops could be planned right now.
+    /// Routable iff the path planner's own selector finds a path to `dest` over `routing.hop_count()` hops.
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub fn is_routable(&self, dest: Address, routing: HopRouting) -> Result<bool, HoprError> {
         let dest_key = self

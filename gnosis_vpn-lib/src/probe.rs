@@ -1,9 +1,4 @@
-//! One long-lived TCP bridge session to a destination, probed on three independent cadences:
-//! API version, ping latency and exit load. The same session carries WireGuard registration.
-//!
-//! [`Probe`] is Core's mirror of the background task: pure state fed by [`Event`]s, plus the
-//! task's cancellation handle. The task itself never stops on its own; after
-//! `REOPEN_AFTER_FAILURES` consecutive failed checks it closes the session and opens a new one.
+//! One long-lived bridge session per daemon, probed for version, latency and load; connections register over it.
 use edgli::FlowControlConfig;
 use edgli::hopr_lib::HoprSessionClientConfig;
 use rand::prelude::*;
@@ -60,7 +55,7 @@ fn reopen_backoff(attempt: u32) -> Duration {
         .min(REOPEN_BACKOFF_MAX)
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Check {
     Version,
     Ping,
@@ -261,10 +256,6 @@ impl Drop for Probe {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Background task
-// ---------------------------------------------------------------------------
-
 async fn run_probe(
     hopr: Arc<Hopr>,
     destination: Destination,
@@ -322,8 +313,7 @@ struct Checker {
 }
 
 impl Checker {
-    /// Initial version → ping → load, then each check on its own jittered timer.
-    /// Returns the error that broke the session once failures pile up.
+    /// Initial version → ping → load, then jittered timers; returns the error that broke the session.
     async fn run_until_broken(&self, intervals: &HealthCheckIntervals) -> String {
         let mut failures = 0;
         for check in [Check::Version, Check::Ping, Check::Load] {
@@ -412,10 +402,7 @@ impl Checker {
     }
 }
 
-/// RAII guard around the probe's bridge session.
-///
-/// The happy path awaits [`ProbeSession::close`]; cancellation of the surrounding task falls
-/// through to `Drop`, which detaches a close task so the exit port is not leaked.
+/// RAII guard: cancellation falls through to `Drop`, which detaches a close so the exit port is not leaked.
 struct ProbeSession {
     hopr: Arc<Hopr>,
     meta: SessionClientMetadata,

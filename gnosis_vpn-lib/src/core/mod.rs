@@ -766,8 +766,7 @@ impl Core {
                 } else {
                     tracing::warn!(%evt, ?self.phase, "received disconnection event for unknown connection");
                 }
-                // Reconnect early once the old key is unregistered; earlier would swap the probe
-                // session the down runner is still using.
+                // Not earlier: a probe swap would close the session the down runner still unregisters over.
                 if matches!(evt, connection::down::Event::CloseBridge) {
                     self.act_on_target(results_sender);
                 }
