@@ -86,10 +86,7 @@ pub async fn generate(
     cfg.protocol.probe.interval = Duration::from_secs(3);
     cfg.protocol.probe.recheck_threshold = Duration::from_secs(3);
     cfg.protocol.path_planner = edgli::latency_path_planner_config(path_planner_min_ack_rate);
-    // Re-enables the latency pruning edgli's preset disables (floor 0), trading relayer retention.
-    cfg.protocol.path_planner.min_paths_anonymity_floor =
-        crate::connection::options::DEFAULT_PATH_PLANNER_MIN_PATHS_ANONYMITY_FLOOR;
-    // Layer user overrides on top; unset fields keep the preset (or the baseline above).
+    // Layer user overrides on top of the latency preset; unset fields keep the preset value.
     path_planner.apply(&mut cfg.protocol.path_planner);
     Ok(cfg)
 }
@@ -111,11 +108,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_anonymity_floor_is_three() {
+    async fn default_keeps_the_preset_floor() {
         let cfg = generate(&safe_module(), 0.1, PathPlannerOptions::default())
             .await
             .expect("generate should succeed");
-        assert_eq!(cfg.protocol.path_planner.min_paths_anonymity_floor, 3);
+        assert_eq!(cfg.protocol.path_planner.min_paths_anonymity_floor, 0);
     }
 
     #[tokio::test]

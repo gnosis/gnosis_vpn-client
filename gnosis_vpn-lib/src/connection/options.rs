@@ -1,6 +1,4 @@
 pub const DEFAULT_PATH_PLANNER_MIN_ACK_RATE: f64 = 0.1;
-/// Caps retained paths at 3, overriding the edgli preset's 0 (which keeps every path).
-pub const DEFAULT_PATH_PLANNER_MIN_PATHS_ANONYMITY_FLOOR: usize = 3;
 
 use bytesize::ByteSize;
 use edgli::PathPlannerConfig;

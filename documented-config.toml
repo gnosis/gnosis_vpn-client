@@ -106,7 +106,8 @@ path    = { hops = 1 }
 # min_paths_anonymity_floor - keep at most this many candidate paths, dropping the
 # slowest first and preferring distinct first relayers; 0 keeps every path. Fewer
 # paths means less relayer diversity, which weakens detection of a dead return path.
-# min_paths_anonymity_floor = 3
+# The client preset uses 0; the installer-shipped configs set 3.
+# min_paths_anonymity_floor = 0
 # latency_halflife - path latency at which the latency weight factor equals 0.5;
 # larger values make selection less latency-sensitive (humantime).
 # latency_halflife = "100ms"
