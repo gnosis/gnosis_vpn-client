@@ -34,9 +34,7 @@ pub struct Options {
     pub path_planner: PathPlannerOptions,
 }
 
-/// Optional overrides mirroring [`PathPlannerConfig`]; only the fields set here override the preset.
-///
-/// `min_ack_rate` is deliberately absent — it stays the flat `path_planner_min_ack_rate` key.
+/// Optional overrides mirroring [`PathPlannerConfig`]: only set fields override the preset; `min_ack_rate` stays flat.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct PathPlannerOptions {
     /// Maximum number of entries in the path cache.
