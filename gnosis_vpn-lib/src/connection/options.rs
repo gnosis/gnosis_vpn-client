@@ -1,7 +1,5 @@
 pub const DEFAULT_PATH_PLANNER_MIN_ACK_RATE: f64 = 0.1;
-/// Client baseline for the path-planner anonymity floor, applied when
-/// `[connection.path_planner].min_paths_anonymity_floor` is unset. Overrides the
-/// edge-client preset so a small floor is kept by default; 0 would disable pruning.
+/// Caps retained paths at 3, overriding the edgli preset's 0 (which keeps every path).
 pub const DEFAULT_PATH_PLANNER_MIN_PATHS_ANONYMITY_FLOOR: usize = 3;
 
 use bytesize::ByteSize;
@@ -32,17 +30,13 @@ pub struct Options {
     /// Minimum acknowledgement rate [0.0, 1.0] a path must sustain to be considered by
     /// the latency path planner. Paths below this threshold are skipped.
     pub path_planner_min_ack_rate: f64,
-    /// Overrides for the remaining HOPR path-planner knobs, layered on top of the
-    /// edge-client latency preset. Empty by default (preset used unchanged).
+    /// Overrides layered on the edge-client latency preset; empty leaves the preset unchanged.
     pub path_planner: PathPlannerOptions,
 }
 
-/// Optional overrides for the HOPR path planner, mirroring [`PathPlannerConfig`].
+/// Optional overrides mirroring [`PathPlannerConfig`]; only the fields set here override the preset.
 ///
-/// The edge-client ships a latency-tuned preset (`edgli::latency_path_planner_config`);
-/// only the fields set here override it, leaving every other knob at the preset value.
-/// `min_ack_rate` is configured separately via the top-level `path_planner_min_ack_rate`
-/// key and is intentionally not repeated here.
+/// `min_ack_rate` is deliberately absent — it stays the flat `path_planner_min_ack_rate` key.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct PathPlannerOptions {
     /// Maximum number of entries in the path cache.
@@ -58,14 +52,12 @@ pub struct PathPlannerOptions {
     /// Penalty multiplier for edges lacking probe-based quality observations. Must be in [0.0, 1.0].
     #[serde(default, deserialize_with = "validate_unit_interval_opt")]
     pub edge_penalty: Option<f64>,
-    /// Candidate count below which no latency-based pruning occurs (the anonymity floor).
-    /// `min(found_count, floor)` semantics; 0 disables pruning.
+    /// Cap on retained candidate paths, slowest dropped first; 0 keeps every path.
     pub min_paths_anonymity_floor: Option<usize>,
     /// Total path latency at which the latency factor equals 0.5 (humantime).
     #[serde(default, with = "humantime_serde::option")]
     pub latency_halflife: Option<Duration>,
-    /// Reference channel balance scaling the capacity factor, in wxHOPR base units.
-    /// Limited to `u64` here (TOML integers are 64-bit); widened to the node's `u128` on apply.
+    /// Capacity saturation point in single-hop tickets; `u64` because TOML integers are, widened on apply.
     pub capacity_reference: Option<u64>,
     /// Exponent applied to return-path weights before sampling. Must be in (0.0, 1.0].
     #[serde(default, deserialize_with = "validate_weight_temper_opt")]

@@ -89,14 +89,13 @@ path    = { hops = 1 }
 # path_planner_min_ack_rate = 0.1
 
 # [connection.path_planner] - fine-grained overrides for the HOPR path planner.
-# Every key is optional and layers on top of the edge-client's latency-tuned preset;
-# an unset key keeps the preset value (shown below as the default). min_ack_rate is
+# Every key is optional; an unset key keeps the value shown below. min_ack_rate is
 # configured via path_planner_min_ack_rate above and is not repeated here.
 # [connection.path_planner]
 # max_cache_capacity - maximum number of (source, destination, hops) entries cached.
 # max_cache_capacity = 10000
-# cache_ttl - time-to-live for a cached path list; bounds how stale frozen candidate
-# weights can be before a lazy recompute (humantime string).
+# cache_ttl - how long a cached path list, and the weights computed with it, stay
+# valid before the next lookup recomputes them (humantime string).
 # cache_ttl = "10s"
 # refresh_period - period between proactive background cache-refresh sweeps (humantime).
 # refresh_period = "5s"
@@ -104,15 +103,15 @@ path    = { hops = 1 }
 # max_cached_paths = 50
 # edge_penalty - multiplier [0.0, 1.0] down-weighting edges without probe observations.
 # edge_penalty = 0.5
-# min_paths_anonymity_floor - candidate count below which no latency pruning happens
-# (the anonymity floor); min(found, floor) semantics. Defaults to 3; set 0 to disable
-# pruning entirely (keep every relayer), or raise it to keep more candidate paths.
+# min_paths_anonymity_floor - keep at most this many candidate paths, dropping the
+# slowest first and preferring distinct first relayers; 0 keeps every path. Fewer
+# paths means less relayer diversity, which weakens detection of a dead return path.
 # min_paths_anonymity_floor = 3
 # latency_halflife - path latency at which the latency weight factor equals 0.5;
 # larger values make selection less latency-sensitive (humantime).
 # latency_halflife = "100ms"
-# capacity_reference - reference channel balance (wxHOPR base units) scaling the
-# capacity factor; the factor saturates near this value.
+# capacity_reference - channel capacity, counted in single-hop tickets, at which the
+# capacity factor saturates; a path counts as its thinnest channel.
 # capacity_reference = 10000000
 # return_path_weight_temper - exponent (0.0, 1.0] flattening the return-path sampling
 # distribution; 1.0 samples by raw path value, smaller values tend toward uniform.
