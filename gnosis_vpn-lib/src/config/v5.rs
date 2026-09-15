@@ -118,7 +118,6 @@ fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstrea
 
 impl From<Option<Connection>> for options::Options {
     fn from(conn: Option<Connection>) -> Self {
-<<<<<<< HEAD
         let connection = conn.as_ref();
         let bridge_target = connection
             .and_then(|c| c.bridge.as_ref())
@@ -191,24 +190,7 @@ impl From<Option<Connection>> for options::Options {
             lan_lockdown: false,
             probe_local_addresses: false,
             path_planner_min_ack_rate: options::DEFAULT_PATH_PLANNER_MIN_ACK_RATE,
-=======
-        let conn = conn.as_ref();
-        super::v7::Connection {
-            http_timeout: conn.and_then(|c| c.http_timeout),
-            bridge: conn.and_then(|c| c.bridge.clone()),
-            wg: conn.and_then(|c| c.wg.clone()),
-            ping: conn.and_then(|c| c.ping.clone()),
-            surb_balancing: Some(to_surb_balancing_config(
-                conn.and_then(|c| c.buffer.clone()),
-                conn.and_then(|c| c.max_surb_upstream.clone()),
-            )),
-            pix: None, // PIX is required from v6 on; legacy configs inherit the defaults, they do not opt out
-            health_check_intervals: conn.and_then(|c| c.health_check_intervals.clone()),
-            lan_lockdown: None,
-            probe_local_addresses: None,
-            path_planner_min_ack_rate: None,
-            path_planner: None,
->>>>>>> 0fef0a1 (feat(config): expose path-planner overrides via [connection.path_planner] (#799))
+            path_planner: options::PathPlannerOptions::default(),
         }
     }
 }
