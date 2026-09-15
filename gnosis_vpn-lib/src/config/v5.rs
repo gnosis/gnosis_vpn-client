@@ -98,6 +98,7 @@ impl From<Option<Connection>> for super::v7::Connection {
             lan_lockdown: None,
             probe_local_addresses: None,
             path_planner_min_ack_rate: None,
+            path_planner: None,
         }
     }
 }

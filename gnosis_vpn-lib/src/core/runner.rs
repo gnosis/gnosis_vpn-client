@@ -230,6 +230,7 @@ pub(crate) async fn hopr(
     worker_params: WorkerParams,
     blokli_config: BlokliConfig,
     path_planner_min_ack_rate: f64,
+    path_planner: connection::options::PathPlannerOptions,
     probe_local_addresses: bool,
     safe_module: &SafeModule,
     results_sender: mpsc::Sender<Results>,
@@ -238,6 +239,7 @@ pub(crate) async fn hopr(
         worker_params,
         blokli_config,
         path_planner_min_ack_rate,
+        path_planner,
         probe_local_addresses,
         safe_module,
         &results_sender,
@@ -570,12 +572,15 @@ async fn run_hopr(
     worker_params: WorkerParams,
     blokli_config: BlokliConfig,
     path_planner_min_ack_rate: f64,
+    path_planner: connection::options::PathPlannerOptions,
     probe_local_addresses: bool,
     safe_module: &SafeModule,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<Hopr, Error> {
     tracing::debug!("starting hopr runner");
-    let cfg = worker_params.to_config(safe_module, path_planner_min_ack_rate).await?;
+    let cfg = worker_params
+        .to_config(safe_module, path_planner_min_ack_rate, path_planner)
+        .await?;
     let keys = worker_params.calc_keys().await?;
     let blokli_endpoint = worker_params.blokli_endpoint(blokli_config.request_timeout);
     let sender = results_sender.clone();
