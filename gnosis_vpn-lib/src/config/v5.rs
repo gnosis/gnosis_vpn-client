@@ -190,6 +190,7 @@ impl From<Option<Connection>> for options::Options {
             lan_lockdown: false,
             probe_local_addresses: false,
             path_planner_min_ack_rate: options::DEFAULT_PATH_PLANNER_MIN_ACK_RATE,
+            path_planner: options::PathPlannerOptions::default(),
         }
     }
 }
