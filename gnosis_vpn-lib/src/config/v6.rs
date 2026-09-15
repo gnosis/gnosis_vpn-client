@@ -1297,7 +1297,7 @@ success_probabilty = 0.95
         );
     }
 
-    /// `[connection]` is shared with v7, so a v6 file may carry the path-planner overrides too.
+    /// Pins that `wrong_keys` accepts every documented path-planner override.
     #[test]
     fn v6_file_still_accepts_the_path_planner_overrides() {
         let table = r#####"
