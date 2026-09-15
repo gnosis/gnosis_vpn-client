@@ -90,7 +90,7 @@ let
     ];
 
   # Native Linux builds: host == target, so host's pkgsStatic is correct.
-  linuxExtraBuildInputs = lib.optionals pkgs.stdenv.isLinux (
+  linuxExtraBuildInputs = lib.optionals pkgs.stdenv.hostPlatform.isLinux (
     mkLinuxStaticBuildInputs pkgs.pkgsStatic
   );
 
@@ -405,7 +405,7 @@ in
     src = sources.checks;
   };
 }
-// lib.optionalAttrs pkgs.stdenv.isDarwin {
+// lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
   # macOS — aarch64 (only available on Darwin hosts; cctools is Darwin-only)
   binary-gnosis_vpn-aarch64-darwin = withDarwinStaticFlags (
     withTokioUnstable (
