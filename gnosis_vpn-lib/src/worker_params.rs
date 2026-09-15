@@ -182,10 +182,11 @@ impl WorkerParams {
         &self,
         safe_module: &SafeModule,
         path_planner_min_ack_rate: f64,
+        path_planner: crate::connection::options::PathPlannerOptions,
     ) -> Result<HoprLibConfig, Error> {
         match self.config_mode.clone() {
             ConfigFileMode::Manual(path) => config::from_path(path).await.map_err(Error::from),
-            ConfigFileMode::Generated => config::generate(safe_module, path_planner_min_ack_rate)
+            ConfigFileMode::Generated => config::generate(safe_module, path_planner_min_ack_rate, path_planner)
                 .await
                 .map_err(Error::from),
         }
