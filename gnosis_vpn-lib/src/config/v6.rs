@@ -43,6 +43,8 @@ pub(super) struct Connection {
     pub(super) probe_local_addresses: Option<bool>,
     #[serde(default, deserialize_with = "validate_path_planner_min_ack_rate")]
     pub(super) path_planner_min_ack_rate: Option<f64>,
+    #[serde(default)]
+    pub(super) path_planner: Option<options::PathPlannerOptions>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -332,6 +334,7 @@ impl From<Option<Connection>> for options::Options {
             path_planner_min_ack_rate: connection
                 .and_then(|c| c.path_planner_min_ack_rate)
                 .unwrap_or(options::DEFAULT_PATH_PLANNER_MIN_ACK_RATE),
+            path_planner: connection.and_then(|c| c.path_planner.clone()).unwrap_or_default(),
         }
     }
 }
@@ -1026,6 +1029,85 @@ path_planner_min_ack_rate = {bad}
     }
 
     #[test]
+    fn path_planner_defaults_to_empty_overrides() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(
+            result.connection.path_planner,
+            crate::connection::options::PathPlannerOptions::default()
+        );
+    }
+
+    #[test]
+    fn path_planner_reads_overrides_from_connection() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.path_planner]
+min_paths_anonymity_floor = 4
+latency_halflife = "50ms"
+edge_penalty = 0.25
+capacity_reference = 20000000
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let pp = &result.connection.path_planner;
+        assert_eq!(pp.min_paths_anonymity_floor, Some(4));
+        assert_eq!(pp.latency_halflife, Some(Duration::from_millis(50)));
+        assert_eq!(pp.edge_penalty, Some(0.25));
+        assert_eq!(pp.capacity_reference, Some(20_000_000));
+        assert_eq!(pp.return_path_exploration, None);
+    }
+
+    #[test]
+    fn path_planner_rejects_out_of_range() {
+        for line in &[
+            "edge_penalty = 1.5",
+            "edge_penalty = -0.1",
+            "return_path_weight_temper = 0.0",
+            "return_path_weight_temper = 1.5",
+            "return_path_exploration = 1.1",
+        ] {
+            let toml = format!(
+                r#####"
+version = 6
+
+[connection.path_planner]
+{line}
+"#####
+            );
+            let result = toml::from_str::<Config>(&toml);
+            assert!(result.is_err(), "expected rejection for `{line}`");
+        }
+    }
+
+    #[test]
+    fn path_planner_unknown_key_is_flagged() {
+        let table = r#####"
+version = 6
+
+[connection.path_planner]
+min_paths_anonymity_floor = 4
+nonsense = 1
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), vec!["connection.path_planner.nonsense".to_string()]);
+    }
+
+    #[test]
     fn strategy_channel_capacity_is_parsed() {
         let cfg = parse(
             r#####"
@@ -1215,8 +1297,6 @@ success_probabilty = 0.95
         );
     }
 
-<<<<<<< HEAD
-=======
     /// `[connection]` is shared with v7, so a v6 file may carry the path-planner overrides too.
     #[test]
     fn v6_file_still_accepts_the_path_planner_overrides() {
@@ -1236,8 +1316,6 @@ latency_halflife = "50ms"
         assert!(wrong_keys(&table).is_empty());
     }
 
-    /// PIX is v7 schema, tested there; this only pins that a v6 file may still carry it.
->>>>>>> 0fef0a1 (feat(config): expose path-planner overrides via [connection.path_planner] (#799))
     #[test]
     fn strategy_sizing_mode_table_form_deterministic_is_known() {
         let table = r#####"
