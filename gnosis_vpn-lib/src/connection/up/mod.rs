@@ -55,7 +55,7 @@ pub enum Progress {
 }
 
 /// How long a SURB balancer target change takes to fully converge.
-const SURB_RAMP_DURATION: Duration = Duration::from_secs(60);
+const SURB_RAMP_DURATION: Duration = Duration::from_secs(20);
 
 /// Caps ramp-tick elapsed time so a backlog of failed pushes can't cause one big jump; a few sample intervals so a normal tick is never clamped.
 const MAX_RAMP_TICK_ELAPSED: Duration = crate::wg_tunnel::STATS_SAMPLE_INTERVAL.saturating_mul(3);
