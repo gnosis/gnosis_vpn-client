@@ -866,7 +866,7 @@ impl Core {
                     self.phase = Phase::Connected(conn);
                 }
                 phase => {
-                    tracing::debug!(?phase, "received surb ramp tick outside a connected phase");
+                    tracing::warn!(?phase, "received surb ramp tick outside a connected phase");
                 }
             },
 
