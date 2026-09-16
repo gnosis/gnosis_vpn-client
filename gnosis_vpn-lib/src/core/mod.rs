@@ -768,16 +768,12 @@ impl Core {
                     // A spliced session has no local listener to poll; the pump task
                     // reports its own death via WgPumpExited instead of a monitor.
                     self.spawn_tunnel_ping_probe(results_sender);
-<<<<<<< HEAD
-                    self.cancel_peers.cancel();
-                    self.cancel_peers = self.cancel_on_shutdown.child_token();
-                    self.spawn_peers(results_sender, Duration::from_secs(10));
-=======
                     if conn.surb_target.is_some() {
                         self.spawn_surb_ramp_ticker(results_sender);
                     }
-                    self.set_peers_interval(PEERS_EAGER_INTERVAL);
->>>>>>> 34d9734 (fix(connection): make SURB ramping configurable (GNO-780) (#810))
+                    self.cancel_peers.cancel();
+                    self.cancel_peers = self.cancel_on_shutdown.child_token();
+                    self.spawn_peers(results_sender, Duration::from_secs(10));
                 }
                 (Ok(_), phase) => {
                     tracing::warn!(?phase, "unawaited connection established successfully");

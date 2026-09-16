@@ -100,15 +100,8 @@ pub(crate) enum Results {
     },
     /// A new WireGuard telemetry sample from the running pump.
     WgStatsSample(crate::wg_tunnel::TunnelStatsSample),
-<<<<<<< HEAD
-=======
     /// The SURB ramp ticker fired; Core nudges the active session's setpoint toward its target.
     SurbRampTick,
-    /// A health check timer fired; Core resolves the destination as it is now and runs the probe.
-    HealthCheckDue {
-        key: ExitKey,
-    },
->>>>>>> 34d9734 (fix(connection): make SURB ramping configurable (GNO-780) (#810))
     HealthCheck {
         id: String,
         outcome: HealthCheckOutcome,

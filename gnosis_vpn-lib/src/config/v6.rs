@@ -100,11 +100,20 @@ pub(super) struct SessionSurbConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct SurbRampConfig {
+    #[serde(default, with = "humantime_serde::option")]
+    interval: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    duration: Option<Duration>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct SurbBalancingConfig {
     ping: Option<SessionSurbConfig>,
     main: Option<SessionSurbConfig>,
     bridge: Option<SessionSurbConfig>,
     health_check: Option<SessionSurbConfig>,
+    ramp: Option<SurbRampConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -302,6 +311,18 @@ impl From<Option<Connection>> for options::Options {
             main: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.main.clone()), def.main),
             bridge: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.bridge.clone()), def.bridge),
             health_check: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.health_check.clone()), def.health_check),
+            ramp: options::SurbRampOptions {
+                interval: surb_cfg
+                    .as_ref()
+                    .and_then(|s| s.ramp.as_ref())
+                    .and_then(|r| r.interval)
+                    .unwrap_or(def.ramp.interval),
+                duration: surb_cfg
+                    .as_ref()
+                    .and_then(|s| s.ramp.as_ref())
+                    .and_then(|r| r.duration)
+                    .unwrap_or(def.ramp.duration),
+            },
         };
         let http_timeout = connection
             .and_then(|c| c.http_timeout)
@@ -714,6 +735,10 @@ impl TryFrom<Config> for config::Config {
         let connection: options::Options = value.connection.into();
         if connection.surb_balancing.ping.enabled != connection.surb_balancing.main.enabled {
             return Err(config::Error::SurbBalancingMismatch);
+        }
+        let ramp = connection.surb_balancing.ramp;
+        if ramp.interval.is_zero() || ramp.duration.is_zero() {
+            return Err(config::Error::SurbRampZero);
         }
         let destinations = convert_destinations(value.destinations)?;
         let wireguard = value.wireguard.into();
@@ -1327,12 +1352,26 @@ latency_halflife = "50ms"
         assert!(wrong_keys(&table).is_empty());
     }
 
-<<<<<<< HEAD
-=======
-    /// `[connection]` is shared with v7, so a v6 file may carry the SURB ramp pacing too.
     #[test]
-    fn v6_file_still_accepts_the_surb_ramp() {
-        let table = r#####"
+    fn surb_ramp_defaults() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let ramp = result.connection.surb_balancing.ramp;
+        assert_eq!(ramp.interval, Duration::from_secs(1));
+        assert_eq!(ramp.duration, Duration::from_secs(20));
+    }
+
+    #[test]
+    fn surb_ramp_reads_from_connection() {
+        let cfg = parse(
+            r#####"
 version = 6
 
 [destinations.Germany]
@@ -1341,15 +1380,51 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 [connection.surb_balancing.ramp]
 interval = "500ms"
 duration = "10s"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let ramp = result.connection.surb_balancing.ramp;
+        assert_eq!(ramp.interval, Duration::from_millis(500));
+        assert_eq!(ramp.duration, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn surb_ramp_rejects_zero() {
+        for line in &["interval = \"0s\"", "duration = \"0s\""] {
+            let cfg = parse(&format!(
+                r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.surb_balancing.ramp]
+{line}
+"#####
+            ));
+            let result: Result<crate::config::Config, _> = cfg.try_into();
+            assert!(result.is_err(), "expected rejection for `{line}`");
+        }
+    }
+
+    #[test]
+    fn surb_ramp_unknown_key_is_flagged() {
+        let table = r#####"
+version = 6
+
+[connection.surb_balancing.ramp]
+interval = "1s"
+nonsense = 1
 "#####
             .parse::<toml::Table>()
             .expect("valid TOML");
 
-        assert!(wrong_keys(&table).is_empty());
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["connection.surb_balancing.ramp.nonsense".to_string()]
+        );
     }
 
-    /// PIX is v7 schema, tested there; this only pins that a v6 file may still carry it.
->>>>>>> 34d9734 (fix(connection): make SURB ramping configurable (GNO-780) (#810))
     #[test]
     fn strategy_sizing_mode_table_form_deterministic_is_known() {
         let table = r#####"
