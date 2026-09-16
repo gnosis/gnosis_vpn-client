@@ -292,9 +292,14 @@ pub(crate) async fn peers(
     }
 }
 
+/// Extra ramp ticks past the configured duration, so pushes that failed and retried can still land.
+const RAMP_RETRY_SLACK_TICKS: u64 = 3;
+
 /// Ticks the SURB ramp at its configured interval; bounded to the ramp duration plus slack for retried pushes, so an idle connection isn't ticked forever.
 pub(crate) async fn surb_ramp_loop(ramp: connection::options::SurbRampOptions, sender: mpsc::Sender<Results>) {
-    let ticks = (ramp.duration.as_secs_f64() / ramp.interval.as_secs_f64()).ceil() as u32 + 3;
+    // Saturating: the cast tops out at u64::MAX for an extreme interval/duration ratio and the add must not wrap past it.
+    let ticks = (ramp.duration.as_secs_f64() / ramp.interval.as_secs_f64()).ceil() as u64;
+    let ticks = ticks.saturating_add(RAMP_RETRY_SLACK_TICKS);
     tracing::debug!(?ramp, ticks, "starting surb ramp ticker");
     for _ in 0..ticks {
         time::sleep(ramp.interval).await;

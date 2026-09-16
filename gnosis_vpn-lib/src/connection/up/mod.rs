@@ -70,7 +70,8 @@ pub struct SurbSlewRate {
 impl SurbSlewRate {
     /// Rate that closes the gap between `applied` and `target` over `duration`.
     fn to_cover(applied: SurbBalancerConfig, target: SurbBalancerConfig, duration: Duration) -> Self {
-        let secs = duration.as_secs_f64().max(1.0);
+        // No floor: config rejects a zero duration, and the ticker only runs for this exact duration.
+        let secs = duration.as_secs_f64();
         let buffer_gap = applied.target_surb_buffer_size.abs_diff(target.target_surb_buffer_size);
         let rate_gap = applied.max_surbs_per_sec.abs_diff(target.max_surbs_per_sec);
         Self {
@@ -475,7 +476,19 @@ mod surb_ramp_tests {
 
     #[test]
     fn ramp_converges_in_configured_duration_at_configured_interval() {
-        let ramp = SurbRampOptions::default();
+        assert_ramp_converges(SurbRampOptions::default());
+    }
+
+    /// A sub-second ramp must converge within its own tick budget, not one padded to a full second.
+    #[test]
+    fn ramp_converges_for_sub_second_duration() {
+        assert_ramp_converges(SurbRampOptions {
+            interval: Duration::from_millis(50),
+            duration: Duration::from_millis(100),
+        });
+    }
+
+    fn assert_ramp_converges(ramp: SurbRampOptions) {
         let target = config(600, 60);
         let rate = SurbSlewRate::to_cover(config(0, 0), target, ramp.duration);
         let cap = ramp.interval.saturating_mul(RAMP_TICK_CAP_INTERVALS);
