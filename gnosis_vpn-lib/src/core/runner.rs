@@ -108,6 +108,8 @@ pub(crate) enum Results {
     },
     /// A new WireGuard telemetry sample from the running pump.
     WgStatsSample(crate::wg_tunnel::TunnelStatsSample),
+    /// The SURB ramp ticker fired; Core nudges the active session's setpoint toward its target.
+    SurbRampTick,
     /// A health check timer fired; Core resolves the destination as it is now and runs the probe.
     HealthCheckDue {
         key: ExitKey,
@@ -286,6 +288,23 @@ pub(crate) async fn peers(
         tokio::select! {
             _ = time::sleep(delay) => {}
             _ = interval.changed() => {}
+        }
+    }
+}
+
+/// Extra ramp ticks past the configured duration, so pushes that failed and retried can still land.
+const RAMP_RETRY_SLACK_TICKS: u64 = 3;
+
+/// Ticks the SURB ramp at its configured interval; bounded to the ramp duration plus slack for retried pushes, so an idle connection isn't ticked forever.
+pub(crate) async fn surb_ramp_loop(ramp: connection::options::SurbRampOptions, sender: mpsc::Sender<Results>) {
+    // Saturating: the cast tops out at u64::MAX for an extreme interval/duration ratio and the add must not wrap past it.
+    let ticks = (ramp.duration.as_secs_f64() / ramp.interval.as_secs_f64()).ceil() as u64;
+    let ticks = ticks.saturating_add(RAMP_RETRY_SLACK_TICKS);
+    tracing::debug!(?ramp, ticks, "starting surb ramp ticker");
+    for _ in 0..ticks {
+        time::sleep(ramp.interval).await;
+        if sender.send(Results::SurbRampTick).await.is_err() {
+            break;
         }
     }
 }
@@ -734,6 +753,7 @@ impl Display for Results {
             Results::WgStatsSample(sample) => {
                 write!(f, "WgStatsSample: tx={} rx={}", sample.tx_bytes, sample.rx_bytes)
             }
+            Results::SurbRampTick => write!(f, "SurbRampTick"),
             Results::QuerySafe { res } => match res {
                 Ok(Some(_)) => write!(f, "QuerySafe: Safe found"),
                 Ok(None) => write!(f, "QuerySafe: No safe found"),
