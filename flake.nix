@@ -27,7 +27,7 @@
     };
 
     nix-lib = {
-      url = "github:hoprnet/nix-lib/6e2c9a32399eec2b9dfa898d71150c8aec68cbd6";
+      url = "github:hoprnet/nix-lib/1409f8caa2666afcf575dd5e05d5a8c521f5c1d6";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.crane.follows = "crane";
       inputs.rust-overlay.follows = "rust-overlay";
@@ -167,7 +167,7 @@
             inherit pre-commit-check;
             default = gnosisvpnPackages.binary-gnosis_vpn;
           }
-          // lib.optionalAttrs pkgs.stdenv.isDarwin {
+          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
             inherit (gnosisvpnPackages)
               binary-gnosis_vpn-aarch64-darwin
               binary-gnosis_vpn-aarch64-darwin-dev
@@ -194,7 +194,7 @@
 
               VERGEN_GIT_SHA = toString (self.shortRev or self.dirtyShortRev);
             }
-            // lib.optionalAttrs pkgs.stdenv.isLinux {
+            // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
               # Point mnl-sys and nftnl-sys directly to static library dirs,
               # bypassing pkg-config which can fail in cross-compilation contexts
               LIBMNL_LIB_DIR = "${pkgs.pkgsStatic.libmnl}/lib";

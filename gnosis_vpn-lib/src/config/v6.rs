@@ -85,6 +85,30 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     {
                         continue;
                     }
+                    if k == "path_planner" {
+                        if let Some(pp) = v.as_table() {
+                            for (k2, _) in pp.iter() {
+                                if matches!(
+                                    k2.as_str(),
+                                    "max_cache_capacity"
+                                        | "cache_ttl"
+                                        | "refresh_period"
+                                        | "max_cached_paths"
+                                        | "edge_penalty"
+                                        | "min_paths_anonymity_floor"
+                                        | "latency_halflife"
+                                        | "capacity_reference"
+                                        | "return_path_weight_temper"
+                                        | "return_path_exploration"
+                                        | "max_plausible_loopback_rtt"
+                                ) {
+                                    continue;
+                                }
+                                wrong.push(format!("connection.path_planner.{k2}"));
+                            }
+                        }
+                        continue;
+                    }
                     if k == "bridge" || k == "wg" {
                         if let Some(prot) = v.as_table() {
                             for (k2, _) in prot.iter() {
@@ -121,6 +145,17 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                                 continue;
                                             }
                                             wrong.push(format!("connection.surb_balancing.{k2}.{k3}"));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                if k2 == "ramp" {
+                                    if let Some(ramp) = v2.as_table() {
+                                        for (k3, _) in ramp.iter() {
+                                            if k3 == "interval" || k3 == "duration" {
+                                                continue;
+                                            }
+                                            wrong.push(format!("connection.surb_balancing.ramp.{k3}"));
                                         }
                                     }
                                     continue;
@@ -396,6 +431,44 @@ gnosis_vpn_server = "172.30.0.1:8000"
             wrong_keys(&table),
             vec!["destinations.Germany.gnosis_vpn_server".to_string()]
         );
+    }
+
+    /// `[connection]` is shared with v7, so a v6 file may carry the path-planner overrides too.
+    #[test]
+    fn v6_file_still_accepts_the_path_planner_overrides() {
+        let table = r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.path_planner]
+min_paths_anonymity_floor = 4
+latency_halflife = "50ms"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert!(wrong_keys(&table).is_empty());
+    }
+
+    /// `[connection]` is shared with v7, so a v6 file may carry the SURB ramp pacing too.
+    #[test]
+    fn v6_file_still_accepts_the_surb_ramp() {
+        let table = r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.surb_balancing.ramp]
+interval = "500ms"
+duration = "10s"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert!(wrong_keys(&table).is_empty());
     }
 
     /// PIX is v7 schema, tested there; this only pins that a v6 file may still carry it.

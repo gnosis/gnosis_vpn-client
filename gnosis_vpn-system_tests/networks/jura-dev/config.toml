@@ -19,3 +19,7 @@ max_surb_upstream = "12000 Kb/s"
 
 [connection.surb_balancing.main]
 max_surb_upstream = "12000 Kb/s"
+
+[connection.path_planner]
+# Prune to the 3 fastest candidate paths; the client preset keeps every relayer (0).
+min_paths_anonymity_floor = 3

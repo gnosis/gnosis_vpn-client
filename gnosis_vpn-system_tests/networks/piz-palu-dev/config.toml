@@ -20,3 +20,7 @@ max_deposit_retries       = 3
 max_deposit_tracking_time = "60s"
 max_ssa_allocation        = "0.000000001 wxHOPR"
 price_per_byte            = "0.000000000000000001 wxHOPR"
+
+[connection.path_planner]
+# Prune to the 3 fastest candidate paths; the client preset keeps every relayer (0).
+min_paths_anonymity_floor = 3

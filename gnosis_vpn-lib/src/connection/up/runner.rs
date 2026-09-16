@@ -193,8 +193,9 @@ impl Runner {
         match (ping_surb_management, main_surb.management) {
             (Some(applied), Some(target)) => {
                 // Not in the listener registry, so the target is tracked on `Up` and slewed toward gradually by `core`, instead of jumping straight to it here (which floods the response buffer at startup).
+                let ramp = self.options.surb_balancing.ramp;
                 let _ = results_sender
-                    .send(progress(Progress::SetSurbTarget { applied, target }))
+                    .send(progress(Progress::SetSurbTarget { applied, target, ramp }))
                     .await;
             }
             (None, Some(target)) => {
@@ -204,10 +205,12 @@ impl Runner {
                     .update_surb_balancer_config(target)
                     .map_err(|e| HoprError::SessionNotAdjusted(e.to_string()))?;
                 // Already converged, so the ramp is a no-op - this only records the setpoint for nerd-stats.
+                let ramp = self.options.surb_balancing.ramp;
                 let _ = results_sender
                     .send(progress(Progress::SetSurbTarget {
                         applied: target,
                         target,
+                        ramp,
                     }))
                     .await;
             }

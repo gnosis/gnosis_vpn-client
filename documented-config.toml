@@ -88,6 +88,42 @@ path    = { hops = 1 }
 # skipped. Lower values accept noisier paths; higher values are more selective.
 # path_planner_min_ack_rate = 0.1
 
+# [connection.path_planner] - fine-grained overrides for the HOPR path planner.
+# Every key is optional; an unset key keeps the value shown below. min_ack_rate is
+# configured via path_planner_min_ack_rate above and is not repeated here.
+# [connection.path_planner]
+# max_cache_capacity - maximum number of (source, destination, hops) entries cached.
+# max_cache_capacity = 10000
+# cache_ttl - how long a cached path list, and the weights computed with it, stay
+# valid before the next lookup recomputes them (humantime string).
+# cache_ttl = "10s"
+# refresh_period - period between proactive background cache-refresh sweeps (humantime).
+# refresh_period = "5s"
+# max_cached_paths - maximum candidate paths the selector returns per query.
+# max_cached_paths = 50
+# edge_penalty - multiplier [0.0, 1.0] down-weighting edges without probe observations.
+# edge_penalty = 0.5
+# min_paths_anonymity_floor - keep at most this many candidate paths, dropping the
+# slowest first and preferring distinct first relayers; 0 keeps every path. Fewer
+# paths means less relayer diversity, which weakens detection of a dead return path.
+# The client preset uses 0; the installer-shipped configs set 3.
+# min_paths_anonymity_floor = 0
+# latency_halflife - path latency at which the latency weight factor equals 0.5;
+# larger values make selection less latency-sensitive (humantime).
+# latency_halflife = "100ms"
+# capacity_reference - channel capacity, counted in single-hop tickets, at which the
+# capacity factor saturates; a path counts as its thinnest channel.
+# capacity_reference = 10000000
+# return_path_weight_temper - exponent (0.0, 1.0] flattening the return-path sampling
+# distribution; 1.0 samples by raw path value, smaller values tend toward uniform.
+# return_path_weight_temper = 0.5
+# return_path_exploration - fraction [0.0, 1.0] of return-path draws made uniformly at
+# random to keep every candidate under observation; 0.0 disables exploration.
+# return_path_exploration = 0.1
+# max_plausible_loopback_rtt - upper bound on a plausible loopback probe RTT; larger
+# measurements are discarded instead of poisoning the latency estimate (humantime).
+# max_plausible_loopback_rtt = "30s"
+
 # determine specific connection parameters for ephemeral bridge connection
 # [connection.bridge]
 # capabilities = [ "segmentation", "retransmission", "retransmission_ack_only", "no_rate_control" ]
@@ -137,6 +173,14 @@ path    = { hops = 1 }
 # buffer = "10 MB"
 # max_surb_upstream = "16 Mb/s"
 # always_max_out_surbs = true  # defaults to `enabled` - send 2 SURBs per request if 2 would fit
+#
+# [connection.surb_balancing.ramp] - after connecting, the SURB balancer is moved
+# from the ping tier to the main tier gradually instead of jumping (a jump floods
+# the response buffer). interval is how often the setpoint is nudged, duration is
+# how long the full ramp takes (both humantime strings, both must be > 0).
+# [connection.surb_balancing.ramp]
+# interval = "1s"
+# duration = "20s"
 
 # adjust PIX enablement per session type
 # bridge defaults to disabled; ping_main defaults to enabled

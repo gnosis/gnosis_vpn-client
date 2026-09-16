@@ -51,6 +51,8 @@ pub(super) struct Connection {
     pub(super) probe_local_addresses: Option<bool>,
     #[serde(default, deserialize_with = "validate_path_planner_min_ack_rate")]
     pub(super) path_planner_min_ack_rate: Option<f64>,
+    #[serde(default)]
+    pub(super) path_planner: Option<options::PathPlannerOptions>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -106,10 +108,19 @@ pub(super) struct SessionSurbConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct SurbRampConfig {
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) interval: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) duration: Option<Duration>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct SurbBalancingConfig {
     pub(super) ping: Option<SessionSurbConfig>,
     pub(super) main: Option<SessionSurbConfig>,
     pub(super) bridge: Option<SessionSurbConfig>,
+    pub(super) ramp: Option<SurbRampConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -317,6 +328,18 @@ impl From<Option<Connection>> for options::Options {
             ping: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.ping.clone()), def.ping),
             main: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.main.clone()), def.main),
             bridge: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.bridge.clone()), def.bridge),
+            ramp: options::SurbRampOptions {
+                interval: surb_cfg
+                    .as_ref()
+                    .and_then(|s| s.ramp.as_ref())
+                    .and_then(|r| r.interval)
+                    .unwrap_or(def.ramp.interval),
+                duration: surb_cfg
+                    .as_ref()
+                    .and_then(|s| s.ramp.as_ref())
+                    .and_then(|r| r.duration)
+                    .unwrap_or(def.ramp.duration),
+            },
         };
 
         let pix_cfg = connection.and_then(|c| c.pix.clone());
@@ -358,6 +381,7 @@ impl From<Option<Connection>> for options::Options {
             path_planner_min_ack_rate: connection
                 .and_then(|c| c.path_planner_min_ack_rate)
                 .unwrap_or(options::DEFAULT_PATH_PLANNER_MIN_ACK_RATE),
+            path_planner: connection.and_then(|c| c.path_planner.clone()).unwrap_or_default(),
         }
     }
 }
@@ -616,6 +640,30 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     {
                         continue;
                     }
+                    if k == "path_planner" {
+                        if let Some(pp) = v.as_table() {
+                            for (k2, _) in pp.iter() {
+                                if matches!(
+                                    k2.as_str(),
+                                    "max_cache_capacity"
+                                        | "cache_ttl"
+                                        | "refresh_period"
+                                        | "max_cached_paths"
+                                        | "edge_penalty"
+                                        | "min_paths_anonymity_floor"
+                                        | "latency_halflife"
+                                        | "capacity_reference"
+                                        | "return_path_weight_temper"
+                                        | "return_path_exploration"
+                                        | "max_plausible_loopback_rtt"
+                                ) {
+                                    continue;
+                                }
+                                wrong.push(format!("connection.path_planner.{k2}"));
+                            }
+                        }
+                        continue;
+                    }
                     if k == "bridge" || k == "wg" {
                         if let Some(prot) = v.as_table() {
                             for (k2, _) in prot.iter() {
@@ -652,6 +700,17 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                                 continue;
                                             }
                                             wrong.push(format!("connection.surb_balancing.{k2}.{k3}"));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                if k2 == "ramp" {
+                                    if let Some(ramp) = v2.as_table() {
+                                        for (k3, _) in ramp.iter() {
+                                            if k3 == "interval" || k3 == "duration" {
+                                                continue;
+                                            }
+                                            wrong.push(format!("connection.surb_balancing.ramp.{k3}"));
                                         }
                                     }
                                     continue;
@@ -820,6 +879,10 @@ impl TryFrom<Config> for config::Config {
         let connection: options::Options = value.connection.into();
         if connection.surb_balancing.ping.enabled != connection.surb_balancing.main.enabled {
             return Err(config::Error::SurbBalancingMismatch);
+        }
+        let ramp = connection.surb_balancing.ramp;
+        if ramp.interval.is_zero() || ramp.duration.is_zero() {
+            return Err(config::Error::SurbRampZero);
         }
         let default_targets = DefaultTargets {
             gnosis_vpn_server: default_gnosis_vpn_server,
@@ -1276,6 +1339,135 @@ path_planner_min_ack_rate = {bad}
                 "expected rejection for path_planner_min_ack_rate = {bad}"
             );
         }
+    }
+
+    #[test]
+    fn path_planner_defaults_to_empty_overrides() {
+        let cfg = parse("version = 7\n");
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(
+            result.connection.path_planner,
+            crate::connection::options::PathPlannerOptions::default()
+        );
+    }
+
+    #[test]
+    fn path_planner_reads_overrides_from_connection() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[connection.path_planner]
+min_paths_anonymity_floor = 4
+latency_halflife = "50ms"
+edge_penalty = 0.25
+capacity_reference = 20000000
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let pp = &result.connection.path_planner;
+        assert_eq!(pp.min_paths_anonymity_floor, Some(4));
+        assert_eq!(pp.latency_halflife, Some(Duration::from_millis(50)));
+        assert_eq!(pp.edge_penalty, Some(0.25));
+        assert_eq!(pp.capacity_reference, Some(20_000_000));
+        assert_eq!(pp.return_path_exploration, None);
+    }
+
+    #[test]
+    fn path_planner_rejects_out_of_range() {
+        for line in &[
+            "edge_penalty = 1.5",
+            "edge_penalty = -0.1",
+            "return_path_weight_temper = 0.0",
+            "return_path_weight_temper = 1.5",
+            "return_path_exploration = 1.1",
+        ] {
+            let toml = format!(
+                r#####"
+version = 7
+
+[connection.path_planner]
+{line}
+"#####
+            );
+            let result = toml::from_str::<Config>(&toml);
+            assert!(result.is_err(), "expected rejection for `{line}`");
+        }
+    }
+
+    #[test]
+    fn surb_ramp_defaults() {
+        let cfg = parse("version = 7");
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let ramp = result.connection.surb_balancing.ramp;
+        assert_eq!(ramp.interval, Duration::from_secs(1));
+        assert_eq!(ramp.duration, Duration::from_secs(20));
+    }
+
+    #[test]
+    fn surb_ramp_reads_from_connection() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[connection.surb_balancing.ramp]
+interval = "500ms"
+duration = "10s"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let ramp = result.connection.surb_balancing.ramp;
+        assert_eq!(ramp.interval, Duration::from_millis(500));
+        assert_eq!(ramp.duration, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn surb_ramp_rejects_zero() {
+        for line in &["interval = \"0s\"", "duration = \"0s\""] {
+            let cfg = parse(&format!(
+                r#####"
+version = 7
+
+[connection.surb_balancing.ramp]
+{line}
+"#####
+            ));
+            let result: Result<crate::config::Config, _> = cfg.try_into();
+            assert!(result.is_err(), "expected rejection for `{line}`");
+        }
+    }
+
+    #[test]
+    fn surb_ramp_unknown_key_is_flagged() {
+        let table = r#####"
+version = 7
+
+[connection.surb_balancing.ramp]
+interval = "1s"
+nonsense = 1
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["connection.surb_balancing.ramp.nonsense".to_string()]
+        );
+    }
+
+    #[test]
+    fn path_planner_unknown_key_is_flagged() {
+        let table = r#####"
+version = 7
+
+[connection.path_planner]
+min_paths_anonymity_floor = 4
+nonsense = 1
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), vec!["connection.path_planner.nonsense".to_string()]);
     }
 
     #[test]

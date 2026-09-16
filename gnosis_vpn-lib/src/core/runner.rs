@@ -121,6 +121,8 @@ pub(crate) enum Results {
         generation: u64,
         event: probe::Event,
     },
+    /// The SURB ramp ticker fired; Core nudges the active session's setpoint toward its target.
+    SurbRampTick,
     RetryReactor,
     NerdStatsTicketStats {
         res: command::TicketStatsStatus,
@@ -233,6 +235,7 @@ pub(crate) async fn hopr(
     worker_params: WorkerParams,
     blokli_config: BlokliConfig,
     path_planner_min_ack_rate: f64,
+    path_planner: connection::options::PathPlannerOptions,
     probe_local_addresses: bool,
     safe_module: &SafeModule,
     results_sender: mpsc::Sender<Results>,
@@ -241,6 +244,7 @@ pub(crate) async fn hopr(
         worker_params,
         blokli_config,
         path_planner_min_ack_rate,
+        path_planner,
         probe_local_addresses,
         safe_module,
         &results_sender,
@@ -306,6 +310,23 @@ pub(crate) async fn routability(
             let _ = results_sender.send(Results::Routability { map }).await;
         }
         Err(err) => tracing::error!(?err, "graph walk task panicked"),
+    }
+}
+
+/// Extra ramp ticks past the configured duration, so pushes that failed and retried can still land.
+const RAMP_RETRY_SLACK_TICKS: u64 = 3;
+
+/// Ticks the SURB ramp at its configured interval; bounded to the ramp duration plus slack for retried pushes, so an idle connection isn't ticked forever.
+pub(crate) async fn surb_ramp_loop(ramp: connection::options::SurbRampOptions, sender: mpsc::Sender<Results>) {
+    // Saturating: the cast tops out at u64::MAX for an extreme interval/duration ratio and the add must not wrap past it.
+    let ticks = (ramp.duration.as_secs_f64() / ramp.interval.as_secs_f64()).ceil() as u64;
+    let ticks = ticks.saturating_add(RAMP_RETRY_SLACK_TICKS);
+    tracing::debug!(?ramp, ticks, "starting surb ramp ticker");
+    for _ in 0..ticks {
+        time::sleep(ramp.interval).await;
+        if sender.send(Results::SurbRampTick).await.is_err() {
+            break;
+        }
     }
 }
 
@@ -591,12 +612,15 @@ async fn run_hopr(
     worker_params: WorkerParams,
     blokli_config: BlokliConfig,
     path_planner_min_ack_rate: f64,
+    path_planner: connection::options::PathPlannerOptions,
     probe_local_addresses: bool,
     safe_module: &SafeModule,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<Hopr, Error> {
     tracing::debug!("starting hopr runner");
-    let cfg = worker_params.to_config(safe_module, path_planner_min_ack_rate).await?;
+    let cfg = worker_params
+        .to_config(safe_module, path_planner_min_ack_rate, path_planner)
+        .await?;
     let keys = worker_params.calc_keys().await?;
     let blokli_endpoint = worker_params.blokli_endpoint(blokli_config.request_timeout);
     let sender = results_sender.clone();
@@ -749,6 +773,7 @@ impl Display for Results {
             Results::WgStatsSample(sample) => {
                 write!(f, "WgStatsSample: tx={} rx={}", sample.tx_bytes, sample.rx_bytes)
             }
+            Results::SurbRampTick => write!(f, "SurbRampTick"),
             Results::QuerySafe { res } => match res {
                 Ok(Some(_)) => write!(f, "QuerySafe: Safe found"),
                 Ok(None) => write!(f, "QuerySafe: No safe found"),

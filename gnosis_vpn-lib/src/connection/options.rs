@@ -1,9 +1,10 @@
 pub const DEFAULT_PATH_PLANNER_MIN_ACK_RATE: f64 = 0.1;
 
 use bytesize::ByteSize;
+use edgli::PathPlannerConfig;
 use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionTarget, SurbBalancerConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
 use std::time::Duration;
@@ -27,6 +28,103 @@ pub struct Options {
     /// Minimum acknowledgement rate [0.0, 1.0] a path must sustain to be considered by
     /// the latency path planner. Paths below this threshold are skipped.
     pub path_planner_min_ack_rate: f64,
+    /// Overrides layered on the edge-client latency preset; empty leaves the preset unchanged.
+    pub path_planner: PathPlannerOptions,
+}
+
+/// Optional overrides mirroring [`PathPlannerConfig`]: only set fields override the preset; `min_ack_rate` stays flat.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct PathPlannerOptions {
+    /// Maximum number of entries in the path cache.
+    pub max_cache_capacity: Option<u64>,
+    /// Time-to-live for a cached path list (humantime, e.g. "10s").
+    #[serde(default, with = "humantime_serde::option")]
+    pub cache_ttl: Option<Duration>,
+    /// Period between proactive background cache-refresh sweeps (humantime).
+    #[serde(default, with = "humantime_serde::option")]
+    pub refresh_period: Option<Duration>,
+    /// Maximum number of candidate paths the selector may return per query.
+    pub max_cached_paths: Option<usize>,
+    /// Penalty multiplier for edges lacking probe-based quality observations. Must be in [0.0, 1.0].
+    #[serde(default, deserialize_with = "validate_unit_interval_opt")]
+    pub edge_penalty: Option<f64>,
+    /// Cap on retained candidate paths, slowest dropped first; 0 keeps every path.
+    pub min_paths_anonymity_floor: Option<usize>,
+    /// Total path latency at which the latency factor equals 0.5 (humantime).
+    #[serde(default, with = "humantime_serde::option")]
+    pub latency_halflife: Option<Duration>,
+    /// Capacity saturation point in single-hop tickets; `u64` because TOML integers are, widened on apply.
+    pub capacity_reference: Option<u64>,
+    /// Exponent applied to return-path weights before sampling. Must be in (0.0, 1.0].
+    #[serde(default, deserialize_with = "validate_weight_temper_opt")]
+    pub return_path_weight_temper: Option<f64>,
+    /// Fraction of return-path draws made uniformly at random. Must be in [0.0, 1.0].
+    #[serde(default, deserialize_with = "validate_unit_interval_opt")]
+    pub return_path_exploration: Option<f64>,
+    /// Upper bound on a plausible loopback probe round-trip time (humantime).
+    #[serde(default, with = "humantime_serde::option")]
+    pub max_plausible_loopback_rtt: Option<Duration>,
+}
+
+impl PathPlannerOptions {
+    /// Apply the set overrides onto `cfg`, leaving unset fields untouched.
+    pub fn apply(&self, cfg: &mut PathPlannerConfig) {
+        if let Some(v) = self.max_cache_capacity {
+            cfg.max_cache_capacity = v;
+        }
+        if let Some(v) = self.cache_ttl {
+            cfg.cache_ttl = v;
+        }
+        if let Some(v) = self.refresh_period {
+            cfg.refresh_period = v;
+        }
+        if let Some(v) = self.max_cached_paths {
+            cfg.max_cached_paths = v;
+        }
+        if let Some(v) = self.edge_penalty {
+            cfg.edge_penalty = v;
+        }
+        if let Some(v) = self.min_paths_anonymity_floor {
+            cfg.min_paths_anonymity_floor = v;
+        }
+        if let Some(v) = self.latency_halflife {
+            cfg.latency_halflife = v;
+        }
+        if let Some(v) = self.capacity_reference {
+            cfg.capacity_reference = u128::from(v);
+        }
+        if let Some(v) = self.return_path_weight_temper {
+            cfg.return_path_weight_temper = v;
+        }
+        if let Some(v) = self.return_path_exploration {
+            cfg.return_path_exploration = v;
+        }
+        if let Some(v) = self.max_plausible_loopback_rtt {
+            cfg.max_plausible_loopback_rtt = v;
+        }
+    }
+}
+
+fn validate_unit_interval_opt<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Option::<f64>::deserialize(deserializer)? {
+        Some(v) if !(0.0..=1.0).contains(&v) => Err(serde::de::Error::custom("value must be in the range [0.0, 1.0]")),
+        other => Ok(other),
+    }
+}
+
+fn validate_weight_temper_opt<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Option::<f64>::deserialize(deserializer)? {
+        Some(v) if !(v > 0.0 && v <= 1.0) => Err(serde::de::Error::custom(
+            "return_path_weight_temper must be in the range (0.0, 1.0]",
+        )),
+        other => Ok(other),
+    }
 }
 
 /// Cadence of each check the probe session runs, plus the tunnel's own ICMP ping.
@@ -75,6 +173,27 @@ pub struct SurbBalancing {
     pub ping: SessionSurbOptions,
     pub main: SessionSurbOptions,
     pub bridge: SessionSurbOptions,
+    pub ramp: SurbRampOptions,
+}
+
+/// Pacing of the post-connect ping->main SURB setpoint ramp (see `Up::advance_surb_ramp`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SurbRampOptions {
+    /// How often the setpoint is nudged toward the main tier.
+    #[serde(with = "humantime_serde")]
+    pub interval: Duration,
+    /// How long the full ping->main ramp takes to converge.
+    #[serde(with = "humantime_serde")]
+    pub duration: Duration,
+}
+
+impl Default for SurbRampOptions {
+    fn default() -> Self {
+        Self {
+            interval: Duration::from_secs(1),
+            duration: Duration::from_secs(20),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -125,6 +244,7 @@ impl Default for SurbBalancing {
             // maximum allowed buffer size is 10 MB
             main: SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(16)),
             bridge: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
+            ramp: SurbRampOptions::default(),
         }
     }
 }

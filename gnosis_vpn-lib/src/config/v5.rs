@@ -77,6 +77,7 @@ fn to_surb_balancing_config(buf: Option<BufferOptions>, surbs: Option<MaxSurbUps
         ping: Some(session(buf.ping, surbs.ping)),
         main: Some(session(buf.main, surbs.main)),
         bridge: Some(session(buf.bridge, surbs.bridge)),
+        ramp: None,
     }
 }
 
@@ -97,6 +98,7 @@ impl From<Option<Connection>> for super::v7::Connection {
             lan_lockdown: None,
             probe_local_addresses: None,
             path_planner_min_ack_rate: None,
+            path_planner: None,
         }
     }
 }
