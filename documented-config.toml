@@ -153,6 +153,14 @@ path    = { hops = 1 }
 # buffer = "16 KB"
 # max_surb_upstream = "128 Kb/s"
 # always_max_out_surbs = false  # defaults to `enabled` - send only 1 SURB per request even if 2 would fit
+#
+# [connection.surb_balancing.ramp] - after connecting, the SURB balancer is moved
+# from the ping tier to the main tier gradually instead of jumping (a jump floods
+# the response buffer). interval is how often the setpoint is nudged, duration is
+# how long the full ramp takes (both humantime strings, both must be > 0).
+# [connection.surb_balancing.ramp]
+# interval = "1s"
+# duration = "20s"
 
 ###
 ## wireguard section - specific VPN-related settings

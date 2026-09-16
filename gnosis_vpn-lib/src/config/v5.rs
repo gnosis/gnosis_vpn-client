@@ -96,6 +96,7 @@ fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstrea
         ping: None,
         main: None,
     });
+<<<<<<< HEAD
     options::SurbBalancing {
         ping: options::SessionSurbOptions::new(
             true,
@@ -113,6 +114,20 @@ fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstrea
             surbs.bridge.unwrap_or(def.bridge.max_surb_upstream),
         ),
         health_check: def.health_check,
+=======
+    let session = |buffer: Option<ByteSize>, max_surb_upstream: Option<Bandwidth>| SessionSurbConfig {
+        enabled: None,
+        buffer,
+        max_surb_upstream,
+        always_max_out_surbs: None,
+    };
+    SurbBalancingConfig {
+        ping: Some(session(buf.ping, surbs.ping)),
+        main: Some(session(buf.main, surbs.main)),
+        bridge: Some(session(buf.bridge, surbs.bridge)),
+        health_check: None,
+        ramp: None,
+>>>>>>> 34d9734 (fix(connection): make SURB ramping configurable (GNO-780) (#810))
     }
 }
 

@@ -22,7 +22,7 @@ use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, 
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::route_health::{self, RouteHealth};
 use crate::worker_params::{self, WorkerParams};
-use crate::{balance, log_output, peer, ticket_stats, wg_tunnel, wireguard};
+use crate::{balance, log_output, peer, ticket_stats, wireguard};
 
 pub(crate) mod runner;
 
@@ -768,9 +768,16 @@ impl Core {
                     // A spliced session has no local listener to poll; the pump task
                     // reports its own death via WgPumpExited instead of a monitor.
                     self.spawn_tunnel_ping_probe(results_sender);
+<<<<<<< HEAD
                     self.cancel_peers.cancel();
                     self.cancel_peers = self.cancel_on_shutdown.child_token();
                     self.spawn_peers(results_sender, Duration::from_secs(10));
+=======
+                    if conn.surb_target.is_some() {
+                        self.spawn_surb_ramp_ticker(results_sender);
+                    }
+                    self.set_peers_interval(PEERS_EAGER_INTERVAL);
+>>>>>>> 34d9734 (fix(connection): make SURB ramping configurable (GNO-780) (#810))
                 }
                 (Ok(_), phase) => {
                     tracing::warn!(?phase, "unawaited connection established successfully");
@@ -836,17 +843,27 @@ impl Core {
 
             Results::WgStatsSample(sample) => match self.phase.clone() {
                 Phase::Connecting(mut conn) => {
-                    conn.record_wg_stats(sample.clone());
-                    self.maybe_adjust_session(&mut conn, &sample);
+                    conn.record_wg_stats(sample);
                     self.phase = Phase::Connecting(conn);
                 }
                 Phase::Connected(mut conn) => {
-                    conn.record_wg_stats(sample.clone());
-                    self.maybe_adjust_session(&mut conn, &sample);
+                    conn.record_wg_stats(sample);
                     self.phase = Phase::Connected(conn);
                 }
                 phase => {
                     tracing::debug!(?phase, "received wg stats sample outside an active connection");
+                }
+            },
+
+            Results::SurbRampTick => match self.phase.clone() {
+                Phase::Connected(mut conn) => {
+                    if let Some(configurator) = conn.session_configurator.clone() {
+                        conn.advance_surb_ramp(&configurator, SystemTime::now());
+                    }
+                    self.phase = Phase::Connected(conn);
+                }
+                phase => {
+                    tracing::warn!(?phase, "received surb ramp tick outside a connected phase");
                 }
             },
 
@@ -1484,11 +1501,17 @@ impl Core {
         }
     }
 
-    /// Advances the active session's SURB balancer toward `conn.surb_target` on each telemetry tick (see `Up::advance_surb_ramp`).
-    fn maybe_adjust_session(&self, conn: &mut connection::up::Up, sample: &wg_tunnel::TunnelStatsSample) {
-        if let Some(configurator) = conn.session_configurator.clone() {
-            conn.advance_surb_ramp(&configurator, sample.at);
-        };
+    fn spawn_surb_ramp_ticker(&self, results_sender: &mpsc::Sender<Results>) {
+        let ramp = self.config.connection.surb_balancing.ramp;
+        let cancel = self.cancel_connection.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    runner::surb_ramp_loop(ramp, results_sender).await;
+                })
+                .await
+        });
     }
 
     fn spawn_tunnel_ping_probe(&self, results_sender: &mpsc::Sender<Results>) {
