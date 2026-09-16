@@ -26,6 +26,9 @@ const TIMER_PERIOD: Duration = Duration::from_millis(250);
 /// tick is ~4s.
 const STATS_SAMPLE_EVERY_N_TICKS: u32 = 16;
 
+/// Wall-clock spacing between emitted stats samples; consumers pacing on samples must use this, not `TIMER_PERIOD`.
+pub const STATS_SAMPLE_INTERVAL: Duration = TIMER_PERIOD.saturating_mul(STATS_SAMPLE_EVERY_N_TICKS);
+
 /// Longest a single session/TUN write may block before the pump treats the
 /// endpoint as wedged and tears down so the connection can be re-established.
 /// Legitimate backpressure resolves in milliseconds; this only bounds a hang so

@@ -57,8 +57,8 @@ pub enum Progress {
 /// How long a SURB balancer target change takes to fully converge.
 const SURB_RAMP_DURATION: Duration = Duration::from_secs(60);
 
-/// Caps ramp-tick elapsed time so a backlog of failed pushes can't cause one big jump; comfortably above the ~250ms telemetry cadence.
-const MAX_RAMP_TICK_ELAPSED: Duration = Duration::from_secs(1);
+/// Caps ramp-tick elapsed time so a backlog of failed pushes can't cause one big jump; a few sample intervals so a normal tick is never clamped.
+const MAX_RAMP_TICK_ELAPSED: Duration = crate::wg_tunnel::STATS_SAMPLE_INTERVAL.saturating_mul(3);
 
 /// Max per-second change per SURB balancer knob, so the follower converges gradually instead of jumping.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -461,6 +461,38 @@ mod surb_ramp_tests {
             "a backlog of failed pushes should not produce one big jump"
         );
         assert!(!clock_went_backward);
+    }
+
+    #[test]
+    fn ramp_tick_elapsed_does_not_clamp_a_normal_sample_gap() {
+        let last = SystemTime::now();
+        let now = last + crate::wg_tunnel::STATS_SAMPLE_INTERVAL;
+        let (elapsed, clock_went_backward) = ramp_tick_elapsed(Some(last), now);
+        assert_eq!(elapsed, crate::wg_tunnel::STATS_SAMPLE_INTERVAL);
+        assert!(!clock_went_backward);
+    }
+
+    #[test]
+    fn ramp_converges_in_ramp_duration_at_sample_cadence() {
+        let target = config(600, 60);
+        let rate = SurbSlewRate::to_cover(config(0, 0), target, SURB_RAMP_DURATION);
+        let ticks_to_converge =
+            (SURB_RAMP_DURATION.as_secs_f64() / crate::wg_tunnel::STATS_SAMPLE_INTERVAL.as_secs_f64()).ceil() as u32;
+        let mut applied = config(0, 0);
+        let mut last = SystemTime::now();
+        for tick in 1..=ticks_to_converge {
+            let now = last + crate::wg_tunnel::STATS_SAMPLE_INTERVAL;
+            let (elapsed, _) = ramp_tick_elapsed(Some(last), now);
+            applied = slew_towards(applied, target, elapsed, rate);
+            last = now;
+            if tick < ticks_to_converge {
+                assert_ne!(applied, target, "converged early at tick {tick}");
+            }
+        }
+        assert_eq!(
+            applied, target,
+            "should converge within {ticks_to_converge} sample ticks"
+        );
     }
 
     #[test]
