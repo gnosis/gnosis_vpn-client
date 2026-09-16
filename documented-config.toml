@@ -202,6 +202,29 @@ path    = { hops = 1 }
 # [connection.pix.health_check]
 # enabled = false
 
+# Entry-side PIX share generator dimensions. Leave unset unless you are matching a specific
+# deployment - the defaults are what the public network runs.
+#
+# What these really set is the per-SSA quota - num_ssa_parts x (ssa_part_size +
+# additional_shares) x 1038 bytes - which is how much exit-to-client data one deposit covers, and
+# therefore how much traffic has to flow before a PIX cycle completes. The defaults
+# (8192 x (64 + 16)) put it at roughly 649 MiB.
+#
+# This is a decision about the peer, not about this node: nothing is negotiated, and an exit
+# accepts only quotas inside the window it advertises, refusing anything else with
+# UnacceptablePixParams at session-open time. A `hoprd-localcluster --enable-pix`, for instance,
+# generates 8 x (2 + 2) and accepts 0 .. 1 MiB, so talking PIX to one means matching it here.
+#
+# num_ssa_parts must be 8..=16192, ssa_part_size 2..=255, additional_shares 0..=255 and never
+# greater than ssa_part_size - the surplus is billed into the quota, so a larger one would buy
+# more redundancy than payload. Unset fields keep the upstream default; additional_shares left
+# unset stays derived from ssa_part_size rather than pinned to a number.
+#
+# [connection.pix.dimensions]
+# num_ssa_parts = 8192
+# ssa_part_size = 64
+# additional_shares = 16
+
 ###
 ## wireguard section - specific VPN-related settings
 

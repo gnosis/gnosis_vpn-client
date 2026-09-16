@@ -179,6 +179,22 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                     }
                                     continue;
                                 }
+                                // v6 shares v7's `Connection` verbatim, so this key already takes
+                                // effect here; without this arm it would be reported as unsupported.
+                                if k2 == "dimensions" {
+                                    if let Some(dims) = v2.as_table() {
+                                        for (k3, _) in dims.iter() {
+                                            if k3 == "num_ssa_parts"
+                                                || k3 == "ssa_part_size"
+                                                || k3 == "additional_shares"
+                                            {
+                                                continue;
+                                            }
+                                            wrong.push(format!("connection.pix.{k2}.{k3}"));
+                                        }
+                                    }
+                                    continue;
+                                }
                                 wrong.push(format!("connection.pix.{k2}"));
                             }
                         }
@@ -445,6 +461,27 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 [connection.path_planner]
 min_paths_anonymity_floor = 4
 latency_halflife = "50ms"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert!(wrong_keys(&table).is_empty());
+    }
+
+    /// Same reason as the path planner above: `[connection]` is v7's, so the PIX generator
+    /// dimensions take effect in a v6 file and must not be reported as unsupported.
+    #[test]
+    fn v6_file_still_accepts_the_pix_dimensions() {
+        let table = r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.pix.dimensions]
+num_ssa_parts     = 8
+ssa_part_size     = 2
+additional_shares = 2
 "#####
             .parse::<toml::Table>()
             .expect("valid TOML");

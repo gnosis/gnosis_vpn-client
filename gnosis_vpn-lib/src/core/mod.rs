@@ -1361,6 +1361,7 @@ impl Core {
         let blokli_config = self.config.blokli.clone();
         let path_planner_min_ack_rate = self.config.connection.path_planner_min_ack_rate;
         let path_planner = self.config.connection.path_planner.clone();
+        let pix_dimensions = self.config.connection.pix.dimensions.clone();
         let probe_local_addresses = self.config.connection.probe_local_addresses;
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
@@ -1372,6 +1373,7 @@ impl Core {
                         blokli_config,
                         path_planner_min_ack_rate,
                         path_planner,
+                        pix_dimensions,
                         probe_local_addresses,
                         &safe_module,
                         results_sender,
