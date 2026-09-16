@@ -49,6 +49,8 @@ pub enum Error {
     VersionMismatch(u8),
     #[error("ping and main sessions must both have surb_balancing enabled or both disabled")]
     SurbBalancingMismatch,
+    #[error("surb_balancing.ramp interval and duration must both be greater than zero")]
+    SurbRampZero,
     #[error("Error in hopr-lib: {0}")]
     HoprGeneral(#[from] GeneralError),
     #[error(

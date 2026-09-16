@@ -174,6 +174,27 @@ pub struct SurbBalancing {
     pub main: SessionSurbOptions,
     pub bridge: SessionSurbOptions,
     pub health_check: SessionSurbOptions,
+    pub ramp: SurbRampOptions,
+}
+
+/// Pacing of the post-connect ping->main SURB setpoint ramp (see `Up::advance_surb_ramp`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SurbRampOptions {
+    /// How often the setpoint is nudged toward the main tier.
+    #[serde(with = "humantime_serde")]
+    pub interval: Duration,
+    /// How long the full ping->main ramp takes to converge.
+    #[serde(with = "humantime_serde")]
+    pub duration: Duration,
+}
+
+impl Default for SurbRampOptions {
+    fn default() -> Self {
+        Self {
+            interval: Duration::from_secs(1),
+            duration: Duration::from_secs(20),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -226,6 +247,7 @@ impl Default for SurbBalancing {
             main: SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(16)),
             bridge: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
             health_check: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
+            ramp: SurbRampOptions::default(),
         }
     }
 }

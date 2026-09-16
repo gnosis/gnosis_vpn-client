@@ -78,6 +78,7 @@ fn to_surb_balancing_config(buf: Option<BufferOptions>, surbs: Option<MaxSurbUps
         main: Some(session(buf.main, surbs.main)),
         bridge: Some(session(buf.bridge, surbs.bridge)),
         health_check: None,
+        ramp: None,
     }
 }
 
