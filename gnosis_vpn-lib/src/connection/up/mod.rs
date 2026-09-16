@@ -55,8 +55,13 @@ pub enum Progress {
     },
 }
 
-/// Ramp ticks may arrive this many intervals late before elapsed time is clamped, so a backlog of failed pushes can't cause one big jump.
-const RAMP_TICK_CAP_INTERVALS: u32 = 3;
+/// An in-flight SURB ramp. Each tick derives the setpoint from total time since `started`, so no fractional progress is lost between ticks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SurbRamp {
+    started: SystemTime,
+    from: SurbBalancerConfig,
+    rate: SurbSlewRate,
+}
 
 /// Max per-second change per SURB balancer knob, so the follower converges gradually instead of jumping.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -116,15 +121,10 @@ pub(crate) fn slew_towards(
     }
 }
 
-/// Elapsed time for this tick (capped), plus whether the clock moved backward (e.g. an NTP correction), which can't be measured as elapsed time.
-fn ramp_tick_elapsed(last_tick: Option<SystemTime>, now: SystemTime, cap: Duration) -> (Duration, bool) {
-    match last_tick {
-        None => (Duration::ZERO, false),
-        Some(last) => match now.duration_since(last) {
-            Ok(elapsed) => (elapsed.min(cap), false),
-            Err(_) => (Duration::ZERO, true),
-        },
-    }
+/// Where the ramp's schedule stands at `now`; `None` when the clock moved backward (e.g. an NTP correction), which can't be measured as elapsed time.
+fn ramp_position(ramp: SurbRamp, target: SurbBalancerConfig, now: SystemTime) -> Option<SurbBalancerConfig> {
+    let elapsed = now.duration_since(ramp.started).ok()?;
+    Some(slew_towards(ramp.from, target, elapsed, ramp.rate))
 }
 
 #[derive(Debug)]
@@ -180,9 +180,7 @@ pub struct Up {
     pub surb_target: Option<SurbBalancerConfig>,
     /// SURB balancer setpoint actually pushed to the session so far.
     pub surb_applied: Option<SurbBalancerConfig>,
-    surb_ramp_rate: Option<SurbSlewRate>,
-    surb_last_tick: Option<SystemTime>,
-    surb_tick_cap: Duration,
+    surb_ramp: Option<SurbRamp>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -220,35 +218,32 @@ impl Up {
             session_configurator: None,
             surb_target: None,
             surb_applied: None,
-            surb_ramp_rate: None,
-            surb_last_tick: None,
-            surb_tick_cap: Duration::ZERO,
+            surb_ramp: None,
         }
     }
 
     /// Advances the SURB balancer setpoint one tick toward `surb_target`; a no-op once converged, and logs rather than propagates a failed push so the next tick retries.
     pub fn advance_surb_ramp(&mut self, configurator: &HoprSessionConfigurator, now: SystemTime) {
-        let (Some(target), Some(applied), Some(rate)) = (self.surb_target, self.surb_applied, self.surb_ramp_rate)
-        else {
+        let (Some(target), Some(applied), Some(ramp)) = (self.surb_target, self.surb_applied, self.surb_ramp) else {
             return;
         };
         if applied == target {
             return;
         }
-        let (elapsed, clock_went_backward) = ramp_tick_elapsed(self.surb_last_tick, now, self.surb_tick_cap);
-        if clock_went_backward {
-            self.surb_last_tick = Some(now);
+        let Some(next) = ramp_position(ramp, target, now) else {
+            // Restart the schedule from what is applied now; the old start time is meaningless after a backward clock jump.
+            self.surb_ramp = Some(SurbRamp {
+                started: now,
+                from: applied,
+                rate: ramp.rate,
+            });
             return;
-        }
-        let next = slew_towards(applied, target, elapsed, rate);
+        };
         if next == applied {
             return;
         }
         match configurator.update_surb_balancer_config(next) {
-            Ok(()) => {
-                self.surb_applied = Some(next);
-                self.surb_last_tick = Some(now);
-            }
+            Ok(()) => self.surb_applied = Some(next),
             // Unthrottled by design: failure means the session is already gone, so a reconnect self-resolves this within ~tunnel_ping_max_failures * tunnel_ping.
             Err(e) => tracing::warn!(error = ?e, "failed to adjust surb balancer - will retry next tick"),
         }
@@ -295,11 +290,13 @@ impl Up {
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
             Progress::AdjustToMain(_round_trip_time) => self.phase = (now, Phase::AdjustToMain),
             Progress::SetSurbTarget { applied, target, ramp } => {
-                self.surb_ramp_rate = Some(SurbSlewRate::to_cover(applied, target, ramp.duration));
-                self.surb_tick_cap = ramp.interval.saturating_mul(RAMP_TICK_CAP_INTERVALS);
+                self.surb_ramp = Some(SurbRamp {
+                    started: now,
+                    from: applied,
+                    rate: SurbSlewRate::to_cover(applied, target, ramp.duration),
+                });
                 self.surb_applied = Some(applied);
                 self.surb_target = Some(target);
-                self.surb_last_tick = Some(now);
             }
         }
     }
@@ -447,70 +444,99 @@ mod surb_ramp_tests {
         assert_eq!(done, target);
     }
 
-    const CAP: Duration = Duration::from_secs(3);
-
-    #[test]
-    fn ramp_tick_elapsed_is_zero_before_first_tick() {
-        let now = SystemTime::now();
-        assert_eq!(ramp_tick_elapsed(None, now, CAP), (Duration::ZERO, false));
+    fn ramp(from: SurbBalancerConfig, target: SurbBalancerConfig, duration: Duration) -> SurbRamp {
+        SurbRamp {
+            started: SystemTime::now(),
+            from,
+            rate: SurbSlewRate::to_cover(from, target, duration),
+        }
     }
 
     #[test]
-    fn ramp_tick_elapsed_caps_large_gaps() {
-        let last = SystemTime::now();
-        let now = last + Duration::from_secs(300);
-        let (elapsed, clock_went_backward) = ramp_tick_elapsed(Some(last), now, CAP);
+    fn ramp_position_follows_the_schedule_from_the_start() {
+        let target = config(600, 60);
+        let ramp = ramp(config(0, 0), target, Duration::from_secs(60));
+        assert_eq!(ramp_position(ramp, target, ramp.started), Some(config(0, 0)));
         assert_eq!(
-            elapsed, CAP,
-            "a backlog of failed pushes should not produce one big jump"
+            ramp_position(ramp, target, ramp.started + Duration::from_secs(30)),
+            Some(config(300, 30))
         );
-        assert!(!clock_went_backward);
+        assert_eq!(
+            ramp_position(ramp, target, ramp.started + Duration::from_secs(300)),
+            Some(target),
+            "a late tick lands on the target, never past it"
+        );
     }
 
     #[test]
-    fn ramp_tick_elapsed_does_not_clamp_a_normal_tick() {
-        let last = SystemTime::now();
-        let now = last + Duration::from_secs(1);
-        assert_eq!(ramp_tick_elapsed(Some(last), now, CAP), (Duration::from_secs(1), false));
+    fn ramp_position_is_none_after_a_backward_clock() {
+        let target = config(600, 60);
+        let ramp = ramp(config(0, 0), target, Duration::from_secs(60));
+        assert_eq!(ramp_position(ramp, target, ramp.started - Duration::from_secs(5)), None);
     }
 
     #[test]
     fn ramp_converges_in_configured_duration_at_configured_interval() {
-        assert_ramp_converges(SurbRampOptions::default());
+        assert_ramp_converges_on_final_tick(SurbRampOptions::default(), config(600, 60));
     }
 
     /// A sub-second ramp must converge within its own tick budget, not one padded to a full second.
     #[test]
     fn ramp_converges_for_sub_second_duration() {
-        assert_ramp_converges(SurbRampOptions {
+        let opts = SurbRampOptions {
             interval: Duration::from_millis(50),
             duration: Duration::from_millis(100),
-        });
+        };
+        assert_ramp_converges_on_final_tick(opts, config(600, 60));
     }
 
-    fn assert_ramp_converges(ramp: SurbRampOptions) {
-        let target = config(600, 60);
-        let rate = SurbSlewRate::to_cover(config(0, 0), target, ramp.duration);
-        let cap = ramp.interval.saturating_mul(RAMP_TICK_CAP_INTERVALS);
-        let ticks_to_converge = (ramp.duration.as_secs_f64() / ramp.interval.as_secs_f64()).ceil() as u32;
-        let mut applied = config(0, 0);
-        let mut last = SystemTime::now();
-        for tick in 1..=ticks_to_converge {
-            let now = last + ramp.interval;
-            let (elapsed, _) = ramp_tick_elapsed(Some(last), now, cap);
-            applied = slew_towards(applied, target, elapsed, rate);
-            last = now;
-            if tick < ticks_to_converge {
-                assert_ne!(applied, target, "converged early at tick {tick}");
-            }
-        }
-        assert_eq!(applied, target, "should converge within {ticks_to_converge} ticks");
-    }
-
+    /// Regression: a per-tick delta scheme truncated 1 unit/s * 150ms to zero forever.
     #[test]
-    fn ramp_tick_elapsed_detects_backward_clock() {
-        let last = SystemTime::now();
-        let now = last - Duration::from_secs(5);
-        assert_eq!(ramp_tick_elapsed(Some(last), now, CAP), (Duration::ZERO, true));
+    fn ramp_converges_for_a_tiny_gap_at_a_fast_interval() {
+        let opts = SurbRampOptions {
+            interval: Duration::from_millis(50),
+            duration: Duration::from_secs(20),
+        };
+        assert_ramp_converges_within_budget(opts, config(1, 1));
+    }
+
+    /// Regression: 7 units/s over 500ms ticks used to step floor(3.5) = 3 and land short of the target.
+    #[test]
+    fn ramp_converges_when_rate_times_interval_is_fractional() {
+        let opts = SurbRampOptions {
+            interval: Duration::from_millis(500),
+            duration: Duration::from_secs(20),
+        };
+        assert_ramp_converges_on_final_tick(opts, config(140, 14));
+    }
+
+    fn tick_budget(opts: SurbRampOptions) -> u32 {
+        (opts.duration.as_secs_f64() / opts.interval.as_secs_f64()).ceil() as u32
+    }
+
+    /// Reaches the target exactly on the last scheduled tick, not a tick earlier.
+    fn assert_ramp_converges_on_final_tick(opts: SurbRampOptions, target: SurbBalancerConfig) {
+        let ramp = ramp(config(0, 0), target, opts.duration);
+        let budget = tick_budget(opts);
+        for tick in 1..budget {
+            let now = ramp.started + opts.interval * tick;
+            assert_ne!(
+                ramp_position(ramp, target, now),
+                Some(target),
+                "converged early at tick {tick}"
+            );
+        }
+        assert_ramp_converges_within_budget(opts, target);
+    }
+
+    fn assert_ramp_converges_within_budget(opts: SurbRampOptions, target: SurbBalancerConfig) {
+        let ramp = ramp(config(0, 0), target, opts.duration);
+        let budget = tick_budget(opts);
+        let now = ramp.started + opts.interval * budget;
+        assert_eq!(
+            ramp_position(ramp, target, now),
+            Some(target),
+            "should converge within {budget} ticks"
+        );
     }
 }
