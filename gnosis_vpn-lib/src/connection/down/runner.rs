@@ -1,22 +1,27 @@
 //! The runner module for `core::connection::down` struct.
 //! It handles all state transitions and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
+use backon::Retryable;
 use edgli::FlowControlConfig;
 use edgli::hopr_lib::HoprSessionClientConfig;
 use tokio::sync::mpsc;
 
 use std::fmt::{self, Display};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::connection;
 use crate::connection::options::Options;
 use crate::connection::options::{SurbParams, surb_config_for};
 use crate::core::runner::Results;
-use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
+use crate::{gvpn_client, remote_data};
 
 use super::{Error, Event};
+
+/// hopr-lib's own 1-hop open_session budget; the tunnel is already gone, so a slower unregister is not worth waiting for.
+const UNREGISTER_BUDGET: Duration = Duration::from_secs(15);
 
 pub(crate) struct Runner {
     down: connection::down::Down,
@@ -30,7 +35,10 @@ impl Runner {
     }
 
     pub(crate) async fn start(&self, results_sender: mpsc::Sender<Results>) {
-        let res = self.run(results_sender.clone()).await;
+        let res = match tokio::time::timeout(UNREGISTER_BUDGET, self.run(results_sender.clone())).await {
+            Ok(res) => res,
+            Err(_elapsed) => Err(Error::Timeout(UNREGISTER_BUDGET)),
+        };
         let _ = results_sender
             .send(Results::DisconnectionResult {
                 wg_public_key: self.down.wg_public_key.clone(),
@@ -59,26 +67,25 @@ impl Runner {
                 evt: Event::UnregisterWg,
             })
             .await;
-        match unregister(&self.options, &bridge_session, self.down.wg_public_key.clone()).await {
-            Ok(_) => (),
-            Err(gvpn_client::Error::RegistrationNotFound) => {
-                tracing::warn!(wg_public_key = %self.down.wg_public_key, "trying to unregister already removed registration");
-            }
-            Err(error) => {
-                tracing::error!(%error, "unregistering from gvpn server failed");
-            }
-        }
+        let unregister_res = unregister(&self.options, &bridge_session, self.down.wg_public_key.clone()).await;
 
-        // 3. close bridge session
+        // 3. close bridge session - also after a failed unregister, so the session does not linger
         let _ = results_sender
             .send(Results::DisconnectionEvent {
                 wg_public_key: self.down.wg_public_key.clone(),
                 evt: Event::CloseBridge,
             })
             .await;
-        close_bridge_session(&self.hopr, &bridge_session).await?;
+        let close_res = close_bridge_session(&self.hopr, &bridge_session).await;
 
-        Ok(())
+        match unregister_res {
+            Ok(_) => (),
+            Err(gvpn_client::Error::RegistrationNotFound) => {
+                tracing::warn!(wg_public_key = %self.down.wg_public_key, "trying to unregister already removed registration");
+            }
+            Err(error) => return Err(error.into()),
+        }
+        Ok(close_res?)
     }
 }
 
@@ -119,8 +126,16 @@ async fn unregister(
     public_key: String,
 ) -> Result<(), gvpn_client::Error> {
     let input = gvpn_client::Input::new(public_key, session_client_metadata.bound_host, options.timeouts.http);
-    let client = reqwest::Client::new();
-    gvpn_client::unregister(&client, &input).await
+    (|| async {
+        let client = reqwest::Client::new();
+        gvpn_client::unregister(&client, &input).await
+    })
+    .retry(remote_data::backoff_expo_short_delay_bridge())
+    .when(|err: &gvpn_client::Error| !matches!(err, gvpn_client::Error::RegistrationNotFound))
+    .notify(|err: &gvpn_client::Error, dur: Duration| {
+        tracing::warn!(error = ?err, "unregister wg pubkey failed - will retry after {:?}", dur);
+    })
+    .await
 }
 
 async fn close_bridge_session(hopr: &Hopr, session_client_metadata: &SessionClientMetadata) -> Result<(), HoprError> {
