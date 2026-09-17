@@ -2000,10 +2000,7 @@ version = 7
 {bad}
 "#####
             );
-            assert!(
-                toml::from_str::<Config>(&toml).is_err(),
-                "expected rejection for {bad}"
-            );
+            assert!(toml::from_str::<Config>(&toml).is_err(), "expected rejection for {bad}");
         }
     }
 

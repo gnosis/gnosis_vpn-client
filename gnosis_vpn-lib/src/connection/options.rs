@@ -1,8 +1,8 @@
 pub const DEFAULT_PATH_PLANNER_MIN_ACK_RATE: f64 = 0.1;
 
 use bytesize::ByteSize;
-use edgli::{PathPlannerConfig, PixGlobalConfig};
 use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionTarget, SurbBalancerConfig};
+use edgli::{PathPlannerConfig, PixGlobalConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
