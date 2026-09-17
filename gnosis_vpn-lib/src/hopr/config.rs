@@ -89,8 +89,7 @@ pub async fn generate(
     cfg.protocol.path_planner = edgli::latency_path_planner_config(path_planner_min_ack_rate);
     // Layer user overrides on top of the latency preset; unset fields keep the preset value.
     path_planner.apply(&mut cfg.protocol.path_planner);
-    // Entry-side PIX share generator. Unset fields keep hopr-lib's defaults, which is what every
-    // deployment wants except one deliberately matched to a peer Exit's accepted quota window.
+    // Apply PIX dimension overrides only when matching an Exit's advertised quota window.
     pix_dimensions.apply(&mut cfg.protocol.pix);
     Ok(cfg)
 }
@@ -147,7 +146,7 @@ mod tests {
 
     #[tokio::test]
     async fn table_overrides_pix_dimensions() {
-        // The `hoprd-localcluster --enable-pix` demo geometry, which is the reason this knob exists.
+        // Match `hoprd-localcluster --enable-pix`'s demo geometry.
         let overrides = PixDimensionOptions {
             num_ssa_parts: Some(8),
             ssa_part_size: Some(2),
@@ -169,7 +168,7 @@ mod tests {
         let cfg = generated(PathPlannerOptions::default(), overrides).await;
         assert_eq!(cfg.protocol.pix.ssa_part_size, 4);
         assert_eq!(cfg.protocol.pix.num_ssa_parts, upstream.num_ssa_parts);
-        // Left `None` so the surplus keeps being derived from `ssa_part_size` rather than pinned.
+        // Leave this unset so hopr-lib still derives it from `ssa_part_size`.
         assert_eq!(cfg.protocol.pix.additional_shares, upstream.additional_shares);
     }
 }

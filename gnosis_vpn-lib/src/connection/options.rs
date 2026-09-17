@@ -212,18 +212,7 @@ pub struct PixOptions {
     pub dimensions: PixDimensionOptions,
 }
 
-/// Optional overrides mirroring [`PixGlobalConfig`]: only set fields override hopr-lib's defaults.
-///
-/// These are the Entry-side share-generator dimensions, and what they really set is the **per-SSA
-/// quota** — `num_ssa_parts × (ssa_part_size + additional_shares) × PACKET_PAYLOAD_SIZE` — which is
-/// the amount of Exit → Entry data one deposit covers, and therefore how much traffic has to flow
-/// before a cycle completes. At the defaults (8192 × (64+16)) that is ~649 MiB.
-///
-/// **This is a decision about the peer, not about this node.** The Exit accepts only quotas inside
-/// its own `quota_range` and nothing is negotiated, so dimensions that disagree with it are refused
-/// outright with `UnacceptablePixParams` at Session establishment. Leave unset unless you know the
-/// window the Exit advertises — the reason to set them is to match a specific deployment, such as a
-/// `hoprd-localcluster --enable-pix` whose demo geometry is 8 × (2+2).
+/// Optional `PixGlobalConfig` overrides for matching an Exit's advertised quota window.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(try_from = "PixDimensionOptionsRaw")]
 pub struct PixDimensionOptions {
@@ -231,19 +220,11 @@ pub struct PixDimensionOptions {
     pub num_ssa_parts: Option<usize>,
     /// Number of shares required to reconstruct an SSA part. Range 2..=255.
     pub ssa_part_size: Option<usize>,
-    /// Shares emitted beyond `ssa_part_size` to absorb return-path loss. Range 0..=255, and never
-    /// more than `ssa_part_size` — the surplus is priced into the quota, so a larger one would pay
-    /// for more redundancy than payload.
+    /// Extra shares for return-path loss; range 0..=255 and never above `ssa_part_size`.
     pub additional_shares: Option<usize>,
 }
 
-/// Raw [`PixDimensionOptions`], separate only so the cross-field rule can be checked on the way in.
-///
-/// Per-field ranges could be `deserialize_with` validators like the path planner's, but
-/// `additional_shares <= ssa_part_size` spans two fields and serde cannot see a sibling from a field
-/// validator. Rejecting here turns every one of these into a config-load error naming the offending
-/// key, rather than a `failed to apply PIX to session config` at the first connect attempt — nothing
-/// in this client calls `HoprLibConfig::validate()`, so hopr-lib's own bounds never run.
+/// Separate raw form so deserialization can enforce `additional_shares <= ssa_part_size`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PixDimensionOptionsRaw {
@@ -270,8 +251,7 @@ impl TryFrom<PixDimensionOptionsRaw> for PixDimensionOptions {
         in_range("ssa_part_size", raw.ssa_part_size, 2, 255)?;
         in_range("additional_shares", raw.additional_shares, 0, 255)?;
 
-        // Only checkable when both are stated: against an unset `ssa_part_size` the comparison would
-        // be against hopr-lib's default of 64, which is not what this config says.
+        // Only compare explicit values; an unset threshold still means "use hopr-lib's default".
         if let (Some(surplus), Some(threshold)) = (raw.additional_shares, raw.ssa_part_size)
             && surplus > threshold
         {
@@ -298,8 +278,7 @@ impl PixDimensionOptions {
         if let Some(v) = self.ssa_part_size {
             cfg.ssa_part_size = v;
         }
-        // Upstream's own field is optional — `None` derives the surplus from `ssa_part_size` — so an
-        // unset override has to leave it alone rather than write `None` over a derived value.
+        // Only overwrite this when requested so hopr-lib can keep deriving it from `ssa_part_size`.
         if let Some(v) = self.additional_shares {
             cfg.additional_shares = Some(v);
         }

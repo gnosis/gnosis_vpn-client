@@ -1945,7 +1945,7 @@ additional_shares = 2
         assert_eq!(result.connection.pix.dimensions.num_ssa_parts, Some(8));
         assert_eq!(result.connection.pix.dimensions.ssa_part_size, Some(2));
         assert_eq!(result.connection.pix.dimensions.additional_shares, Some(2));
-        // sibling toggles keep their defaults
+        // Sibling toggles still use their defaults.
         assert!(result.connection.pix.ping_main.enabled);
     }
 
@@ -1984,7 +1984,7 @@ num_ssa_part = 8
 
     #[test]
     fn pix_dimensions_reject_out_of_range() {
-        // min 8 / min 2 / max 255 respectively, per hopr-lib's own `PixGlobalConfig` bounds.
+        // Match hopr-lib's PIX bounds.
         for bad in [
             "num_ssa_parts = 7",
             "num_ssa_parts = 16193",
@@ -2006,8 +2006,7 @@ version = 7
 
     #[test]
     fn pix_surplus_may_not_exceed_the_threshold() {
-        // Checkable only because both fields are stated; the surplus is billed into the quota, so a
-        // larger one pays for more redundancy than payload.
+        // Only explicit values can be compared here.
         let toml = r#####"
 version = 7
 

@@ -1,7 +1,4 @@
-/// Config v6: identical to v7 except `[destinations]` was still required (non-empty) and a
-/// destination could not carry `gnosis_vpn_server`/`wireguard_server`. Forward-converts into
-/// `v7::Config`; the shared schema (connection, wireguard, blokli, strategy) is defined once in
-/// `v7` and reused here unchanged.
+/// v6 keeps its older destinations dialect but reuses v7's shared schema before converting to `v7::Config`.
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
@@ -33,9 +30,7 @@ pub(super) struct Destination {
     pub(super) path: Option<DestinationPath>,
 }
 
-/// Same key set v6 has always accepted — a v6 file never had `gnosis_vpn_server`/
-/// `wireguard_server`, so those still surface as unsupported keys here; upgrade to
-/// `version = 7` to use them.
+/// v6 still rejects only truly v7-only destination keys; shared `[connection]` keys stay supported.
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong = Vec::new();
     for (key, value) in table.iter() {
@@ -179,8 +174,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                     }
                                     continue;
                                 }
-                                // v6 shares v7's `Connection` verbatim, so this key already takes
-                                // effect here; without this arm it would be reported as unsupported.
+                                // v6 reuses v7's `Connection`, so `dimensions` already works here.
                                 if k2 == "dimensions" {
                                     if let Some(dims) = v2.as_table() {
                                         for (k3, _) in dims.iter() {
@@ -468,8 +462,7 @@ latency_halflife = "50ms"
         assert!(wrong_keys(&table).is_empty());
     }
 
-    /// Same reason as the path planner above: `[connection]` is v7's, so the PIX generator
-    /// dimensions take effect in a v6 file and must not be reported as unsupported.
+    /// v6 reuses v7's `[connection]`, so PIX dimensions stay supported here.
     #[test]
     fn v6_file_still_accepts_the_pix_dimensions() {
         let table = r#####"
