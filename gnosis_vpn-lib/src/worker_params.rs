@@ -181,17 +181,11 @@ impl WorkerParams {
     pub async fn to_config(
         &self,
         safe_module: &SafeModule,
-        path_planner_min_ack_rate: f64,
-        path_planner: crate::connection::options::PathPlannerOptions,
-        pix_dimensions: crate::connection::options::PixDimensionOptions,
+        options: crate::connection::options::HoprConfigOptions,
     ) -> Result<HoprLibConfig, Error> {
         match self.config_mode.clone() {
             ConfigFileMode::Manual(path) => config::from_path(path).await.map_err(Error::from),
-            ConfigFileMode::Generated => {
-                config::generate(safe_module, path_planner_min_ack_rate, path_planner, pix_dimensions)
-                    .await
-                    .map_err(Error::from)
-            }
+            ConfigFileMode::Generated => config::generate(safe_module, options).await.map_err(Error::from),
         }
     }
 

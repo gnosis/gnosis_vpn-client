@@ -67,9 +67,7 @@ pub async fn read_safe(state_home: PathBuf) -> Result<SafeModule, Error> {
 
 pub async fn generate(
     safe_module: &SafeModule,
-    path_planner_min_ack_rate: f64,
-    path_planner: crate::connection::options::PathPlannerOptions,
-    pix_dimensions: crate::connection::options::PixDimensionOptions,
+    options: crate::connection::options::HoprConfigOptions,
 ) -> Result<HoprLibConfig, Error> {
     let mut cfg = HoprLibConfig::default();
     cfg.safe_module.safe_address = safe_module
@@ -86,11 +84,11 @@ pub async fn generate(
     cfg.protocol.probe.timeout = Duration::from_secs(3);
     cfg.protocol.probe.interval = Duration::from_secs(3);
     cfg.protocol.probe.recheck_threshold = Duration::from_secs(3);
-    cfg.protocol.path_planner = edgli::latency_path_planner_config(path_planner_min_ack_rate);
+    cfg.protocol.path_planner = edgli::latency_path_planner_config(options.path_planner_min_ack_rate);
     // Layer user overrides on top of the latency preset; unset fields keep the preset value.
-    path_planner.apply(&mut cfg.protocol.path_planner);
+    options.path_planner.apply(&mut cfg.protocol.path_planner);
     // Apply PIX dimension overrides only when matching an Exit's advertised quota window.
-    pix_dimensions.apply(&mut cfg.protocol.pix);
+    options.pix_dimensions.apply(&mut cfg.protocol.pix);
     Ok(cfg)
 }
 
@@ -101,7 +99,7 @@ pub fn safe_file(state_home: PathBuf) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::options::{PathPlannerOptions, PixDimensionOptions};
+    use crate::connection::options::{HoprConfigOptions, PathPlannerOptions, PixDimensionOptions};
 
     fn safe_module() -> SafeModule {
         SafeModule {
@@ -114,7 +112,12 @@ mod tests {
         path_planner: PathPlannerOptions,
         pix_dimensions: PixDimensionOptions,
     ) -> edgli::hopr_lib::config::HoprLibConfig {
-        generate(&safe_module(), 0.1, path_planner, pix_dimensions)
+        let options = HoprConfigOptions {
+            path_planner,
+            pix_dimensions,
+            ..HoprConfigOptions::default()
+        };
+        generate(&safe_module(), options)
             .await
             .expect("generate should succeed")
     }

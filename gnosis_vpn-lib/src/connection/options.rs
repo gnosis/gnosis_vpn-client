@@ -32,6 +32,40 @@ pub struct Options {
     pub path_planner: PathPlannerOptions,
 }
 
+impl Options {
+    /// The subset of these options that shapes the generated `hopr-lib` config.
+    pub fn hopr_config(&self) -> HoprConfigOptions {
+        HoprConfigOptions {
+            path_planner_min_ack_rate: self.path_planner_min_ack_rate,
+            path_planner: self.path_planner.clone(),
+            pix_dimensions: self.pix.dimensions.clone(),
+        }
+    }
+}
+
+/// The parts of [`Options`] that shape the generated `hopr-lib` config, carried as one value so
+/// the signatures down to [`crate::hopr::config::generate`] do not grow per knob.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HoprConfigOptions {
+    /// See [`Options::path_planner_min_ack_rate`].
+    pub path_planner_min_ack_rate: f64,
+    /// See [`Options::path_planner`].
+    pub path_planner: PathPlannerOptions,
+    /// See [`PixOptions::dimensions`].
+    pub pix_dimensions: PixDimensionOptions,
+}
+
+impl Default for HoprConfigOptions {
+    /// `path_planner_min_ack_rate` is [`DEFAULT_PATH_PLANNER_MIN_ACK_RATE`], not `f64::default()`.
+    fn default() -> Self {
+        Self {
+            path_planner_min_ack_rate: DEFAULT_PATH_PLANNER_MIN_ACK_RATE,
+            path_planner: PathPlannerOptions::default(),
+            pix_dimensions: PixDimensionOptions::default(),
+        }
+    }
+}
+
 /// Optional overrides mirroring [`PathPlannerConfig`]: only set fields override the preset; `min_ack_rate` stays flat.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct PathPlannerOptions {
