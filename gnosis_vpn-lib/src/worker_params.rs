@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn blokli_endpoint_uses_system_dns_until_the_host_is_resolved() {
         let endpoint = params(None).blokli_endpoint(TEST_REQUEST_TIMEOUT);
-        assert_eq!(endpoint.url, *edgli::DEFAULT_BLOKLI_URL);
+        assert_eq!(endpoint.url.as_str(), "https://blokli.jura.gnosisvpn.io/");
         assert_eq!(endpoint.dns_override, None);
     }
 
