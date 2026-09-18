@@ -35,10 +35,7 @@ impl Runner {
     }
 
     pub(crate) async fn start(&self, results_sender: mpsc::Sender<Results>) {
-        let res = match tokio::time::timeout(UNREGISTER_BUDGET, self.run(results_sender.clone())).await {
-            Ok(res) => res,
-            Err(_elapsed) => Err(Error::Timeout(UNREGISTER_BUDGET)),
-        };
+        let res = self.run(results_sender.clone()).await;
         let _ = results_sender
             .send(Results::DisconnectionResult {
                 wg_public_key: self.down.wg_public_key.clone(),
@@ -67,7 +64,17 @@ impl Runner {
                 evt: Event::UnregisterWg,
             })
             .await;
-        let unregister_res = unregister(&self.options, &bridge_session, self.down.wg_public_key.clone()).await;
+        // Only the unregister is bounded: the bridge session opened above must be closed on every path.
+        let unregister_fut = unregister(&self.options, &bridge_session, self.down.wg_public_key.clone());
+        let unregister_res = match tokio::time::timeout(UNREGISTER_BUDGET, unregister_fut).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(gvpn_client::Error::RegistrationNotFound)) => {
+                tracing::warn!(wg_public_key = %self.down.wg_public_key, "trying to unregister already removed registration");
+                Ok(())
+            }
+            Ok(Err(error)) => Err(Error::from(error)),
+            Err(_elapsed) => Err(Error::Timeout(UNREGISTER_BUDGET)),
+        };
 
         // 3. close bridge session - also after a failed unregister, so the session does not linger
         let _ = results_sender
@@ -78,13 +85,7 @@ impl Runner {
             .await;
         let close_res = close_bridge_session(&self.hopr, &bridge_session).await;
 
-        match unregister_res {
-            Ok(_) => (),
-            Err(gvpn_client::Error::RegistrationNotFound) => {
-                tracing::warn!(wg_public_key = %self.down.wg_public_key, "trying to unregister already removed registration");
-            }
-            Err(error) => return Err(error.into()),
-        }
+        unregister_res?;
         Ok(close_res?)
     }
 }

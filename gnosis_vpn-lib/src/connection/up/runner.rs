@@ -31,8 +31,8 @@ use super::{Error, Event, Progress, Setback};
 pub(crate) struct PreviousConnection {
     /// Blokli IPs resolved during the previous connection (reused when killswitch blocks DNS).
     pub blokli_ips: Vec<Ipv4Addr>,
-    /// WireGuard public keys still registered at this exit, unregistered during bridge cleanup.
-    pub wg_public_keys: Vec<String>,
+    /// WireGuard public key from the previous connection to unregister during bridge cleanup.
+    pub wg_public_key: Option<String>,
 }
 
 /// What to connect to and how to configure it, as supplied by the caller.
@@ -144,7 +144,7 @@ impl Runner {
             self.hopr.clone(),
             bridge_session,
             self.options.clone(),
-            self.prev_conn.wg_public_keys.clone(),
+            self.prev_conn.wg_public_key.clone(),
             results_sender.clone(),
         );
 
@@ -608,11 +608,11 @@ fn spawn_background_bridge_cleanup(
     hopr: Arc<Hopr>,
     bridge_session: SessionClientMetadata,
     options: Options,
-    prev_public_keys: Vec<String>,
+    prev_public_key: Option<String>,
     results_sender: mpsc::Sender<Results>,
 ) {
     tokio::spawn(async move {
-        for old_key in prev_public_keys {
+        if let Some(old_key) = prev_public_key {
             let input = gvpn_client::Input::new(old_key, bridge_session.bound_host, options.timeouts.http);
             let client = reqwest::Client::new();
             match gvpn_client::unregister(&client, &input).await {
