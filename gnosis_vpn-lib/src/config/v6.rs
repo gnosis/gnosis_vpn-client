@@ -1,7 +1,4 @@
-/// Config v6: identical to v7 except `[destinations]` was still required (non-empty) and a
-/// destination could not carry `gnosis_vpn_server`/`wireguard_server`. Forward-converts into
-/// `v7::Config`; the shared schema (connection, wireguard, blokli, strategy) is defined once in
-/// `v7` and reused here unchanged.
+/// v6 keeps its older destinations dialect but reuses v7's shared schema before converting to `v7::Config`.
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
@@ -33,9 +30,7 @@ pub(super) struct Destination {
     pub(super) path: Option<DestinationPath>,
 }
 
-/// Same key set v6 has always accepted — a v6 file never had `gnosis_vpn_server`/
-/// `wireguard_server`, so those still surface as unsupported keys here; upgrade to
-/// `version = 7` to use them.
+/// v6 still rejects only truly v7-only destination keys; shared `[connection]` keys stay supported.
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong = Vec::new();
     for (key, value) in table.iter() {
@@ -172,6 +167,21 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                     if let Some(session) = v2.as_table() {
                                         for (k3, _) in session.iter() {
                                             if k3 == "enabled" {
+                                                continue;
+                                            }
+                                            wrong.push(format!("connection.pix.{k2}.{k3}"));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                // v6 reuses v7's `Connection`, so `dimensions` already works here.
+                                if k2 == "dimensions" {
+                                    if let Some(dims) = v2.as_table() {
+                                        for (k3, _) in dims.iter() {
+                                            if k3 == "num_ssa_parts"
+                                                || k3 == "ssa_part_size"
+                                                || k3 == "additional_shares"
+                                            {
                                                 continue;
                                             }
                                             wrong.push(format!("connection.pix.{k2}.{k3}"));
@@ -445,6 +455,26 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 [connection.path_planner]
 min_paths_anonymity_floor = 4
 latency_halflife = "50ms"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert!(wrong_keys(&table).is_empty());
+    }
+
+    /// v6 reuses v7's `[connection]`, so PIX dimensions stay supported here.
+    #[test]
+    fn v6_file_still_accepts_the_pix_dimensions() {
+        let table = r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.pix.dimensions]
+num_ssa_parts     = 8
+ssa_part_size     = 2
+additional_shares = 2
 "#####
             .parse::<toml::Table>()
             .expect("valid TOML");

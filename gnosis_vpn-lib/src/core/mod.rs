@@ -1387,8 +1387,7 @@ impl Core {
         let cancel = self.cancel_on_shutdown.clone();
         let worker_params = self.worker_params.clone();
         let blokli_config = self.config.blokli.clone();
-        let path_planner_min_ack_rate = self.config.connection.path_planner_min_ack_rate;
-        let path_planner = self.config.connection.path_planner.clone();
+        let hopr_config_options = self.config.connection.hopr_config();
         let probe_local_addresses = self.config.connection.probe_local_addresses;
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
@@ -1398,8 +1397,7 @@ impl Core {
                     runner::hopr(
                         worker_params,
                         blokli_config,
-                        path_planner_min_ack_rate,
-                        path_planner,
+                        hopr_config_options,
                         probe_local_addresses,
                         &safe_module,
                         results_sender,

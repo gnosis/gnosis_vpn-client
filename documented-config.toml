@@ -202,6 +202,15 @@ path    = { hops = 1 }
 # [connection.pix.health_check]
 # enabled = false
 
+# Entry-side PIX share-generator overrides; leave unset unless matching an Exit's advertised quota window.
+# Quota is num_ssa_parts x (ssa_part_size + additional_shares) x 1038 bytes; defaults are ~649 MiB.
+# The Exit must accept these exactly; `hoprd-localcluster --enable-pix` uses 8 x (2 + 2).
+# num_ssa_parts: 8..=16192, ssa_part_size: 2..=255, additional_shares: 0..=255 and <= ssa_part_size.
+# [connection.pix.dimensions]
+# num_ssa_parts = 8192
+# ssa_part_size = 64
+# additional_shares = 16
+
 ###
 ## wireguard section - specific VPN-related settings
 

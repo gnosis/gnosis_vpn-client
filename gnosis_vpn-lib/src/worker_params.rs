@@ -181,14 +181,11 @@ impl WorkerParams {
     pub async fn to_config(
         &self,
         safe_module: &SafeModule,
-        path_planner_min_ack_rate: f64,
-        path_planner: crate::connection::options::PathPlannerOptions,
+        options: crate::connection::options::HoprConfigOptions,
     ) -> Result<HoprLibConfig, Error> {
         match self.config_mode.clone() {
             ConfigFileMode::Manual(path) => config::from_path(path).await.map_err(Error::from),
-            ConfigFileMode::Generated => config::generate(safe_module, path_planner_min_ack_rate, path_planner)
-                .await
-                .map_err(Error::from),
+            ConfigFileMode::Generated => config::generate(safe_module, options).await.map_err(Error::from),
         }
     }
 
@@ -324,7 +321,7 @@ mod tests {
     #[test]
     fn blokli_endpoint_uses_system_dns_until_the_host_is_resolved() {
         let endpoint = params(None).blokli_endpoint(TEST_REQUEST_TIMEOUT);
-        assert_eq!(endpoint.url, *edgli::DEFAULT_BLOKLI_URL);
+        assert_eq!(endpoint.url.as_str(), "https://blokli.jura.gnosisvpn.io/");
         assert_eq!(endpoint.dns_override, None);
     }
 
