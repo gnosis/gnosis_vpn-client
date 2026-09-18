@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use std::fmt::{self, Display};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::connection::destination::Destination;
 use crate::connection::options::SurbConfigError;
@@ -40,6 +40,8 @@ pub(crate) enum Error {
     Ping(#[from] ping::Error),
     #[error("Surb config error: {0}")]
     SurbConfig(#[from] SurbConfigError),
+    #[error("unregister exceeded its {0:?} budget")]
+    Timeout(Duration),
 }
 
 #[derive(Clone, Copy, Debug)]
