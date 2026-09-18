@@ -60,6 +60,9 @@ pub struct Meta {
     pub location: Option<String>,
     pub flag: Option<String>,
     pub description: Option<String>,
+    /// Decimal degrees, WGS84. Published as text, like every other label.
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
     /// Every unrecognized key, kept so nothing an operator publishes is lost.
     pub other: HashMap<String, String>,
 }
@@ -67,14 +70,32 @@ pub struct Meta {
 impl Meta {
     /// The only place the recognized label names are known.
     pub fn from_map(mut labels: HashMap<String, String>) -> Self {
+        let latitude = take_coordinate(&mut labels, "latitude", 90.0);
+        let longitude = take_coordinate(&mut labels, "longitude", 180.0);
         Self {
             name: labels.remove("name"),
             location: labels.remove("location"),
             flag: labels.remove("flag"),
             description: labels.remove("description"),
+            latitude,
+            longitude,
             other: labels,
         }
     }
+}
+
+/// Parses a coordinate label, leaving anything unusable in the map for `other` to keep.
+///
+/// Metadata is operator-published and unverified, so a value that is not a finite number within
+/// `limit` is treated as absent rather than trusted - it would otherwise place a marker at a
+/// nonsense position.
+fn take_coordinate(labels: &mut HashMap<String, String>, key: &str, limit: f64) -> Option<f64> {
+    let degrees = labels.get(key)?.trim().parse::<f64>().ok()?;
+    if !degrees.is_finite() || degrees.abs() > limit {
+        return None;
+    }
+    labels.remove(key);
+    Some(degrees)
 }
 
 /// Discovery publishes no path, so every discovered exit sits at this one.
@@ -723,6 +744,74 @@ mod tests {
     }
 
     #[test]
+    fn configuration_pins_coordinates_like_any_other_label() {
+        let addr = address(1);
+        let mut config_labels = HashMap::new();
+        config_labels.insert("latitude".to_string(), "48.2020".to_string());
+        config_labels.insert("longitude".to_string(), "16.3647".to_string());
+
+        let mut info = exit_node(addr);
+        info.meta.insert("latitude".to_string(), "50.1100".to_string());
+        info.meta.insert("longitude".to_string(), "8.6821".to_string());
+
+        let dest = merged(pinned("dest-1", addr, config_labels, None, None), info);
+
+        assert_eq!(Some(48.2020), dest.meta.latitude);
+        assert_eq!(Some(16.3647), dest.meta.longitude);
+    }
+
+    #[test]
+    fn coordinates_are_taken_from_the_published_labels() {
+        let mut labels = HashMap::new();
+        labels.insert("latitude".to_string(), "-33.8714".to_string());
+        labels.insert("longitude".to_string(), " 151.2125 ".to_string());
+
+        let meta = Meta::from_map(labels);
+
+        assert_eq!(Some(-33.8714), meta.latitude);
+        assert_eq!(Some(151.2125), meta.longitude);
+        // Recognized keys never linger in `other`.
+        assert!(meta.other.is_empty());
+    }
+
+    #[test]
+    fn absent_coordinates_stay_absent() {
+        let meta = Meta::from_map(HashMap::new());
+
+        assert_eq!(None, meta.latitude);
+        assert_eq!(None, meta.longitude);
+    }
+
+    #[test]
+    fn an_unusable_coordinate_is_dropped_but_the_published_text_is_kept() {
+        for value in ["abc", "91", "-90.5", "NaN", "inf", ""] {
+            let mut labels = HashMap::new();
+            labels.insert("latitude".to_string(), value.to_string());
+
+            let meta = Meta::from_map(labels);
+
+            assert_eq!(None, meta.latitude, "{value} should not parse as a latitude");
+            assert_eq!(
+                Some(value),
+                meta.other.get("latitude").map(String::as_str),
+                "{value} should survive in other"
+            );
+        }
+    }
+
+    #[test]
+    fn longitude_allows_what_latitude_rejects() {
+        let mut labels = HashMap::new();
+        labels.insert("latitude".to_string(), "120.0".to_string());
+        labels.insert("longitude".to_string(), "120.0".to_string());
+
+        let meta = Meta::from_map(labels);
+
+        assert_eq!(None, meta.latitude);
+        assert_eq!(Some(120.0), meta.longitude);
+    }
+
+    #[test]
     fn a_deregistered_exit_falls_back_to_configuration_and_the_defaults() {
         let addr = address(1);
         let mut config_labels = HashMap::new();
@@ -1331,7 +1420,7 @@ mod tests {
 
         assert_eq!(
             json,
-            r#"{"id":"dest-1","meta":{"name":null,"location":null,"flag":null,"description":null,"other":{}},"address":"0x0101010101010101010101010101010101010101","routing":1,"gnosis_vpn_server":"172.30.0.1:8000","wireguard_server":"172.30.0.1:51820","source":"Configured","overrides":{"configured_meta":{},"configured_gnosis_vpn_server":null,"configured_wireguard_server":null}}"#
+            r#"{"id":"dest-1","meta":{"name":null,"location":null,"flag":null,"description":null,"latitude":null,"longitude":null,"other":{}},"address":"0x0101010101010101010101010101010101010101","routing":1,"gnosis_vpn_server":"172.30.0.1:8000","wireguard_server":"172.30.0.1:51820","source":"Configured","overrides":{"configured_meta":{},"configured_gnosis_vpn_server":null,"configured_wireguard_server":null}}"#
         );
     }
 

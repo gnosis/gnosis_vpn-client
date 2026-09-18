@@ -1174,6 +1174,41 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
     }
 
     #[test]
+    fn configured_meta_reaches_the_destination_as_typed_labels() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Austria]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+meta = { location = "Vienna", flag = "AT", latitude = "48.2020", longitude = "16.3647" }
+"#####,
+        );
+        let result = convert_with_defaults(cfg.destinations);
+        let d = result.values().next().unwrap();
+        assert_eq!(Some("Vienna"), d.meta.location.as_deref());
+        assert_eq!(Some("AT"), d.meta.flag.as_deref());
+        assert_eq!(Some(48.2020), d.meta.latitude);
+        assert_eq!(Some(16.3647), d.meta.longitude);
+    }
+
+    #[test]
+    fn a_bare_float_coordinate_is_rejected() {
+        // `meta` deserializes as a map of strings, so an unquoted number fails the whole table.
+        // Configuration must quote coordinates; this pins that requirement down.
+        let result = toml::from_str::<Config>(
+            r#####"
+version = 7
+
+[destinations.Austria]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+meta = { latitude = 48.2020 }
+"#####,
+        );
+        assert!(result.is_err(), "an unquoted coordinate should not deserialize");
+    }
+
+    #[test]
     fn configured_destination_target_overrides_win_over_the_default() {
         let cfg = parse(
             r#####"
