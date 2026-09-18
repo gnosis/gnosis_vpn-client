@@ -1506,7 +1506,7 @@ impl Core {
         let retries: Vec<connection::down::Down> = self
             .pending_unregisters
             .iter()
-            .filter(|p| p.down.destination.same_exit(destination))
+            .filter(|p| p.down.destination.id == destination.id)
             .map(|p| p.down.clone())
             .collect();
         for down in retries {
