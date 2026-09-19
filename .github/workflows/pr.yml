@@ -76,7 +76,8 @@ jobs:
       gcp_service_account: download-gnosisvpn-gh-sa@gnosisvpn-production.iam.gserviceaccount.com
       runner: ${{ matrix.runner }}
       timeout_minutes: 240
-      enabled: ${{ matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label) }}
+      # "publish-binaries" already makes set-build-version publish commit builds to the registry; it now also builds every architecture, so one label does both. The per-arch labels still work on their own.
+      enabled: ${{ matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, 'publish-binaries') || contains(github.event.pull_request.labels.*.name, matrix.required_label) }}
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       gpg_private_key: ${{ secrets.GNOSISVPN_GPG_PRIVATE_KEY }}
