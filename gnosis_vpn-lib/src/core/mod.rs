@@ -111,9 +111,19 @@ pub struct Core {
     // Cleared in disconnect_from_connection so stale entries don't outlive their connection.
     responders: HashMap<u64, Responder>,
     ongoing_disconnections: Vec<connection::down::Down>,
+    pending_unregisters: Vec<PendingUnregister>,
     cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
     reconnecting_since: Option<SystemTime>,
 }
+
+/// A disconnect whose unregister failed; re-run against its own destination snapshot on the next connect to this exit.
+struct PendingUnregister {
+    down: connection::down::Down,
+    since: SystemTime,
+}
+
+/// Server GC: client_handshake_timeout_s=300 plus a 180 s sweep - older entries are already collected.
+const PENDING_UNREGISTER_TTL: Duration = Duration::from_secs(8 * 60);
 
 #[derive(Debug, Clone)]
 enum Phase {
@@ -221,6 +231,7 @@ impl Core {
             balances: None,
             strategy_handle: None,
             ongoing_disconnections: Vec::new(),
+            pending_unregisters: Vec::new(),
             route_healths,
             next_request_id: 0,
             responders: HashMap::new(),
@@ -807,9 +818,26 @@ impl Core {
                 match res {
                     Ok(_) => {
                         tracing::info!(%wg_public_key, "disconnected successful");
+                        self.pending_unregisters
+                            .retain(|p| p.down.wg_public_key != wg_public_key);
                     }
                     Err(err) => {
-                        tracing::error!(?err, %wg_public_key, "disconnection failed");
+                        tracing::warn!(?err, %wg_public_key, "disconnect failed - retrying on next connect to this exit");
+                        let down = self
+                            .ongoing_disconnections
+                            .iter()
+                            .find(|c| c.wg_public_key == wg_public_key);
+                        // A failed retry keeps its first entry, so the TTL counts from the original failure.
+                        let already_pending = self
+                            .pending_unregisters
+                            .iter()
+                            .any(|p| p.down.wg_public_key == wg_public_key);
+                        if let (Some(down), false) = (down, already_pending) {
+                            self.pending_unregisters.push(PendingUnregister {
+                                down: down.clone(),
+                                since: SystemTime::now(),
+                            });
+                        }
                     }
                 }
                 self.ongoing_disconnections.retain(|c| c.wg_public_key != wg_public_key);
@@ -1529,6 +1557,7 @@ impl Core {
         prev_public_key: Option<String>,
         results_sender: &mpsc::Sender<Results>,
     ) {
+        self.retry_pending_unregisters(&destination, results_sender);
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connection.clone();
             let conn = connection::up::Up::new(destination.clone());
@@ -1559,6 +1588,49 @@ impl Core {
                 rh.connecting(exit, &self.config.connection, &results_sender);
             }
             self.phase = Phase::Connecting(conn);
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        runner.start(results_sender).await;
+                    })
+                    .await;
+            });
+        }
+    }
+
+    /// Re-runs the failed disconnects of this exit; entries leave only on success or past the server's GC window.
+    fn retry_pending_unregisters(&mut self, destination: &Destination, results_sender: &mpsc::Sender<Results>) {
+        let now = SystemTime::now();
+        let still_registered =
+            |p: &PendingUnregister| now.duration_since(p.since).unwrap_or_default() < PENDING_UNREGISTER_TTL;
+        self.pending_unregisters.retain(still_registered);
+        let retries: Vec<connection::down::Down> = self
+            .pending_unregisters
+            .iter()
+            .filter(|p| p.down.destination.same_exit(destination))
+            .map(|p| p.down.clone())
+            .collect();
+        for down in retries {
+            let already_running = self
+                .ongoing_disconnections
+                .iter()
+                .any(|c| c.wg_public_key == down.wg_public_key);
+            if already_running {
+                continue;
+            }
+            tracing::info!(%down, "retrying failed disconnect");
+            self.spawn_unregister_retry(&down, results_sender);
+        }
+    }
+
+    /// Like spawn_disconnection_runner without the tunnel teardown - the retry has no live tunnel.
+    fn spawn_unregister_retry(&mut self, disconn: &connection::down::Down, results_sender: &mpsc::Sender<Results>) {
+        if let Some(hopr) = self.hopr.clone() {
+            let cancel = self.cancel_on_shutdown.clone();
+            let config_connection = self.config.connection.clone();
+            let runner = connection::down::runner::Runner::new(disconn.clone(), hopr, config_connection);
+            let results_sender = results_sender.clone();
+            self.ongoing_disconnections.push(disconn.clone());
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
