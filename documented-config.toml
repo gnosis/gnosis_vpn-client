@@ -37,9 +37,8 @@ version = 7
 # additional information about this exit node - any key is kept, and overrides the exit's own label
 # of the same name. `name`, location, flag and description are shown as labels in `gvpn-ctl status`;
 # `name` is left out when the id above already says the same thing
-# latitude and longitude are decimal degrees (WGS84) and place the exit on the app's map. Quote
-# them like every other value - meta is a table of strings, so a bare number is rejected. A value
-# that is not a number, or is outside +/-90 (latitude) or +/-180 (longitude), is ignored.
+# latitude and longitude place the exit on the app's map; quote them because `meta` is stringly typed.
+# Invalid coordinates outside +/-90 latitude or +/-180 longitude are ignored.
 # meta = { name = <title>, location = <location>, flag = <two-letter country code>, description = <free text>, latitude = "<decimal degrees>", longitude = "<decimal degrees>" }
 # session path: number of intermediate hops (0–3). Not an override: a discovered exit is always
 # reachable at 1 hop, so an entry at another path is an additional destination beside it. Two

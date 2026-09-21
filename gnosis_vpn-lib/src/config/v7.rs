@@ -1194,8 +1194,7 @@ meta = { location = "Vienna", flag = "AT", latitude = "48.2020", longitude = "16
 
     #[test]
     fn a_bare_float_coordinate_is_rejected() {
-        // `meta` deserializes as a map of strings, so an unquoted number fails the whole table.
-        // Configuration must quote coordinates; this pins that requirement down.
+        // Bare numbers fail because `meta` deserializes as strings.
         let result = toml::from_str::<Config>(
             r#####"
 version = 7

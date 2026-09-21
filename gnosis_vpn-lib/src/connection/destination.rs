@@ -60,7 +60,7 @@ pub struct Meta {
     pub location: Option<String>,
     pub flag: Option<String>,
     pub description: Option<String>,
-    /// Decimal degrees, WGS84. Published as text, like every other label.
+    /// Published as text so `meta` stays a string map.
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     /// Every unrecognized key, kept so nothing an operator publishes is lost.
@@ -84,11 +84,7 @@ impl Meta {
     }
 }
 
-/// Parses a coordinate label, leaving anything unusable in the map for `other` to keep.
-///
-/// Metadata is operator-published and unverified, so a value that is not a finite number within
-/// `limit` is treated as absent rather than trusted - it would otherwise place a marker at a
-/// nonsense position.
+/// Invalid coordinates stay in `other` instead of being trusted.
 fn take_coordinate(labels: &mut HashMap<String, String>, key: &str, limit: f64) -> Option<f64> {
     let degrees = labels.get(key)?.trim().parse::<f64>().ok()?;
     if !degrees.is_finite() || degrees.abs() > limit {
