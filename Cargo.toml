@@ -58,7 +58,7 @@ reqwest = { version = "~0.13.4", features = ["blocking", "json"] }
 rtnetlink = "~0.23.0"
 rustix = { version = "~1.1.4", features = ["fs", "net", "pipe", "stdio"] }
 serde = { version = "~1.0.229", features = ["derive"] }
-serde-saphyr = "~0.0.29"
+serde-saphyr = "~1.2.0"
 serde_json = "~1.0.151"
 serde_with = "~3.22.0"
 tempfile = "~3.27.0"
