@@ -25,3 +25,10 @@ informational_warnings = ["unmaintained"]
 deny      = []
 quiet     = false
 show_tree = true
+
+# The nix build sandbox has no network, so the crates.io index is unavailable
+# and every crate logs a spurious "couldn't check if the package is yanked"
+# error. Advisory matching is unaffected; it uses the offline advisory-db input.
+[yanked]
+enabled      = false
+update_index = false
