@@ -7320,11 +7320,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "socket2 0.6.5",
-<<<<<<< HEAD
- "windows-sys 0.60.2",
-=======
  "windows-sys 0.61.2",
->>>>>>> 8b58a8b (chore(deps): update rust crates (patch) (main) (#820))
 ]
 
 [[package]]
