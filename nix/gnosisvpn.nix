@@ -31,12 +31,21 @@ let
   # commit instead, which is also substitutable from the cachix cache.
   # Update these whenever Cargo.lock's rev for the corresponding dependency changes.
   outputHashes = {
+<<<<<<< HEAD
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.2#3a400950a68b4490cb7aeb6f1a5ec91e5e02ba55" =
       "sha256-+aW5BXZ/dnnMsTurMlWyUWgdySTdqbhXRQCqnco2vJE=";
     "git+https://github.com/hoprnet/edge-client.git?branch=release/4.1#e19adcf1f6d4df248780509dc4523449ced0b202" =
       "sha256-AGcY49P2xKuQ5HsuBgRDI+XDrAe3j5juYJQa6/1Bh3M=";
     "git+https://github.com/hoprnet/hoprnet?branch=release/4.0#33624711663e6943cc28bd6cf11670a63db462ae" =
       "sha256-QYMLYNo57QeOM2t69F17PXIW9s5hcf0NRO/CAy2EAuo=";
+=======
+    "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.4#0aebe247729574acc449f9debd62fc8d419dbf07" =
+      "sha256-oxCxToa9dE2TslRNxvO19qZrOrf9qsUlB4u+ZNwzA28=";
+    "git+https://github.com/hoprnet/edge-client.git?rev=aec3623b64f6c8414524f14d714fb3020e6322ae#aec3623b64f6c8414524f14d714fb3020e6322ae" =
+      "sha256-Rp23zj3c/yVRy4gIzCgT5enziMewuYnXOk3ekK1LQws=";
+    "git+https://github.com/hoprnet/hoprnet?rev=85e698a726710e205e8f76f4df7ad52debd2ff86#85e698a726710e205e8f76f4df7ad52debd2ff86" =
+      "sha256-NzPkA4n643OSh6S9SibtcMN7+GktF0BQ/qrq8b+/8j8=";
+>>>>>>> 8b58a8b (chore(deps): update rust crates (patch) (main) (#820))
   };
 
   builders = nixLib.mkRustBuilders {
