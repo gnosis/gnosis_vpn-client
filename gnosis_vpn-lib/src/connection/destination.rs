@@ -84,7 +84,7 @@ impl Meta {
     }
 }
 
-/// Non-finite or out-of-range coordinates stay in `other`.
+/// Unparseable, non-finite, or out-of-range coordinates stay in `other`.
 fn take_coordinate(labels: &mut HashMap<String, String>, key: &str, limit: f64) -> Option<f64> {
     let degrees = labels.get(key)?.trim().parse::<f64>().ok()?;
     if !degrees.is_finite() || degrees.abs() > limit {
