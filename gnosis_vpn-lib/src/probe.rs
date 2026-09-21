@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::command;
 use crate::connection::destination::{Destination, ExitKey};
-use crate::connection::options::{HealthCheckIntervals, Options, surb_config_for};
+use crate::connection::options::{HealthCheckIntervals, Options, SurbParams, surb_config_for};
 use crate::core::runner::Results;
 use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
@@ -24,6 +24,11 @@ pub use crate::gvpn_client::{Health, LoadAvg, Slots, Versions};
 const REOPEN_AFTER_FAILURES: u32 = 3;
 const REOPEN_BACKOFF_STEP: Duration = Duration::from_secs(5);
 const REOPEN_BACKOFF_MAX: Duration = Duration::from_secs(60);
+
+/// Whole quick probe, session open included, so a blocking caller always gets an answer.
+const QUICKPROBE_BUDGET: Duration = Duration::from_secs(30);
+/// Not `timeouts.http` (60 s by default) - a list sweep cannot wait that long per exit.
+const QUICKPROBE_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Add ±25 % random jitter to `base`; zero stays zero so immediate triggers are not delayed.
 pub(crate) fn jitter(base: Duration) -> Duration {
@@ -269,9 +274,26 @@ async fn run_probe(
             let _ = sender.send(Results::Probe { generation, event }).await;
         }
     };
+    // Bridge settings because WireGuard registration runs over this very session.
+    let surb = match surb_config_for(&options.surb_balancing.bridge) {
+        Ok(surb) => surb,
+        Err(err) => {
+            tracing::error!(%destination, %err, "probe cannot open a session with this surb config");
+            send(Event::OpenFailed { error: err.to_string() }).await;
+            return;
+        }
+    };
     let mut open_attempt = 0;
     loop {
-        let session = match ProbeSession::open(hopr.clone(), &destination, &options).await {
+        let session = match ProbeSession::open(
+            hopr.clone(),
+            &destination,
+            &options,
+            surb.clone(),
+            options.pix.bridge.enabled,
+        )
+        .await
+        {
             Ok(session) => session,
             Err(err) => {
                 open_attempt += 1;
@@ -301,6 +323,64 @@ async fn run_probe(
         send(Event::Reopening { error }).await;
         session.close().await;
     }
+}
+
+/// What one quick probe found; `api_version` is None when the exit speaks nothing we support.
+#[derive(Debug)]
+pub(crate) struct QuickProbeOutcome {
+    pub(crate) versions: Versions,
+    pub(crate) api_version: Option<String>,
+    pub(crate) health: Health,
+    pub(crate) rtt: Duration,
+}
+
+/// Opens an unbalanced session, runs version and health over it, tears it down - bounded so a caller can block on it.
+pub(crate) async fn quick_probe(
+    hopr: Arc<Hopr>,
+    destination: Destination,
+    options: Options,
+) -> Result<QuickProbeOutcome, String> {
+    match time::timeout(QUICKPROBE_BUDGET, run_quick_probe(hopr, &destination, &options)).await {
+        Ok(outcome) => outcome,
+        Err(_elapsed) => Err(format!("quick probe exceeded its {QUICKPROBE_BUDGET:?} budget")),
+    }
+}
+
+async fn run_quick_probe(
+    hopr: Arc<Hopr>,
+    destination: &Destination,
+    options: &Options,
+) -> Result<QuickProbeOutcome, String> {
+    // No balancing and no PIX: the session lives for two requests.
+    let surb = SurbParams {
+        management: None,
+        always_max_out_surbs: false,
+    };
+    tracing::debug!(%destination, "opening quick probe session");
+    let session = ProbeSession::open(hopr, destination, options, surb, false)
+        .await
+        .map_err(|err| format!("opening session failed: {err}"))?;
+    let outcome = quick_checks(session.meta.bound_host).await;
+    session.close().await;
+    outcome
+}
+
+async fn quick_checks(bound_host: std::net::SocketAddr) -> Result<QuickProbeOutcome, String> {
+    let client = reqwest::Client::new();
+    let started = Instant::now();
+    let versions = gvpn_client::versions(&client, bound_host, QUICKPROBE_HTTP_TIMEOUT)
+        .await
+        .map_err(|err| format!("versions check failed: {err}"))?;
+    let rtt = started.elapsed();
+    let health = gvpn_client::health(&client, bound_host, QUICKPROBE_HTTP_TIMEOUT)
+        .await
+        .map_err(|err| format!("health check failed: {err}"))?;
+    Ok(QuickProbeOutcome {
+        api_version: select_api_version(&versions.versions).map(str::to_owned),
+        versions,
+        health,
+        rtt,
+    })
 }
 
 /// Runs the checks over one session and reports each result.
@@ -410,9 +490,13 @@ struct ProbeSession {
 }
 
 impl ProbeSession {
-    /// Opened with the bridge settings because WireGuard registration runs over this very session.
-    async fn open(hopr: Arc<Hopr>, destination: &Destination, options: &Options) -> Result<Self, HoprError> {
-        let surb = surb_config_for(&options.surb_balancing.bridge).map_err(|e| HoprError::Session(e.to_string()))?;
+    async fn open(
+        hopr: Arc<Hopr>,
+        destination: &Destination,
+        options: &Options,
+        surb: SurbParams,
+        pix_enabled: bool,
+    ) -> Result<Self, HoprError> {
         let cfg = HoprSessionClientConfig {
             capabilities: options.sessions.bridge.capabilities,
             forward_path: destination.routing,
@@ -422,7 +506,7 @@ impl ProbeSession {
             flow_control: Some(FlowControlConfig::robust()),
             ..Default::default()
         };
-        let cfg = if options.pix.bridge.enabled {
+        let cfg = if pix_enabled {
             hopr.pix_aware_session_cfg(cfg)?
         } else {
             cfg
@@ -675,5 +759,73 @@ mod tests {
     #[test]
     fn jitter_zero_returns_zero() {
         assert_eq!(jitter(Duration::ZERO), Duration::ZERO);
+    }
+
+    const VERSIONS_BODY: &str = r#"{"versions":["v1"],"latest":"v1"}"#;
+    const HEALTH_BODY: &str = r#"{"slots":{"total":10,"available":7,"connected":3},"load_avg":{"one":0.5,"five":0.4,"fifteen":0.3,"nproc":4}}"#;
+
+    /// One canned answer per connection, so `quick_checks` runs against the real HTTP client.
+    async fn canned_exit(versions_body: &'static str, status: &'static str) -> std::net::SocketAddr {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buf = [0u8; 512];
+                    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match stream.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => request.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    let body = match String::from_utf8_lossy(&request).contains("/versions") {
+                        true => versions_body,
+                        false => HEALTH_BODY,
+                    };
+                    // `connection: close` keeps every request on its own connection.
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {len}\r\nconnection: close\r\n\r\n{body}",
+                        len = body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.flush().await;
+                });
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn quick_checks_reports_versions_load_and_rtt() {
+        let addr = canned_exit(VERSIONS_BODY, "200 OK").await;
+
+        let outcome = quick_checks(addr).await.expect("checks succeed");
+
+        assert_eq!(outcome.api_version.as_deref(), Some("v1"));
+        assert_eq!(outcome.versions.latest, "v1");
+        assert_eq!(outcome.health.slots.available, 7);
+        assert!(outcome.rtt > Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn quick_checks_still_succeed_on_an_incompatible_api_version() {
+        let addr = canned_exit(r#"{"versions":["v2"],"latest":"v2"}"#, "200 OK").await;
+
+        let outcome = quick_checks(addr).await.expect("checks succeed");
+
+        assert_eq!(outcome.api_version, None);
+        assert_eq!(outcome.versions.versions, vec!["v2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn quick_checks_name_the_check_that_failed() {
+        let addr = canned_exit(VERSIONS_BODY, "500 Internal Server Error").await;
+
+        let error = quick_checks(addr).await.expect_err("a failing exit fails the check");
+
+        assert!(error.starts_with("versions check failed"), "unexpected error: {error}");
     }
 }

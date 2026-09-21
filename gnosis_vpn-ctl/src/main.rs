@@ -264,6 +264,12 @@ fn pretty_print(resp: &Response) {
         Response::Unprobe(command::UnprobeResponse::NotProbing) => {
             eprintln!("Currently not probing any destination");
         }
+        Response::QuickProbe(res @ command::QuickProbeResponse::Checked { .. }) => {
+            println!("{res}");
+        }
+        Response::QuickProbe(res) => {
+            eprintln!("{res}");
+        }
         Response::Telemetry(Some(metrics)) => {
             println!("{metrics}");
         }
@@ -492,6 +498,9 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Probe(command::ProbeResponse::NotReady) => exitcode::UNAVAILABLE,
         Response::Probe(command::ProbeResponse::DestinationNotFound) => exitcode::UNAVAILABLE,
         Response::Probe(command::ProbeResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
+        Response::QuickProbe(command::QuickProbeResponse::Checked { .. }) => exitcode::OK,
+        Response::QuickProbe(command::QuickProbeResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
+        Response::QuickProbe(..) => exitcode::UNAVAILABLE,
         Response::Unprobe(command::UnprobeResponse::Closing { .. }) => exitcode::OK,
         Response::Unprobe(command::UnprobeResponse::InUse { .. }) => exitcode::PROTOCOL,
         Response::Unprobe(command::UnprobeResponse::NotProbing) => exitcode::PROTOCOL,

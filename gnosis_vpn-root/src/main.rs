@@ -1016,6 +1016,7 @@ impl DaemonState {
             | LibCommand::Disconnect
             | LibCommand::Probe(_)
             | LibCommand::Unprobe
+            | LibCommand::QuickProbe(_)
             | LibCommand::Balance
             | LibCommand::FundingTool(_)
             | LibCommand::Telemetry => Ok(match self.shutdown_ongoing {

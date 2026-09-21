@@ -7,9 +7,10 @@ use gnosis_vpn_lib::balance::{BalanceRecommendation, Capacity, CapacityAllocatio
 use gnosis_vpn_lib::command::{
     ActiveSession, BalanceResponse, ChannelBalance, ChannelOut, Command, ConnStats, ConnectResponse, ConnectedInfo,
     ConnectingInfo, DestinationState, DisconnectResponse, DisconnectingInfo, FundingToolResponse, HoprInitStatus,
-    HoprStatus, Info, InfoResponse, NerdStatsConnection, NerdStatsResponse, ProbeResponse, ProbeView, ReconnectingInfo,
-    Response, RouteHealthView, RunMode, StartClientResponse, StatusResponse, StopClientResponse, SurbBalancerSetpoint,
-    SurbStats, TicketStats, TicketStatsStatus, UnprobeResponse, WorkerCommand,
+    HoprStatus, Info, InfoResponse, NerdStatsConnection, NerdStatsResponse, ProbeResponse, ProbeView,
+    QuickProbeResponse, ReconnectingInfo, Response, RouteHealthView, RunMode, StartClientResponse, StatusResponse,
+    StopClientResponse, SurbBalancerSetpoint, SurbStats, TicketStats, TicketStatsStatus, UnprobeResponse,
+    WorkerCommand,
 };
 use gnosis_vpn_lib::connection::destination::{Address, Destination, HopRouting, Meta};
 use gnosis_vpn_lib::connection::{DownPhase, UpPhase};
@@ -64,6 +65,7 @@ fn assert_types_are_accessible() {
     let _: UnrecoverableReason;
     let _: ProbeResponse;
     let _: UnprobeResponse;
+    let _: QuickProbeResponse;
     let _: ProbeView;
     let _: ProbeState;
     let _: Versions;

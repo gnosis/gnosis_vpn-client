@@ -268,7 +268,7 @@ pub(crate) enum SurbConfigError {
     MaxSurbsPerSecOverflow,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct SurbParams {
     pub(crate) management: Option<SurbBalancerConfig>,
     pub(crate) always_max_out_surbs: bool,

@@ -53,6 +53,8 @@ pub enum Command {
     Probe(String),
     /// Close the probe session
     Unprobe,
+    /// Check one exit over a short-lived session and report what it found
+    QuickProbe(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -68,6 +70,7 @@ pub enum WorkerCommand {
     Destinations,
     Probe(String),
     Unprobe,
+    QuickProbe(String),
     /// Reconnect the current HOPR session without clearing the target or disabling the killswitch.
     /// Used by the root process when a WAN interface change is detected.
     ForceReconnect,
@@ -93,6 +96,7 @@ pub enum Response {
     Destinations(Vec<String>),
     Probe(ProbeResponse),
     Unprobe(UnprobeResponse),
+    QuickProbe(QuickProbeResponse),
     WorkerOffline,
     WorkerRestarting,
 }
@@ -332,6 +336,53 @@ impl UnprobeResponse {
     pub fn in_use(destination: Destination) -> Self {
         UnprobeResponse::InUse {
             destination: Box::new(destination),
+        }
+    }
+}
+
+/// One short-lived check of an exit, for an overview list; nothing of it outlives the request.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum QuickProbeResponse {
+    Checked {
+        destination: Box<Destination>,
+        versions: Versions,
+        /// The API version this client selected from `versions`; None means incompatible.
+        api_version: Option<String>,
+        load: Health,
+        #[serde(with = "serde_utils::duration_ms")]
+        rtt: Duration,
+    },
+    /// The session or one of the checks failed.
+    Failed {
+        destination: Box<Destination>,
+        error: String,
+    },
+    /// Refused before opening a session, because the route cannot carry one.
+    UnableToProbe {
+        destination: Box<Destination>,
+        route_health: RouteHealthState,
+    },
+    /// The edge client is not running yet.
+    NotReady,
+    DestinationNotFound,
+    DestinationAmbiguous {
+        connect_ids: Vec<String>,
+    },
+}
+
+impl QuickProbeResponse {
+    pub fn failed(destination: Destination, error: String) -> Self {
+        QuickProbeResponse::Failed {
+            destination: Box::new(destination),
+            error,
+        }
+    }
+
+    pub fn unable(destination: Destination, route_health: RouteHealthState) -> Self {
+        QuickProbeResponse::UnableToProbe {
+            destination: Box::new(destination),
+            route_health,
         }
     }
 }
@@ -833,6 +884,38 @@ impl Display for ProbeView {
     }
 }
 
+impl Display for QuickProbeResponse {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            QuickProbeResponse::Checked {
+                destination,
+                versions,
+                api_version,
+                load,
+                rtt,
+            } => {
+                write!(f, "Checked {destination} - RTT {:.2} s, {load}", rtt.as_secs_f32())?;
+                match api_version {
+                    Some(api) => write!(f, ", API {api} ({versions})"),
+                    None => write!(f, ", no compatible API ({versions})"),
+                }
+            }
+            QuickProbeResponse::Failed { destination, error } => write!(f, "Check of {destination} failed: {error}"),
+            QuickProbeResponse::UnableToProbe {
+                destination,
+                route_health,
+            } => write!(f, "Unable to check {destination}: {route_health}"),
+            QuickProbeResponse::NotReady => write!(f, "Edge client not running yet - try again later"),
+            QuickProbeResponse::DestinationNotFound => write!(f, "Destination not found"),
+            QuickProbeResponse::DestinationAmbiguous { connect_ids } => write!(
+                f,
+                "That exit is reachable by several paths - check one of: {}",
+                connect_ids.join(", ")
+            ),
+        }
+    }
+}
+
 impl Display for DisconnectingInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -893,6 +976,7 @@ impl TryFrom<Command> for WorkerCommand {
             Command::Destinations => Ok(WorkerCommand::Destinations),
             Command::Probe(dest) => Ok(WorkerCommand::Probe(dest)),
             Command::Unprobe => Ok(WorkerCommand::Unprobe),
+            Command::QuickProbe(dest) => Ok(WorkerCommand::QuickProbe(dest)),
             // Commands that are not relevant for the worker
             Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient => Err(()),
         }
