@@ -66,6 +66,7 @@ let
       inherit fs;
       root = ../.;
       extraFiles = [
+        ../.cargo/audit.toml
         ../deny.toml
       ];
     };

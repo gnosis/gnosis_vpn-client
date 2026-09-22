@@ -152,6 +152,7 @@
               pkgs.writeShellApplication {
                 name = "audit";
                 runtimeInputs = [
+                  pkgs.git
                   ((pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
                     targets = [ ];
                   })
@@ -159,8 +160,11 @@
                 ];
                 text = ''
                   repo_root="${1:-$PWD}"
+                  if repo_git_root="$(git -C "$repo_root" rev-parse --show-toplevel 2>/dev/null)"; then
+                    repo_root="$repo_git_root"
+                  fi
                   if [ ! -f "$repo_root/Cargo.toml" ] || [ ! -f "$repo_root/.cargo/audit.toml" ]; then
-                    echo "run from the repo root or pass it as the first argument" >&2
+                    echo "run from the repo root, any repo subdir, or pass the repo root" >&2
                     exit 1
                   fi
 
