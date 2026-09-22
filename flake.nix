@@ -152,13 +152,17 @@
               pkgs.writeShellApplication {
                 name = "audit";
                 runtimeInputs = [
+                  pkgs.git
                   ((pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
                     targets = [ ];
                   })
                   pkgs.cargo-audit
                 ];
                 text = ''
-                  cargo audit --config .cargo/audit.toml
+                  repo_root="$(git rev-parse --show-toplevel)"
+                  cd "$repo_root"
+                  cargo audit fetch
+                  cargo audit -n --config .cargo/audit.toml
                 '';
               }
             }/bin/audit";
