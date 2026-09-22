@@ -31,8 +31,8 @@ let
   # commit instead, which is also substitutable from the cachix cache.
   # Update these whenever Cargo.lock's rev for the corresponding dependency changes.
   outputHashes = {
-    "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.2#3a400950a68b4490cb7aeb6f1a5ec91e5e02ba55" =
-      "sha256-+aW5BXZ/dnnMsTurMlWyUWgdySTdqbhXRQCqnco2vJE=";
+    "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.4#0aebe247729574acc449f9debd62fc8d419dbf07" =
+      "sha256-oxCxToa9dE2TslRNxvO19qZrOrf9qsUlB4u+ZNwzA28=";
     "git+https://github.com/hoprnet/edge-client.git?branch=release/4.1#e19adcf1f6d4df248780509dc4523449ced0b202" =
       "sha256-AGcY49P2xKuQ5HsuBgRDI+XDrAe3j5juYJQa6/1Bh3M=";
     "git+https://github.com/hoprnet/hoprnet?branch=release/4.0#33624711663e6943cc28bd6cf11670a63db462ae" =
