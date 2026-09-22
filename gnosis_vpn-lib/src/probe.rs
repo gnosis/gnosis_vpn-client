@@ -3,7 +3,7 @@ use edgli::FlowControlConfig;
 use edgli::hopr_lib::HoprSessionClientConfig;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
@@ -13,7 +13,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::command;
 use crate::connection::destination::{Destination, ExitKey};
-use crate::connection::options::{HealthCheckIntervals, Options, SurbParams, surb_config_for};
+use crate::connection::options::{
+    HealthCheckIntervals, Options, SessionPixOptions, SessionSurbOptions, SurbParams, surb_config_for,
+};
 use crate::core::runner::Results;
 use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
@@ -52,6 +54,11 @@ pub(crate) fn select_api_version(server_versions: &[String]) -> Option<&'static 
         .iter()
         .copied()
         .find(|&v| server_versions.iter().any(|sv| sv == v))
+}
+
+/// hopr-lib fixes SURB balancing and PIX at open, so only an identically opened session can be adopted.
+pub(crate) fn quick_session_matches_bridge(bridge: &SessionSurbOptions, pix: &SessionPixOptions) -> bool {
+    !bridge.enabled && !bridge.always_max_out_surbs && !pix.enabled
 }
 
 fn reopen_backoff(attempt: u32) -> Duration {
@@ -124,6 +131,8 @@ pub(crate) struct Probe {
     consecutive_failures: u32,
     last_error: Option<String>,
     cancel: CancellationToken,
+    /// Present while the task waits for an in-flight quick check's session.
+    adoption: Option<oneshot::Sender<Option<ProbeSession>>>,
 }
 
 impl Probe {
@@ -135,14 +144,22 @@ impl Probe {
         options: Options,
         cancel_on_shutdown: &CancellationToken,
         sender: &mpsc::Sender<Results>,
+        adopt_quick_probe: bool,
     ) -> Self {
         let cancel = cancel_on_shutdown.child_token();
         let task_cancel = cancel.clone();
         let destination = dest.clone();
         let sender = sender.clone();
+        let (adoption, adopt) = match adopt_quick_probe {
+            true => {
+                let (tx, rx) = oneshot::channel();
+                (Some(tx), Some(rx))
+            }
+            false => (None, None),
+        };
         tokio::spawn(async move {
             task_cancel
-                .run_until_cancelled(run_probe(hopr, destination, options, generation, sender))
+                .run_until_cancelled(run_probe(hopr, destination, options, generation, sender, adopt))
                 .await;
         });
         Self {
@@ -158,6 +175,18 @@ impl Probe {
             consecutive_failures: 0,
             last_error: None,
             cancel,
+            adoption,
+        }
+    }
+
+    /// Hands a finished quick check's session to the waiting task; `None` tells it to open its own.
+    pub(crate) fn adopt(&mut self, session: Option<ProbeSession>) {
+        let Some(adoption) = self.adoption.take() else {
+            // Nothing is waiting; the session falls out of scope and Drop closes it.
+            return;
+        };
+        if adoption.send(session).is_err() {
+            tracing::debug!(destination = %self.destination, "probe task gone before adopting the quick session");
         }
     }
 
@@ -267,6 +296,7 @@ async fn run_probe(
     options: Options,
     generation: u64,
     sender: mpsc::Sender<Results>,
+    adopt: Option<oneshot::Receiver<Option<ProbeSession>>>,
 ) {
     let send = |event: Event| {
         let sender = sender.clone();
@@ -283,28 +313,19 @@ async fn run_probe(
             return;
         }
     };
-    let mut open_attempt = 0;
+    // A dropped sender means Core has nothing to hand over: open our own.
+    let mut adopted = match adopt {
+        Some(rx) => rx.await.unwrap_or(None),
+        None => None,
+    };
     loop {
-        let session = match ProbeSession::open(
-            hopr.clone(),
-            &destination,
-            &options,
-            surb.clone(),
-            options.pix.bridge.enabled,
-        )
-        .await
-        {
-            Ok(session) => session,
-            Err(err) => {
-                open_attempt += 1;
-                let delay = reopen_backoff(open_attempt);
-                tracing::warn!(%destination, ?err, ?delay, "opening probe session failed - retrying");
-                send(Event::OpenFailed { error: err.to_string() }).await;
-                time::sleep(delay).await;
-                continue;
+        let session = match adopted.take() {
+            Some(session) => {
+                tracing::info!(%destination, "probe adopted the quick check's session");
+                session
             }
+            None => open_until_success(hopr.clone(), &destination, &options, &surb, &send).await,
         };
-        open_attempt = 0;
         send(Event::Opened {
             session: session.meta.clone(),
             since: SystemTime::now(),
@@ -325,6 +346,41 @@ async fn run_probe(
     }
 }
 
+/// Retries with growing backoff until a bridge session is open; each failure is reported as `OpenFailed`.
+async fn open_until_success<F, Fut>(
+    hopr: Arc<Hopr>,
+    destination: &Destination,
+    options: &Options,
+    surb: &SurbParams,
+    send: &F,
+) -> ProbeSession
+where
+    F: Fn(Event) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let mut open_attempt = 0;
+    loop {
+        match ProbeSession::open(
+            hopr.clone(),
+            destination,
+            options,
+            surb.clone(),
+            options.pix.bridge.enabled,
+        )
+        .await
+        {
+            Ok(session) => return session,
+            Err(err) => {
+                open_attempt += 1;
+                let delay = reopen_backoff(open_attempt);
+                tracing::warn!(%destination, ?err, ?delay, "opening probe session failed - retrying");
+                send(Event::OpenFailed { error: err.to_string() }).await;
+                time::sleep(delay).await;
+            }
+        }
+    }
+}
+
 /// What one quick probe found; `api_version` is None when the exit speaks nothing we support.
 #[derive(Debug, Clone)]
 pub(crate) struct QuickProbeOutcome {
@@ -334,15 +390,19 @@ pub(crate) struct QuickProbeOutcome {
     pub(crate) rtt: Duration,
 }
 
-/// Opens an unbalanced session, runs version and health over it, tears it down - bounded so a caller can block on it.
+/// Bounded version and health check over an unbalanced session; the session is handed back only when a probe could adopt it.
 pub(crate) async fn quick_probe(
     hopr: Arc<Hopr>,
     destination: Destination,
     options: Options,
-) -> Result<QuickProbeOutcome, String> {
+) -> (Result<QuickProbeOutcome, String>, Option<ProbeSession>) {
+    // Dropping the timed-out future drops any open session, whose Drop closes it.
     match time::timeout(QUICKPROBE_BUDGET, run_quick_probe(hopr, &destination, &options)).await {
-        Ok(outcome) => outcome,
-        Err(_elapsed) => Err(format!("quick probe exceeded its {QUICKPROBE_BUDGET:?} budget")),
+        Ok(result) => result,
+        Err(_elapsed) => (
+            Err(format!("quick probe exceeded its {QUICKPROBE_BUDGET:?} budget")),
+            None,
+        ),
     }
 }
 
@@ -350,19 +410,24 @@ async fn run_quick_probe(
     hopr: Arc<Hopr>,
     destination: &Destination,
     options: &Options,
-) -> Result<QuickProbeOutcome, String> {
-    // No balancing and no PIX: the session lives for two requests.
+) -> (Result<QuickProbeOutcome, String>, Option<ProbeSession>) {
+    // No balancing and no PIX: the session lives for two requests unless a probe adopts it.
     let surb = SurbParams {
         management: None,
         always_max_out_surbs: false,
     };
     tracing::debug!(%destination, "opening quick probe session");
-    let session = ProbeSession::open(hopr, destination, options, surb, false)
-        .await
-        .map_err(|err| format!("opening session failed: {err}"))?;
+    let session = match ProbeSession::open(hopr, destination, options, surb, false).await {
+        Ok(session) => session,
+        Err(err) => return (Err(format!("opening session failed: {err}")), None),
+    };
     let outcome = quick_checks(session.meta.bound_host).await;
+    let adoptable = quick_session_matches_bridge(&options.surb_balancing.bridge, &options.pix.bridge);
+    if outcome.is_ok() && adoptable {
+        return (outcome, Some(session));
+    }
     session.close().await;
-    outcome
+    (outcome, None)
 }
 
 async fn quick_checks(bound_host: std::net::SocketAddr) -> Result<QuickProbeOutcome, String> {
@@ -483,7 +548,7 @@ impl Checker {
 }
 
 /// RAII guard: cancellation falls through to `Drop`, which detaches a close so the exit port is not leaked.
-struct ProbeSession {
+pub(crate) struct ProbeSession {
     hopr: Arc<Hopr>,
     meta: SessionClientMetadata,
     closed: bool,
@@ -633,6 +698,7 @@ mod tests {
             consecutive_failures: 0,
             last_error: None,
             cancel: CancellationToken::new(),
+            adoption: None,
         }
     }
 
@@ -754,6 +820,26 @@ mod tests {
     fn select_api_version_returns_none_when_no_match() {
         assert_eq!(select_api_version(&[]), None);
         assert_eq!(select_api_version(&["v2".to_string(), "v99".to_string()]), None);
+    }
+
+    #[test]
+    fn quick_session_matches_the_default_bridge_only() {
+        use crate::connection::options::{PixOptions, SurbBalancing};
+
+        let bridge = SurbBalancing::default().bridge;
+        let pix = PixOptions::default().bridge;
+        assert!(quick_session_matches_bridge(&bridge, &pix));
+
+        let mut balanced = bridge.clone();
+        balanced.enabled = true;
+        assert!(!quick_session_matches_bridge(&balanced, &pix));
+
+        let mut maxed_out = bridge.clone();
+        maxed_out.always_max_out_surbs = true;
+        assert!(!quick_session_matches_bridge(&maxed_out, &pix));
+
+        let pix_on = SessionPixOptions { enabled: true };
+        assert!(!quick_session_matches_bridge(&bridge, &pix_on));
     }
 
     #[test]

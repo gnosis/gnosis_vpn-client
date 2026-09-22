@@ -77,9 +77,13 @@ impl RouteHealth {
         self.quick_probe.as_ref()
     }
 
+    pub(crate) fn is_quick_probing(&self) -> bool {
+        matches!(self.quick_probe, Some(QuickProbeState::Checking { .. }))
+    }
+
     /// Claims the exit for one quick probe; false while another is still running against it.
     pub(crate) fn start_quick_probe(&mut self, now: SystemTime) -> bool {
-        if matches!(self.quick_probe, Some(QuickProbeState::Checking { .. })) {
+        if self.is_quick_probing() {
             return false;
         }
         self.quick_probe = Some(QuickProbeState::Checking { since: now });
@@ -370,15 +374,19 @@ mod tests {
         let now = SystemTime::now();
         let mut rh = RouteHealth::new(&destination(1), false, false);
         assert!(rh.quick_probe().is_none());
+        assert!(!rh.is_quick_probing());
         assert!(rh.start_quick_probe(now));
         assert!(!rh.start_quick_probe(now), "still checking");
+        assert!(rh.is_quick_probing());
         assert!(matches!(rh.quick_probe(), Some(QuickProbeState::Checking { .. })));
 
         rh.apply_quick_probe(&Err("boom".to_string()), now);
+        assert!(!rh.is_quick_probing(), "a failed check is no longer in flight");
         assert!(matches!(rh.quick_probe(), Some(QuickProbeState::Failed { error, .. }) if error == "boom"));
         assert!(rh.start_quick_probe(now), "a finished check can be redone");
 
         rh.apply_quick_probe(&Ok(outcome(&["v1"])), now);
+        assert!(!rh.is_quick_probing(), "a successful check is no longer in flight");
         assert!(
             matches!(rh.quick_probe(), Some(QuickProbeState::Checked { api_version: Some(api), .. }) if api == "v1")
         );

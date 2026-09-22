@@ -128,10 +128,11 @@ pub(crate) enum Results {
         res: command::TicketStatsStatus,
         resp: oneshot::Sender<Response>,
     },
-    /// A quick probe finished; Core records it under the destination before answering the caller.
+    /// A quick probe finished; Core records it, offers `session` to a probe of that exit, then answers the caller.
     QuickProbe {
         destination: Box<Destination>,
         outcome: Result<probe::QuickProbeOutcome, String>,
+        session: Option<probe::ProbeSession>,
         resp: oneshot::Sender<Response>,
     },
 }

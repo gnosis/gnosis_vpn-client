@@ -997,11 +997,18 @@ impl Core {
             Results::QuickProbe {
                 destination,
                 outcome,
+                session,
                 resp,
             } => {
                 match self.route_healths.get_mut(&destination.key()) {
                     Some(rh) => rh.apply_quick_probe(&outcome, SystemTime::now()),
                     None => tracing::debug!(%destination, "quick probe finished for a destination that is gone"),
+                }
+                match self.probe.as_mut().filter(|p| p.key() == destination.key()) {
+                    // `None` tells a waiting probe task to open its own session.
+                    Some(probe) => probe.adopt(session),
+                    // Nobody wants it; ProbeSession's Drop closes it.
+                    None => drop(session),
                 }
                 let response = match outcome {
                     Ok(found) => command::QuickProbeResponse::Checked {
@@ -1686,11 +1693,11 @@ impl Core {
         let cancel = self.cancel_on_shutdown.clone();
         let sender = results_sender.clone();
         tokio::spawn(async move {
-            let outcome = cancel
+            let result = cancel
                 .run_until_cancelled(probe::quick_probe(hopr, dest.clone(), options))
                 .await;
             // Core may be gone on shutdown, so answer the caller directly instead of through it.
-            let Some(outcome) = outcome else {
+            let Some((outcome, session)) = result else {
                 let response = command::QuickProbeResponse::failed(dest, "client is shutting down".to_string());
                 let _ = resp.send(Response::QuickProbe(response));
                 return;
@@ -1699,6 +1706,7 @@ impl Core {
                 .send(Results::QuickProbe {
                     destination: Box::new(dest),
                     outcome,
+                    session,
                     resp,
                 })
                 .await;
@@ -1710,7 +1718,12 @@ impl Core {
         let hopr = self.hopr.clone()?;
         let replaced = self.stop_probe();
         self.probe_generation += 1;
-        tracing::info!(destination = %dest, generation = self.probe_generation, "starting probe");
+        // A quick check in flight for this exit already holds a session; the probe takes it over.
+        let adopt = self
+            .route_healths
+            .get(&dest.key())
+            .is_some_and(RouteHealth::is_quick_probing);
+        tracing::info!(destination = %dest, generation = self.probe_generation, adopting = adopt, "starting probe");
         self.probe = Some(Probe::start(
             dest,
             self.probe_generation,
@@ -1718,6 +1731,7 @@ impl Core {
             self.config.connection.clone(),
             &self.cancel_on_shutdown,
             results_sender,
+            adopt,
         ));
         replaced
     }
