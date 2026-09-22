@@ -160,7 +160,7 @@
                 text = ''
                   repo_root="${1:-$PWD}"
                   if [ ! -f "$repo_root/Cargo.toml" ] || [ ! -f "$repo_root/.cargo/audit.toml" ]; then
-                    echo "pass the repository root as the first argument" >&2
+                    echo "run from the repo root or pass it as the first argument" >&2
                     exit 1
                   fi
 
