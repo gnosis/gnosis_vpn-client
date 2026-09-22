@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use crate::command::{self, Response};
 use crate::compat::SafeModule;
-use crate::connection::destination::ExitKey;
+use crate::connection::destination::{Destination, ExitKey};
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config};
@@ -126,6 +126,12 @@ pub(crate) enum Results {
     RetryReactor,
     NerdStatsTicketStats {
         res: command::TicketStatsStatus,
+        resp: oneshot::Sender<Response>,
+    },
+    /// A quick probe finished; Core records it under the destination before answering the caller.
+    QuickProbe {
+        destination: Box<Destination>,
+        outcome: Result<probe::QuickProbeOutcome, String>,
         resp: oneshot::Sender<Response>,
     },
 }
@@ -782,6 +788,12 @@ impl Display for Results {
             Results::Probe { generation, event } => write!(f, "Probe (gen {generation}): {event:?}"),
             Results::RetryReactor => write!(f, "RetryReactor"),
             Results::NerdStatsTicketStats { .. } => write!(f, "NerdStatsTicketStats"),
+            Results::QuickProbe {
+                destination, outcome, ..
+            } => match outcome {
+                Ok(found) => write!(f, "QuickProbe {destination}: checked in {:?}", found.rtt),
+                Err(err) => write!(f, "QuickProbe {destination}: Error({err})"),
+            },
         }
     }
 }

@@ -15,7 +15,7 @@ use crate::connection::destination::{Address, Destination};
 use crate::hopr::types::SessionClientMetadata;
 use crate::log_output;
 use crate::probe::{Health, ProbeState, Versions};
-use crate::route_health::{RouteHealth, RouteHealthState};
+use crate::route_health::{QuickProbeState, RouteHealth, RouteHealthState};
 use crate::serde_utils;
 pub use crate::ticket_stats::TicketStats;
 
@@ -340,7 +340,7 @@ impl UnprobeResponse {
     }
 }
 
-/// One short-lived check of an exit, for an overview list; nothing of it outlives the request.
+/// One short-lived check of an exit; Core keeps the result under the destination's route health.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum QuickProbeResponse {
@@ -363,6 +363,14 @@ pub enum QuickProbeResponse {
         destination: Box<Destination>,
         route_health: RouteHealthState,
     },
+    /// The long-lived probe has this exit; its results are in `status`.
+    AlreadyProbing {
+        destination: Box<Destination>,
+    },
+    /// An earlier quick probe of this exit is still running.
+    AlreadyChecking {
+        destination: Box<Destination>,
+    },
     /// The edge client is not running yet.
     NotReady,
     DestinationNotFound,
@@ -376,6 +384,18 @@ impl QuickProbeResponse {
         QuickProbeResponse::Failed {
             destination: Box::new(destination),
             error,
+        }
+    }
+
+    pub fn already_probing(destination: Destination) -> Self {
+        QuickProbeResponse::AlreadyProbing {
+            destination: Box::new(destination),
+        }
+    }
+
+    pub fn already_checking(destination: Destination) -> Self {
+        QuickProbeResponse::AlreadyChecking {
+            destination: Box::new(destination),
         }
     }
 
@@ -410,6 +430,7 @@ pub struct ProbeView {
 pub struct RouteHealthView {
     pub state: RouteHealthState,
     pub last_error: Option<String>,
+    pub quick_probe: Option<QuickProbeState>,
 }
 
 impl From<&RouteHealth> for RouteHealthView {
@@ -417,6 +438,7 @@ impl From<&RouteHealth> for RouteHealthView {
         RouteHealthView {
             state: rh.state().clone(),
             last_error: rh.last_error().map(str::to_owned),
+            quick_probe: rh.quick_probe().cloned(),
         }
     }
 }
@@ -905,6 +927,12 @@ impl Display for QuickProbeResponse {
                 destination,
                 route_health,
             } => write!(f, "Unable to check {destination}: {route_health}"),
+            QuickProbeResponse::AlreadyProbing { destination } => {
+                write!(f, "Already probing {destination} - its results are in status")
+            }
+            QuickProbeResponse::AlreadyChecking { destination } => {
+                write!(f, "Already checking {destination} - retry shortly")
+            }
             QuickProbeResponse::NotReady => write!(f, "Edge client not running yet - try again later"),
             QuickProbeResponse::DestinationNotFound => write!(f, "Destination not found"),
             QuickProbeResponse::DestinationAmbiguous { connect_ids } => write!(
@@ -1064,6 +1092,15 @@ mod tests {
 
         let closing = serde_json::to_string(&UnprobeResponse::closing(destination())).unwrap();
         assert!(closing.starts_with(r#"{"type":"Closing","destination":{"#), "{closing}");
+
+        let quick_not_ready = serde_json::to_string(&QuickProbeResponse::NotReady).unwrap();
+        assert_eq!(r#"{"type":"NotReady"}"#, quick_not_ready);
+
+        let checking = serde_json::to_string(&QuickProbeResponse::already_checking(destination())).unwrap();
+        assert!(
+            checking.starts_with(r#"{"type":"AlreadyChecking","destination":{"#),
+            "{checking}"
+        );
     }
 
     #[test]

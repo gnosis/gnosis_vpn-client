@@ -2,9 +2,12 @@
 use serde::{Deserialize, Serialize};
 
 use std::fmt::{self, Display};
+use std::time::{Duration, SystemTime};
 
 use crate::connection::destination::{Destination, ExitKey, HopRouting};
-use crate::probe::select_api_version;
+use crate::log_output;
+use crate::probe::{Health, QuickProbeOutcome, Versions, select_api_version};
+use crate::serde_utils;
 
 /// Terminal failure modes. `NotAllowed` needs a config change; `IncompatibleApiVersion` an exit upgrade.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -28,10 +31,36 @@ pub enum RouteHealthState {
     Routable,
 }
 
+/// The last `quickprobe` of this exit; also the wire format shown by the CLI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "state")]
+pub enum QuickProbeState {
+    Checking {
+        #[serde(with = "serde_utils::system_time")]
+        since: SystemTime,
+    },
+    Checked {
+        #[serde(with = "serde_utils::system_time")]
+        checked_at: SystemTime,
+        versions: Versions,
+        /// The API version this client selected from `versions`; None means incompatible.
+        api_version: Option<String>,
+        load: Health,
+        #[serde(with = "serde_utils::duration_ms")]
+        rtt: Duration,
+    },
+    Failed {
+        #[serde(with = "serde_utils::system_time")]
+        checked_at: SystemTime,
+        error: String,
+    },
+}
+
 pub(crate) struct RouteHealth {
     key: ExitKey,
     state: RouteHealthState,
     last_error: Option<String>,
+    quick_probe: Option<QuickProbeState>,
 }
 
 impl RouteHealth {
@@ -40,7 +69,41 @@ impl RouteHealth {
             key: dest.key(),
             state: derive_initial_state(&dest.routing, allow_insecure, allow_experimental),
             last_error: None,
+            quick_probe: None,
         }
+    }
+
+    pub(crate) fn quick_probe(&self) -> Option<&QuickProbeState> {
+        self.quick_probe.as_ref()
+    }
+
+    /// Claims the exit for one quick probe; false while another is still running against it.
+    pub(crate) fn start_quick_probe(&mut self, now: SystemTime) -> bool {
+        if matches!(self.quick_probe, Some(QuickProbeState::Checking { .. })) {
+            return false;
+        }
+        self.quick_probe = Some(QuickProbeState::Checking { since: now });
+        true
+    }
+
+    /// Records what the quick probe found; a compatible API also unlatches the route like any probe does.
+    pub(crate) fn apply_quick_probe(&mut self, outcome: &Result<QuickProbeOutcome, String>, now: SystemTime) {
+        self.quick_probe = Some(match outcome {
+            Ok(found) => {
+                self.apply_api_versions(&found.versions.versions);
+                QuickProbeState::Checked {
+                    checked_at: now,
+                    versions: found.versions.clone(),
+                    api_version: found.api_version.clone(),
+                    load: found.health.clone(),
+                    rtt: found.rtt,
+                }
+            }
+            Err(error) => QuickProbeState::Failed {
+                checked_at: now,
+                error: error.clone(),
+            },
+        });
     }
 
     pub(crate) fn state(&self) -> &RouteHealthState {
@@ -148,6 +211,35 @@ impl Display for UnrecoverableReason {
     }
 }
 
+impl Display for QuickProbeState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            QuickProbeState::Checking { since } => write!(f, "checking (since {})", log_output::elapsed(since)),
+            QuickProbeState::Checked {
+                checked_at,
+                versions,
+                api_version,
+                load,
+                rtt,
+            } => {
+                write!(
+                    f,
+                    "checked {} ago - RTT {:.2} s, {load}",
+                    log_output::elapsed(checked_at),
+                    rtt.as_secs_f32()
+                )?;
+                match api_version {
+                    Some(api) => write!(f, ", API {api} ({versions})"),
+                    None => write!(f, ", no compatible API ({versions})"),
+                }
+            }
+            QuickProbeState::Failed { checked_at, error } => {
+                write!(f, "failed {} ago: {error}", log_output::elapsed(checked_at))
+            }
+        }
+    }
+}
+
 impl Display for RouteHealthState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -173,6 +265,31 @@ mod tests {
             "172.30.0.1:51820".parse().unwrap(),
             DestinationSource::Configured,
         )
+    }
+
+    fn outcome(server_versions: &[&str]) -> QuickProbeOutcome {
+        let versions = Versions {
+            versions: server_versions.iter().map(|v| v.to_string()).collect(),
+            latest: server_versions.last().unwrap_or(&"").to_string(),
+        };
+        QuickProbeOutcome {
+            api_version: select_api_version(&versions.versions).map(str::to_owned),
+            versions,
+            health: Health {
+                slots: crate::probe::Slots {
+                    total: 10,
+                    available: 9,
+                    connected: 1,
+                },
+                load_avg: crate::probe::LoadAvg {
+                    one: 0.1,
+                    five: 0.1,
+                    fifteen: 0.1,
+                    nproc: 4,
+                },
+            },
+            rtt: Duration::from_millis(120),
+        }
     }
 
     fn not_allowed(state: &RouteHealthState) -> bool {
@@ -246,5 +363,40 @@ mod tests {
         latched.apply_api_versions(&["v99".to_string()]);
         latched.apply_api_versions(&["v1".to_string()]);
         assert!(not_allowed(latched.state()), "NotAllowed keeps precedence");
+    }
+
+    #[test]
+    fn quick_probe_is_claimed_once_until_it_reports() {
+        let now = SystemTime::now();
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        assert!(rh.quick_probe().is_none());
+        assert!(rh.start_quick_probe(now));
+        assert!(!rh.start_quick_probe(now), "still checking");
+        assert!(matches!(rh.quick_probe(), Some(QuickProbeState::Checking { .. })));
+
+        rh.apply_quick_probe(&Err("boom".to_string()), now);
+        assert!(matches!(rh.quick_probe(), Some(QuickProbeState::Failed { error, .. }) if error == "boom"));
+        assert!(rh.start_quick_probe(now), "a finished check can be redone");
+
+        rh.apply_quick_probe(&Ok(outcome(&["v1"])), now);
+        assert!(
+            matches!(rh.quick_probe(), Some(QuickProbeState::Checked { api_version: Some(api), .. }) if api == "v1")
+        );
+    }
+
+    #[test]
+    fn quick_probe_versions_latch_and_unlatch_the_route() {
+        let now = SystemTime::now();
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        rh.set_routable(true);
+        rh.apply_quick_probe(&Ok(outcome(&["v99"])), now);
+        assert!(rh.is_unrecoverable());
+        rh.apply_quick_probe(&Ok(outcome(&["v1"])), now);
+        assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
+
+        let mut failing = RouteHealth::new(&destination(1), false, false);
+        failing.set_routable(true);
+        failing.apply_quick_probe(&Err("boom".to_string()), now);
+        assert!(failing.is_routable(), "a failed check says nothing about the API");
     }
 }

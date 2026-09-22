@@ -316,7 +316,13 @@ fn pretty_print(resp: &Response) {
             for dest_state in destinations {
                 str_resp.push_str(&format!("---\n{}\n", dest_state.destination));
                 if let Some(rh) = &dest_state.route_health {
-                    str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.connect_id, rh,));
+                    str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.connect_id, rh));
+                    if let Some(quick) = &rh.quick_probe {
+                        str_resp.push_str(&format!(
+                            "{} Quick check: {}\n",
+                            dest_state.destination.connect_id, quick
+                        ));
+                    }
                 }
             }
             println!("{str_resp}");

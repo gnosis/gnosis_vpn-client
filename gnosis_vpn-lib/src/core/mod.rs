@@ -477,7 +477,7 @@ impl Core {
                     }
 
                     WorkerCommand::QuickProbe(token) => match self.config.destinations.resolve(&token).cloned() {
-                        Ok(dest) => self.spawn_quick_probe(dest, resp),
+                        Ok(dest) => self.spawn_quick_probe(dest, resp, results_sender),
                         Err(destination::Unresolved::Ambiguous(ids)) => {
                             let _ = resp.send(Response::QuickProbe(
                                 command::QuickProbeResponse::DestinationAmbiguous { connect_ids: ids },
@@ -992,6 +992,28 @@ impl Core {
 
             Results::RetryReactor => {
                 self.try_start_reactor(results_sender).await;
+            }
+
+            Results::QuickProbe {
+                destination,
+                outcome,
+                resp,
+            } => {
+                match self.route_healths.get_mut(&destination.key()) {
+                    Some(rh) => rh.apply_quick_probe(&outcome, SystemTime::now()),
+                    None => tracing::debug!(%destination, "quick probe finished for a destination that is gone"),
+                }
+                let response = match outcome {
+                    Ok(found) => command::QuickProbeResponse::Checked {
+                        destination,
+                        versions: found.versions,
+                        api_version: found.api_version,
+                        load: found.health,
+                        rtt: found.rtt,
+                    },
+                    Err(error) => command::QuickProbeResponse::failed(*destination, error),
+                };
+                let _ = resp.send(Response::QuickProbe(response));
             }
 
             Results::NerdStatsTicketStats {
@@ -1627,13 +1649,18 @@ impl Core {
         }
     }
 
-    /// Answers `quickprobe <id>` from its own task; a route that cannot carry a session is refused before opening one.
-    fn spawn_quick_probe(&self, dest: Destination, resp: oneshot::Sender<Response>) {
+    /// Starts `quickprobe <id>`; refused when the route cannot carry a session or the exit is already being probed.
+    fn spawn_quick_probe(
+        &mut self,
+        dest: Destination,
+        resp: oneshot::Sender<Response>,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
         let Some(hopr) = self.hopr.clone() else {
             let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::NotReady));
             return;
         };
-        let Some(route_health) = self.route_healths.get(&dest.key()) else {
+        let Some(route_health) = self.route_healths.get_mut(&dest.key()) else {
             tracing::warn!(key = %dest.key(), "no route health found for destination - this should not happen");
             let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::DestinationNotFound));
             return;
@@ -1643,25 +1670,38 @@ impl Core {
             let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::unable(dest, state)));
             return;
         }
+        // The long-lived probe already reports on this exit; a second session would only add load.
+        if self.probe.as_ref().is_some_and(|p| p.key() == dest.key()) {
+            let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::already_probing(dest)));
+            return;
+        }
+        if !route_health.start_quick_probe(SystemTime::now()) {
+            let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::already_checking(
+                dest,
+            )));
+            return;
+        }
 
         let options = self.config.connection.clone();
         let cancel = self.cancel_on_shutdown.clone();
+        let sender = results_sender.clone();
         tokio::spawn(async move {
             let outcome = cancel
                 .run_until_cancelled(probe::quick_probe(hopr, dest.clone(), options))
                 .await;
-            let response = match outcome {
-                Some(Ok(found)) => command::QuickProbeResponse::Checked {
-                    destination: Box::new(dest),
-                    versions: found.versions,
-                    api_version: found.api_version,
-                    load: found.health,
-                    rtt: found.rtt,
-                },
-                Some(Err(error)) => command::QuickProbeResponse::failed(dest, error),
-                None => command::QuickProbeResponse::failed(dest, "client is shutting down".to_string()),
+            // Core may be gone on shutdown, so answer the caller directly instead of through it.
+            let Some(outcome) = outcome else {
+                let response = command::QuickProbeResponse::failed(dest, "client is shutting down".to_string());
+                let _ = resp.send(Response::QuickProbe(response));
+                return;
             };
-            let _ = resp.send(Response::QuickProbe(response));
+            let _ = sender
+                .send(Results::QuickProbe {
+                    destination: Box::new(dest),
+                    outcome,
+                    resp,
+                })
+                .await;
         });
     }
 

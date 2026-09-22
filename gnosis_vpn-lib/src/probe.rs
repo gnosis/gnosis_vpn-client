@@ -326,7 +326,7 @@ async fn run_probe(
 }
 
 /// What one quick probe found; `api_version` is None when the exit speaks nothing we support.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct QuickProbeOutcome {
     pub(crate) versions: Versions,
     pub(crate) api_version: Option<String>,
