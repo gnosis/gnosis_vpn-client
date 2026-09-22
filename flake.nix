@@ -168,8 +168,8 @@
 
                   db_dir="$(mktemp -d)"
                   trap 'rm -rf "$db_dir"' EXIT
-                  cargo audit fetch --db "$db_dir"
                   cd "$repo_root"
+                  cargo audit fetch --db "$db_dir"
                   cargo audit -n --db "$db_dir" --config .cargo/audit.toml
                 '';
               }
