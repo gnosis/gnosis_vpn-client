@@ -171,7 +171,7 @@
                   cd "$repo_root"
                   db_dir="${CARGO_HOME:-$HOME/.cargo}/advisory-db"
                   cargo audit fetch --db "$db_dir"
-                  cargo audit -n --db "$db_dir" --config .cargo/audit.toml
+                  cargo audit -n --db "$db_dir" --config .cargo/audit.toml --file "$repo_root/Cargo.lock"
                 '';
               }
             }/bin/audit";
