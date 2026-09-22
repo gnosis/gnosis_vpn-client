@@ -152,17 +152,25 @@
               pkgs.writeShellApplication {
                 name = "audit";
                 runtimeInputs = [
-                  pkgs.git
                   ((pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
                     targets = [ ];
                   })
                   pkgs.cargo-audit
                 ];
                 text = ''
-                  repo_root="$(git rev-parse --show-toplevel)"
+                  repo_root="$PWD"
+                  while [ "$repo_root" != / ] && [ ! -f "$repo_root/Cargo.toml" ]; do
+                    repo_root="$(dirname "$repo_root")"
+                  done
+                  if [ ! -f "$repo_root/Cargo.toml" ] || [ ! -f "$repo_root/.cargo/audit.toml" ]; then
+                    repo_root=${self}
+                  fi
+
+                  db_dir="$(mktemp -d)"
+                  trap 'rm -rf "$db_dir"' EXIT
+                  cargo audit fetch --db "$db_dir"
                   cd "$repo_root"
-                  cargo audit fetch
-                  cargo audit -n --config .cargo/audit.toml
+                  cargo audit -n --db "$db_dir" --config .cargo/audit.toml
                 '';
               }
             }/bin/audit";
