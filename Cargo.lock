@@ -854,7 +854,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -865,7 +865,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1948,9 +1948,9 @@ dependencies = [
 
 [[package]]
 name = "cfg-if"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "cfg_aliases"
@@ -2161,9 +2161,9 @@ dependencies = [
 
 [[package]]
 name = "const-hex"
-version = "1.19.1"
+version = "1.19.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33e2a781ebdf4467d1428dc4593067825fb646f6871475098d8577421af73558"
+checksum = "0e59eef12462b0f9b0a3620219be5d639afd79fe39dff0a42c3997061f9298b4"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
@@ -2341,9 +2341,9 @@ checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 
 [[package]]
 name = "crossfire"
-version = "3.1.19"
+version = "3.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "111ce8f7abfbac38b4bc4f32a3a2dda1a8034b873c90c7899f302cc9dbbc05ec"
+checksum = "adb5e5c51e448ac2309883593482db91a5549c528d08a36aaa87bba13e5a40ae"
 dependencies = [
  "crossbeam-utils",
  "futures-core",
@@ -2558,6 +2558,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "darling"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed17f5901b6630b993ca003def43f2f8ef4014fc13b047b57aad617ff32bc2ec"
+dependencies = [
+ "darling_core 0.24.1",
+ "darling_macro 0.24.1",
+]
+
+[[package]]
 name = "darling_core"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2586,6 +2596,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "darling_core"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6837e2cf7485aaae18f86181d2f0e9a7ed297a025e220aeabf63fdebd3a2ddff"
+dependencies = [
+ "ident_case",
+ "proc-macro2",
+ "quote",
+ "strsim 0.11.1",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "darling_macro"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2605,6 +2628,17 @@ dependencies = [
  "darling_core 0.23.0",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "darling_macro"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ac7135c3ef02b2f7833bbeb1be5ba7f966dcde8a87c6b87f65a778d71a02785"
+dependencies = [
+ "darling_core 0.24.1",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -2947,7 +2981,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "4.1.1"
-source = "git+https://github.com/hoprnet/edge-client.git?branch=release%2F4.1#ed2a727b505d35ffee1f733b757972bf22bdf3a7"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=release%2F4.1#a84a33ad1246341c655e75370cad0352b2f37ab9"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -3118,7 +3152,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3160,7 +3194,7 @@ dependencies = [
  "launchdarkly-sdk-transport",
  "log",
  "pin-project",
- "rand 0.10.2",
+ "rand 0.10.3",
  "tokio",
 ]
 
@@ -3683,7 +3717,7 @@ dependencies = [
  "objc2-foundation",
  "pfctl",
  "ping",
- "rand 0.10.2",
+ "rand 0.10.3",
  "reqwest",
  "rustix",
  "serde",
@@ -3737,7 +3771,7 @@ dependencies = [
  "clap",
  "exitcode",
  "gnosis_vpn-lib",
- "rand 0.10.2",
+ "rand 0.10.3",
  "reqwest",
  "tokio",
  "tracing",
@@ -3787,7 +3821,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7fd1a1c7a5206c5b7a3f5a0d7ccd3ff85d0c8f5133d62a02680255b0004af5f4"
 dependencies = [
  "ff 0.14.0",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rand_core 0.10.1",
  "subtle",
 ]
@@ -3961,7 +3995,7 @@ dependencies = [
  "idna",
  "ipnet",
  "jni",
- "rand 0.10.2",
+ "rand 0.10.3",
  "thiserror 2.0.20",
  "tinyvec",
  "tokio",
@@ -4007,7 +4041,7 @@ dependencies = [
  "jni",
  "once_cell",
  "prefix-trie",
- "rand 0.10.2",
+ "rand 0.10.3",
  "ring",
  "thiserror 2.0.20",
  "tinyvec",
@@ -4053,7 +4087,7 @@ dependencies = [
  "ndk-context",
  "once_cell",
  "parking_lot",
- "rand 0.10.2",
+ "rand 0.10.3",
  "resolv-conf",
  "smallvec",
  "system-configuration",
@@ -4170,7 +4204,7 @@ dependencies = [
 [[package]]
 name = "hopr-crypto-packet"
 version = "1.4.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#6746fd7259863c2b32d4dd3d83252579a1eec42e"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#7aad5382d7cbdd258155129892feec0b097955d8"
 dependencies = [
  "bimap",
  "const-hex",
@@ -4206,7 +4240,7 @@ dependencies = [
 [[package]]
 name = "hopr-lib"
 version = "4.0.5"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#6746fd7259863c2b32d4dd3d83252579a1eec42e"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#7aad5382d7cbdd258155129892feec0b097955d8"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -4249,7 +4283,7 @@ dependencies = [
  "lazy_static",
  "parking_lot",
  "petgraph",
- "rand 0.10.2",
+ "rand 0.10.3",
  "smallvec",
  "thiserror 2.0.20",
  "tracing",
@@ -4258,7 +4292,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-app"
 version = "1.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#6746fd7259863c2b32d4dd3d83252579a1eec42e"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#7aad5382d7cbdd258155129892feec0b097955d8"
 dependencies = [
  "hopr-crypto-packet",
  "hopr-types",
@@ -4271,7 +4305,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-hopr"
 version = "6.2.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#6746fd7259863c2b32d4dd3d83252579a1eec42e"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#7aad5382d7cbdd258155129892feec0b097955d8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4300,7 +4334,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-session"
 version = "1.5.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#6746fd7259863c2b32d4dd3d83252579a1eec42e"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#7aad5382d7cbdd258155129892feec0b097955d8"
 dependencies = [
  "aquamarine",
  "asynchronous-codec",
@@ -4331,7 +4365,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-start"
 version = "1.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#6746fd7259863c2b32d4dd3d83252579a1eec42e"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#7aad5382d7cbdd258155129892feec0b097955d8"
 dependencies = [
  "aquamarine",
  "flagset",
@@ -4398,7 +4432,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport"
 version = "0.48.5"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#6746fd7259863c2b32d4dd3d83252579a1eec42e"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#7aad5382d7cbdd258155129892feec0b097955d8"
 dependencies = [
  "ahash",
  "anyhow",
@@ -4427,7 +4461,7 @@ dependencies = [
  "moka",
  "multiaddr",
  "proc-macro-regex",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rand_distr",
  "serde",
  "smart-default",
@@ -4441,7 +4475,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-mixer"
 version = "0.4.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#6746fd7259863c2b32d4dd3d83252579a1eec42e"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#7aad5382d7cbdd258155129892feec0b097955d8"
 dependencies = [
  "futures",
  "futures-timer",
@@ -4480,7 +4514,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-probe"
 version = "0.8.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#6746fd7259863c2b32d4dd3d83252579a1eec42e"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#7aad5382d7cbdd258155129892feec0b097955d8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4494,7 +4528,7 @@ dependencies = [
  "hopr-utilities",
  "humantime-serde",
  "moka",
- "rand 0.10.2",
+ "rand 0.10.3",
  "serde",
  "smart-default",
  "strum",
@@ -4506,7 +4540,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-session"
 version = "0.30.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#6746fd7259863c2b32d4dd3d83252579a1eec42e"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#7aad5382d7cbdd258155129892feec0b097955d8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4538,7 +4572,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-tag-allocator"
 version = "0.1.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#6746fd7259863c2b32d4dd3d83252579a1eec42e"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#7aad5382d7cbdd258155129892feec0b097955d8"
 dependencies = [
  "hopr-protocol-app",
  "serde",
@@ -4589,7 +4623,7 @@ dependencies = [
  "opentelemetry_sdk",
  "poly1305 0.9.1",
  "primitive-types 0.14.0",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rayon",
  "regex",
  "rlp 0.6.1",
@@ -4633,7 +4667,7 @@ dependencies = [
  "libp2p-identity",
  "multiaddr",
  "pin-project",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rayon",
  "serde",
  "serde_bytes",
@@ -6139,7 +6173,7 @@ dependencies = [
  "num-complex",
  "num-rational",
  "num-traits",
- "rand 0.10.2",
+ "rand 0.10.3",
  "simba",
  "typenum",
 ]
@@ -6153,7 +6187,7 @@ checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 [[package]]
 name = "neptun"
 version = "2.2.3"
-source = "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.2#3a400950a68b4490cb7aeb6f1a5ec91e5e02ba55"
+source = "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.4#0aebe247729574acc449f9debd62fc8d419dbf07"
 dependencies = [
  "aead",
  "base64 0.22.1",
@@ -6374,7 +6408,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7282,7 +7316,7 @@ dependencies = [
  "fastbloom",
  "getrandom 0.4.3",
  "lru-slab",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rand_pcg",
  "ring",
  "rustc-hash",
@@ -7306,7 +7340,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.5",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7318,7 +7352,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "socket2 0.6.5",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7373,9 +7407,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
+checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
 dependencies = [
  "chacha20 0.10.1",
  "getrandom 0.4.3",
@@ -7434,7 +7468,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d431c2703ccf129de4d45253c03f49ebb22b97d6ad79ee3ecfc7e3f4862c1d8"
 dependencies = [
  "num-traits",
- "rand 0.10.2",
+ "rand 0.10.3",
 ]
 
 [[package]]
@@ -7806,7 +7840,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7865,7 +7899,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8209,11 +8243,11 @@ dependencies = [
 
 [[package]]
 name = "serde_with"
-version = "3.22.0"
+version = "3.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee78f1fbe43ac4a0e47aadb3dbd357b69eb0d3793e948624cd03dd2750ab1c0a"
+checksum = "935177bb8c0cd8ca1a4e6d1a2ac8988bea69cab4f9d3a31311e012ad27868ea4"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bs58",
  "chrono",
  "hex",
@@ -8230,14 +8264,14 @@ dependencies = [
 
 [[package]]
 name = "serde_with_macros"
-version = "3.22.0"
+version = "3.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8705578779c2b6bd90d84d66eb2e206b708b1a4d7b9f17641b293545bf1c7e46"
+checksum = "1d607aa01a3cb0ad757d6fd216136910db3c97b102fe686585689615a02dbcdc"
 dependencies = [
- "darling 0.23.0",
+ "darling 0.24.1",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -8492,7 +8526,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8551,7 +8585,7 @@ dependencies = [
  "approx",
  "nalgebra",
  "num-traits",
- "rand 0.10.2",
+ "rand 0.10.3",
  "thiserror 2.0.20",
 ]
 
@@ -8727,7 +8761,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8932,9 +8966,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.1.4+spec-1.1.0"
+version = "1.1.6+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3aace63f4bbcdfc2c965b059de67119c89c4017a70d633be6c104910f67056f5"
+checksum = "920602543f0911ab71da12c50d59701da54c196d1a2bf5cb4b75667f137a406a"
 dependencies = [
  "indexmap 2.14.0",
  "serde_core",
@@ -9530,7 +9564,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
