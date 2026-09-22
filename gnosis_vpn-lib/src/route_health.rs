@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display};
 
 use crate::connection::destination::{Destination, ExitKey, HopRouting};
+use crate::probe::select_api_version;
 
 /// Terminal failure modes. `NotAllowed` needs a config change; `IncompatibleApiVersion` an exit upgrade.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -76,8 +77,16 @@ impl RouteHealth {
         }
     }
 
+    /// One rule for every probe kind: an exit's advertised API versions latch or unlatch the route.
+    pub(crate) fn apply_api_versions(&mut self, server_versions: &[String]) {
+        match select_api_version(server_versions) {
+            Some(_) => self.clear_incompatible(),
+            None => self.set_incompatible(server_versions.to_vec()),
+        }
+    }
+
     /// Latch on an exit that speaks no API version we support. `NotAllowed` keeps precedence.
-    pub(crate) fn set_incompatible(&mut self, server_versions: Vec<String>) {
+    fn set_incompatible(&mut self, server_versions: Vec<String>) {
         if self.is_unrecoverable() {
             return;
         }
@@ -88,7 +97,7 @@ impl RouteHealth {
     }
 
     /// An exit upgrade unlatches the route; the next graph walk decides routability again.
-    pub(crate) fn clear_incompatible(&mut self) {
+    fn clear_incompatible(&mut self) {
         let incompatible = matches!(
             self.state,
             RouteHealthState::Unrecoverable {
@@ -225,17 +234,17 @@ mod tests {
     }
 
     #[test]
-    fn clear_incompatible_only_unlatches_an_incompatible_api_version() {
+    fn api_versions_latch_and_unlatch_only_an_incompatible_api_version() {
         let mut rh = RouteHealth::new(&destination(1), false, false);
         rh.set_routable(true);
-        rh.set_incompatible(vec!["v99".to_string()]);
+        rh.apply_api_versions(&["v99".to_string()]);
         assert!(rh.is_unrecoverable());
-        rh.clear_incompatible();
+        rh.apply_api_versions(&["v1".to_string()]);
         assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
 
         let mut latched = RouteHealth::new(&destination(0), false, false);
-        latched.set_incompatible(vec!["v99".to_string()]);
-        latched.clear_incompatible();
+        latched.apply_api_versions(&["v99".to_string()]);
+        latched.apply_api_versions(&["v1".to_string()]);
         assert!(not_allowed(latched.state()), "NotAllowed keeps precedence");
     }
 }

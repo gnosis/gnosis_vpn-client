@@ -972,10 +972,7 @@ impl Core {
                 if let probe::Event::Version { versions, .. } = &event
                     && let Some(rh) = self.route_healths.get_mut(&key)
                 {
-                    match probe::select_api_version(&versions.versions) {
-                        Some(_) => rh.clear_incompatible(),
-                        None => rh.set_incompatible(versions.versions.clone()),
-                    }
+                    rh.apply_api_versions(&versions.versions);
                 }
                 probe.apply(event);
                 let is_ready = probe.ready_session().is_some();
