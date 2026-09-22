@@ -21,14 +21,12 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    advisory-db = {
-      url = "github:rustsec/advisory-db";
-      flake = false;
-    };
-
     nix-lib = {
       url = "github:hoprnet/nix-lib/1409f8caa2666afcf575dd5e05d5a8c521f5c1d6";
       inputs.nixpkgs.follows = "nixpkgs";
+      # Our nixpkgs is already unstable; following avoids a second nixpkgs fetch per job.
+      inputs.nixpkgs-unstable.follows = "nixpkgs";
+      inputs.flake-parts.follows = "flake-parts";
       inputs.crane.follows = "crane";
       inputs.rust-overlay.follows = "rust-overlay";
     };
@@ -41,7 +39,6 @@
       nixpkgs,
       rust-overlay,
       crane,
-      advisory-db,
       pre-commit,
       nix-lib,
       ...
@@ -96,7 +93,6 @@
               self
               pkgs
               craneLib
-              advisory-db
               tokioUnstableHook
               ;
           };
@@ -149,10 +145,11 @@
               gnosis_vpn-clippy
               gnosis_vpn-docs
               gnosis_vpn-test
-              gnosis_vpn-audit
               gnosis_vpn-licenses
               ;
           };
+
+          apps.audit = nixLib.mkAuditApp { rustToolchainFile = ./rust-toolchain.toml; };
 
           packages = {
             inherit (gnosisvpnPackages)
