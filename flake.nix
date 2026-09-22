@@ -158,12 +158,9 @@
                   pkgs.cargo-audit
                 ];
                 text = ''
-                  repo_root="$PWD"
-                  while [ "$repo_root" != / ] && [ ! -f "$repo_root/Cargo.toml" ]; do
-                    repo_root="$(dirname "$repo_root")"
-                  done
+                  repo_root="${1:-$PWD}"
                   if [ ! -f "$repo_root/Cargo.toml" ] || [ ! -f "$repo_root/.cargo/audit.toml" ]; then
-                    echo "run nix run .#audit from this repository" >&2
+                    echo "pass the repository root as the first argument" >&2
                     exit 1
                   fi
 
