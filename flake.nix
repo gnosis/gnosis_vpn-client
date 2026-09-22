@@ -149,10 +149,11 @@
               gnosis_vpn-clippy
               gnosis_vpn-docs
               gnosis_vpn-test
-              gnosis_vpn-audit
               gnosis_vpn-licenses
               ;
           };
+
+          apps.audit = nixLib.mkAuditApp { };
 
           packages = {
             inherit (gnosisvpnPackages)

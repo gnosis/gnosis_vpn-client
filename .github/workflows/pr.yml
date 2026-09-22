@@ -88,6 +88,13 @@ jobs:
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     runs-on: depot-ubuntu-22.04-4
     steps:
+      - name: Run audit
+        uses: hoprnet/hopr-workflows/actions/nix-action@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # nix-action-v1.1.3
+        with:
+          source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+          cachix_cache_name: gnosis-vpn-client
+          cachix_auth_token: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+          command: nix run -L .#audit
       - name: Run checks
         uses: hoprnet/hopr-workflows/actions/nix-action@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # nix-action-v1.1.3
         with:
