@@ -21,11 +21,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    advisory-db = {
-      url = "github:rustsec/advisory-db";
-      flake = false;
-    };
-
     nix-lib = {
       url = "github:hoprnet/nix-lib/1409f8caa2666afcf575dd5e05d5a8c521f5c1d6";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -41,7 +36,6 @@
       nixpkgs,
       rust-overlay,
       crane,
-      advisory-db,
       pre-commit,
       nix-lib,
       ...
@@ -96,7 +90,6 @@
               self
               pkgs
               craneLib
-              advisory-db
               tokioUnstableHook
               ;
           };
@@ -155,18 +148,20 @@
 
           apps.audit = {
             type = "app";
-            program = "${pkgs.writeShellApplication {
-              name = "audit";
-              runtimeInputs = [
-                ((pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
-                  targets = [ ];
-                })
-                pkgs.cargo-audit
-              ];
-              text = ''
-                cargo audit -n -d ${advisory-db}
-              '';
-            }}/bin/audit";
+            program = "${
+              pkgs.writeShellApplication {
+                name = "audit";
+                runtimeInputs = [
+                  ((pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
+                    targets = [ ];
+                  })
+                  pkgs.cargo-audit
+                ];
+                text = ''
+                  cargo audit
+                '';
+              }
+            }/bin/audit";
           };
 
           packages = {

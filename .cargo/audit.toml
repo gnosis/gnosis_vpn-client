@@ -26,7 +26,7 @@ deny      = []
 quiet     = false
 show_tree = true
 
-# Nix builds audit offline, so skip noisy yanked-index checks.
+# Skip noisy yanked-index checks.
 [yanked]
 enabled      = false
 update_index = false
