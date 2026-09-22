@@ -167,9 +167,8 @@
                     exit 1
                   fi
 
-                  db_dir="$(mktemp -d)"
-                  trap 'rm -rf "$db_dir"' EXIT
                   cd "$repo_root"
+                  db_dir="${CARGO_HOME:-$HOME/.cargo}/advisory-db"
                   cargo audit fetch --db "$db_dir"
                   cargo audit -n --db "$db_dir" --config .cargo/audit.toml
                 '';
