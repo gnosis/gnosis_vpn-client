@@ -159,7 +159,7 @@
                   pkgs.cargo-audit
                 ];
                 text = ''
-                  repo_root="${1:-$PWD}"
+                  repo_root="''${1:-$PWD}"
                   if repo_git_root="$(git -C "$repo_root" rev-parse --show-toplevel 2>/dev/null)"; then
                     repo_root="$repo_git_root"
                   fi
@@ -169,9 +169,8 @@
                   fi
 
                   cd "$repo_root"
-                  db_dir="${CARGO_HOME:-$HOME/.cargo}/advisory-db"
-                  cargo audit fetch --db "$db_dir"
-                  cargo audit -n --db "$db_dir" --config .cargo/audit.toml --file "$repo_root/Cargo.lock"
+                  db_dir="''${CARGO_HOME:-$HOME/.cargo}/advisory-db"
+                  cargo audit --db "$db_dir" --file "$repo_root/Cargo.lock"
                 '';
               }
             }/bin/audit";
