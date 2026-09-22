@@ -61,12 +61,11 @@ let
       inherit fs;
       root = ../.;
     };
-    # Includes config files needed by crane-based checks
+    # deny.toml for the cargoDeny license check
     checks = nixLib.mkSrc {
       inherit fs;
       root = ../.;
       extraFiles = [
-        ../.cargo/audit.toml
         ../deny.toml
       ];
     };
