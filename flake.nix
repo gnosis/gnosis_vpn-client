@@ -24,6 +24,9 @@
     nix-lib = {
       url = "github:hoprnet/nix-lib/1409f8caa2666afcf575dd5e05d5a8c521f5c1d6";
       inputs.nixpkgs.follows = "nixpkgs";
+      # Our nixpkgs is already unstable; following avoids a second nixpkgs fetch per job.
+      inputs.nixpkgs-unstable.follows = "nixpkgs";
+      inputs.flake-parts.follows = "flake-parts";
       inputs.crane.follows = "crane";
       inputs.rust-overlay.follows = "rust-overlay";
     };
