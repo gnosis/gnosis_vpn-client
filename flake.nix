@@ -163,7 +163,8 @@
                     repo_root="$(dirname "$repo_root")"
                   done
                   if [ ! -f "$repo_root/Cargo.toml" ] || [ ! -f "$repo_root/.cargo/audit.toml" ]; then
-                    repo_root=${self}
+                    echo "run nix run .#audit from this repository" >&2
+                    exit 1
                   fi
 
                   db_dir="$(mktemp -d)"
