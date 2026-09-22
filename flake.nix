@@ -153,7 +153,21 @@
               ;
           };
 
-          apps.audit = nixLib.mkAuditApp { };
+          apps.audit = {
+            type = "app";
+            program = "${pkgs.writeShellApplication {
+              name = "audit";
+              runtimeInputs = [
+                ((pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
+                  targets = [ ];
+                })
+                pkgs.cargo-audit
+              ];
+              text = ''
+                cargo audit -n -d ${advisory-db}
+              '';
+            }}/bin/audit";
+          };
 
           packages = {
             inherit (gnosisvpnPackages)
