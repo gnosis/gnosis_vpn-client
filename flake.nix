@@ -21,6 +21,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    advisory-db = {
+      url = "github:rustsec/advisory-db";
+      flake = false;
+    };
+
     nix-lib = {
       url = "github:hoprnet/nix-lib/1409f8caa2666afcf575dd5e05d5a8c521f5c1d6";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -36,6 +41,7 @@
       nixpkgs,
       rust-overlay,
       crane,
+      advisory-db,
       pre-commit,
       nix-lib,
       ...
@@ -90,6 +96,7 @@
               self
               pkgs
               craneLib
+              advisory-db
               tokioUnstableHook
               ;
           };
@@ -142,38 +149,9 @@
               gnosis_vpn-clippy
               gnosis_vpn-docs
               gnosis_vpn-test
+              gnosis_vpn-audit
               gnosis_vpn-licenses
               ;
-          };
-
-          apps.audit = {
-            type = "app";
-            program = "${
-              pkgs.writeShellApplication {
-                name = "audit";
-                runtimeInputs = [
-                  pkgs.git
-                  ((pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
-                    targets = [ ];
-                  })
-                  pkgs.cargo-audit
-                ];
-                text = ''
-                  repo_root="''${1:-$PWD}"
-                  if repo_git_root="$(git -C "$repo_root" rev-parse --show-toplevel 2>/dev/null)"; then
-                    repo_root="$repo_git_root"
-                  fi
-                  if [ ! -f "$repo_root/Cargo.toml" ] || [ ! -f "$repo_root/.cargo/audit.toml" ]; then
-                    echo "run from the repo root, any repo subdir, or pass the repo root" >&2
-                    exit 1
-                  fi
-
-                  cd "$repo_root"
-                  db_dir="''${CARGO_HOME:-$HOME/.cargo}/advisory-db"
-                  cargo audit --db "$db_dir" --file "$repo_root/Cargo.lock"
-                '';
-              }
-            }/bin/audit";
           };
 
           packages = {

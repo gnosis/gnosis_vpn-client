@@ -7,13 +7,14 @@
 # Structure:
 # - Local builds: binary-gnosis_vpn (release), binary-gnosis_vpn-dev (dev)
 # - Cross-compiled: binary-gnosis_vpn-{arch}-{os} for each target platform
-# - QA: gnosis_vpn-test, gnosis_vpn-clippy, gnosis_vpn-docs, gnosis_vpn-licenses
+# - QA: gnosis_vpn-test, gnosis_vpn-clippy, gnosis_vpn-docs, gnosis_vpn-audit, gnosis_vpn-licenses
 {
   lib,
   nixLib,
   self,
   pkgs,
   craneLib,
+  advisory-db,
   # Shell snippet appending `--cfg tokio_unstable` to CARGO_BUILD_RUSTFLAGS.
   tokioUnstableHook,
 }:
@@ -61,11 +62,12 @@ let
       inherit fs;
       root = ../.;
     };
-    # deny.toml for the cargoDeny license check
+    # Includes audit and license config files needed by crane-based checks
     checks = nixLib.mkSrc {
       inherit fs;
       root = ../.;
       extraFiles = [
+        ../.cargo/audit.toml
         ../deny.toml
       ];
     };
@@ -387,6 +389,16 @@ in
       }
     )
   );
+
+  # Audit dependencies
+  # Vulnerabilities are exempted because they are either:
+  # - From transitive dependencies we cannot control
+  # - Unmaintained crates with no viable alternatives
+  # - Lack a fixed version
+  gnosis_vpn-audit = craneLib.cargoAudit {
+    src = sources.checks;
+    inherit advisory-db;
+  };
 
   # Audit licenses
   gnosis_vpn-licenses = craneLib.cargoDeny {
