@@ -158,7 +158,8 @@
                   pkgs.cargo-audit
                 ];
                 text = ''
-                  cargo audit
+                  cd ${self}
+                  cargo audit --config .cargo/audit.toml
                 '';
               }
             }/bin/audit";
