@@ -86,15 +86,20 @@ jobs:
   checks:
     name: Checks
     if: ${{ github.event.pull_request.head.repo.fork == false }}
-    runs-on: depot-ubuntu-22.04-4
-    steps:
-      - name: Run checks
-        uses: hoprnet/hopr-workflows/actions/nix-action@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # nix-action-v1.1.3
-        with:
-          source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
-          cachix_cache_name: gnosis-vpn-client
-          cachix_auth_token: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-          command: nix flake check -L --show-trace
+    permissions:
+      contents: read
+    uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@1476429c0d8c5a6331c50a4655501125051cdbf4 # workflow-checks-v2.1.2
+    with:
+      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      cachix_cache_name: gnosis-vpn-client
+      # No `.#check` app or `.#ci` devshell here; `nix flake check` already covers clippy/docs/test/licenses.
+      format: false
+      pre_commit: false
+      deps: false
+      lint_command: nix flake check -L --show-trace
+      audit_command: nix run -L .#audit
+    secrets:
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   system-test:
     name: System tests
     # NOTE: Do not switch to a depot runner here. The system-test recipe requires passwordless
