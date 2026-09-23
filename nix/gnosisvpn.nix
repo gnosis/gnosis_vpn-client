@@ -35,8 +35,6 @@ let
       "sha256-oxCxToa9dE2TslRNxvO19qZrOrf9qsUlB4u+ZNwzA28=";
     "git+https://github.com/hoprnet/edge-client.git?branch=release/4.1#a84a33ad1246341c655e75370cad0352b2f37ab9" =
       "sha256-0/eu+OpLL9T27QJx1L4yj0lORik59zrJ3rm9azytn6A=";
-    "git+https://github.com/hoprnet/hoprnet?branch=release/4.0#33624711663e6943cc28bd6cf11670a63db462ae" =
-      "sha256-QYMLYNo57QeOM2t69F17PXIW9s5hcf0NRO/CAy2EAuo=";
     "git+https://github.com/hoprnet/hoprnet?branch=release/4.0#7aad5382d7cbdd258155129892feec0b097955d8" =
       "sha256-kv/JRBnu/zr2AQHMzcIrPRjLbGHCRdjm5Zz6qj8rm1I=";
   };
