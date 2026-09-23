@@ -466,7 +466,6 @@ pub(super) struct Strategy {
     pub(super) channel_capacity: Option<ByteSize>,
     pub(super) topup_capacity: Option<ByteSize>,
     pub(super) lower_capacity_threshold: Option<ByteSize>,
-    pub(super) min_safe_capacity_required: Option<ByteSize>,
     pub(super) sizing_mode: Option<edgli::strategy::CapacitySizingMode>,
 }
 
@@ -511,7 +510,6 @@ impl From<Option<Strategy>> for StrategyConfig {
             channel_capacity: v.as_ref().and_then(|s| s.channel_capacity),
             topup_capacity: v.as_ref().and_then(|s| s.topup_capacity),
             lower_capacity_threshold: v.as_ref().and_then(|s| s.lower_capacity_threshold),
-            min_safe_capacity_required: v.as_ref().and_then(|s| s.min_safe_capacity_required),
             sizing_mode: v.as_ref().and_then(|s| s.sizing_mode.clone()),
         }
     }
@@ -811,7 +809,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                             | "channel_capacity"
                             | "topup_capacity"
                             | "lower_capacity_threshold"
-                            | "min_safe_capacity_required"
                     ) {
                         continue;
                     }
@@ -1536,7 +1533,6 @@ channel_capacity = "16 EiB"
             channel_capacity: None,
             topup_capacity: None,
             lower_capacity_threshold: None,
-            min_safe_capacity_required: None,
             sizing_mode: None,
         });
         let cfg: StrategyConfig = strategy.into();
@@ -1556,11 +1552,27 @@ channel_capacity = "16 EiB"
             channel_capacity: None,
             topup_capacity: None,
             lower_capacity_threshold: None,
-            min_safe_capacity_required: None,
             sizing_mode: None,
         });
         let cfg: StrategyConfig = strategy.into();
         assert!(cfg.channel_allowlist.is_none());
+    }
+
+    #[test]
+    fn obsolete_min_safe_capacity_is_flagged() {
+        let table = r#####"
+version = 7
+
+[strategy]
+min_safe_capacity_required = "640 MiB"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["strategy.min_safe_capacity_required".to_string()]
+        );
     }
 
     #[test]
@@ -1572,18 +1584,15 @@ version = 7
 [strategy]
 topup_capacity = "384 MiB"
 lower_capacity_threshold = "128 MiB"
-min_safe_capacity_required = "640 MiB"
 "#####,
         );
         let strategy = cfg.strategy.expect("strategy section present");
         assert_eq!(strategy.topup_capacity, Some(bytesize::ByteSize::mib(384)));
         assert_eq!(strategy.lower_capacity_threshold, Some(bytesize::ByteSize::mib(128)));
-        assert_eq!(strategy.min_safe_capacity_required, Some(bytesize::ByteSize::mib(640)));
 
         let converted: StrategyConfig = Some(strategy).into();
         assert_eq!(converted.topup_capacity, Some(bytesize::ByteSize::mib(384)));
         assert_eq!(converted.lower_capacity_threshold, Some(bytesize::ByteSize::mib(128)));
-        assert_eq!(converted.min_safe_capacity_required, Some(bytesize::ByteSize::mib(640)));
     }
 
     #[test]
@@ -1599,12 +1608,10 @@ channel_capacity = "1 GiB"
         let strategy = cfg.strategy.expect("strategy section present");
         assert!(strategy.topup_capacity.is_none());
         assert!(strategy.lower_capacity_threshold.is_none());
-        assert!(strategy.min_safe_capacity_required.is_none());
 
         let converted: StrategyConfig = Some(strategy).into();
         assert!(converted.topup_capacity.is_none());
         assert!(converted.lower_capacity_threshold.is_none());
-        assert!(converted.min_safe_capacity_required.is_none());
     }
 
     #[test]
@@ -1657,7 +1664,6 @@ version = 7
 [strategy]
 topup_capacity = "384 MiB"
 lower_capacity_threshold = "128 MiB"
-min_safe_capacity_required = "640 MiB"
 sizing_mode = "deterministic"
 "#####
             .parse::<toml::Table>()
@@ -1711,7 +1717,6 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 channel_capacity = "640 MiB"
 topup_capacity = "384 MiB"
 lower_capacity_threshold = "128 MiB"
-min_safe_capacity_required = "640 MiB"
 sizing_mode = "deterministic"
 "#####,
         );
@@ -1721,10 +1726,6 @@ sizing_mode = "deterministic"
         assert_eq!(
             result.strategy.lower_capacity_threshold,
             Some(bytesize::ByteSize::mib(128))
-        );
-        assert_eq!(
-            result.strategy.min_safe_capacity_required,
-            Some(bytesize::ByteSize::mib(640))
         );
         assert_eq!(
             result.strategy.sizing_mode,

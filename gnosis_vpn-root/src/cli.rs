@@ -73,9 +73,9 @@ pub struct Cli {
     #[arg(long, env = hopr::ENV_VAR_ID_PASS, default_value = None)]
     pub hopr_identity_pass: Option<String>,
 
-    /// Override internal Hopr Blokli URL used for on chain queries
-    #[arg(long, env = hopr::ENV_VAR_BLOKLI_URL, default_value = None)]
-    pub hopr_blokli_url: Option<Url>,
+    /// Hopr Blokli URL used for on chain queries
+    #[arg(long, env = hopr::ENV_VAR_BLOKLI_URL)]
+    pub hopr_blokli_url: Url,
 
     /// Allow insecure non-private connections (only for testing purposes)
     #[arg(long)]
@@ -138,6 +138,9 @@ mod tests {
             "/tmp/gnosis.socket",
             "--config-path",
             "/tmp/gnosis.toml",
+            // required since edgli dropped its production default
+            "--hopr-blokli-url",
+            "https://blokli.example.com",
         ]
     }
 

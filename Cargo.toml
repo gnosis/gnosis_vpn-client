@@ -25,7 +25,7 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.6", features = ["derive", "env"] }
 clap_complete = "~4.6.9"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "aec3623b64f6c8414524f14d714fb3020e6322ae", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "5d7246a3a100666edb5fb71aac31f0d965e4b535", features = [
   "blokli",
   "pix",
   "pix-test",
@@ -34,12 +34,12 @@ edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "aec3623b64f
 exitcode = "~1.1.2"
 futures = "~0.3.34"
 futures-util = "~0.3.34"
-# Pinned by REV, not by branch, and the form matters. `edgli` pins `hopr-lib` by rev, and
+# Pinned by BRANCH, not by rev, and the form matters. `edgli` pins `hopr-lib` by branch, and
 # Cargo treats `?branch=X#sha` and `?rev=sha` as distinct sources even for byte-identical
 # commits -- mixing the two builds hoprnet twice and fails with `expected
-# hopr_lib::HoprSessionClientConfig, found HoprSessionClientConfig`. Keep both entries in the
-# same form and pointed at the same commit as edgli's own `hopr-lib` pin.
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", rev = "85e698a726710e205e8f76f4df7ad52debd2ff86", features = [
+# hopr_lib::HoprSessionClientConfig, found HoprSessionClientConfig`. Keep this matching
+# edgli's own `hopr-lib` pin.
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "master", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
@@ -60,7 +60,7 @@ rustix = { version = "~1.1.4", features = ["fs", "net", "pipe", "stdio"] }
 serde = { version = "~1.0.229", features = ["derive"] }
 serde-saphyr = "~1.2.0"
 serde_json = "~1.0.151"
-serde_with = "~3.22.0"
+serde_with = "~3.23.0"
 tempfile = "~3.27.0"
 thiserror = "~2.0.20"
 tikv-jemallocator = "~0.7.0"
