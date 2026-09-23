@@ -29,9 +29,6 @@ pub struct StrategyConfig {
     /// Channel balance (as data capacity) below which a top-up fires. `None` leaves edgli's default in place.
     pub lower_capacity_threshold: Option<ByteSize>,
 
-    /// Minimum safe balance required before opening/funding any channel. `None` derives it from `channel_capacity`.
-    pub min_safe_capacity_required: Option<ByteSize>,
-
     /// How each capacity field above converts to a wxHOPR stake. `None` leaves edgli's default in place.
     pub sizing_mode: Option<edgli::strategy::CapacitySizingMode>,
 }
@@ -46,7 +43,6 @@ impl Default for StrategyConfig {
             channel_capacity: def.channel_capacity,
             topup_capacity: def.topup_capacity,
             lower_capacity_threshold: def.lower_capacity_threshold,
-            min_safe_capacity_required: def.min_safe_capacity_required,
             sizing_mode: def.sizing_mode,
         }
     }
@@ -61,7 +57,6 @@ impl From<StrategyConfig> for edgli::strategy::IncentiveConfiguration {
             channel_capacity: c.channel_capacity,
             topup_capacity: c.topup_capacity,
             lower_capacity_threshold: c.lower_capacity_threshold,
-            min_safe_capacity_required: c.min_safe_capacity_required,
             sizing_mode: c.sizing_mode,
         }
     }
