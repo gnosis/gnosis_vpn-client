@@ -34,11 +34,8 @@ edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "5d7246a3a10
 exitcode = "~1.1.2"
 futures = "~0.3.34"
 futures-util = "~0.3.34"
-# Pinned by BRANCH, not by rev, and the form matters. `edgli` pins `hopr-lib` by branch, and
-# Cargo treats `?branch=X#sha` and `?rev=sha` as distinct sources even for byte-identical
-# commits -- mixing the two builds hoprnet twice and fails with `expected
-# hopr_lib::HoprSessionClientConfig, found HoprSessionClientConfig`. Keep this matching
-# edgli's own `hopr-lib` pin.
+# Pinned by BRANCH to match edgli's own `hopr-lib` pin: cargo treats `?branch=X#sha` and
+# `?rev=sha` as distinct sources, so mixing them vendors hoprnet twice and fails to compile.
 hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "master", features = [
   "runtime-tokio",
 ] }
