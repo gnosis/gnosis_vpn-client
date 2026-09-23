@@ -59,7 +59,7 @@ pub enum Command {
     #[command()]
     Unprobe {},
 
-    /// Check one exit over a short-lived session: API versions, load and round trip time
+    /// Start a short-lived check of one exit; see its API versions, load and round trip time in `status`
     #[command(name = "quickprobe")]
     QuickProbe {
         /// Endpoint node address

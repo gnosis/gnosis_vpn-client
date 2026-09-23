@@ -264,7 +264,9 @@ fn pretty_print(resp: &Response) {
         Response::Unprobe(command::UnprobeResponse::NotProbing) => {
             eprintln!("Currently not probing any destination");
         }
-        Response::QuickProbe(res @ command::QuickProbeResponse::Checked { .. }) => {
+        Response::QuickProbe(
+            res @ (command::QuickProbeResponse::Checking { .. } | command::QuickProbeResponse::AlreadyChecking { .. }),
+        ) => {
             println!("{res}");
         }
         Response::QuickProbe(res) => {
@@ -504,7 +506,8 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Probe(command::ProbeResponse::NotReady) => exitcode::UNAVAILABLE,
         Response::Probe(command::ProbeResponse::DestinationNotFound) => exitcode::UNAVAILABLE,
         Response::Probe(command::ProbeResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
-        Response::QuickProbe(command::QuickProbeResponse::Checked { .. }) => exitcode::OK,
+        Response::QuickProbe(command::QuickProbeResponse::Checking { .. }) => exitcode::OK,
+        Response::QuickProbe(command::QuickProbeResponse::AlreadyChecking { .. }) => exitcode::OK,
         Response::QuickProbe(command::QuickProbeResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
         Response::QuickProbe(..) => exitcode::UNAVAILABLE,
         Response::Unprobe(command::UnprobeResponse::Closing { .. }) => exitcode::OK,

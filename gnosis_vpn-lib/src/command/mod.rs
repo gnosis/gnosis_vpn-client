@@ -53,7 +53,7 @@ pub enum Command {
     Probe(String),
     /// Close the probe session
     Unprobe,
-    /// Check one exit over a short-lived session and report what it found
+    /// Start a short-lived check of one exit; its result appears in `status`
     QuickProbe(String),
 }
 
@@ -344,19 +344,9 @@ impl UnprobeResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum QuickProbeResponse {
-    Checked {
+    /// Accepted; the check runs in the background and its result appears in `status`.
+    Checking {
         destination: Box<Destination>,
-        versions: Versions,
-        /// The API version this client selected from `versions`; None means incompatible.
-        api_version: Option<String>,
-        load: Health,
-        #[serde(with = "serde_utils::duration_ms")]
-        rtt: Duration,
-    },
-    /// The session or one of the checks failed.
-    Failed {
-        destination: Box<Destination>,
-        error: String,
     },
     /// Refused before opening a session, because the route cannot carry one.
     UnableToProbe {
@@ -380,10 +370,9 @@ pub enum QuickProbeResponse {
 }
 
 impl QuickProbeResponse {
-    pub fn failed(destination: Destination, error: String) -> Self {
-        QuickProbeResponse::Failed {
+    pub fn checking(destination: Destination) -> Self {
+        QuickProbeResponse::Checking {
             destination: Box::new(destination),
-            error,
         }
     }
 
@@ -909,20 +898,9 @@ impl Display for ProbeView {
 impl Display for QuickProbeResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            QuickProbeResponse::Checked {
-                destination,
-                versions,
-                api_version,
-                load,
-                rtt,
-            } => {
-                write!(f, "Checked {destination} - RTT {:.2} s, {load}", rtt.as_secs_f32())?;
-                match api_version {
-                    Some(api) => write!(f, ", API {api} ({versions})"),
-                    None => write!(f, ", no compatible API ({versions})"),
-                }
+            QuickProbeResponse::Checking { destination } => {
+                write!(f, "Checking {destination} - its result will appear in status")
             }
-            QuickProbeResponse::Failed { destination, error } => write!(f, "Check of {destination} failed: {error}"),
             QuickProbeResponse::UnableToProbe {
                 destination,
                 route_health,
@@ -931,7 +909,7 @@ impl Display for QuickProbeResponse {
                 write!(f, "Already probing {destination} - its results are in status")
             }
             QuickProbeResponse::AlreadyChecking { destination } => {
-                write!(f, "Already checking {destination} - retry shortly")
+                write!(f, "Already checking {destination} - its result will appear in status")
             }
             QuickProbeResponse::NotReady => write!(f, "Edge client not running yet - try again later"),
             QuickProbeResponse::DestinationNotFound => write!(f, "Destination not found"),
@@ -1096,10 +1074,16 @@ mod tests {
         let quick_not_ready = serde_json::to_string(&QuickProbeResponse::NotReady).unwrap();
         assert_eq!(r#"{"type":"NotReady"}"#, quick_not_ready);
 
-        let checking = serde_json::to_string(&QuickProbeResponse::already_checking(destination())).unwrap();
+        let quick_checking = serde_json::to_string(&QuickProbeResponse::checking(destination())).unwrap();
         assert!(
-            checking.starts_with(r#"{"type":"AlreadyChecking","destination":{"#),
-            "{checking}"
+            quick_checking.starts_with(r#"{"type":"Checking","destination":{"#),
+            "{quick_checking}"
+        );
+
+        let already_checking = serde_json::to_string(&QuickProbeResponse::already_checking(destination())).unwrap();
+        assert!(
+            already_checking.starts_with(r#"{"type":"AlreadyChecking","destination":{"#),
+            "{already_checking}"
         );
     }
 

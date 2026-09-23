@@ -998,8 +998,11 @@ impl Core {
                 destination,
                 outcome,
                 session,
-                resp,
             } => {
+                // Nobody waits on a quick probe anymore, so a failure would otherwise only show up in `status`.
+                if let Err(error) = &outcome {
+                    tracing::warn!(%destination, %error, "quick probe failed");
+                }
                 match self.route_healths.get_mut(&destination.key()) {
                     Some(rh) => rh.apply_quick_probe(&outcome, SystemTime::now()),
                     None => tracing::debug!(%destination, "quick probe finished for a destination that is gone"),
@@ -1010,17 +1013,6 @@ impl Core {
                     // Nobody wants it; ProbeSession's Drop closes it.
                     None => drop(session),
                 }
-                let response = match outcome {
-                    Ok(found) => command::QuickProbeResponse::Checked {
-                        destination,
-                        versions: found.versions,
-                        api_version: found.api_version,
-                        load: found.health,
-                        rtt: found.rtt,
-                    },
-                    Err(error) => command::QuickProbeResponse::failed(*destination, error),
-                };
-                let _ = resp.send(Response::QuickProbe(response));
             }
 
             Results::NerdStatsTicketStats {
@@ -1656,7 +1648,7 @@ impl Core {
         }
     }
 
-    /// Starts `quickprobe <id>`; refused when the route cannot carry a session or the exit is already being probed.
+    /// Starts `quickprobe <id>` and answers right away; the result lands in the destination's route health.
     fn spawn_quick_probe(
         &mut self,
         dest: Destination,
@@ -1688,6 +1680,9 @@ impl Core {
             )));
             return;
         }
+        let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::checking(
+            dest.clone(),
+        )));
 
         let options = self.config.connection.clone();
         let cancel = self.cancel_on_shutdown.clone();
@@ -1696,10 +1691,8 @@ impl Core {
             let result = cancel
                 .run_until_cancelled(probe::quick_probe(hopr, dest.clone(), options))
                 .await;
-            // Core may be gone on shutdown, so answer the caller directly instead of through it.
             let Some((outcome, session)) = result else {
-                let response = command::QuickProbeResponse::failed(dest, "client is shutting down".to_string());
-                let _ = resp.send(Response::QuickProbe(response));
+                tracing::debug!(destination = %dest, "quick probe cancelled by shutdown");
                 return;
             };
             let _ = sender
@@ -1707,7 +1700,6 @@ impl Core {
                     destination: Box::new(dest),
                     outcome,
                     session,
-                    resp,
                 })
                 .await;
         });
