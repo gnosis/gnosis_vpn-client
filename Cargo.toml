@@ -25,7 +25,7 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.6", features = ["derive", "env"] }
 clap_complete = "~4.6.9"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "0278f30286e7f2204d23fee74b965d208c283354", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "a8146ade0beb4c1abc653edfd7514c1c693e7884", features = [
   "blokli",
   "pix",
   "pix-test",
@@ -59,7 +59,7 @@ rustix = { version = "~1.1.4", features = ["fs", "net", "pipe", "stdio"] }
 serde = { version = "~1.0.229", features = ["derive"] }
 serde-saphyr = "~1.2.0"
 serde_json = "~1.0.151"
-serde_with = "~3.22.0"
+serde_with = "~3.23.0"
 tempfile = "~3.27.0"
 thiserror = "~2.0.20"
 tikv-jemallocator = "~0.7.0"
