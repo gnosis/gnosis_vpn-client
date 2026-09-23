@@ -20,7 +20,7 @@ use crate::core::runner::Results;
 use crate::event::RunnerToRoot;
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::{SessionClientMetadata, SplicedWgSession};
-use crate::hopr::{self, Hopr, HoprError};
+use crate::hopr::{Hopr, HoprError};
 use crate::wireguard::{self, WireGuard};
 use crate::worker_params::WorkerParams;
 use crate::{ping, remote_data, wg_tunnel};
@@ -101,13 +101,12 @@ impl Runner {
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
         // 1. determine the blokli ips to exempt from the killswitch, which blocks DNS while up
         let _ = results_sender.send(progress(Progress::ResolveBlokliIps)).await;
-        let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
         let blokli_ips = match self.worker_params.pinned_blokli_ip() {
             // The Blokli client talks to the pinned address instead of resolving the host, so the
             // killswitch has to exempt exactly that address rather than whatever DNS returns now.
             Some(ip) => vec![ip],
             None if !self.prev_conn.blokli_ips.is_empty() => self.prev_conn.blokli_ips.clone(),
-            None => remote_data::resolve_ips(&blokli_url).await?,
+            None => remote_data::resolve_ips(self.worker_params.blokli_url()).await?,
         };
 
         // 2. generate wg keys

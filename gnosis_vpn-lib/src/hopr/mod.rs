@@ -24,11 +24,3 @@ pub fn telemetry() -> Result<String, HoprError> {
     tracing::debug!("query hopr telemetry");
     edgli::collect_hopr_metrics().map_err(|e| HoprError::Telemetry(e.to_string()))
 }
-
-/// Blokli endpoint used when neither `--hopr-blokli-url` nor `GNOSISVPN_HOPR_BLOKLI_URL` is set.
-/// `edgli` dropped its own fallback in hoprnet/edge-client#169; this keeps the previous behaviour.
-pub const DEFAULT_BLOKLI_URL: &str = "https://blokli.jura.gnosisvpn.io";
-
-pub fn blokli_url(provided_blokli_url: Option<url::Url>) -> url::Url {
-    provided_blokli_url.unwrap_or_else(|| DEFAULT_BLOKLI_URL.parse().expect("DEFAULT_BLOKLI_URL is a valid URL"))
-}
