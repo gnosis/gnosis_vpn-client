@@ -134,7 +134,7 @@ pub(super) struct PixOptionsConfig {
     ping_main: Option<SessionPixConfig>,
     bridge: Option<SessionPixConfig>,
     health_check: Option<SessionPixConfig>,
-    dimensions: Option<options::PixDimensionOptions>,
+    pub(super) dimensions: Option<options::PixDimensionOptions>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

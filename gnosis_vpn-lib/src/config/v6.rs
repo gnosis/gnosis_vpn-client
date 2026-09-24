@@ -30,7 +30,7 @@ pub(super) struct Destination {
     pub(super) path: Option<DestinationPath>,
 }
 
-/// v6 still rejects only truly v7-only destination keys; shared `[connection]` keys stay supported.
+/// v6 rejects v7-only keys; shared `[connection]` keys stay supported, except the PIX dimensions.
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong = Vec::new();
     for (key, value) in table.iter() {
@@ -167,21 +167,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                     if let Some(session) = v2.as_table() {
                                         for (k3, _) in session.iter() {
                                             if k3 == "enabled" {
-                                                continue;
-                                            }
-                                            wrong.push(format!("connection.pix.{k2}.{k3}"));
-                                        }
-                                    }
-                                    continue;
-                                }
-                                // v6 reuses v7's `Connection`, so `dimensions` already works here.
-                                if k2 == "dimensions" {
-                                    if let Some(dims) = v2.as_table() {
-                                        for (k3, _) in dims.iter() {
-                                            if k3 == "num_ssa_parts"
-                                                || k3 == "ssa_part_size"
-                                                || k3 == "additional_shares"
-                                            {
                                                 continue;
                                             }
                                             wrong.push(format!("connection.pix.{k2}.{k3}"));
@@ -331,10 +316,16 @@ impl TryFrom<Config> for super::v7::Config {
                 .collect()
         });
 
+        // Reported as unsupported by `wrong_keys`, so the shared struct must not apply them either.
+        let mut connection = value.connection;
+        if let Some(pix) = connection.as_mut().and_then(|c| c.pix.as_mut()) {
+            pix.dimensions = None;
+        }
+
         Ok(super::v7::Config {
             version: value.version,
             destinations,
-            connection: value.connection,
+            connection,
             wireguard: value.wireguard,
             blokli: value.blokli,
             strategy: value.strategy,
@@ -479,10 +470,10 @@ latency_halflife = "50ms"
         assert!(wrong_keys(&table).is_empty());
     }
 
-    /// v6 reuses v7's `[connection]`, so PIX dimensions stay supported here.
+    /// PIX is not backported, so the dimensions need `version = 7`: warned about and dropped here.
     #[test]
-    fn v6_file_still_accepts_the_pix_dimensions() {
-        let table = r#####"
+    fn pix_dimensions_are_not_a_supported_key_in_v6() {
+        let toml = r#####"
 version = 6
 
 [destinations.Germany]
@@ -492,11 +483,15 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 num_ssa_parts     = 8
 ssa_part_size     = 2
 additional_shares = 2
-"#####
-            .parse::<toml::Table>()
-            .expect("valid TOML");
+"#####;
+        let table = toml.parse::<toml::Table>().expect("valid TOML");
+        assert_eq!(wrong_keys(&table), vec!["connection.pix.dimensions".to_string()]);
 
-        assert!(wrong_keys(&table).is_empty());
+        let result = runtime_config(parse(toml));
+        assert_eq!(
+            result.connection.pix.dimensions,
+            crate::connection::options::PixDimensionOptions::default()
+        );
     }
 
     /// `[connection]` is shared with v7, so a v6 file may carry the SURB ramp pacing too.
