@@ -64,3 +64,11 @@ doctest = false
 harness = false
 name    = "worker_bootstrap"
 path    = "tests/worker_bootstrap.rs"
+
+[features]
+default = ["pix-test"]
+# The PIX deposit pool, forwarded to edgli. Exactly one: they are mutually exclusive there.
+# `pix-test` settles to visible secp256k1 addresses (tests and demos); `pix-curvy` to anonymous
+# Baby JubJub addresses through a Curvy deployment.
+pix-test  = ["edgli/pix-test"]
+pix-curvy = ["edgli/pix-curvy"]
