@@ -974,17 +974,6 @@ impl DaemonState {
         }
     }
 
-<<<<<<< HEAD
-=======
-    /// What root can still answer from the config file alone once the worker is gone.
-    fn offline_response(&self, cmd: &WorkerCommand) -> Option<Response> {
-        match cmd {
-            WorkerCommand::Status => Some(self.status_response_offline()),
-            WorkerCommand::Destinations => Some(Response::Destinations(self.configured_destination_ids())),
-            _ => None,
-        }
-    }
-
     /// What root answers once the worker is gone and it has no config-level answer.
     fn worker_gone_response(&self) -> Response {
         match self.shutdown_ongoing {
@@ -993,12 +982,6 @@ impl DaemonState {
         }
     }
 
-    /// Only what the config file names; the worker's answer also carries whatever discovery found.
-    fn configured_destination_ids(&self) -> Vec<String> {
-        self.config.destinations.connect_ids()
-    }
-
->>>>>>> 7a51524 (fix(root): answer pending socket commands instead of dropping them (#835))
     fn status_response_offline(&self) -> Response {
         let mut vals: Vec<&Destination> = self.config.destinations.values().collect();
         vals.sort_unstable_by(|a, b| a.id.cmp(&b.id));
