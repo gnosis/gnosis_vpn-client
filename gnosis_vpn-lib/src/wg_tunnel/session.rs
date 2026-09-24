@@ -63,6 +63,10 @@ where
         self.write.write_all(datagram).await?;
         self.write.flush().await
     }
+
+    async fn close(&mut self) -> std::io::Result<()> {
+        self.write.shutdown().await
+    }
 }
 
 /// Reads whole WireGuard datagrams from the read half of a session, one per
@@ -125,6 +129,19 @@ mod tests {
         // Drop the whole client end so the peer read half actually sees EOF; a
         // `tokio::io::split` write half alone would keep the stream alive.
         drop(sender);
+        assert_eq!(receiver.recv(&mut [0u8; 64]).await.unwrap(), None);
+    }
+
+    /// The teardown path: EOF from `close` alone, since the pump task still owns the session.
+    #[tokio::test]
+    async fn close_reports_none_without_dropping_the_sender() {
+        let (client, server) = tokio::io::duplex(4096);
+        let (_c_r, c_w) = tokio::io::split(client);
+        let mut sender = SessionSender::new(c_w);
+        let mut receiver = SessionReceiver::new(server);
+
+        sender.close().await.unwrap();
+
         assert_eq!(receiver.recv(&mut [0u8; 64]).await.unwrap(), None);
     }
 

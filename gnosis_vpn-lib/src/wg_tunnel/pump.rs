@@ -49,6 +49,23 @@ const DECAP_FAILURE_MAJORITY_DIVISOR: u32 = 2;
 #[async_trait::async_trait]
 pub trait NetworkSender: Send {
     async fn send(&mut self, datagram: &[u8]) -> std::io::Result<()>;
+
+    /// Signal end-of-stream; `HoprSession` has no `Drop`, so a dropped session leaks at the exit.
+    async fn close(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Lets a caller lend the sender to [`run`] and still close it after cancellation.
+#[async_trait::async_trait]
+impl<T: NetworkSender + ?Sized> NetworkSender for &mut T {
+    async fn send(&mut self, datagram: &[u8]) -> std::io::Result<()> {
+        (**self).send(datagram).await
+    }
+
+    async fn close(&mut self) -> std::io::Result<()> {
+        (**self).close().await
+    }
 }
 
 /// Reads whole WireGuard datagrams from the session, one per call, or `None` on
@@ -151,7 +168,8 @@ pub async fn run<E, NS, NR, TS, TR>(
 ) -> Result<PumpExit, Error>
 where
     E: TunnelEngine + Send + 'static,
-    NS: NetworkSender + 'static,
+    // Borrowed rather than owned by callers that must close the session afterwards.
+    NS: NetworkSender,
     NR: NetworkReceiver + 'static,
     TS: TunSender + 'static,
     TR: TunReceiver + 'static,
