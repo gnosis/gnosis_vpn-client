@@ -24,7 +24,3 @@ pub fn telemetry() -> Result<String, HoprError> {
     tracing::debug!("query hopr telemetry");
     edgli::collect_hopr_metrics().map_err(|e| HoprError::Telemetry(e.to_string()))
 }
-
-pub fn blokli_url(provided_blokli_url: Option<url::Url>) -> url::Url {
-    provided_blokli_url.unwrap_or(edgli::DEFAULT_BLOKLI_URL.clone())
-}
