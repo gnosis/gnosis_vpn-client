@@ -685,6 +685,15 @@ async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) 
     Ok(())
 }
 
+/// Dropping a pending sender closes the caller's socket with zero bytes, read as EOF.
+fn answer_pending(pending: &mut HashMap<u64, oneshot::Sender<Response>>, response: Response) {
+    for (_, resp) in pending.drain() {
+        let _ = resp.send(response.clone()).map_err(|error| {
+            tracing::error!(?error, "socket command response channel closed");
+        });
+    }
+}
+
 async fn spawn_ping(options: ping::Options) -> Result<Duration, String> {
     // delay ping by one sec to increase success rate
     time::sleep(Duration::from_secs(1)).await;
@@ -910,11 +919,7 @@ impl DaemonState {
                     });
                     Ok(())
                 } else {
-                    let response = match self.shutdown_ongoing {
-                        Shutdown::RestartWorker => Response::WorkerRestarting,
-                        _ => Response::WorkerOffline,
-                    };
-                    let _ = resp.send(response).map_err(|error| {
+                    let _ = resp.send(self.worker_gone_response()).map_err(|error| {
                         tracing::error!(?error, "socket command response channel closed");
                     });
                     Ok(())
@@ -977,6 +982,14 @@ impl DaemonState {
         }
     }
 
+    /// What root answers once the worker is gone and it has no config-level answer.
+    fn worker_gone_response(&self) -> Response {
+        match self.shutdown_ongoing {
+            Shutdown::RestartWorker => Response::WorkerRestarting,
+            _ => Response::WorkerOffline,
+        }
+    }
+
     /// Only what the config file names; the worker's answer also carries whatever discovery found.
     fn configured_destination_ids(&self) -> Vec<String> {
         self.config.destinations.connect_ids()
@@ -1015,10 +1028,7 @@ impl DaemonState {
             | LibCommand::Disconnect
             | LibCommand::Balance
             | LibCommand::FundingTool(_)
-            | LibCommand::Telemetry => Ok(match self.shutdown_ongoing {
-                Shutdown::RestartWorker => Response::WorkerRestarting,
-                _ => Response::WorkerOffline,
-            }),
+            | LibCommand::Telemetry => Ok(self.worker_gone_response()),
             LibCommand::Ping => Ok(Response::Pong),
             LibCommand::Destinations => Ok(Response::Destinations(self.configured_destination_ids())),
             LibCommand::Info => {
@@ -1485,7 +1495,8 @@ impl DaemonState {
     async fn cleanup_worker_resources(&mut self) {
         self.ping_tasks.shutdown().await;
         self.teardown_any_routing().await;
-        self.pending_responses.clear();
+        let worker_gone = self.worker_gone_response();
+        answer_pending(&mut self.pending_responses, worker_gone);
         let _ = self
             .keep_alive_instruction_sender
             .send(KeepAliveInstruction::Suspend)
@@ -1544,6 +1555,18 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+
+    // The caller is blocked on this oneshot; dropping it is what produced the EOF.
+    #[tokio::test]
+    async fn pending_callers_are_answered_instead_of_dropped() {
+        let (tx, rx) = oneshot::channel();
+        let mut pending = HashMap::from([(1u64, tx)]);
+
+        answer_pending(&mut pending, Response::WorkerRestarting);
+
+        assert!(matches!(rx.await, Ok(Response::WorkerRestarting)));
+        assert!(pending.is_empty());
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn fd_send_does_not_block_the_async_runtime() {
