@@ -1297,6 +1297,8 @@ impl DaemonState {
             Shutdown::None => {
                 if status.success() {
                     tracing::warn!(exit_code = ?status.code(), "worker process exited cleanly without shutdown signal - restarting");
+                    // Ids issued to the dead worker are never answered by its replacement.
+                    answer_pending(&mut self.pending_responses, Response::WorkerRestarting);
                     self.setup_worker().await?;
                     let _ = self
                         .keep_alive_instruction_sender
