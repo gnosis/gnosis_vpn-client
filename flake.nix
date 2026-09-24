@@ -157,6 +157,7 @@
               binary-gnosis_vpn-dev
               binary-gnosis_vpn-x86_64-linux
               binary-gnosis_vpn-x86_64-linux-dev
+              binary-gnosis_vpn-pix-curvy-x86_64-linux
               binary-gnosis_vpn-aarch64-linux
               binary-gnosis_vpn-aarch64-linux-dev
               binary-gnosis_vpn-system_tests

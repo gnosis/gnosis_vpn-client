@@ -19,3 +19,8 @@ tracing.workspace        = true
 # Target-specific dependencies for memory allocators
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemallocator = { workspace = true }
+
+[features]
+default   = ["pix-test"]
+pix-test  = ["gnosis_vpn-lib/pix-test"]
+pix-curvy = ["gnosis_vpn-lib/pix-curvy"]

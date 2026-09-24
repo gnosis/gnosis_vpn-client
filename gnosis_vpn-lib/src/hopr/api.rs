@@ -368,6 +368,8 @@ impl Hopr {
         &self,
         sizing: edgli::strategy::IncentiveConfiguration,
         pix: PixConfig,
+        blokli_url: &url::Url,
+        state_home: &std::path::Path,
     ) -> Result<AbortHandle, HoprError> {
         let mut cfg = edgli::strategy::default_strategy_cfg(&sizing)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
@@ -383,9 +385,9 @@ impl Hopr {
         // Drop any pre-existing entry first so a future upstream default can't register it twice.
         cfg.strategies
             .retain(|s| !matches!(s, edgli::strategy::EdgeStrategyKind::Pix(_)));
-        // Boxed upstream (edge-client #186): the variant grew with the Curvy pool's config.
-        cfg.strategies
-            .push(edgli::strategy::EdgeStrategyKind::Pix(Box::new(pix.into())));
+        cfg.strategies.push(edgli::strategy::EdgeStrategyKind::Pix(Box::new(
+            pix.to_entry_config(blokli_url, state_home),
+        )));
         self.edgli
             .run_reactor_from_cfg(cfg)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))

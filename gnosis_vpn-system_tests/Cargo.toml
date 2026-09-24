@@ -16,3 +16,8 @@ tokio.workspace              = true
 tracing.workspace            = true
 tracing-subscriber.workspace = true
 url.workspace                = true
+
+[features]
+default   = ["pix-test"]
+pix-test  = ["gnosis_vpn-lib/pix-test"]
+pix-curvy = ["gnosis_vpn-lib/pix-curvy"]
