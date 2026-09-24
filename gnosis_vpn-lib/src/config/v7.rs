@@ -134,6 +134,7 @@ pub(super) struct PixOptionsConfig {
     ping_main: Option<SessionPixConfig>,
     bridge: Option<SessionPixConfig>,
     health_check: Option<SessionPixConfig>,
+    pub(super) dimensions: Option<options::PixDimensionOptions>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -366,6 +367,10 @@ impl From<Option<Connection>> for options::Options {
                 pix_cfg.as_ref().and_then(|s| s.health_check.clone()),
                 def_pix.health_check,
             ),
+            dimensions: pix_cfg
+                .as_ref()
+                .and_then(|s| s.dimensions.clone())
+                .unwrap_or(def_pix.dimensions),
         };
 
         let http_timeout = connection
@@ -744,6 +749,20 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                     if let Some(session) = v2.as_table() {
                                         for (k3, _) in session.iter() {
                                             if k3 == "enabled" {
+                                                continue;
+                                            }
+                                            wrong.push(format!("connection.pix.{k2}.{k3}"));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                if k2 == "dimensions" {
+                                    if let Some(dims) = v2.as_table() {
+                                        for (k3, _) in dims.iter() {
+                                            if k3 == "num_ssa_parts"
+                                                || k3 == "ssa_part_size"
+                                                || k3 == "additional_shares"
+                                            {
                                                 continue;
                                             }
                                             wrong.push(format!("connection.pix.{k2}.{k3}"));
@@ -1889,6 +1908,123 @@ enabled = false
             .expect("valid TOML");
 
         assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn pix_dimensions_default_to_upstream() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(
+            result.connection.pix.dimensions,
+            crate::connection::options::PixDimensionOptions::default()
+        );
+    }
+
+    #[test]
+    fn pix_dimensions_are_applied() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.pix.dimensions]
+num_ssa_parts     = 8
+ssa_part_size     = 2
+additional_shares = 2
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(result.connection.pix.dimensions.num_ssa_parts, Some(8));
+        assert_eq!(result.connection.pix.dimensions.ssa_part_size, Some(2));
+        assert_eq!(result.connection.pix.dimensions.additional_shares, Some(2));
+        // Sibling toggles still use their defaults.
+        assert!(result.connection.pix.ping_main.enabled);
+    }
+
+    #[test]
+    fn pix_dimensions_are_known_keys() {
+        let table = r#####"
+version = 7
+
+[connection.pix.dimensions]
+num_ssa_parts     = 8
+ssa_part_size     = 2
+additional_shares = 2
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn pix_dimensions_typo_is_reported() {
+        let table = r#####"
+version = 7
+
+[connection.pix.dimensions]
+num_ssa_part = 8
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["connection.pix.dimensions.num_ssa_part".to_string()]
+        );
+    }
+
+    #[test]
+    fn pix_dimensions_reject_out_of_range() {
+        // Match hopr-lib's PIX bounds.
+        for bad in [
+            "num_ssa_parts = 7",
+            "num_ssa_parts = 16193",
+            "ssa_part_size = 1",
+            "ssa_part_size = 256",
+            "additional_shares = 256",
+        ] {
+            let toml = format!(
+                r#####"
+version = 7
+
+[connection.pix.dimensions]
+{bad}
+"#####
+            );
+            assert!(toml::from_str::<Config>(&toml).is_err(), "expected rejection for {bad}");
+        }
+    }
+
+    #[test]
+    fn pix_surplus_may_not_exceed_the_threshold() {
+        // Only explicit values can be compared here.
+        let toml = r#####"
+version = 7
+
+[connection.pix.dimensions]
+ssa_part_size     = 2
+additional_shares = 3
+"#####;
+        assert!(toml::from_str::<Config>(toml).is_err());
+
+        let ok = r#####"
+version = 7
+
+[connection.pix.dimensions]
+ssa_part_size     = 2
+additional_shares = 2
+"#####;
+        assert!(toml::from_str::<Config>(ok).is_ok());
     }
 
     #[test]

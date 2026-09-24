@@ -151,4 +151,17 @@ mod tests {
 
         Ok(())
     }
+
+    /// There is deliberately no fallback Blokli endpoint: a deployment must say which one it talks to.
+    #[test]
+    fn rejects_cli_without_a_blokli_url() {
+        let args = [
+            "gnosis_vpn",
+            "--socket-path",
+            "/tmp/gnosis.socket",
+            "--config-path",
+            "/tmp/gnosis.toml",
+        ];
+        assert!(Cli::try_parse_from(args).is_err());
+    }
 }
