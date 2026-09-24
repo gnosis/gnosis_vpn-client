@@ -478,7 +478,7 @@ impl Runner {
     fn spawn_pump_task<NS, NR>(
         &self,
         engine: wg_tunnel::WgTunnel,
-        net_tx: NS,
+        mut net_tx: NS,
         net_rx: NR,
         tun: (wg_tunnel::TunWriter, wg_tunnel::TunReader),
         results_sender: &mpsc::Sender<Results>,
@@ -511,9 +511,18 @@ impl Runner {
         self.pump_tasks.spawn(async move {
             let outcome = cancel
                 .run_until_cancelled(wg_tunnel::run(
-                    engine, net_tx, net_rx, tun_writer, tun_reader, sample_tx,
+                    engine,
+                    &mut net_tx,
+                    net_rx,
+                    tun_writer,
+                    tun_reader,
+                    sample_tx,
                 ))
                 .await;
+            // Owned out here: cancellation drops `run`, and a dropped session never reaches the manager.
+            if let Err(error) = net_tx.close().await {
+                tracing::warn!(%error, "failed to close spliced wg session");
+            }
             match pump_exit_reason(outcome) {
                 None => tracing::debug!("wg pump stopped (connection cancelled)"),
                 Some(reason) => {
