@@ -138,8 +138,9 @@ mod tests {
             "/tmp/gnosis.socket",
             "--config-path",
             "/tmp/gnosis.toml",
+            // required since edgli dropped its production default
             "--hopr-blokli-url",
-            "https://blokli.example.com/",
+            "https://blokli.example.com",
         ]
     }
 

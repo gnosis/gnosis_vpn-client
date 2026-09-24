@@ -22,20 +22,14 @@ let
   fs = lib.fileset;
   rev = toString (self.shortRev or self.dirtyShortRev);
 
-  # Cargo.lock pins these as bare `?rev=<sha>` git sources (no branch/tag), so
-  # crane's default vendoring can't shallow-fetch them — it has to fetch every
-  # ref (all branches, tags, and PRs) of the whole repo just to locate the sha,
-  # which takes ~10 minutes for the huge hoprnet/hoprnet monorepo. Providing the
-  # output hash up front switches crane to a targeted `fetchgit` of just that
-  # commit instead, which is also substitutable from the cachix cache.
-  # Update these whenever Cargo.lock's rev for the corresponding dependency changes.
+  # A hash lets crane fetchgit just that commit (cachix-substitutable) instead of fetching every ref (~10 min for hoprnet); keep in sync with Cargo.lock.
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.4#0aebe247729574acc449f9debd62fc8d419dbf07" =
       "sha256-oxCxToa9dE2TslRNxvO19qZrOrf9qsUlB4u+ZNwzA28=";
-    "git+https://github.com/hoprnet/edge-client.git?rev=aec3623b64f6c8414524f14d714fb3020e6322ae#aec3623b64f6c8414524f14d714fb3020e6322ae" =
-      "sha256-Rp23zj3c/yVRy4gIzCgT5enziMewuYnXOk3ekK1LQws=";
-    "git+https://github.com/hoprnet/hoprnet?rev=85e698a726710e205e8f76f4df7ad52debd2ff86#85e698a726710e205e8f76f4df7ad52debd2ff86" =
-      "sha256-NzPkA4n643OSh6S9SibtcMN7+GktF0BQ/qrq8b+/8j8=";
+    "git+https://github.com/hoprnet/edge-client.git?rev=532efe78ec71a6a0cdf84a3507f758df41ee2b37#532efe78ec71a6a0cdf84a3507f758df41ee2b37" =
+      "sha256-fvbHVs3qDBM3JsGDSWysOqj4jgLcobb4SOm78Otwo1Q=";
+    "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda" =
+      "sha256-eWhdldN6vFSOng5AjjP6iYOwhxrDDVLrEoYQlDAhB/k=";
   };
 
   builders = nixLib.mkRustBuilders {

@@ -215,8 +215,8 @@ impl WorkerParams {
         self.allow_funding_tool_rerun
     }
 
-    pub fn blokli_url(&self) -> &Url {
-        &self.blokli_url
+    pub fn blokli_url(&self) -> Url {
+        self.blokli_url.clone()
     }
 
     /// Resolves the Blokli host once, so later Blokli traffic needs no DNS lookup.
@@ -225,8 +225,8 @@ impl WorkerParams {
     /// for the rest of the session, which would otherwise leave the Blokli client unable to
     /// resolve its endpoint. Leaves the address unset on failure, falling back to system DNS.
     pub async fn resolve_blokli_ip(&mut self) {
-        let url = &self.blokli_url;
-        match remote_data::resolve_ips(url).await.map(|ips| ips.first().copied()) {
+        let url = self.blokli_url();
+        match remote_data::resolve_ips(&url).await.map(|ips| ips.first().copied()) {
             Ok(Some(ip)) => {
                 tracing::info!(%url, %ip, "resolved blokli host - pinning it for this session");
                 self.resolved_blokli_ip = Some(ip);
@@ -254,7 +254,7 @@ impl WorkerParams {
     /// [`WorkerParams`] is built from CLI arguments in the root process - hence a parameter
     /// rather than a stored field.
     pub fn blokli_endpoint(&self, request_timeout: Duration) -> BlokliEndpoint {
-        let endpoint = BlokliEndpoint::new(self.blokli_url.clone()).with_request_timeout(request_timeout);
+        let endpoint = BlokliEndpoint::new(self.blokli_url()).with_request_timeout(request_timeout);
         match self.pinned_blokli_ip() {
             // A `None` port keeps the endpoint URL's port, which is what the IP was resolved for.
             Some(ip) => endpoint.with_dns_override(BlokliDnsOverride::new(IpAddr::V4(ip), None)),
@@ -324,6 +324,13 @@ mod tests {
         let endpoint = params(configured.clone()).blokli_endpoint(TEST_REQUEST_TIMEOUT);
         assert_eq!(endpoint.url, configured);
         assert_eq!(endpoint.dns_override, None);
+    }
+
+    #[test]
+    fn blokli_endpoint_keeps_configured_url() {
+        let configured = url("https://blokli.example.com/");
+        let endpoint = params(configured.clone()).blokli_endpoint(TEST_REQUEST_TIMEOUT);
+        assert_eq!(endpoint.url, configured);
     }
 
     #[test]

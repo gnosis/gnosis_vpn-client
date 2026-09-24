@@ -36,6 +36,8 @@ pub enum Error {
     SocketConnect(reqwest::Error),
     #[error("Connection reset by peer: {0:?}")]
     ConnectionReset(reqwest::Error),
+    #[error("Request timed out: {0:?}")]
+    Timeout(reqwest::Error),
     #[error("Registration not found")]
     RegistrationNotFound,
 }
@@ -229,6 +231,9 @@ pub async fn unregister(client: &Client, input: &Input) -> Result<(), Error> {
 fn connect_errors(err: reqwest::Error) -> Error {
     if err.is_connect() {
         Error::SocketConnect(err)
+    } else if err.is_timeout() {
+        // Before `is_request`, which also covers timeouts and would call them resets.
+        Error::Timeout(err)
     } else if err.is_request() {
         Error::ConnectionReset(err)
     } else {

@@ -242,7 +242,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                             | "channel_capacity"
                             | "topup_capacity"
                             | "lower_capacity_threshold"
-                            | "min_safe_capacity_required"
                     ) {
                         continue;
                     }
@@ -440,6 +439,24 @@ gnosis_vpn_server = "172.30.0.1:8000"
         assert_eq!(
             wrong_keys(&table),
             vec!["destinations.Germany.gnosis_vpn_server".to_string()]
+        );
+    }
+
+    /// The knob a `release/hoprdv4` config carries; an upgrading user must be told it is inert.
+    #[test]
+    fn obsolete_min_safe_capacity_is_flagged() {
+        let table = r#####"
+version = 6
+
+[strategy]
+min_safe_capacity_required = "640 MiB"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["strategy.min_safe_capacity_required".to_string()]
         );
     }
 

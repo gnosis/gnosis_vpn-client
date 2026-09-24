@@ -25,7 +25,7 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.6", features = ["derive", "env"] }
 clap_complete = "~4.6.9"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "a8146ade0beb4c1abc653edfd7514c1c693e7884", features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "532efe78ec71a6a0cdf84a3507f758df41ee2b37", features = [
   "blokli",
   "pix",
   "pix-test",
@@ -34,10 +34,8 @@ edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "a8146ade0be
 exitcode = "~1.1.2"
 futures = "~0.3.34"
 futures-util = "~0.3.34"
-# Tracks `master` to match `edgli`'s own `hopr-lib` pin. Cargo keys a git source on the reference,
-# not the resolved commit, so `branch = "master"` here and `rev = "<sha>"` there are two sources even
-# at the same commit -- hoprnet gets built twice and the types do not unify. `Cargo.lock` holds the
-# actual commit; keep it at whatever every node this client talks to was built from.
+# Pinned by BRANCH to match edgli's own `hopr-lib` pin: cargo treats `?branch=X#sha` and
+# `?rev=sha` as distinct sources, so mixing them vendors hoprnet twice and fails to compile.
 hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "master", features = [
   "runtime-tokio",
 ] }
