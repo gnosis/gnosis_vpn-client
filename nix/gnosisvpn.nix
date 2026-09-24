@@ -290,6 +290,23 @@ in
     )
   );
 
+  # Same binaries with the Curvy (Baby JubJub) PIX deposit pool instead of `pix-test`. The pool
+  # reads its proving artifacts from `CURVY_ZK_KEYS_DIR` at run time; none are compiled in.
+  binary-gnosis_vpn-pix-curvy-x86_64-linux = withX86_64LinuxStaticEnv (
+    withTokioUnstable (
+      builders.x86_64-linux.callPackage nixLib.mkRustPackage (
+        (mkGnosisvpnBuildArgs {
+          src = sources.main;
+          depsSrc = sources.deps;
+          extraCargoArgs = "--no-default-features --features gnosis_vpn-root/pix-curvy,gnosis_vpn-worker/pix-curvy,gnosis_vpn-ctl/pix-curvy";
+        })
+        // {
+          extraBuildInputs = mkLinuxStaticBuildInputs x86_64LinuxStaticPkgs;
+        }
+      )
+    )
+  );
+
   binary-gnosis_vpn-x86_64-linux-dev = withX86_64LinuxStaticEnv (
     withTokioUnstable (
       builders.x86_64-linux.callPackage nixLib.mkRustPackage (
