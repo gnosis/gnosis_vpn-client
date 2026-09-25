@@ -29,7 +29,7 @@ docker-build-arm64: build-arm64
     cp -f result/bin/gnosis_vpn-root result/bin/gnosis_vpn-worker result/bin/gnosis_vpn-ctl docker/
     docker build --platform linux/arm64 -t gnosis_vpn-client:arm64 docker/
 
-# run docker container detached; CONFIG_DIR must hold client.toml (+ identity file if used)
+# run docker container detached; CONFIG_DIR must hold client.toml (+ identity file if used), GNOSISVPN_HOPR_BLOKLI_URL must be set
 # see gnosis_vpn-testenv's client-start for a full example against a live cluster
 docker-run:
     #!/usr/bin/env bash
@@ -37,11 +37,12 @@ docker-run:
 
     log_level=$(if [ "${RUST_LOG:-}" = "" ]; then echo info; else echo "${RUST_LOG}"; fi)
     config_dir="${CONFIG_DIR:?CONFIG_DIR must point at a directory containing client.toml}"
+    blokli_url="${GNOSISVPN_HOPR_BLOKLI_URL:?GNOSISVPN_HOPR_BLOKLI_URL must be set; the client ships no default}"
 
     docker run --detach --rm \
         --env RUST_LOG=${log_level} \
         --env GNOSISVPN_CONFIG_PATH=/config/client.toml \
-        --env GNOSISVPN_HOPR_BLOKLI_URL=${GNOSISVPN_HOPR_BLOKLI_URL:-} \
+        --env GNOSISVPN_HOPR_BLOKLI_URL="${blokli_url}" \
         --env GNOSISVPN_HOPR_IDENTITY_FILE=${GNOSISVPN_HOPR_IDENTITY_FILE:-} \
         --env GNOSISVPN_HOPR_IDENTITY_PASS=${GNOSISVPN_HOPR_IDENTITY_PASS:-} \
         --volume "${config_dir}:/config:ro" \

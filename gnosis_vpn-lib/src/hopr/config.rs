@@ -67,8 +67,7 @@ pub async fn read_safe(state_home: PathBuf) -> Result<SafeModule, Error> {
 
 pub async fn generate(
     safe_module: &SafeModule,
-    path_planner_min_ack_rate: f64,
-    path_planner: crate::connection::options::PathPlannerOptions,
+    options: crate::connection::options::HoprConfigOptions,
 ) -> Result<HoprLibConfig, Error> {
     let mut cfg = HoprLibConfig::default();
     cfg.safe_module.safe_address = safe_module
@@ -85,9 +84,11 @@ pub async fn generate(
     cfg.protocol.probe.timeout = Duration::from_secs(3);
     cfg.protocol.probe.interval = Duration::from_secs(3);
     cfg.protocol.probe.recheck_threshold = Duration::from_secs(3);
-    cfg.protocol.path_planner = edgli::latency_path_planner_config(path_planner_min_ack_rate);
+    cfg.protocol.path_planner = edgli::latency_path_planner_config(options.path_planner_min_ack_rate);
     // Layer user overrides on top of the latency preset; unset fields keep the preset value.
-    path_planner.apply(&mut cfg.protocol.path_planner);
+    options.path_planner.apply(&mut cfg.protocol.path_planner);
+    // Apply PIX dimension overrides only when matching an Exit's advertised quota window.
+    options.pix_dimensions.apply(&mut cfg.protocol.pix);
     Ok(cfg)
 }
 
@@ -98,7 +99,7 @@ pub fn safe_file(state_home: PathBuf) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::options::PathPlannerOptions;
+    use crate::connection::options::{HoprConfigOptions, PathPlannerOptions, PixDimensionOptions};
 
     fn safe_module() -> SafeModule {
         SafeModule {
@@ -107,11 +108,23 @@ mod tests {
         }
     }
 
+    async fn generated(
+        path_planner: PathPlannerOptions,
+        pix_dimensions: PixDimensionOptions,
+    ) -> edgli::hopr_lib::config::HoprLibConfig {
+        let options = HoprConfigOptions {
+            path_planner,
+            pix_dimensions,
+            ..HoprConfigOptions::default()
+        };
+        generate(&safe_module(), options)
+            .await
+            .expect("generate should succeed")
+    }
+
     #[tokio::test]
     async fn default_keeps_the_preset_floor() {
-        let cfg = generate(&safe_module(), 0.1, PathPlannerOptions::default())
-            .await
-            .expect("generate should succeed");
+        let cfg = generated(PathPlannerOptions::default(), PixDimensionOptions::default()).await;
         assert_eq!(cfg.protocol.path_planner.min_paths_anonymity_floor, 0);
     }
 
@@ -121,9 +134,44 @@ mod tests {
             min_paths_anonymity_floor: Some(7),
             ..PathPlannerOptions::default()
         };
-        let cfg = generate(&safe_module(), 0.1, overrides)
-            .await
-            .expect("generate should succeed");
+        let cfg = generated(overrides, PixDimensionOptions::default()).await;
         assert_eq!(cfg.protocol.path_planner.min_paths_anonymity_floor, 7);
+    }
+
+    #[tokio::test]
+    async fn default_keeps_the_upstream_pix_dimensions() {
+        let upstream = edgli::PixGlobalConfig::default();
+        let cfg = generated(PathPlannerOptions::default(), PixDimensionOptions::default()).await;
+        assert_eq!(cfg.protocol.pix.num_ssa_parts, upstream.num_ssa_parts);
+        assert_eq!(cfg.protocol.pix.ssa_part_size, upstream.ssa_part_size);
+        assert_eq!(cfg.protocol.pix.additional_shares, upstream.additional_shares);
+    }
+
+    #[tokio::test]
+    async fn table_overrides_pix_dimensions() {
+        // Match `hoprd-localcluster --enable-pix`'s demo geometry.
+        let overrides = PixDimensionOptions {
+            num_ssa_parts: Some(8),
+            ssa_part_size: Some(2),
+            additional_shares: Some(2),
+        };
+        let cfg = generated(PathPlannerOptions::default(), overrides).await;
+        assert_eq!(cfg.protocol.pix.num_ssa_parts, 8);
+        assert_eq!(cfg.protocol.pix.ssa_part_size, 2);
+        assert_eq!(cfg.protocol.pix.additional_shares, Some(2));
+    }
+
+    #[tokio::test]
+    async fn partial_pix_dimensions_leave_the_rest_upstream() {
+        let upstream = edgli::PixGlobalConfig::default();
+        let overrides = PixDimensionOptions {
+            ssa_part_size: Some(4),
+            ..PixDimensionOptions::default()
+        };
+        let cfg = generated(PathPlannerOptions::default(), overrides).await;
+        assert_eq!(cfg.protocol.pix.ssa_part_size, 4);
+        assert_eq!(cfg.protocol.pix.num_ssa_parts, upstream.num_ssa_parts);
+        // Leave this unset so hopr-lib still derives it from `ssa_part_size`.
+        assert_eq!(cfg.protocol.pix.additional_shares, upstream.additional_shares);
     }
 }

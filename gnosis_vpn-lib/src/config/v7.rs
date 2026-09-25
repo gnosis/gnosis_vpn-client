@@ -132,6 +132,7 @@ pub(super) struct SessionPixConfig {
 pub(super) struct PixOptionsConfig {
     ping_main: Option<SessionPixConfig>,
     bridge: Option<SessionPixConfig>,
+    pub(super) dimensions: Option<options::PixDimensionOptions>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -347,6 +348,10 @@ impl From<Option<Connection>> for options::Options {
         let pix = options::PixOptions {
             ping_main: apply_session_pix(pix_cfg.as_ref().and_then(|s| s.ping_main.clone()), def_pix.ping_main),
             bridge: apply_session_pix(pix_cfg.as_ref().and_then(|s| s.bridge.clone()), def_pix.bridge),
+            dimensions: pix_cfg
+                .as_ref()
+                .and_then(|s| s.dimensions.clone())
+                .unwrap_or(def_pix.dimensions),
         };
 
         let http_timeout = connection
@@ -447,7 +452,6 @@ pub(super) struct Strategy {
     pub(super) channel_capacity: Option<ByteSize>,
     pub(super) topup_capacity: Option<ByteSize>,
     pub(super) lower_capacity_threshold: Option<ByteSize>,
-    pub(super) min_safe_capacity_required: Option<ByteSize>,
     pub(super) sizing_mode: Option<edgli::strategy::CapacitySizingMode>,
 }
 
@@ -492,7 +496,6 @@ impl From<Option<Strategy>> for StrategyConfig {
             channel_capacity: v.as_ref().and_then(|s| s.channel_capacity),
             topup_capacity: v.as_ref().and_then(|s| s.topup_capacity),
             lower_capacity_threshold: v.as_ref().and_then(|s| s.lower_capacity_threshold),
-            min_safe_capacity_required: v.as_ref().and_then(|s| s.min_safe_capacity_required),
             sizing_mode: v.as_ref().and_then(|s| s.sizing_mode.clone()),
         }
     }
@@ -734,6 +737,20 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                     }
                                     continue;
                                 }
+                                if k2 == "dimensions" {
+                                    if let Some(dims) = v2.as_table() {
+                                        for (k3, _) in dims.iter() {
+                                            if k3 == "num_ssa_parts"
+                                                || k3 == "ssa_part_size"
+                                                || k3 == "additional_shares"
+                                            {
+                                                continue;
+                                            }
+                                            wrong.push(format!("connection.pix.{k2}.{k3}"));
+                                        }
+                                    }
+                                    continue;
+                                }
                                 wrong.push(format!("connection.pix.{k2}"));
                             }
                         }
@@ -792,7 +809,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                             | "channel_capacity"
                             | "topup_capacity"
                             | "lower_capacity_threshold"
-                            | "min_safe_capacity_required"
                     ) {
                         continue;
                     }
@@ -1517,7 +1533,6 @@ channel_capacity = "16 EiB"
             channel_capacity: None,
             topup_capacity: None,
             lower_capacity_threshold: None,
-            min_safe_capacity_required: None,
             sizing_mode: None,
         });
         let cfg: StrategyConfig = strategy.into();
@@ -1537,11 +1552,27 @@ channel_capacity = "16 EiB"
             channel_capacity: None,
             topup_capacity: None,
             lower_capacity_threshold: None,
-            min_safe_capacity_required: None,
             sizing_mode: None,
         });
         let cfg: StrategyConfig = strategy.into();
         assert!(cfg.channel_allowlist.is_none());
+    }
+
+    #[test]
+    fn obsolete_min_safe_capacity_is_flagged() {
+        let table = r#####"
+version = 7
+
+[strategy]
+min_safe_capacity_required = "640 MiB"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["strategy.min_safe_capacity_required".to_string()]
+        );
     }
 
     #[test]
@@ -1553,18 +1584,15 @@ version = 7
 [strategy]
 topup_capacity = "384 MiB"
 lower_capacity_threshold = "128 MiB"
-min_safe_capacity_required = "640 MiB"
 "#####,
         );
         let strategy = cfg.strategy.expect("strategy section present");
         assert_eq!(strategy.topup_capacity, Some(bytesize::ByteSize::mib(384)));
         assert_eq!(strategy.lower_capacity_threshold, Some(bytesize::ByteSize::mib(128)));
-        assert_eq!(strategy.min_safe_capacity_required, Some(bytesize::ByteSize::mib(640)));
 
         let converted: StrategyConfig = Some(strategy).into();
         assert_eq!(converted.topup_capacity, Some(bytesize::ByteSize::mib(384)));
         assert_eq!(converted.lower_capacity_threshold, Some(bytesize::ByteSize::mib(128)));
-        assert_eq!(converted.min_safe_capacity_required, Some(bytesize::ByteSize::mib(640)));
     }
 
     #[test]
@@ -1580,12 +1608,10 @@ channel_capacity = "1 GiB"
         let strategy = cfg.strategy.expect("strategy section present");
         assert!(strategy.topup_capacity.is_none());
         assert!(strategy.lower_capacity_threshold.is_none());
-        assert!(strategy.min_safe_capacity_required.is_none());
 
         let converted: StrategyConfig = Some(strategy).into();
         assert!(converted.topup_capacity.is_none());
         assert!(converted.lower_capacity_threshold.is_none());
-        assert!(converted.min_safe_capacity_required.is_none());
     }
 
     #[test]
@@ -1638,7 +1664,6 @@ version = 7
 [strategy]
 topup_capacity = "384 MiB"
 lower_capacity_threshold = "128 MiB"
-min_safe_capacity_required = "640 MiB"
 sizing_mode = "deterministic"
 "#####
             .parse::<toml::Table>()
@@ -1692,7 +1717,6 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 channel_capacity = "640 MiB"
 topup_capacity = "384 MiB"
 lower_capacity_threshold = "128 MiB"
-min_safe_capacity_required = "640 MiB"
 sizing_mode = "deterministic"
 "#####,
         );
@@ -1702,10 +1726,6 @@ sizing_mode = "deterministic"
         assert_eq!(
             result.strategy.lower_capacity_threshold,
             Some(bytesize::ByteSize::mib(128))
-        );
-        assert_eq!(
-            result.strategy.min_safe_capacity_required,
-            Some(bytesize::ByteSize::mib(640))
         );
         assert_eq!(
             result.strategy.sizing_mode,
@@ -1898,6 +1918,123 @@ enabled = false
             wrong.contains(&"connection.surb_balancing.health_check".to_string()),
             "{wrong:?}"
         );
+    }
+
+    #[test]
+    fn pix_dimensions_default_to_upstream() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(
+            result.connection.pix.dimensions,
+            crate::connection::options::PixDimensionOptions::default()
+        );
+    }
+
+    #[test]
+    fn pix_dimensions_are_applied() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.pix.dimensions]
+num_ssa_parts     = 8
+ssa_part_size     = 2
+additional_shares = 2
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(result.connection.pix.dimensions.num_ssa_parts, Some(8));
+        assert_eq!(result.connection.pix.dimensions.ssa_part_size, Some(2));
+        assert_eq!(result.connection.pix.dimensions.additional_shares, Some(2));
+        // Sibling toggles still use their defaults.
+        assert!(result.connection.pix.ping_main.enabled);
+    }
+
+    #[test]
+    fn pix_dimensions_are_known_keys() {
+        let table = r#####"
+version = 7
+
+[connection.pix.dimensions]
+num_ssa_parts     = 8
+ssa_part_size     = 2
+additional_shares = 2
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn pix_dimensions_typo_is_reported() {
+        let table = r#####"
+version = 7
+
+[connection.pix.dimensions]
+num_ssa_part = 8
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["connection.pix.dimensions.num_ssa_part".to_string()]
+        );
+    }
+
+    #[test]
+    fn pix_dimensions_reject_out_of_range() {
+        // Match hopr-lib's PIX bounds.
+        for bad in [
+            "num_ssa_parts = 7",
+            "num_ssa_parts = 16193",
+            "ssa_part_size = 1",
+            "ssa_part_size = 256",
+            "additional_shares = 256",
+        ] {
+            let toml = format!(
+                r#####"
+version = 7
+
+[connection.pix.dimensions]
+{bad}
+"#####
+            );
+            assert!(toml::from_str::<Config>(&toml).is_err(), "expected rejection for {bad}");
+        }
+    }
+
+    #[test]
+    fn pix_surplus_may_not_exceed_the_threshold() {
+        // Only explicit values can be compared here.
+        let toml = r#####"
+version = 7
+
+[connection.pix.dimensions]
+ssa_part_size     = 2
+additional_shares = 3
+"#####;
+        assert!(toml::from_str::<Config>(toml).is_err());
+
+        let ok = r#####"
+version = 7
+
+[connection.pix.dimensions]
+ssa_part_size     = 2
+additional_shares = 2
+"#####;
+        assert!(toml::from_str::<Config>(ok).is_ok());
     }
 
     #[test]

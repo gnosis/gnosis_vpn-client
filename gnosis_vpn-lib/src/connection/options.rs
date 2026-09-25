@@ -1,8 +1,8 @@
 pub const DEFAULT_PATH_PLANNER_MIN_ACK_RATE: f64 = 0.1;
 
 use bytesize::ByteSize;
-use edgli::PathPlannerConfig;
 use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionTarget, SurbBalancerConfig};
+use edgli::{PathPlannerConfig, PixGlobalConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
@@ -30,6 +30,40 @@ pub struct Options {
     pub path_planner_min_ack_rate: f64,
     /// Overrides layered on the edge-client latency preset; empty leaves the preset unchanged.
     pub path_planner: PathPlannerOptions,
+}
+
+impl Options {
+    /// The subset of these options that shapes the generated `hopr-lib` config.
+    pub fn hopr_config(&self) -> HoprConfigOptions {
+        HoprConfigOptions {
+            path_planner_min_ack_rate: self.path_planner_min_ack_rate,
+            path_planner: self.path_planner.clone(),
+            pix_dimensions: self.pix.dimensions.clone(),
+        }
+    }
+}
+
+/// The parts of [`Options`] that shape the generated `hopr-lib` config, carried as one value so
+/// the signatures down to [`crate::hopr::config::generate`] do not grow per knob.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HoprConfigOptions {
+    /// See [`Options::path_planner_min_ack_rate`].
+    pub path_planner_min_ack_rate: f64,
+    /// See [`Options::path_planner`].
+    pub path_planner: PathPlannerOptions,
+    /// See [`PixOptions::dimensions`].
+    pub pix_dimensions: PixDimensionOptions,
+}
+
+impl Default for HoprConfigOptions {
+    /// `path_planner_min_ack_rate` is [`DEFAULT_PATH_PLANNER_MIN_ACK_RATE`], not `f64::default()`.
+    fn default() -> Self {
+        Self {
+            path_planner_min_ack_rate: DEFAULT_PATH_PLANNER_MIN_ACK_RATE,
+            path_planner: PathPlannerOptions::default(),
+            pix_dimensions: PixDimensionOptions::default(),
+        }
+    }
 }
 
 /// Optional overrides mirroring [`PathPlannerConfig`]: only set fields override the preset; `min_ack_rate` stays flat.
@@ -206,6 +240,81 @@ pub struct SessionPixOptions {
 pub struct PixOptions {
     pub ping_main: SessionPixOptions,
     pub bridge: SessionPixOptions,
+    /// Overrides for the Entry-side share generator; empty keeps hopr-lib's defaults.
+    pub dimensions: PixDimensionOptions,
+}
+
+/// Optional `PixGlobalConfig` overrides for matching an Exit's advertised quota window.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(try_from = "PixDimensionOptionsRaw")]
+pub struct PixDimensionOptions {
+    /// Number of parts an SSA is split into. Range 8..=16192.
+    pub num_ssa_parts: Option<usize>,
+    /// Number of shares required to reconstruct an SSA part. Range 2..=255.
+    pub ssa_part_size: Option<usize>,
+    /// Extra shares for return-path loss; range 0..=255 and never above `ssa_part_size`.
+    pub additional_shares: Option<usize>,
+}
+
+/// Separate raw form so deserialization can enforce `additional_shares <= ssa_part_size`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PixDimensionOptionsRaw {
+    #[serde(default)]
+    num_ssa_parts: Option<usize>,
+    #[serde(default)]
+    ssa_part_size: Option<usize>,
+    #[serde(default)]
+    additional_shares: Option<usize>,
+}
+
+impl TryFrom<PixDimensionOptionsRaw> for PixDimensionOptions {
+    type Error = String;
+
+    fn try_from(raw: PixDimensionOptionsRaw) -> Result<Self, Self::Error> {
+        fn in_range(name: &str, value: Option<usize>, lo: usize, hi: usize) -> Result<(), String> {
+            match value {
+                Some(v) if !(lo..=hi).contains(&v) => Err(format!("{name} must be in the range {lo}..={hi}")),
+                _ => Ok(()),
+            }
+        }
+
+        in_range("num_ssa_parts", raw.num_ssa_parts, 8, 16192)?;
+        in_range("ssa_part_size", raw.ssa_part_size, 2, 255)?;
+        in_range("additional_shares", raw.additional_shares, 0, 255)?;
+
+        // Only compare explicit values; an unset threshold still means "use hopr-lib's default".
+        if let (Some(surplus), Some(threshold)) = (raw.additional_shares, raw.ssa_part_size)
+            && surplus > threshold
+        {
+            return Err(format!(
+                "additional_shares ({surplus}) must not exceed ssa_part_size ({threshold}) — the surplus is \
+                 billed, so this pays for more redundancy than payload"
+            ));
+        }
+
+        Ok(Self {
+            num_ssa_parts: raw.num_ssa_parts,
+            ssa_part_size: raw.ssa_part_size,
+            additional_shares: raw.additional_shares,
+        })
+    }
+}
+
+impl PixDimensionOptions {
+    /// Apply the set overrides onto `cfg`, leaving unset fields untouched.
+    pub fn apply(&self, cfg: &mut PixGlobalConfig) {
+        if let Some(v) = self.num_ssa_parts {
+            cfg.num_ssa_parts = v;
+        }
+        if let Some(v) = self.ssa_part_size {
+            cfg.ssa_part_size = v;
+        }
+        // Only overwrite this when requested so hopr-lib can keep deriving it from `ssa_part_size`.
+        if let Some(v) = self.additional_shares {
+            cfg.additional_shares = Some(v);
+        }
+    }
 }
 
 impl SessionParameters {
@@ -254,6 +363,7 @@ impl Default for PixOptions {
         Self {
             ping_main: SessionPixOptions { enabled: true },
             bridge: SessionPixOptions { enabled: false },
+            dimensions: PixDimensionOptions::default(),
         }
     }
 }

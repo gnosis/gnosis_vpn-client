@@ -20,7 +20,7 @@ use crate::core::runner::Results;
 use crate::event::RunnerToRoot;
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::{SessionClientMetadata, SplicedWgSession};
-use crate::hopr::{self, Hopr, HoprError};
+use crate::hopr::{Hopr, HoprError};
 use crate::wireguard::{self, WireGuard};
 use crate::worker_params::WorkerParams;
 use crate::{ping, remote_data, wg_tunnel};
@@ -106,7 +106,7 @@ impl Runner {
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
         // 1. determine the blokli ips to exempt from the killswitch, which blocks DNS while up
         let _ = results_sender.send(progress(Progress::ResolveBlokliIps)).await;
-        let blokli_url = hopr::blokli_url(self.worker_params.blokli_url());
+        let blokli_url = self.worker_params.blokli_url();
         let blokli_ips = match self.worker_params.pinned_blokli_ip() {
             // The Blokli client talks to the pinned address instead of resolving the host, so the
             // killswitch has to exempt exactly that address rather than whatever DNS returns now.
@@ -390,7 +390,7 @@ impl Runner {
     fn spawn_pump_task<NS, NR>(
         &self,
         engine: wg_tunnel::WgTunnel,
-        net_tx: NS,
+        mut net_tx: NS,
         net_rx: NR,
         tun: (wg_tunnel::TunWriter, wg_tunnel::TunReader),
         results_sender: &mpsc::Sender<Results>,
@@ -423,9 +423,18 @@ impl Runner {
         self.pump_tasks.spawn(async move {
             let outcome = cancel
                 .run_until_cancelled(wg_tunnel::run(
-                    engine, net_tx, net_rx, tun_writer, tun_reader, sample_tx,
+                    engine,
+                    &mut net_tx,
+                    net_rx,
+                    tun_writer,
+                    tun_reader,
+                    sample_tx,
                 ))
                 .await;
+            // Owned out here: cancellation drops `run`, and a dropped session never reaches the manager.
+            if let Err(error) = net_tx.close().await {
+                tracing::warn!(%error, "failed to close spliced wg session");
+            }
             match pump_exit_reason(outcome) {
                 None => tracing::debug!("wg pump stopped (connection cancelled)"),
                 Some(reason) => {

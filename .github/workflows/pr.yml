@@ -76,7 +76,7 @@ jobs:
       gcp_service_account: download-gnosisvpn-gh-sa@gnosisvpn-production.iam.gserviceaccount.com
       runner: ${{ matrix.runner }}
       timeout_minutes: 240
-      enabled: ${{ matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label) }}
+      enabled: ${{ matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, 'binary:all') || contains(github.event.pull_request.labels.*.name, matrix.required_label) }}
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       gpg_private_key: ${{ secrets.GNOSISVPN_GPG_PRIVATE_KEY }}
@@ -86,15 +86,20 @@ jobs:
   checks:
     name: Checks
     if: ${{ github.event.pull_request.head.repo.fork == false }}
-    runs-on: depot-ubuntu-22.04-4
-    steps:
-      - name: Run checks
-        uses: hoprnet/hopr-workflows/actions/nix-action@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # nix-action-v1.1.3
-        with:
-          source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
-          cachix_cache_name: gnosis-vpn-client
-          cachix_auth_token: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-          command: nix flake check -L --show-trace
+    permissions:
+      contents: read
+    uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@1476429c0d8c5a6331c50a4655501125051cdbf4 # workflow-checks-v2.1.2
+    with:
+      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      cachix_cache_name: gnosis-vpn-client
+      # No `.#check` app or `.#ci` devshell here; `nix flake check` already covers clippy/docs/test/licenses.
+      format: false
+      pre_commit: false
+      deps: false
+      lint_command: nix flake check -L --show-trace
+      audit_command: nix run -L .#audit
+    secrets:
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   system-test:
     name: System tests
     # NOTE: Do not switch to a depot runner here. The system-test recipe requires passwordless
@@ -150,3 +155,14 @@ jobs:
           SYSTEM_TEST_WORKER_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-worker
           SYSTEM_TEST_ROOT_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-root
         run: just system-tests ${{ github.workspace }}/result-system-tests/bin/gnosis_vpn-system_tests
+  ci-ok:
+    name: CI OK
+    # Single required status check: stable across matrix expansion, label gating and fork guards.
+    if: always() # a skipped job counts as passing, so never let a failed dependency skip this one
+    needs: [build-x86_64-linux, build-arm-binaries, checks, system-test]
+    runs-on: depot-ubuntu-22.04-4
+    permissions: {}
+    steps:
+      - name: Fail if any CI job failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1

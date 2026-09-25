@@ -1,7 +1,4 @@
-/// Config v6: identical to v7 except `[destinations]` was still required (non-empty) and a
-/// destination could not carry `gnosis_vpn_server`/`wireguard_server`. Forward-converts into
-/// `v7::Config`; the shared schema (connection, wireguard, blokli, strategy) is defined once in
-/// `v7` and reused here unchanged.
+/// v6 keeps its older destinations dialect but reuses v7's shared schema before converting to `v7::Config`.
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
@@ -33,9 +30,7 @@ pub(super) struct Destination {
     pub(super) path: Option<DestinationPath>,
 }
 
-/// Same key set v6 has always accepted — a v6 file never had `gnosis_vpn_server`/
-/// `wireguard_server`, so those still surface as unsupported keys here; upgrade to
-/// `version = 7` to use them.
+/// v6 rejects v7-only keys; shared `[connection]` keys stay supported, except the PIX dimensions.
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong = Vec::new();
     for (key, value) in table.iter() {
@@ -232,7 +227,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                             | "channel_capacity"
                             | "topup_capacity"
                             | "lower_capacity_threshold"
-                            | "min_safe_capacity_required"
                     ) {
                         continue;
                     }
@@ -322,10 +316,16 @@ impl TryFrom<Config> for super::v7::Config {
                 .collect()
         });
 
+        // Reported as unsupported by `wrong_keys`, so the shared struct must not apply them either.
+        let mut connection = value.connection;
+        if let Some(pix) = connection.as_mut().and_then(|c| c.pix.as_mut()) {
+            pix.dimensions = None;
+        }
+
         Ok(super::v7::Config {
             version: value.version,
             destinations,
-            connection: value.connection,
+            connection,
             wireguard: value.wireguard,
             blokli: value.blokli,
             strategy: value.strategy,
@@ -433,6 +433,24 @@ gnosis_vpn_server = "172.30.0.1:8000"
         );
     }
 
+    /// The knob a `release/hoprdv4` config carries; an upgrading user must be told it is inert.
+    #[test]
+    fn obsolete_min_safe_capacity_is_flagged() {
+        let table = r#####"
+version = 6
+
+[strategy]
+min_safe_capacity_required = "640 MiB"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["strategy.min_safe_capacity_required".to_string()]
+        );
+    }
+
     /// `[connection]` is shared with v7, so a v6 file may carry the path-planner overrides too.
     #[test]
     fn v6_file_still_accepts_the_path_planner_overrides() {
@@ -450,6 +468,30 @@ latency_halflife = "50ms"
             .expect("valid TOML");
 
         assert!(wrong_keys(&table).is_empty());
+    }
+
+    /// PIX is not backported, so the dimensions need `version = 7`: warned about and dropped here.
+    #[test]
+    fn pix_dimensions_are_not_a_supported_key_in_v6() {
+        let toml = r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.pix.dimensions]
+num_ssa_parts     = 8
+ssa_part_size     = 2
+additional_shares = 2
+"#####;
+        let table = toml.parse::<toml::Table>().expect("valid TOML");
+        assert_eq!(wrong_keys(&table), vec!["connection.pix.dimensions".to_string()]);
+
+        let result = runtime_config(parse(toml));
+        assert_eq!(
+            result.connection.pix.dimensions,
+            crate::connection::options::PixDimensionOptions::default()
+        );
     }
 
     /// `[connection]` is shared with v7, so a v6 file may carry the SURB ramp pacing too.

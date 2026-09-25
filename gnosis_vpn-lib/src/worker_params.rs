@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use crate::compat::SafeModule;
 use crate::hopr::blokli_config::BlokliConfig;
-use crate::hopr::{self, config, identity};
+use crate::hopr::{config, identity};
 use crate::remote_data;
 
 #[derive(Debug, Error)]
@@ -40,7 +40,7 @@ pub struct WorkerParams {
     allow_insecure: bool,
     allow_experimental: bool,
     allow_funding_tool_rerun: bool,
-    blokli_url: Option<Url>,
+    blokli_url: Url,
     /// Address the Blokli host resolved to at service startup, see [`WorkerParams::resolve_blokli_ip`].
     resolved_blokli_ip: Option<Ipv4Addr>,
     state_home: PathBuf,
@@ -67,7 +67,7 @@ impl WorkerParams {
         identity_pass: Option<String>,
         config_mode: ConfigFileMode,
         allow: AllowFlags,
-        blokli_url: Option<Url>,
+        blokli_url: Url,
         state_home: PathBuf,
     ) -> Self {
         Self {
@@ -181,14 +181,11 @@ impl WorkerParams {
     pub async fn to_config(
         &self,
         safe_module: &SafeModule,
-        path_planner_min_ack_rate: f64,
-        path_planner: crate::connection::options::PathPlannerOptions,
+        options: crate::connection::options::HoprConfigOptions,
     ) -> Result<HoprLibConfig, Error> {
         match self.config_mode.clone() {
             ConfigFileMode::Manual(path) => config::from_path(path).await.map_err(Error::from),
-            ConfigFileMode::Generated => config::generate(safe_module, path_planner_min_ack_rate, path_planner)
-                .await
-                .map_err(Error::from),
+            ConfigFileMode::Generated => config::generate(safe_module, options).await.map_err(Error::from),
         }
     }
 
@@ -218,7 +215,7 @@ impl WorkerParams {
         self.allow_funding_tool_rerun
     }
 
-    pub fn blokli_url(&self) -> Option<Url> {
+    pub fn blokli_url(&self) -> Url {
         self.blokli_url.clone()
     }
 
@@ -228,7 +225,7 @@ impl WorkerParams {
     /// for the rest of the session, which would otherwise leave the Blokli client unable to
     /// resolve its endpoint. Leaves the address unset on failure, falling back to system DNS.
     pub async fn resolve_blokli_ip(&mut self) {
-        let url = hopr::blokli_url(self.blokli_url());
+        let url = self.blokli_url();
         match remote_data::resolve_ips(&url).await.map(|ips| ips.first().copied()) {
             Ok(Some(ip)) => {
                 tracing::info!(%url, %ip, "resolved blokli host - pinning it for this session");
@@ -257,7 +254,7 @@ impl WorkerParams {
     /// [`WorkerParams`] is built from CLI arguments in the root process - hence a parameter
     /// rather than a stored field.
     pub fn blokli_endpoint(&self, request_timeout: Duration) -> BlokliEndpoint {
-        let endpoint = BlokliEndpoint::new(hopr::blokli_url(self.blokli_url())).with_request_timeout(request_timeout);
+        let endpoint = BlokliEndpoint::new(self.blokli_url()).with_request_timeout(request_timeout);
         match self.pinned_blokli_ip() {
             // A `None` port keeps the endpoint URL's port, which is what the IP was resolved for.
             Some(ip) => endpoint.with_dns_override(BlokliDnsOverride::new(IpAddr::V4(ip), None)),
@@ -302,7 +299,7 @@ fn log_path_diagnostics(path: &std::path::Path) {
 mod tests {
     use super::*;
 
-    fn params(blokli_url: Option<Url>) -> WorkerParams {
+    fn params(blokli_url: Url) -> WorkerParams {
         WorkerParams::new(
             None,
             None,
@@ -313,8 +310,8 @@ mod tests {
         )
     }
 
-    fn url(raw: &str) -> Option<Url> {
-        Some(raw.parse().unwrap())
+    fn url(raw: &str) -> Url {
+        raw.parse().unwrap()
     }
 
     /// Stands in for the configured `[blokli] request_timeout` in tests that do not care
@@ -323,21 +320,22 @@ mod tests {
 
     #[test]
     fn blokli_endpoint_uses_system_dns_until_the_host_is_resolved() {
-        let endpoint = params(None).blokli_endpoint(TEST_REQUEST_TIMEOUT);
-        assert_eq!(endpoint.url, *edgli::DEFAULT_BLOKLI_URL);
+        let configured = url("https://blokli.example.com/");
+        let endpoint = params(configured.clone()).blokli_endpoint(TEST_REQUEST_TIMEOUT);
+        assert_eq!(endpoint.url, configured);
         assert_eq!(endpoint.dns_override, None);
     }
 
     #[test]
     fn blokli_endpoint_keeps_configured_url() {
-        let configured = url("https://blokli.example.com/").unwrap();
-        let endpoint = params(Some(configured.clone())).blokli_endpoint(TEST_REQUEST_TIMEOUT);
+        let configured = url("https://blokli.example.com/");
+        let endpoint = params(configured.clone()).blokli_endpoint(TEST_REQUEST_TIMEOUT);
         assert_eq!(endpoint.url, configured);
     }
 
     #[test]
     fn blokli_endpoint_carries_the_configured_request_timeout() {
-        let endpoint = params(None).blokli_endpoint(Duration::from_secs(45));
+        let endpoint = params(url("https://blokli.example.com/")).blokli_endpoint(Duration::from_secs(45));
         assert_eq!(endpoint.request_timeout, Duration::from_secs(45));
     }
 
@@ -384,7 +382,7 @@ mod tests {
     /// IP cached during the previous connection - the one the killswitch exempts - pins the host.
     #[test]
     fn a_cached_ip_pins_the_endpoint_when_startup_resolution_produced_nothing() {
-        let mut params = params(None);
+        let mut params = params(url("https://blokli.example.com/"));
         params.set_cached_blokli_ips(vec![Ipv4Addr::new(203, 0, 113, 7), Ipv4Addr::new(203, 0, 113, 8)]);
 
         assert_eq!(params.pinned_blokli_ip(), Some(Ipv4Addr::new(203, 0, 113, 7)));
