@@ -437,8 +437,7 @@ impl Hopr {
             planner.min_ack_rate,
             graph.ticket_face_value(),
         );
-        // Take as many as the planner caches: one arbitrary survivor tells us nothing about
-        // how many paths exist, and its value is not comparable to any other path's.
+        // One arbitrary survivor gives neither a path count nor a comparable value.
         let paths = graph.simple_paths(
             graph.identity(),
             &dest_key,
@@ -449,9 +448,7 @@ impl Hopr {
         let mut count = 0;
         let mut first_relays = HashSet::new();
         let mut best: Option<(Vec<_>, f64)> = None;
-        // `simple_paths` only enforces `value >= 0.0`; the planner additionally drops zero-valued
-        // paths, so keeping them would report a path count it would not honour. It strips the
-        // destination and never yields the source, so each node list is exactly the relays.
+        // The planner drops zero-valued paths, `simple_paths` does not; its node lists are the bare relays.
         for (relays, _, value) in paths.into_iter().filter(|(_, _, value)| *value > 0.0) {
             count += 1;
             if let Some(first) = relays.first() {
