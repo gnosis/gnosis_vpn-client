@@ -26,8 +26,8 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.4#0aebe247729574acc449f9debd62fc8d419dbf07" =
       "sha256-oxCxToa9dE2TslRNxvO19qZrOrf9qsUlB4u+ZNwzA28=";
-    "git+https://github.com/hoprnet/edge-client.git?rev=532efe78ec71a6a0cdf84a3507f758df41ee2b37#532efe78ec71a6a0cdf84a3507f758df41ee2b37" =
-      "sha256-fvbHVs3qDBM3JsGDSWysOqj4jgLcobb4SOm78Otwo1Q=";
+    "git+https://github.com/0xCurvy/edge-client.git?rev=e087034eafd4ed94854340d47c2835adecccfbcc#e087034eafd4ed94854340d47c2835adecccfbcc" =
+      "sha256-k5mNGbrKh0J2nZgK9EvWhl0dEosOhcHSO8HfmZbclnc=";
     "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda" =
       "sha256-eWhdldN6vFSOng5AjjP6iYOwhxrDDVLrEoYQlDAhB/k=";
   };
@@ -276,6 +276,23 @@ in
         (mkGnosisvpnBuildArgs {
           src = sources.main;
           depsSrc = sources.deps;
+        })
+        // {
+          extraBuildInputs = mkLinuxStaticBuildInputs x86_64LinuxStaticPkgs;
+        }
+      )
+    )
+  );
+
+  # Same binaries with the Curvy (Baby JubJub) PIX deposit pool instead of `pix-test`. The pool
+  # reads its proving artifacts from `CURVY_ZK_KEYS_DIR` at run time; none are compiled in.
+  binary-gnosis_vpn-pix-curvy-x86_64-linux = withX86_64LinuxStaticEnv (
+    withTokioUnstable (
+      builders.x86_64-linux.callPackage nixLib.mkRustPackage (
+        (mkGnosisvpnBuildArgs {
+          src = sources.main;
+          depsSrc = sources.deps;
+          extraCargoArgs = "--no-default-features --features gnosis_vpn-root/pix-curvy,gnosis_vpn-worker/pix-curvy,gnosis_vpn-ctl/pix-curvy";
         })
         // {
           extraBuildInputs = mkLinuxStaticBuildInputs x86_64LinuxStaticPkgs;

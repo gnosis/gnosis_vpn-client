@@ -25,10 +25,12 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.6", features = ["derive", "env"] }
 clap_complete = "~4.6.9"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "532efe78ec71a6a0cdf84a3507f758df41ee2b37", features = [
+# The PIX deposit pool (`pix-test` or `pix-curvy`) is not selected here: the two are mutually
+# exclusive, and a feature listed on a workspace dependency cannot be switched off by a member.
+# `gnosis_vpn-lib` forwards whichever one its dependents ask for.
+edgli = { git = "https://github.com/0xCurvy/edge-client.git", rev = "e087034eafd4ed94854340d47c2835adecccfbcc", features = [
   "blokli",
   "pix",
-  "pix-test",
   "telemetry",
 ] }
 exitcode = "~1.1.2"
@@ -79,7 +81,7 @@ objc2-foundation = { version = "~0.3.2", features = [
   "NSString",
 ] }
 
-gnosis_vpn-lib = { path = "gnosis_vpn-lib" }
+gnosis_vpn-lib = { path = "gnosis_vpn-lib", default-features = false }
 
 # this profile focuses on the best runtime performance and the smallest binary size
 [profile.release]
