@@ -12,6 +12,7 @@ pub mod event;
 pub mod hopr;
 pub mod logging;
 pub mod ping;
+pub mod probe;
 pub mod route_health;
 pub mod shell_command_ext;
 pub mod socket;

@@ -225,6 +225,53 @@ fn pretty_print(resp: &Response) {
         Response::Disconnect(command::DisconnectResponse::NotConnected) => {
             eprintln!("Currently not connected to any destination");
         }
+        Response::Probe(command::ProbeResponse::Probing { destination: dest }) => {
+            println!("Probing {dest}");
+        }
+        Response::Probe(command::ProbeResponse::Replaced {
+            destination: dest,
+            previous,
+        }) => {
+            println!("Probing {dest} (closed probe of {previous})");
+        }
+        Response::Probe(command::ProbeResponse::AlreadyProbing { destination: dest }) => {
+            println!("Already probing {dest}");
+        }
+        Response::Probe(command::ProbeResponse::UnableToProbe {
+            destination: dest,
+            route_health,
+        }) => {
+            eprintln!("Unable to probe {dest}: {route_health}");
+        }
+        Response::Probe(command::ProbeResponse::NotReady) => {
+            eprintln!("Edge client not running yet - try again later");
+        }
+        Response::Probe(command::ProbeResponse::DestinationNotFound) => {
+            eprintln!("Destination not found");
+        }
+        Response::Probe(command::ProbeResponse::DestinationAmbiguous { connect_ids: ids }) => {
+            eprintln!(
+                "That exit is reachable by several paths - probe one of: {}",
+                ids.join(", ")
+            );
+        }
+        Response::Unprobe(command::UnprobeResponse::Closing { destination: dest }) => {
+            println!("Closing probe of {dest}");
+        }
+        Response::Unprobe(command::UnprobeResponse::InUse { destination: dest }) => {
+            eprintln!("Probe of {dest} is registering a connection right now - retry once connected");
+        }
+        Response::Unprobe(command::UnprobeResponse::NotProbing) => {
+            eprintln!("Currently not probing any destination");
+        }
+        Response::QuickProbe(
+            res @ (command::QuickProbeResponse::Checking { .. } | command::QuickProbeResponse::AlreadyChecking { .. }),
+        ) => {
+            println!("{res}");
+        }
+        Response::QuickProbe(res) => {
+            eprintln!("{res}");
+        }
         Response::Telemetry(Some(metrics)) => {
             println!("{metrics}");
         }
@@ -239,6 +286,7 @@ fn pretty_print(resp: &Response) {
             reconnecting,
             connected,
             disconnecting,
+            probe,
         }) => {
             let mut str_resp = format!("{run_mode}\n");
             if let Some(id) = target_destination {
@@ -261,13 +309,25 @@ fn pretty_print(resp: &Response) {
             for info in disconnecting {
                 str_resp.push_str(&format!("---\n{info}\n"));
             }
+            if let Some(probe) = probe {
+                str_resp.push_str(&format!("---\n{probe}\n"));
+            }
             if !destinations.is_empty() {
                 str_resp.push_str("---\nDestinations - [c] configured, [d] discovered, (c) value from config\n");
             }
             for dest_state in destinations {
                 str_resp.push_str(&format!("---\n{}\n", dest_state.destination));
                 if let Some(rh) = &dest_state.route_health {
-                    str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.connect_id, rh,));
+                    str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.connect_id, rh));
+                    if let Some(walk) = &rh.walk {
+                        str_resp.push_str(&format!("{} Route walk: {}\n", dest_state.destination.connect_id, walk));
+                    }
+                    if let Some(quick) = &rh.quick_probe {
+                        str_resp.push_str(&format!(
+                            "{} Quick check: {}\n",
+                            dest_state.destination.connect_id, quick
+                        ));
+                    }
                 }
             }
             println!("{str_resp}");
@@ -442,6 +502,20 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Connect(command::ConnectResponse::UnableToConnect { .. }) => exitcode::UNAVAILABLE,
         Response::Disconnect(command::DisconnectResponse::Disconnecting { .. }) => exitcode::OK,
         Response::Disconnect(command::DisconnectResponse::NotConnected) => exitcode::PROTOCOL,
+        Response::Probe(command::ProbeResponse::Probing { .. }) => exitcode::OK,
+        Response::Probe(command::ProbeResponse::Replaced { .. }) => exitcode::OK,
+        Response::Probe(command::ProbeResponse::AlreadyProbing { .. }) => exitcode::OK,
+        Response::Probe(command::ProbeResponse::UnableToProbe { .. }) => exitcode::UNAVAILABLE,
+        Response::Probe(command::ProbeResponse::NotReady) => exitcode::UNAVAILABLE,
+        Response::Probe(command::ProbeResponse::DestinationNotFound) => exitcode::UNAVAILABLE,
+        Response::Probe(command::ProbeResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
+        Response::QuickProbe(command::QuickProbeResponse::Checking { .. }) => exitcode::OK,
+        Response::QuickProbe(command::QuickProbeResponse::AlreadyChecking { .. }) => exitcode::OK,
+        Response::QuickProbe(command::QuickProbeResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
+        Response::QuickProbe(..) => exitcode::UNAVAILABLE,
+        Response::Unprobe(command::UnprobeResponse::Closing { .. }) => exitcode::OK,
+        Response::Unprobe(command::UnprobeResponse::InUse { .. }) => exitcode::PROTOCOL,
+        Response::Unprobe(command::UnprobeResponse::NotProbing) => exitcode::PROTOCOL,
         Response::Status(..) => exitcode::OK,
         Response::Balance(Ok(..)) => exitcode::OK,
         Response::Balance(Err(..)) => exitcode::SOFTWARE,

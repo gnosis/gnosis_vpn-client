@@ -1017,6 +1017,7 @@ impl DaemonState {
             reconnecting: None,
             connected: None,
             disconnecting: vec![],
+            probe: None,
         })
     }
 
@@ -1026,6 +1027,9 @@ impl DaemonState {
             LibCommand::NerdStats
             | LibCommand::Connect(_)
             | LibCommand::Disconnect
+            | LibCommand::Probe(_)
+            | LibCommand::Unprobe
+            | LibCommand::QuickProbe(_)
             | LibCommand::Balance
             | LibCommand::FundingTool(_)
             | LibCommand::Telemetry => Ok(self.worker_gone_response()),
@@ -1531,10 +1535,18 @@ impl DaemonState {
 
     async fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {
         match cmd {
-            WorkerCommand::Connect(_) => {
+            // A probe is deliberate long-running activity, so it holds the idle countdown like a connection.
+            WorkerCommand::Connect(_) | WorkerCommand::Probe(_) => {
                 let _ = self
                     .keep_alive_instruction_sender
                     .send(KeepAliveInstruction::Suspend)
+                    .await;
+            }
+            // Only resume when no connection target still holds the countdown.
+            WorkerCommand::Unprobe if self.target_dest_id.is_none() => {
+                let _ = self
+                    .keep_alive_instruction_sender
+                    .send(KeepAliveInstruction::Resume)
                     .await;
             }
             WorkerCommand::Disconnect => {

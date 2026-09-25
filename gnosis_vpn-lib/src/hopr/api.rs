@@ -4,9 +4,10 @@ use edgli::{BlockchainConnectorConfig, BlokliEndpoint, EdgeNodeApi, EdgliInitSta
 use edgli::{
     Edgli,
     hopr_lib::{
-        HoprSessionClientConfig,
+        HopRouting, HoprSessionClientConfig,
         api::{
-            chain::{AccountSelector, ChainReadAccountOperations},
+            chain::{AccountSelector, ChainKeyOperations, ChainReadAccountOperations},
+            graph::{NetworkGraphTraverse, NetworkGraphView, function::EdgeValueFn},
             node::HasChainApi,
             types::{internal::channels::ChannelStatus, primitive::prelude::Address},
         },
@@ -25,12 +26,15 @@ use hopr_utils_session::{
 use tracing::instrument;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
+    time::SystemTime,
 };
 
-use crate::peer::{Peer, Peers};
+use crate::peer::Peer;
+use crate::route_health::RouteWalk;
 use crate::{
     balance::{self, Balances},
     hopr::{
@@ -412,23 +416,62 @@ impl Hopr {
         Ok(peers)
     }
 
-    #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub async fn connected_peers(&self) -> Result<HashSet<Address>, HoprError> {
-        tracing::debug!("query hopr connected peers");
-        let addresses = self.edgli.connected_peer_addresses().await?;
-        Ok(addresses.into_iter().collect())
-    }
+    /// Walks the graph for `dest` over `routing.hop_count()` hops with the path planner's own selector.
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
+    pub fn walk_route(&self, dest: Address, routing: HopRouting) -> Result<RouteWalk, HoprError> {
+        let chain_api = self.edgli.chain_api();
+        let now = SystemTime::now();
+        let dest_key = chain_api
+            .chain_key_to_packet_key(&dest)
+            .map_err(|e| HoprError::HoprLib(HoprLibError::GeneralError(e.to_string())))?;
+        let Some(dest_key) = dest_key else {
+            tracing::debug!(%dest, "destination has no packet key on chain - not routable");
+            return Ok(RouteWalk::NotAnnounced { walked_at: now });
+        };
+        let graph = self.edgli.graph();
+        let length = NonZeroUsize::new(routing.hop_count() + 1).expect("hops + 1 is at least 1");
+        let planner = &self.edgli.config().protocol.path_planner;
+        let selector = EdgeValueFn::forward(
+            length,
+            planner.edge_penalty,
+            planner.min_ack_rate,
+            graph.ticket_face_value(),
+        );
+        // One arbitrary survivor gives neither a path count nor a comparable value.
+        let paths = graph.simple_paths(
+            graph.identity(),
+            &dest_key,
+            length.get(),
+            Some(planner.max_cached_paths),
+            selector,
+        );
+        let mut count = 0;
+        let mut first_relays = HashSet::new();
+        let mut best: Option<(Vec<_>, f64)> = None;
+        // The planner drops zero-valued paths, `simple_paths` does not; its node lists are the bare relays.
+        for (relays, _, value) in paths.into_iter().filter(|(_, _, value)| *value > 0.0) {
+            count += 1;
+            if let Some(first) = relays.first() {
+                first_relays.insert(*first);
+            }
+            if best.as_ref().is_none_or(|(_, best_value)| value > *best_value) {
+                best = Some((relays, value));
+            }
+        }
+        let Some((best_relays, best_value)) = best else {
+            return Ok(RouteWalk::NoPath { walked_at: now });
+        };
 
-    /// Fetches announced (on-chain) and connected (transport-level) peers in
-    /// one combined tick. The two are fundamentally different data sources
-    /// fetched independently, then bundled for a single result.
-    #[tracing::instrument(skip(self), level = "debug", ret)]
-    pub async fn peers(&self) -> Result<Peers, HoprError> {
-        tracing::debug!("query hopr peers");
-        let (announced, connected) = tokio::join!(self.announced_peers(), self.connected_peers());
-        Ok(Peers {
-            announced: announced?,
-            connected: connected?,
+        Ok(RouteWalk::Paths {
+            walked_at: now,
+            count,
+            distinct_first_relays: first_relays.len(),
+            // A relay the chain index cannot resolve is dropped rather than failing the walk.
+            best_relays: best_relays
+                .iter()
+                .filter_map(|key| chain_api.packet_key_to_chain_key(key).ok().flatten())
+                .collect(),
+            best_value,
         })
     }
 

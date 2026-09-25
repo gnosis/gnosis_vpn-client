@@ -302,7 +302,7 @@ impl DestinationReadiness {
             let is_ready = state
                 .route_health
                 .as_ref()
-                .is_some_and(|rh| matches!(rh.state, RouteHealthState::ReadyToConnect { .. }));
+                .is_some_and(|rh| matches!(rh.state, RouteHealthState::Routable));
             if is_ready {
                 ready.push(state.destination);
             } else {

@@ -141,12 +141,11 @@ path    = { hops = 1 }
 # ttl = 6
 # seq_count = 3
 
-# adjust health check intervals
-# ping runs every cycle, health and version piggyback every Nth cycle
+# adjust the cadence of the checks running on the probe session (`gnosis_vpn-ctl probe <id>`)
 # [connection.health_check_intervals]
-# ping = "15s"
-# health_every_n_pings = 4  # minimum 1
-# version_every_n_pings = 20  # minimum 1
+# version = "1h"  # exit API version check
+# ping = "10s"    # exit ping for latency
+# load = "15s"    # exit load (slots, load average)
 # ICMP ping probe interval when connected (verifies tunnel is working)
 # tunnel_ping = "10s"
 # consecutive tunnel ping failures before triggering reconnect
@@ -154,7 +153,8 @@ path    = { hops = 1 }
 
 # adjust SURB balancing per session type
 # each section enables balancing for that session; omit to use the defaults below
-# bridge and health_check default to disabled; ping and main default to enabled
+# bridge defaults to disabled; ping and main default to enabled
+# the probe session is the bridge session, so it follows the bridge settings
 #
 # [connection.surb_balancing.bridge]
 # enabled = false
@@ -174,12 +174,6 @@ path    = { hops = 1 }
 # max_surb_upstream = "16 Mb/s"
 # always_max_out_surbs = true  # defaults to `enabled` - send 2 SURBs per request if 2 would fit
 #
-# [connection.surb_balancing.health_check]
-# enabled = false
-# buffer = "16 KB"
-# max_surb_upstream = "128 Kb/s"
-# always_max_out_surbs = false  # defaults to `enabled` - send only 1 SURB per request even if 2 would fit
-#
 # [connection.surb_balancing.ramp] - after connecting, the SURB balancer is moved
 # from the ping tier to the main tier gradually instead of jumping (a jump floods
 # the response buffer). interval is how often the setpoint is nudged, duration is
@@ -189,7 +183,7 @@ path    = { hops = 1 }
 # duration = "20s"
 
 # adjust PIX enablement per session type
-# bridge and health_check default to disabled; ping_main defaults to enabled
+# bridge defaults to disabled; ping_main defaults to enabled
 # ping_main covers the shared ping/main tunnel session - ping and main are the same
 # physical session, so PIX can only be decided once, at session-open time
 #
@@ -198,9 +192,6 @@ path    = { hops = 1 }
 #
 # [connection.pix.ping_main]
 # enabled = true
-#
-# [connection.pix.health_check]
-# enabled = false
 
 # Entry-side PIX share-generator overrides; leave unset unless matching an Exit's advertised quota window.
 # Quota is num_ssa_parts x (ssa_part_size + additional_shares) x 1038 bytes; defaults are ~649 MiB.
