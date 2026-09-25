@@ -15,7 +15,7 @@ use crate::connection::destination::{Address, Destination};
 use crate::hopr::types::SessionClientMetadata;
 use crate::log_output;
 use crate::probe::{Health, ProbeState, Versions};
-use crate::route_health::{QuickProbeState, RouteHealth, RouteHealthState};
+use crate::route_health::{QuickProbeState, RouteHealth, RouteHealthState, RouteWalk};
 use crate::serde_utils;
 pub use crate::ticket_stats::TicketStats;
 
@@ -419,6 +419,8 @@ pub struct ProbeView {
 pub struct RouteHealthView {
     pub state: RouteHealthState,
     pub last_error: Option<String>,
+    /// What the last graph walk found; the state above is only its verdict.
+    pub walk: Option<RouteWalk>,
     pub quick_probe: Option<QuickProbeState>,
 }
 
@@ -427,6 +429,7 @@ impl From<&RouteHealth> for RouteHealthView {
         RouteHealthView {
             state: rh.state().clone(),
             last_error: rh.last_error().map(str::to_owned),
+            walk: rh.walk().cloned(),
             quick_probe: rh.quick_probe().cloned(),
         }
     }
@@ -1052,6 +1055,33 @@ mod tests {
             Command::Probe("exit".into()).try_into()
         );
         assert_eq!(Ok(WorkerCommand::Unprobe), Command::Unprobe.try_into());
+    }
+
+    #[test]
+    fn tagged_route_walks_all_serialize_as_objects_with_a_found() {
+        let walked_at = SystemTime::UNIX_EPOCH + Duration::from_millis(1_700_000_000_000);
+
+        let not_announced = serde_json::to_string(&RouteWalk::NotAnnounced { walked_at }).unwrap();
+        assert_eq!(r#"{"found":"NotAnnounced","walked_at":1700000000000}"#, not_announced);
+
+        let no_path = serde_json::to_string(&RouteWalk::NoPath { walked_at }).unwrap();
+        assert_eq!(r#"{"found":"NoPath","walked_at":1700000000000}"#, no_path);
+
+        let paths = serde_json::to_string(&RouteWalk::Paths {
+            walked_at,
+            count: 3,
+            distinct_first_relays: 2,
+            best_relays: vec![address(1)],
+            best_value: 0.75,
+        })
+        .unwrap();
+        assert_eq!(
+            format!(
+                r#"{{"found":"Paths","walked_at":1700000000000,"count":3,"distinct_first_relays":2,"best_relays":["{}"],"best_value":0.75}}"#,
+                address(1).to_checksum()
+            ),
+            paths
+        );
     }
 
     #[test]

@@ -319,6 +319,9 @@ fn pretty_print(resp: &Response) {
                 str_resp.push_str(&format!("---\n{}\n", dest_state.destination));
                 if let Some(rh) = &dest_state.route_health {
                     str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.connect_id, rh));
+                    if let Some(walk) = &rh.walk {
+                        str_resp.push_str(&format!("{} Route walk: {}\n", dest_state.destination.connect_id, walk));
+                    }
                     if let Some(quick) = &rh.quick_probe {
                         str_resp.push_str(&format!(
                             "{} Quick check: {}\n",

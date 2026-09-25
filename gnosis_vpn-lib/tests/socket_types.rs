@@ -15,7 +15,7 @@ use gnosis_vpn_lib::command::{
 use gnosis_vpn_lib::connection::destination::{Address, Destination, HopRouting, Meta};
 use gnosis_vpn_lib::connection::{DownPhase, UpPhase};
 use gnosis_vpn_lib::probe::{Health, LoadAvg, ProbeState, Slots, Versions};
-use gnosis_vpn_lib::route_health::{QuickProbeState, RouteHealthState, UnrecoverableReason};
+use gnosis_vpn_lib::route_health::{QuickProbeState, RouteHealthState, RouteWalk, UnrecoverableReason};
 use gnosis_vpn_lib::wg_tunnel::{TunnelStatsSample, WgTunnelStats};
 
 // This function exists only to force the compiler to verify that every type in
@@ -63,6 +63,7 @@ fn assert_types_are_accessible() {
     let _: DownPhase;
     let _: RouteHealthState;
     let _: QuickProbeState;
+    let _: RouteWalk;
     let _: UnrecoverableReason;
     let _: ProbeResponse;
     let _: UnprobeResponse;

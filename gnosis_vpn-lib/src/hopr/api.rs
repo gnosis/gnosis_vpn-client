@@ -25,14 +25,16 @@ use hopr_utils_session::{
 };
 use tracing::instrument;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
+    time::SystemTime,
 };
 
 use crate::peer::Peer;
+use crate::route_health::RouteWalk;
 use crate::{
     balance::{self, Balances},
     hopr::{
@@ -414,17 +416,17 @@ impl Hopr {
         Ok(peers)
     }
 
-    /// Routable iff the path planner's own selector finds a path to `dest` over `routing.hop_count()` hops.
+    /// Walks the graph for `dest` over `routing.hop_count()` hops with the path planner's own selector.
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
-    pub fn is_routable(&self, dest: Address, routing: HopRouting) -> Result<bool, HoprError> {
-        let dest_key = self
-            .edgli
-            .chain_api()
+    pub fn walk_route(&self, dest: Address, routing: HopRouting) -> Result<RouteWalk, HoprError> {
+        let chain_api = self.edgli.chain_api();
+        let now = SystemTime::now();
+        let dest_key = chain_api
             .chain_key_to_packet_key(&dest)
             .map_err(|e| HoprError::HoprLib(HoprLibError::GeneralError(e.to_string())))?;
         let Some(dest_key) = dest_key else {
             tracing::debug!(%dest, "destination has no packet key on chain - not routable");
-            return Ok(false);
+            return Ok(RouteWalk::NotAnnounced { walked_at: now });
         };
         let graph = self.edgli.graph();
         let length = NonZeroUsize::new(routing.hop_count() + 1).expect("hops + 1 is at least 1");
@@ -435,9 +437,45 @@ impl Hopr {
             planner.min_ack_rate,
             graph.ticket_face_value(),
         );
-        // The selector prunes paths below its floor, so any survivor is a plannable route.
-        let paths = graph.simple_paths(graph.identity(), &dest_key, length.get(), Some(1), selector);
-        Ok(!paths.is_empty())
+        // Take as many as the planner caches: one arbitrary survivor tells us nothing about
+        // how many paths exist, and its value is not comparable to any other path's.
+        let paths = graph.simple_paths(
+            graph.identity(),
+            &dest_key,
+            length.get(),
+            Some(planner.max_cached_paths),
+            selector,
+        );
+        let mut count = 0;
+        let mut first_relays = HashSet::new();
+        let mut best: Option<(Vec<_>, f64)> = None;
+        // `simple_paths` only enforces `value >= 0.0`; the planner additionally drops zero-valued
+        // paths, so keeping them would report a path count it would not honour. It strips the
+        // destination and never yields the source, so each node list is exactly the relays.
+        for (relays, _, value) in paths.into_iter().filter(|(_, _, value)| *value > 0.0) {
+            count += 1;
+            if let Some(first) = relays.first() {
+                first_relays.insert(*first);
+            }
+            if best.as_ref().is_none_or(|(_, best_value)| value > *best_value) {
+                best = Some((relays, value));
+            }
+        }
+        let Some((best_relays, best_value)) = best else {
+            return Ok(RouteWalk::NoPath { walked_at: now });
+        };
+
+        Ok(RouteWalk::Paths {
+            walked_at: now,
+            count,
+            distinct_first_relays: first_relays.len(),
+            // A relay the chain index cannot resolve is dropped rather than failing the walk.
+            best_relays: best_relays
+                .iter()
+                .filter_map(|key| chain_api.packet_key_to_chain_key(key).ok().flatten())
+                .collect(),
+            best_value,
+        })
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret, err)]

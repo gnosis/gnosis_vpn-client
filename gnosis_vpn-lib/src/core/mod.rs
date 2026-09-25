@@ -730,9 +730,12 @@ impl Core {
 
             Results::Routability { map } => {
                 let mut became_routable = false;
-                for (key, routable) in map {
+                for (key, walked) in map {
                     if let Some(rh) = self.route_healths.get_mut(&key) {
-                        became_routable |= rh.set_routable(routable);
+                        match walked {
+                            Ok(walk) => became_routable |= rh.apply_walk(walk),
+                            Err(err) => rh.with_error(err),
+                        }
                     }
                 }
                 if became_routable && self.target.is_some() {

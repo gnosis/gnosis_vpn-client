@@ -28,6 +28,7 @@ use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config};
 use crate::probe;
+use crate::route_health::RouteWalk;
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, connection, event, peer, ping, remote_data};
 
@@ -89,7 +90,7 @@ pub(crate) enum Results {
     },
     /// One graph walk over every configured destination.
     Routability {
-        map: HashMap<ExitKey, bool>,
+        map: HashMap<ExitKey, Result<RouteWalk, String>>,
     },
     HoprConstruction(EdgliInitState),
     HoprRunning,
@@ -289,7 +290,7 @@ pub(crate) async fn announced_peers_loop(hopr: Arc<Hopr>, results_sender: mpsc::
     }
 }
 
-/// Walks the graph once for every target; a failed walk counts as not routable.
+/// Walks the graph once for every target; a failed walk is reported as such, not as not routable.
 pub(crate) async fn routability(
     hopr: Arc<Hopr>,
     targets: Vec<(ExitKey, Address, HopRouting)>,
@@ -300,11 +301,11 @@ pub(crate) async fn routability(
         targets
             .into_iter()
             .map(|(key, address, routing)| {
-                let routable = hopr.is_routable(address, routing).unwrap_or_else(|err| {
-                    tracing::warn!(%key, ?err, "graph walk failed - treating as not routable");
-                    false
+                let walked = hopr.walk_route(address, routing).map_err(|err| {
+                    tracing::warn!(%key, ?err, "graph walk failed");
+                    err.to_string()
                 });
-                (key, routable)
+                (key, walked)
             })
             .collect::<HashMap<_, _>>()
     })
@@ -732,7 +733,10 @@ impl Display for Results {
                 Err(err) => write!(f, "AnnouncedPeers: Error({})", err),
             },
             Results::Routability { map } => {
-                let routable = map.values().filter(|r| **r).count();
+                let routable = map
+                    .values()
+                    .filter(|r| matches!(r, Ok(RouteWalk::Paths { .. })))
+                    .count();
                 write!(f, "Routability: {routable}/{} routable", map.len())
             }
             Results::IncentiveOperations { res } => match res {

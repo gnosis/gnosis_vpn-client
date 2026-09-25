@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display};
 use std::time::{Duration, SystemTime};
 
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
+
 use crate::connection::destination::{Destination, ExitKey, HopRouting};
 use crate::log_output;
 use crate::probe::{Health, QuickProbeOutcome, Versions, select_api_version};
@@ -29,6 +31,35 @@ pub enum RouteHealthState {
     NotRoutable,
     /// A path exists; connecting may proceed.
     Routable,
+}
+
+/// The last graph walk for this exit; also the wire format shown by the CLI.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "found")]
+pub enum RouteWalk {
+    /// The exit's chain address maps to no packet key - it never announced itself.
+    NotAnnounced {
+        #[serde(with = "serde_utils::system_time")]
+        walked_at: SystemTime,
+    },
+    /// The selector accepted no path over this destination's hop count.
+    NoPath {
+        #[serde(with = "serde_utils::system_time")]
+        walked_at: SystemTime,
+    },
+    Paths {
+        #[serde(with = "serde_utils::system_time")]
+        walked_at: SystemTime,
+        /// Capped at the planner's own `max_cached_paths`.
+        count: usize,
+        /// Distinct first relays among them; 1 means a single point of failure.
+        distinct_first_relays: usize,
+        /// Relays of the best-valued path, in path order; empty on a 0-hop route.
+        #[serde(with = "serde_utils::addresses")]
+        best_relays: Vec<Address>,
+        /// The best path's value in (0.0, 1.0]; higher is better.
+        best_value: f64,
+    },
 }
 
 /// The last `quickprobe` of this exit; also the wire format shown by the CLI.
@@ -60,6 +91,7 @@ pub(crate) struct RouteHealth {
     key: ExitKey,
     state: RouteHealthState,
     last_error: Option<String>,
+    last_walk: Option<RouteWalk>,
     quick_probe: Option<QuickProbeState>,
 }
 
@@ -69,8 +101,13 @@ impl RouteHealth {
             key: dest.key(),
             state: derive_initial_state(&dest.routing, allow_insecure, allow_experimental),
             last_error: None,
+            last_walk: None,
             quick_probe: None,
         }
+    }
+
+    pub(crate) fn walk(&self) -> Option<&RouteWalk> {
+        self.last_walk.as_ref()
     }
 
     pub(crate) fn quick_probe(&self) -> Option<&QuickProbeState> {
@@ -124,6 +161,14 @@ impl RouteHealth {
 
     pub fn is_unrecoverable(&self) -> bool {
         matches!(self.state, RouteHealthState::Unrecoverable { .. })
+    }
+
+    /// Record what the walk found. Returns true iff the route just became routable.
+    pub(crate) fn apply_walk(&mut self, walk: RouteWalk) -> bool {
+        let routable = matches!(walk, RouteWalk::Paths { .. });
+        self.last_walk = Some(walk);
+        self.last_error = None;
+        self.set_routable(routable)
     }
 
     /// Apply a graph walk result. Returns true iff the route just became routable.
@@ -215,6 +260,49 @@ impl Display for UnrecoverableReason {
     }
 }
 
+impl Display for RouteWalk {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RouteWalk::NotAnnounced { walked_at } => {
+                write!(
+                    f,
+                    "exit not announced on chain - walked {} ago",
+                    log_output::elapsed(walked_at)
+                )
+            }
+            RouteWalk::NoPath { walked_at } => {
+                write!(f, "no path found - walked {} ago", log_output::elapsed(walked_at))
+            }
+            RouteWalk::Paths {
+                walked_at,
+                count,
+                distinct_first_relays,
+                best_relays,
+                best_value,
+            } => {
+                let plural = if *count == 1 { "" } else { "s" };
+                write!(f, "{count} path{plural}, ")?;
+                // A 0-hop route has no relays, so there is no diversity or "via" to report.
+                if best_relays.is_empty() {
+                    write!(f, "direct")?;
+                } else {
+                    let via = best_relays
+                        .iter()
+                        .map(log_output::address)
+                        .collect::<Vec<_>>()
+                        .join(" -> ");
+                    write!(f, "{distinct_first_relays} distinct first relays, best via {via}")?;
+                }
+                write!(
+                    f,
+                    " (value {best_value:.3}) - walked {} ago",
+                    log_output::elapsed(walked_at)
+                )
+            }
+        }
+    }
+}
+
 impl Display for QuickProbeState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -296,6 +384,16 @@ mod tests {
         }
     }
 
+    fn walk_with_paths(now: SystemTime) -> RouteWalk {
+        RouteWalk::Paths {
+            walked_at: now,
+            count: 3,
+            distinct_first_relays: 2,
+            best_relays: vec![Address::from([2u8; 20])],
+            best_value: 0.75,
+        }
+    }
+
     fn not_allowed(state: &RouteHealthState) -> bool {
         matches!(
             state,
@@ -345,6 +443,36 @@ mod tests {
             "losing the route is not a transition to routable"
         );
         assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
+    }
+
+    #[test]
+    fn apply_walk_reports_routable_only_when_the_walk_found_paths() {
+        let now = SystemTime::now();
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        rh.with_error("graph walk failed".to_string());
+
+        assert!(rh.apply_walk(walk_with_paths(now)));
+        assert!(rh.is_routable());
+        assert!(rh.last_error().is_none(), "a walk that ran clears the previous failure");
+        assert!(matches!(rh.walk(), Some(RouteWalk::Paths { count: 3, .. })));
+
+        assert!(!rh.apply_walk(RouteWalk::NoPath { walked_at: now }));
+        assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
+
+        assert!(!rh.apply_walk(RouteWalk::NotAnnounced { walked_at: now }));
+        assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
+        assert!(matches!(rh.walk(), Some(RouteWalk::NotAnnounced { .. })));
+    }
+
+    #[test]
+    fn apply_walk_never_unlatches_unrecoverable() {
+        let mut rh = RouteHealth::new(&destination(0), false, false);
+        assert!(!rh.apply_walk(walk_with_paths(SystemTime::now())));
+        assert!(
+            not_allowed(rh.state()),
+            "the walk still gets recorded, the verdict does not change"
+        );
+        assert!(rh.walk().is_some());
     }
 
     #[test]
