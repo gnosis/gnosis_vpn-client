@@ -2303,8 +2303,9 @@ fn connect_step(rh: &RouteHealth, probe: Option<&Probe>, key: ExitKey) -> Connec
 
 /// A probe whose exit is gone, or whose endpoints moved under it, talks to a server that is no longer current.
 fn probe_is_stale(current: Option<&Destination>, probed: &Destination) -> bool {
-    let Some(current) = current else { return true };
-    current.gnosis_vpn_server != probed.gnosis_vpn_server || current.wireguard_server != probed.wireguard_server
+    current.is_none_or(|current| {
+        current.gnosis_vpn_server != probed.gnosis_vpn_server || current.wireguard_server != probed.wireguard_server
+    })
 }
 
 /// The probe's session still has a user, or a target is waiting on it; either way it must not be dropped.
