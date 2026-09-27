@@ -1,0 +1,29 @@
+name: Label forwardport
+on:
+  pull_request_target:
+    types:
+      - opened
+      - edited
+permissions:
+  contents: read
+jobs:
+  label:
+    name: Apply default forwardport label
+    # Open or retarget onto release/hoprdv4 only, and never a backport head: that would port it straight back.
+    if: |
+      github.event.pull_request.base.ref == 'release/hoprdv4' &&
+      !startsWith(github.event.pull_request.head.ref, 'backport-') &&
+      (github.event.action == 'opened' || github.event.changes.base.ref.from != '')
+    runs-on: depot-ubuntu-22.04-4
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Add forwardport label
+        shell: bash
+        env:
+          # GITHUB_TOKEN, not the app token: the app installation has no pull-requests scope.
+          # A GITHUB_TOKEN label write emits no events, so PR CI is not re-triggered.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh pr edit "${PR}" --add-label 'forwardport main'
