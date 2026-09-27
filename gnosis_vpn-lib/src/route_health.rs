@@ -62,6 +62,19 @@ pub enum RouteWalk {
     },
 }
 
+/// What one quick probe measured on the exit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuickProbeCheck {
+    #[serde(with = "serde_utils::system_time")]
+    pub checked_at: SystemTime,
+    pub versions: Versions,
+    /// The API version this client selected from `versions`; None means incompatible.
+    pub api_version: Option<String>,
+    pub load: Health,
+    #[serde(with = "serde_utils::duration_ms")]
+    pub rtt: Duration,
+}
+
 /// The last `quickprobe` of this exit; also the wire format shown by the CLI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "state")]
@@ -69,17 +82,10 @@ pub enum QuickProbeState {
     Checking {
         #[serde(with = "serde_utils::system_time")]
         since: SystemTime,
+        /// The result this check refreshes; kept so a re-check does not blank the exit's data.
+        last: Option<QuickProbeCheck>,
     },
-    Checked {
-        #[serde(with = "serde_utils::system_time")]
-        checked_at: SystemTime,
-        versions: Versions,
-        /// The API version this client selected from `versions`; None means incompatible.
-        api_version: Option<String>,
-        load: Health,
-        #[serde(with = "serde_utils::duration_ms")]
-        rtt: Duration,
-    },
+    Checked(QuickProbeCheck),
     Failed {
         #[serde(with = "serde_utils::system_time")]
         checked_at: SystemTime,
@@ -123,7 +129,12 @@ impl RouteHealth {
         if self.is_quick_probing() {
             return false;
         }
-        self.quick_probe = Some(QuickProbeState::Checking { since: now });
+        // A re-check must not blank the exit it refreshes; `checked_at` still says how stale it is.
+        let last = match self.quick_probe.take() {
+            Some(QuickProbeState::Checked(check)) => Some(check),
+            _ => None,
+        };
+        self.quick_probe = Some(QuickProbeState::Checking { since: now, last });
         true
     }
 
@@ -132,13 +143,13 @@ impl RouteHealth {
         self.quick_probe = Some(match outcome {
             Ok(found) => {
                 self.apply_api_versions(&found.versions.versions);
-                QuickProbeState::Checked {
+                QuickProbeState::Checked(QuickProbeCheck {
                     checked_at: now,
                     versions: found.versions.clone(),
                     api_version: found.api_version.clone(),
                     load: found.health.clone(),
                     rtt: found.rtt,
-                }
+                })
             }
             Err(error) => QuickProbeState::Failed {
                 checked_at: now,
@@ -303,28 +314,39 @@ impl Display for RouteWalk {
     }
 }
 
+impl Display for QuickProbeCheck {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let QuickProbeCheck {
+            checked_at,
+            versions,
+            api_version,
+            load,
+            rtt,
+        } = self;
+        write!(
+            f,
+            "checked {} ago - RTT {:.2} s, {load}",
+            log_output::elapsed(checked_at),
+            rtt.as_secs_f32()
+        )?;
+        match api_version {
+            Some(api) => write!(f, ", API {api} ({versions})"),
+            None => write!(f, ", no compatible API ({versions})"),
+        }
+    }
+}
+
 impl Display for QuickProbeState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            QuickProbeState::Checking { since } => write!(f, "checking (since {})", log_output::elapsed(since)),
-            QuickProbeState::Checked {
-                checked_at,
-                versions,
-                api_version,
-                load,
-                rtt,
-            } => {
-                write!(
-                    f,
-                    "checked {} ago - RTT {:.2} s, {load}",
-                    log_output::elapsed(checked_at),
-                    rtt.as_secs_f32()
-                )?;
-                match api_version {
-                    Some(api) => write!(f, ", API {api} ({versions})"),
-                    None => write!(f, ", no compatible API ({versions})"),
+            QuickProbeState::Checking { since, last } => {
+                write!(f, "checking (since {})", log_output::elapsed(since))?;
+                match last {
+                    Some(check) => write!(f, " - last {check}"),
+                    None => Ok(()),
                 }
             }
+            QuickProbeState::Checked(check) => write!(f, "{check}"),
             QuickProbeState::Failed { checked_at, error } => {
                 write!(f, "failed {} ago: {error}", log_output::elapsed(checked_at))
             }
@@ -506,18 +528,40 @@ mod tests {
         assert!(rh.start_quick_probe(now));
         assert!(!rh.start_quick_probe(now), "still checking");
         assert!(rh.is_quick_probing());
-        assert!(matches!(rh.quick_probe(), Some(QuickProbeState::Checking { .. })));
+        assert!(matches!(
+            rh.quick_probe(),
+            Some(QuickProbeState::Checking { last: None, .. })
+        ));
 
         rh.apply_quick_probe(&Err("boom".to_string()), now);
         assert!(!rh.is_quick_probing(), "a failed check is no longer in flight");
         assert!(matches!(rh.quick_probe(), Some(QuickProbeState::Failed { error, .. }) if error == "boom"));
         assert!(rh.start_quick_probe(now), "a finished check can be redone");
+        assert!(
+            matches!(rh.quick_probe(), Some(QuickProbeState::Checking { last: None, .. })),
+            "a failed check leaves nothing to carry forward"
+        );
 
         rh.apply_quick_probe(&Ok(outcome(&["v1"])), now);
         assert!(!rh.is_quick_probing(), "a successful check is no longer in flight");
         assert!(
-            matches!(rh.quick_probe(), Some(QuickProbeState::Checked { api_version: Some(api), .. }) if api == "v1")
+            matches!(rh.quick_probe(), Some(QuickProbeState::Checked(check)) if check.api_version.as_deref() == Some("v1"))
         );
+    }
+
+    #[test]
+    fn a_re_check_keeps_what_the_last_one_measured() {
+        let now = SystemTime::now();
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        rh.apply_quick_probe(&Ok(outcome(&["v1"])), now);
+
+        assert!(rh.start_quick_probe(now));
+        let Some(QuickProbeState::Checking { last: Some(last), .. }) = rh.quick_probe() else {
+            panic!("a re-check must carry the previous result");
+        };
+        assert_eq!(last.rtt, Duration::from_millis(120));
+        assert_eq!(last.checked_at, now);
+        assert_eq!(last.load.slots.available, 9);
     }
 
     #[test]
