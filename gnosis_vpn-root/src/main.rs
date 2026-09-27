@@ -1289,6 +1289,10 @@ impl DaemonState {
                 self.worker_params.set_cached_blokli_ips(ips);
                 Ok(())
             }
+            RequestToRoot::ProbeStopped => {
+                self.probe_ended().await;
+                Ok(())
+            }
             RequestToRoot::UpdatePeerIps { peer_ips } => {
                 let _ = self
                     .routing_actor_sender
@@ -1551,14 +1555,21 @@ impl DaemonState {
                 self.probing = false
             }
             // The probe command suspended the countdown before the worker refused it; undo that.
-            Response::Probe(_) if !self.probing && self.target_dest_id.is_none() => {
-                let _ = self
-                    .keep_alive_instruction_sender
-                    .send(KeepAliveInstruction::Resume)
-                    .await;
-            }
+            Response::Probe(_) if !self.probing => self.probe_ended().await,
             _ => (),
         }
+    }
+
+    /// No probe holds the countdown any more; only a connection target still can.
+    async fn probe_ended(&mut self) {
+        self.probing = false;
+        if self.target_dest_id.is_some() {
+            return;
+        }
+        let _ = self
+            .keep_alive_instruction_sender
+            .send(KeepAliveInstruction::Resume)
+            .await;
     }
 
     async fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {

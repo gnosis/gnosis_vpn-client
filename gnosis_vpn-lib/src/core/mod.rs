@@ -614,7 +614,7 @@ impl Core {
                 }
             }
             Results::ExitNodesUpdated { nodes } => {
-                self.merge_discovered_destinations(nodes, results_sender);
+                self.merge_discovered_destinations(nodes, results_sender).await;
             }
             Results::ExitNodesRetry { error } => {
                 tracing::warn!(%error, "exit node discovery failed - retrying");
@@ -1289,7 +1289,7 @@ impl Core {
     /// Merges a discovery snapshot in and keeps `route_healths` in step, mirroring `Core::init`.
     ///
     /// Leaves the state machine alone: a live connection holds its own `Destination` regardless.
-    fn merge_discovered_destinations(
+    async fn merge_discovered_destinations(
         &mut self,
         nodes: HashMap<Address, edgli::ExitNodeInfo>,
         results_sender: &mpsc::Sender<Results>,
@@ -1340,6 +1340,8 @@ impl Core {
         if probe_vanished {
             tracing::info!("probed exit vanished from discovery - closing its session");
             self.stop_probe();
+            let request = CoreToWorker::RequestToRoot(RequestToRoot::ProbeStopped);
+            let _ = self.outgoing_sender.send(request).await;
         }
 
         // A tracker that just started over needs a graph walk now, not on the lazy tick.
