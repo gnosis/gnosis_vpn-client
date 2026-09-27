@@ -1010,6 +1010,12 @@ impl Core {
                 outcome,
                 session,
             } => {
+                // Discovery may have moved this exit mid-check; result and session both describe the old server.
+                if probe_is_stale(self.config.destinations.get(&destination.key()), &destination) {
+                    tracing::debug!(%destination, "discarding quick probe of a destination that moved");
+                    drop(session);
+                    return true;
+                }
                 // Nobody waits on a quick probe anymore, so a failure would otherwise only show up in `status`.
                 if let Err(error) = &outcome {
                     tracing::warn!(%destination, %error, "quick probe failed");
