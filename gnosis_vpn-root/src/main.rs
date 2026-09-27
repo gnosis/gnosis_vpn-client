@@ -1313,10 +1313,7 @@ impl DaemonState {
                     // Ids issued to the dead worker are never answered by its replacement.
                     answer_pending(&mut self.pending_responses, Response::WorkerRestarting);
                     self.setup_worker().await?;
-                    let _ = self
-                        .keep_alive_instruction_sender
-                        .send(KeepAliveInstruction::Restart)
-                        .await;
+                    self.restart_idle_countdown().await;
                     Ok(())
                 } else {
                     tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
@@ -1349,13 +1346,19 @@ impl DaemonState {
                 }
                 self.shutdown_ongoing = Shutdown::None;
                 self.setup_worker().await?;
-                let _ = self
-                    .keep_alive_instruction_sender
-                    .send(KeepAliveInstruction::Restart)
-                    .await;
+                self.restart_idle_countdown().await;
                 Ok(())
             }
         }
+    }
+
+    /// Restart is a no-op while suspended, so a suspend whose answer died with the worker must not outlive it.
+    async fn restart_idle_countdown(&mut self) {
+        let instruction = match self.target_dest_id {
+            Some(_) => KeepAliveInstruction::Restart,
+            None => KeepAliveInstruction::Resume,
+        };
+        let _ = self.keep_alive_instruction_sender.send(instruction).await;
     }
 
     async fn keep_alive_expired(&mut self, duration: Duration) -> Result<(), exitcode::ExitCode> {
