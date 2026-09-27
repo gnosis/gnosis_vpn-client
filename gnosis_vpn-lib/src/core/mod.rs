@@ -41,6 +41,8 @@ const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
 const ROUTABILITY_EAGER_INTERVAL: Duration = Duration::from_secs(10);
 /// Graph walk cadence once every destination has settled.
 const ROUTABILITY_LAZY_INTERVAL: Duration = Duration::from_secs(60);
+/// What a quick probe reports when discovery moved its exit out from under it.
+const QUICK_PROBE_MOVED: &str = "destination moved while the check was running";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -1010,16 +1012,16 @@ impl Core {
                 outcome,
                 session,
             } => {
-                // Discovery may have moved this exit mid-check; result and session both describe the old server.
-                if probe_is_stale(self.config.destinations.get(&destination.key()), &destination) {
-                    tracing::debug!(%destination, "discarding quick probe of a destination that moved");
-                    drop(session);
-                    return true;
-                }
                 // Nobody waits on a quick probe anymore, so a failure would otherwise only show up in `status`.
                 if let Err(error) = &outcome {
                     tracing::warn!(%destination, %error, "quick probe failed");
                 }
+                // Discovery may have moved this exit mid-check, leaving result and session on the old server.
+                let moved = probe_is_stale(self.config.destinations.get(&destination.key()), &destination);
+                let (outcome, session) = match moved {
+                    true => (Err(QUICK_PROBE_MOVED.to_string()), None),
+                    false => (outcome, session),
+                };
                 match self.route_healths.get_mut(&destination.key()) {
                     Some(rh) => rh.apply_quick_probe(&outcome, SystemTime::now()),
                     None => tracing::debug!(%destination, "quick probe finished for a destination that is gone"),
