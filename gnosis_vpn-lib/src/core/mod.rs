@@ -966,8 +966,13 @@ impl Core {
                     return true;
                 };
                 if let probe::Event::OpenAborted { error } = &event {
+                    let key = probe.key();
                     tracing::error!(destination = %probe.destination(), %error, "probe cannot open a session - stopping it");
                     self.stop_probe();
+                    // The same config aborts every retry, so reporting it is all a waiting target gets.
+                    if let Some(rh) = self.route_healths.get_mut(&key) {
+                        rh.with_error(error.clone());
+                    }
                     let request = CoreToWorker::RequestToRoot(RequestToRoot::ProbeStopped);
                     let _ = self.outgoing_sender.send(request).await;
                     return true;
