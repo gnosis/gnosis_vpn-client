@@ -1,0 +1,96 @@
+name: Forwardport
+on:
+  pull_request_target:
+    types:
+      - closed
+      - labeled
+permissions:
+  contents: read
+jobs:
+  forwardport:
+    name: Forwardport merged PR
+    runs-on: depot-ubuntu-22.04-4
+    # release/hoprdv4 only; labeled checks the label just added, so a later unrelated label doesn't re-run this.
+    if: |
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'release/hoprdv4' &&
+      (
+        (github.event.action == 'closed' && contains(toJSON(github.event.pull_request.labels.*.name), '"forwardport ')) ||
+        (github.event.action == 'labeled' && startsWith(github.event.label.name, 'forwardport '))
+      )
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # The action cherry-picks in the runner's work tree, so it needs its own checkout.
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Same cherry-pick action as the backport workflow, pointed at forwardport labels.
+      - name: Forwardport
+        id: forwardport
+        uses: korthout/backport-action@2e830a1d0b8269505846ddd407a70876913ad1f8 # v4.6.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          label_pattern: ^forwardport ([^ ]+)$
+          branch_name: forwardport-${pull_number}-to-${target_branch}
+          pull_title: "[Forwardport ${target_branch}] ${pull_title}"
+          pull_description: |-
+            # Description
+            Forwardport of #${pull_number} to `${target_branch}`.
+          # Conflicts open a PR instead of vanishing into a comment on a green run.
+          experimental: |
+            {
+              "conflict_resolution": "draft_commit_conflicts"
+            }
+      # The action forces conflict PRs to draft; a real PR is harder to ignore.
+      - name: Mark the forwardport pull requests ready for review
+        if: steps.forwardport.outputs.created_pull_numbers != ''
+        shell: bash
+        env:
+          # GITHUB_TOKEN, not the app token: the app installation has no pull-requests scope.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBERS: ${{ steps.forwardport.outputs.created_pull_numbers }}
+        run: |
+          for pr in ${PR_NUMBERS}; do
+            gh pr ready "${pr}"
+          done
+      # App lacks pull-requests scope; GITHUB_TOKEN's PRs skip CI, so re-push as the app.
+      - name: Generate GitHub App token
+        id: bot-token
+        if: steps.forwardport.outputs.created_pull_numbers != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.GH_APP_GNOSISVPN_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_GNOSISVPN_BOT_PRIVATE_KEY }}
+          owner: gnosis
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Trigger CI on the forwardport pull requests
+        if: steps.forwardport.outputs.created_pull_numbers != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.bot-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          APP_SLUG: ${{ steps.bot-token.outputs.app-slug }}
+          PR_NUMBERS: ${{ steps.forwardport.outputs.created_pull_numbers }}
+        run: |
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${APP_SLUG}[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git"
+          for pr in ${PR_NUMBERS}; do
+            branch="$(gh pr view "${pr}" --json headRefName --jq .headRefName)"
+            git fetch origin "${branch}"
+            git checkout -B "${branch}" "origin/${branch}"
+            sleep 1 # a later committer timestamp guarantees a new commit hash
+            git commit --amend --no-edit
+            git push --force origin "HEAD:refs/heads/${branch}"
+          done
+      # The action only comments on cherry-pick and push failures, and still exits 0.
+      - name: Fail if a forwardport did not land
+        if: steps.forwardport.outputs.was_successful != 'true'
+        env:
+          BY_TARGET: ${{ steps.forwardport.outputs.was_successful_by_target }}
+        run: |
+          echo "::error::Forwardport did not land: ${BY_TARGET}"
+          exit 1
