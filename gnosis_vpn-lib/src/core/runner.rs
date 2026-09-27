@@ -790,7 +790,7 @@ impl Display for Results {
             Results::QuickProbe {
                 destination, outcome, ..
             } => match outcome {
-                Ok(found) => write!(f, "QuickProbe {destination}: checked in {:?}", found.rtt),
+                Ok(found) => write!(f, "QuickProbe {destination}: checked in {:?}", found.status_rtt),
                 Err(err) => write!(f, "QuickProbe {destination}: Error({err})"),
             },
         }

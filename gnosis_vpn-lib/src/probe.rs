@@ -414,7 +414,8 @@ pub(crate) struct QuickProbeOutcome {
     pub(crate) versions: Versions,
     pub(crate) api_version: Option<String>,
     pub(crate) health: Health,
-    pub(crate) rtt: Duration,
+    /// Round-trip of the status request, so it carries the exit's status-generation time too.
+    pub(crate) status_rtt: Duration,
 }
 
 /// Bounded version and health check over an unbalanced session; the session is handed back only when a probe could adopt it.
@@ -467,12 +468,12 @@ async fn quick_checks(bound_host: std::net::SocketAddr) -> Result<QuickProbeOutc
     let health = gvpn_client::health(&client, bound_host, QUICKPROBE_HTTP_TIMEOUT)
         .await
         .map_err(|err| format!("health check failed: {err}"))?;
-    let rtt = started.elapsed();
+    let status_rtt = started.elapsed();
     Ok(QuickProbeOutcome {
         api_version: select_api_version(&versions.versions).map(str::to_owned),
         versions,
         health,
-        rtt,
+        status_rtt,
     })
 }
 
@@ -956,7 +957,7 @@ mod tests {
         assert_eq!(outcome.api_version.as_deref(), Some("v1"));
         assert_eq!(outcome.versions.latest, "v1");
         assert_eq!(outcome.health.slots.available, 7);
-        assert!(outcome.rtt > Duration::ZERO);
+        assert!(outcome.status_rtt > Duration::ZERO);
     }
 
     #[tokio::test]

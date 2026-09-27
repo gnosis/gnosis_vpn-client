@@ -71,8 +71,9 @@ pub struct QuickProbeCheck {
     /// The API version this client selected from `versions`; None means incompatible.
     pub api_version: Option<String>,
     pub load: Health,
+    /// Round-trip of the status request, so it carries the exit's status-generation time too.
     #[serde(with = "serde_utils::duration_ms")]
-    pub rtt: Duration,
+    pub status_rtt: Duration,
 }
 
 /// The last `quickprobe` of this exit; also the wire format shown by the CLI.
@@ -148,7 +149,7 @@ impl RouteHealth {
                     versions: found.versions.clone(),
                     api_version: found.api_version.clone(),
                     load: found.health.clone(),
-                    rtt: found.rtt,
+                    status_rtt: found.status_rtt,
                 })
             }
             Err(error) => QuickProbeState::Failed {
@@ -335,13 +336,13 @@ impl Display for QuickProbeCheck {
             versions,
             api_version,
             load,
-            rtt,
+            status_rtt,
         } = self;
         write!(
             f,
-            "checked {} ago - RTT {:.2} s, {load}",
+            "checked {} ago - status RTT {:.2} s, {load}",
             log_output::elapsed(checked_at),
-            rtt.as_secs_f32()
+            status_rtt.as_secs_f32()
         )?;
         match api_version {
             Some(api) => write!(f, ", API {api} ({versions})"),
@@ -416,7 +417,7 @@ mod tests {
                     nproc: 4,
                 },
             },
-            rtt: Duration::from_millis(120),
+            status_rtt: Duration::from_millis(120),
         }
     }
 
@@ -589,7 +590,7 @@ mod tests {
         let Some(QuickProbeState::Checking { last: Some(last), .. }) = rh.quick_probe() else {
             panic!("a re-check must carry the previous result");
         };
-        assert_eq!(last.rtt, Duration::from_millis(120));
+        assert_eq!(last.status_rtt, Duration::from_millis(120));
         assert_eq!(last.checked_at, now);
         assert_eq!(last.load.slots.available, 9);
     }
