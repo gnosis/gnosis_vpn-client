@@ -220,6 +220,11 @@ impl Probe {
         self.requested
     }
 
+    /// An explicit `probe <id>` takes over the probe `connect` opened, so it outlives the target.
+    pub(crate) fn mark_requested(&mut self) {
+        self.requested = true;
+    }
+
     /// The session once every check has passed on it; what a connection may register over.
     pub(crate) fn ready_session(&self) -> Option<&SessionClientMetadata> {
         match self.state {

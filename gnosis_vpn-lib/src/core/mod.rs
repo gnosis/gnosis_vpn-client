@@ -1648,7 +1648,9 @@ impl Core {
                 route_health: rh.state().clone(),
             };
         }
-        if self.probe.as_ref().is_some_and(|p| p.key() == dest.key()) {
+        // Root counts this answer towards the idle countdown, so the probe must outlive the target too.
+        if let Some(probe) = self.probe.as_mut().filter(|p| p.key() == dest.key()) {
+            probe.mark_requested();
             return command::ProbeResponse::AlreadyProbing { destination: dest };
         }
         if let Some(in_use) = self
