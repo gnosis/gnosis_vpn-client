@@ -2089,7 +2089,7 @@ impl Core {
                     tracing::warn!(destination = %dest, "refusing connection: destination has no route health tracker");
                     return;
                 };
-                match connect_step(rh, self.probe.as_ref(), dest.key()) {
+                match connect_step(rh, self.probe.as_ref(), &dest) {
                     ConnectStep::Refuse => {
                         tracing::error!(destination = %dest, route_health = ?rh.state(), "refusing connection because of route health");
                     }
@@ -2098,7 +2098,12 @@ impl Core {
                     }
                     ConnectStep::StartProbe => {
                         tracing::info!(destination = %dest, "opening probe session before connecting");
-                        self.start_probe(&dest, false, results_sender);
+                        // Replacing this exit's own stale probe must not demote an explicit one to connect-owned.
+                        let requested = self
+                            .probe
+                            .as_ref()
+                            .is_some_and(|p| p.key() == dest.key() && p.is_requested());
+                        self.start_probe(&dest, requested, results_sender);
                     }
                     ConnectStep::WaitProbe => {
                         tracing::debug!(destination = %dest, "waiting for the probe's initial checks before connecting");
@@ -2300,19 +2305,21 @@ enum ConnectStep {
     Connect(SessionClientMetadata),
 }
 
-fn connect_step(rh: &RouteHealth, probe: Option<&Probe>, key: ExitKey) -> ConnectStep {
+fn connect_step(rh: &RouteHealth, probe: Option<&Probe>, dest: &Destination) -> ConnectStep {
     if rh.is_unrecoverable() {
         return ConnectStep::Refuse;
     }
     if !rh.is_routable() {
         return ConnectStep::WaitRoutable;
     }
-    match probe {
-        Some(p) if p.key() == key => match p.ready_session() {
+    // Same exit is not enough: a probe opened before discovery moved it still talks to the old server.
+    let ours = probe.filter(|p| p.key() == dest.key() && !probe_is_stale(Some(dest), p.destination()));
+    match ours {
+        Some(p) => match p.ready_session() {
             Some(session) => ConnectStep::Connect(session.clone()),
             None => ConnectStep::WaitProbe,
         },
-        _ => ConnectStep::StartProbe,
+        None => ConnectStep::StartProbe,
     }
 }
 
@@ -2509,16 +2516,13 @@ mod tests {
     #[test]
     fn connect_step_refuses_a_latched_route() {
         let dest = latched_destination("exit");
-        assert_eq!(connect_step(&tracker(&dest), None, dest.key()), ConnectStep::Refuse);
+        assert_eq!(connect_step(&tracker(&dest), None, &dest), ConnectStep::Refuse);
     }
 
     #[test]
     fn connect_step_waits_for_a_route_before_probing() {
         let dest = destination("exit");
-        assert_eq!(
-            connect_step(&tracker(&dest), None, dest.key()),
-            ConnectStep::WaitRoutable
-        );
+        assert_eq!(connect_step(&tracker(&dest), None, &dest), ConnectStep::WaitRoutable);
     }
 
     #[test]
@@ -2526,7 +2530,7 @@ mod tests {
         let dest = destination("exit");
         let mut rh = tracker(&dest);
         rh.set_routable(true);
-        assert_eq!(connect_step(&rh, None, dest.key()), ConnectStep::StartProbe);
+        assert_eq!(connect_step(&rh, None, &dest), ConnectStep::StartProbe);
     }
 
     // The graph is what makes a moved target reachable again; the tracker just waits for the next walk.
