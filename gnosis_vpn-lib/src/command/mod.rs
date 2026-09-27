@@ -319,7 +319,7 @@ pub enum UnprobeResponse {
     Closing {
         destination: Box<Destination>,
     },
-    /// A connection attempt is registering over the session right now.
+    /// A connection is registering, or a disconnect unregistering, over the session right now.
     InUse {
         destination: Box<Destination>,
     },

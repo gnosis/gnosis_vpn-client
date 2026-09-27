@@ -221,6 +221,10 @@ impl Probe {
                 self.state = ProbeState::Checking;
                 self.session = Some(session);
                 self.since = Some(since);
+                // Samples of the previous session must not count towards this one being ready.
+                self.versions = None;
+                self.ping_rtt = None;
+                self.load = None;
                 self.consecutive_failures = 0;
             }
             Event::OpenFailed { error } => {
@@ -778,6 +782,40 @@ mod tests {
         assert!(p.any_session().is_none());
         assert!(p.ping_rtt.is_some());
         assert_eq!(p.last_error.as_deref(), Some("broken"));
+    }
+
+    #[test]
+    fn a_reopened_session_needs_every_check_again() {
+        let mut p = opened();
+        p.apply(Event::Version {
+            checked_at: now(),
+            versions: versions(),
+        });
+        p.apply(Event::Ping {
+            checked_at: now(),
+            rtt: Duration::from_millis(10),
+        });
+        p.apply(Event::Load {
+            checked_at: now(),
+            health: health(),
+        });
+        assert_eq!(p.state, ProbeState::Ready);
+        p.apply(Event::Reopening {
+            error: "broken".to_string(),
+        });
+        p.apply(Event::Opened {
+            session: session(),
+            since: SystemTime::UNIX_EPOCH,
+        });
+        p.apply(Event::Version {
+            checked_at: now(),
+            versions: versions(),
+        });
+        assert!(
+            p.ready_session().is_none(),
+            "ping and load not yet checked on the new session"
+        );
+        assert_eq!(p.state, ProbeState::Checking);
     }
 
     #[test]

@@ -492,10 +492,14 @@ impl Core {
                         let response = match self.probe.as_ref() {
                             None => command::UnprobeResponse::NotProbing,
                             Some(p) => {
-                                // A connection attempt registers over this session; let it finish first.
+                                // A connection registers, and a disconnect unregisters, over this session; let them finish first.
                                 let registering =
                                     matches!(&self.phase, Phase::Connecting(conn) if conn.destination.key() == p.key());
-                                if registering {
+                                let unregistering = self
+                                    .ongoing_disconnections
+                                    .iter()
+                                    .any(|d| d.destination.same_exit(p.destination()));
+                                if registering || unregistering {
                                     command::UnprobeResponse::in_use(p.destination().clone())
                                 } else {
                                     let destination = p.destination().clone();

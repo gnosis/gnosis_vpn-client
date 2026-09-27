@@ -900,6 +900,14 @@ impl TryFrom<Config> for config::Config {
         if ramp.interval.is_zero() || ramp.duration.is_zero() {
             return Err(config::Error::SurbRampZero);
         }
+        // Zero feeds `time::sleep(0)` timers, which would hammer the exit back to back.
+        let intervals = &connection.health_check_intervals;
+        let any_interval_zero = [intervals.version, intervals.ping, intervals.load, intervals.tunnel_ping]
+            .iter()
+            .any(Duration::is_zero);
+        if any_interval_zero {
+            return Err(config::Error::HealthCheckIntervalZero);
+        }
         let default_targets = DefaultTargets {
             gnosis_vpn_server: default_gnosis_vpn_server,
             wireguard_server: default_wireguard_server,
@@ -1450,6 +1458,30 @@ version = 7
             ));
             let result: Result<crate::config::Config, _> = cfg.try_into();
             assert!(result.is_err(), "expected rejection for `{line}`");
+        }
+    }
+
+    #[test]
+    fn health_check_intervals_reject_zero() {
+        for line in &[
+            "version = \"0s\"",
+            "ping = \"0s\"",
+            "load = \"0s\"",
+            "tunnel_ping = \"0s\"",
+        ] {
+            let cfg = parse(&format!(
+                r#####"
+version = 7
+
+[connection.health_check_intervals]
+{line}
+"#####
+            ));
+            let result: Result<crate::config::Config, _> = cfg.try_into();
+            assert!(
+                matches!(result, Err(crate::config::Error::HealthCheckIntervalZero)),
+                "expected rejection for `{line}`"
+            );
         }
     }
 
