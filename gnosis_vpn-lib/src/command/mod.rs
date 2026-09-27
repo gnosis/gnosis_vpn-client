@@ -301,6 +301,10 @@ pub enum ProbeResponse {
     AlreadyProbing {
         destination: Destination,
     },
+    /// The probe named here is still in use, so it cannot be replaced yet.
+    InUse {
+        destination: Box<Destination>,
+    },
     UnableToProbe {
         destination: Destination,
         route_health: RouteHealthState,
@@ -319,7 +323,7 @@ pub enum UnprobeResponse {
     Closing {
         destination: Box<Destination>,
     },
-    /// A connection is registering, or a disconnect unregistering, over the session right now.
+    /// A connection still needs the session, or is waiting for this very probe.
     InUse {
         destination: Box<Destination>,
     },

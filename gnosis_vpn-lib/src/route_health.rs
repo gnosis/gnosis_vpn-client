@@ -174,6 +174,26 @@ impl RouteHealth {
         matches!(self.state, RouteHealthState::Unrecoverable { .. })
     }
 
+    /// A config-level refusal; only a config change lifts it, so probing it is pointless.
+    pub(crate) fn is_not_allowed(&self) -> bool {
+        matches!(
+            self.state,
+            RouteHealthState::Unrecoverable {
+                reason: UnrecoverableReason::NotAllowed
+            }
+        )
+    }
+
+    /// The exit's own version latch; an upgrade lifts it, so it stays worth re-checking.
+    pub(crate) fn is_incompatible_api(&self) -> bool {
+        matches!(
+            self.state,
+            RouteHealthState::Unrecoverable {
+                reason: UnrecoverableReason::IncompatibleApiVersion { .. }
+            }
+        )
+    }
+
     /// Record what the walk found. Returns true iff the route just became routable.
     pub(crate) fn apply_walk(&mut self, walk: RouteWalk) -> bool {
         let routable = matches!(walk, RouteWalk::Paths { .. });
@@ -221,13 +241,7 @@ impl RouteHealth {
 
     /// An exit upgrade unlatches the route; the next graph walk decides routability again.
     fn clear_incompatible(&mut self) {
-        let incompatible = matches!(
-            self.state,
-            RouteHealthState::Unrecoverable {
-                reason: UnrecoverableReason::IncompatibleApiVersion { .. }
-            }
-        );
-        if incompatible {
+        if self.is_incompatible_api() {
             tracing::info!(destination = %self.key, "exit API version compatible again");
             self.state = RouteHealthState::NotRoutable;
         }
@@ -517,6 +531,22 @@ mod tests {
         latched.apply_api_versions(&["v99".to_string()]);
         latched.apply_api_versions(&["v1".to_string()]);
         assert!(not_allowed(latched.state()), "NotAllowed keeps precedence");
+    }
+
+    #[test]
+    fn only_the_config_latch_blocks_a_probe() {
+        let routable = RouteHealth::new(&destination(1), false, false);
+        assert!(!routable.is_not_allowed());
+        assert!(!routable.is_incompatible_api());
+
+        let insecure = RouteHealth::new(&destination(0), false, false);
+        assert!(insecure.is_not_allowed());
+        assert!(!insecure.is_incompatible_api());
+
+        let mut incompatible = RouteHealth::new(&destination(1), false, false);
+        incompatible.apply_api_versions(&["v99".to_string()]);
+        assert!(!incompatible.is_not_allowed(), "an upgrade can still lift this one");
+        assert!(incompatible.is_incompatible_api());
     }
 
     #[test]

@@ -491,21 +491,13 @@ impl Core {
                     WorkerCommand::Unprobe => {
                         let response = match self.probe.as_ref() {
                             None => command::UnprobeResponse::NotProbing,
+                            Some(p) if self.probe_in_use(p.destination()) => {
+                                command::UnprobeResponse::in_use(p.destination().clone())
+                            }
                             Some(p) => {
-                                // A connection registers, and a disconnect unregisters, over this session; let them finish first.
-                                let registering =
-                                    matches!(&self.phase, Phase::Connecting(conn) if conn.destination.key() == p.key());
-                                let unregistering = self
-                                    .ongoing_disconnections
-                                    .iter()
-                                    .any(|d| d.destination.same_exit(p.destination()));
-                                if registering || unregistering {
-                                    command::UnprobeResponse::in_use(p.destination().clone())
-                                } else {
-                                    let destination = p.destination().clone();
-                                    self.stop_probe();
-                                    command::UnprobeResponse::closing(destination)
-                                }
+                                let destination = p.destination().clone();
+                                self.stop_probe();
+                                command::UnprobeResponse::closing(destination)
                             }
                         };
                         let _ = resp.send(Response::Unprobe(response));
@@ -973,6 +965,13 @@ impl Core {
                     tracing::debug!(generation, ?event, "dropping event of a replaced probe");
                     return true;
                 };
+                if let probe::Event::OpenAborted { error } = &event {
+                    tracing::error!(destination = %probe.destination(), %error, "probe cannot open a session - stopping it");
+                    self.stop_probe();
+                    let request = CoreToWorker::RequestToRoot(RequestToRoot::ProbeStopped);
+                    let _ = self.outgoing_sender.send(request).await;
+                    return true;
+                }
                 let key = probe.key();
                 let was_ready = probe.ready_session().is_some();
                 let reopening = matches!(event, probe::Event::Reopening { .. });
@@ -1333,15 +1332,16 @@ impl Core {
             }
         }
 
-        let probe_vanished = self
-            .probe
-            .as_ref()
-            .is_some_and(|p| !self.config.destinations.contains_key(&p.key()) && Some(p.key()) != active);
-        if probe_vanished {
-            tracing::info!("probed exit vanished from discovery - closing its session");
+        let probe_stale = self.probe.as_ref().is_some_and(|p| {
+            probe_is_stale(self.config.destinations.get(&p.key()), p.destination()) && Some(p.key()) != active
+        });
+        if probe_stale {
+            tracing::info!("probed exit gone or moved in discovery - closing its session");
             self.stop_probe();
             let request = CoreToWorker::RequestToRoot(RequestToRoot::ProbeStopped);
             let _ = self.outgoing_sender.send(request).await;
+            // A target waiting on that probe needs a fresh one against the current endpoints.
+            self.act_on_target(results_sender);
         }
 
         // A tracker that just started over needs a graph walk now, not on the lazy tick.
@@ -1636,7 +1636,7 @@ impl Core {
             return command::ProbeResponse::NotReady;
         }
         if let Some(rh) = self.route_healths.get(&dest.key())
-            && rh.is_unrecoverable()
+            && rh.is_not_allowed()
         {
             return command::ProbeResponse::UnableToProbe {
                 destination: dest,
@@ -1646,7 +1646,17 @@ impl Core {
         if self.probe.as_ref().is_some_and(|p| p.key() == dest.key()) {
             return command::ProbeResponse::AlreadyProbing { destination: dest };
         }
-        match self.start_probe(&dest, results_sender) {
+        if let Some(in_use) = self
+            .probe
+            .as_ref()
+            .map(Probe::destination)
+            .filter(|probed| self.probe_in_use(probed))
+        {
+            return command::ProbeResponse::InUse {
+                destination: Box::new(in_use.clone()),
+            };
+        }
+        match self.start_probe(&dest, true, results_sender) {
             Some(previous) => command::ProbeResponse::Replaced {
                 destination: dest,
                 previous: Box::new(previous),
@@ -1671,7 +1681,7 @@ impl Core {
             let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::DestinationNotFound));
             return;
         };
-        if !route_health.is_routable() {
+        if !route_health.is_routable() && !route_health.is_incompatible_api() {
             let state = route_health.state().clone();
             let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::unable(dest, state)));
             return;
@@ -1712,17 +1722,41 @@ impl Core {
         });
     }
 
+    /// The exit the current target resolves to, once discovery knows it.
+    fn target_key(&self) -> Option<ExitKey> {
+        let target = self.target.as_ref()?;
+        self.config.destinations.by_connect_id(target).map(Destination::key)
+    }
+
+    /// Whether dropping the probe of `probed` would pull the session out from under someone.
+    fn probe_in_use(&self, probed: &Destination) -> bool {
+        probe_in_use(&self.phase, &self.ongoing_disconnections, self.target_key(), probed)
+    }
+
     /// Starts probing `dest`, replacing any other probe. Returns the destination it replaced.
-    fn start_probe(&mut self, dest: &Destination, results_sender: &mpsc::Sender<Results>) -> Option<Destination> {
+    fn start_probe(
+        &mut self,
+        dest: &Destination,
+        requested: bool,
+        results_sender: &mpsc::Sender<Results>,
+    ) -> Option<Destination> {
         let hopr = self.hopr.clone()?;
         let replaced = self.stop_probe();
         self.probe_generation += 1;
-        // A quick check in flight for this exit already holds a session; the probe takes it over.
-        let adopt = self
-            .route_healths
-            .get(&dest.key())
-            .is_some_and(RouteHealth::is_quick_probing);
-        tracing::info!(destination = %dest, generation = self.probe_generation, adopting = adopt, "starting probe");
+        let start = probe::Start {
+            requested,
+            // A quick check in flight for this exit already holds a session; the probe takes it over.
+            adopt_quick_session: self
+                .route_healths
+                .get(&dest.key())
+                .is_some_and(RouteHealth::is_quick_probing),
+        };
+        tracing::info!(
+            destination = %dest,
+            generation = self.probe_generation,
+            adopting = start.adopt_quick_session,
+            "starting probe"
+        );
         self.probe = Some(Probe::start(
             dest,
             self.probe_generation,
@@ -1730,9 +1764,20 @@ impl Core {
             self.config.connection.clone(),
             &self.cancel_on_shutdown,
             results_sender,
-            adopt,
+            start,
         ));
         replaced
+    }
+
+    /// Closes a probe that only existed for a target that is now gone; a requested one stays.
+    fn stop_implicit_probe(&mut self) {
+        let orphaned = self
+            .probe
+            .as_ref()
+            .is_some_and(|p| !p.is_requested() && !self.probe_in_use(p.destination()));
+        if orphaned {
+            self.stop_probe();
+        }
     }
 
     /// Dropping the probe cancels its task, which closes the session.
@@ -2013,6 +2058,8 @@ impl Core {
                 }
                 _ => {}
             }
+            // Root never counted this one towards the idle countdown, so stopping it needs no message.
+            self.stop_implicit_probe();
             return;
         };
         let Some(dest) = self.config.destinations.by_connect_id(&target).cloned() else {
@@ -2036,7 +2083,7 @@ impl Core {
                     }
                     ConnectStep::StartProbe => {
                         tracing::info!(destination = %dest, "opening probe session before connecting");
-                        self.start_probe(&dest, results_sender);
+                        self.start_probe(&dest, false, results_sender);
                     }
                     ConnectStep::WaitProbe => {
                         tracing::debug!(destination = %dest, "waiting for the probe's initial checks before connecting");
@@ -2254,6 +2301,26 @@ fn connect_step(rh: &RouteHealth, probe: Option<&Probe>, key: ExitKey) -> Connec
     }
 }
 
+/// A probe whose exit is gone, or whose endpoints moved under it, talks to a server that is no longer current.
+fn probe_is_stale(current: Option<&Destination>, probed: &Destination) -> bool {
+    let Some(current) = current else { return true };
+    current.gnosis_vpn_server != probed.gnosis_vpn_server || current.wireguard_server != probed.wireguard_server
+}
+
+/// The probe's session still has a user, or a target is waiting on it; either way it must not be dropped.
+fn probe_in_use(
+    phase: &Phase,
+    disconnecting: &[connection::down::Down],
+    target: Option<ExitKey>,
+    probed: &Destination,
+) -> bool {
+    let registering = matches!(phase, Phase::Connecting(conn) if conn.destination.same_exit(probed));
+    let unregistering = disconnecting.iter().any(|d| d.destination.same_exit(probed));
+    // Nothing restarts a probe for an already accepted target, so dropping it strands the connection.
+    let awaited = matches!(phase, Phase::HoprRunning) && target == Some(probed.key());
+    registering || unregistering || awaited
+}
+
 /// Trackers to restart: `Unrecoverable` latches, so a moved target needs a fresh tracker to be tried again.
 fn latched_on_a_moved_target(
     destinations: &Destinations,
@@ -2370,6 +2437,57 @@ mod tests {
         let keys = latched_on_a_moved_target(&destinations, &route_healths, &before);
 
         assert!(keys.is_empty());
+    }
+
+    fn disconnection(dest: &Destination) -> connection::down::Down {
+        connection::down::Down {
+            destination: dest.clone(),
+            phase: (SystemTime::UNIX_EPOCH, connection::down::Phase::UnregisterWg),
+            wg_public_key: "key".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_free_probe_may_be_dropped() {
+        let probed = destination("exit");
+        assert!(!probe_in_use(&Phase::HoprRunning, &[], None, &probed));
+    }
+
+    #[test]
+    fn a_probe_being_registered_or_unregistered_over_is_in_use() {
+        let probed = destination("exit");
+        let connecting = Phase::Connecting(attempt("exit", UpPhase::RegisterWg));
+        assert!(probe_in_use(&connecting, &[], None, &probed));
+        assert!(probe_in_use(
+            &Phase::HoprRunning,
+            &[disconnection(&probed)],
+            None,
+            &probed
+        ));
+    }
+
+    #[test]
+    fn a_probe_an_accepted_target_waits_for_is_in_use() {
+        let probed = destination("exit");
+        assert!(probe_in_use(&Phase::HoprRunning, &[], Some(probed.key()), &probed));
+    }
+
+    #[test]
+    fn a_connected_target_no_longer_holds_its_probe() {
+        let probed = destination("exit");
+        let connected = Phase::Connected(attempt("exit", UpPhase::RegisterWg));
+        assert!(!probe_in_use(&connected, &[], Some(probed.key()), &probed));
+    }
+
+    #[test]
+    fn a_probe_is_stale_once_its_exit_is_gone_or_has_moved() {
+        let probed = destination("exit");
+        assert!(probe_is_stale(None, &probed));
+        assert!(!probe_is_stale(Some(&probed), &probed));
+
+        let mut moved = probed.clone();
+        moved.gnosis_vpn_server = "172.30.0.2:8000".parse().expect("valid socket address");
+        assert!(probe_is_stale(Some(&moved), &probed));
     }
 
     #[test]

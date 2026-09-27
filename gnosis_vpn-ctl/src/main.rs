@@ -237,6 +237,9 @@ fn pretty_print(resp: &Response) {
         Response::Probe(command::ProbeResponse::AlreadyProbing { destination: dest }) => {
             println!("Already probing {dest}");
         }
+        Response::Probe(command::ProbeResponse::InUse { destination: dest }) => {
+            eprintln!("Probe of {dest} is still in use by a connection - retry once connected");
+        }
         Response::Probe(command::ProbeResponse::UnableToProbe {
             destination: dest,
             route_health,
@@ -259,7 +262,7 @@ fn pretty_print(resp: &Response) {
             println!("Closing probe of {dest}");
         }
         Response::Unprobe(command::UnprobeResponse::InUse { destination: dest }) => {
-            eprintln!("Probe of {dest} is registering a connection right now - retry once connected");
+            eprintln!("Probe of {dest} is still in use by a connection - retry once connected");
         }
         Response::Unprobe(command::UnprobeResponse::NotProbing) => {
             eprintln!("Currently not probing any destination");
@@ -505,6 +508,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Probe(command::ProbeResponse::Probing { .. }) => exitcode::OK,
         Response::Probe(command::ProbeResponse::Replaced { .. }) => exitcode::OK,
         Response::Probe(command::ProbeResponse::AlreadyProbing { .. }) => exitcode::OK,
+        Response::Probe(command::ProbeResponse::InUse { .. }) => exitcode::UNAVAILABLE,
         Response::Probe(command::ProbeResponse::UnableToProbe { .. }) => exitcode::UNAVAILABLE,
         Response::Probe(command::ProbeResponse::NotReady) => exitcode::UNAVAILABLE,
         Response::Probe(command::ProbeResponse::DestinationNotFound) => exitcode::UNAVAILABLE,

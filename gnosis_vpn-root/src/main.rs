@@ -916,13 +916,15 @@ impl DaemonState {
                         .send(KeepAliveInstruction::Restart)
                         .await;
                     Ok(())
-                } else if let Some(response) = self.offline_response(&w_cmd) {
-                    let _ = resp.send(response).map_err(|error| {
-                        tracing::error!(?error, "socket command response channel closed");
-                    });
-                    Ok(())
                 } else {
-                    let _ = resp.send(self.worker_gone_response()).map_err(|error| {
+                    let response = self
+                        .offline_response(&w_cmd)
+                        .unwrap_or_else(|| self.worker_gone_response());
+                    // The command suspended the countdown before we knew there was no worker; undo that.
+                    if matches!(w_cmd, WorkerCommand::Connect(_) | WorkerCommand::Probe(_)) {
+                        self.probe_ended().await;
+                    }
+                    let _ = resp.send(response).map_err(|error| {
                         tracing::error!(?error, "socket command response channel closed");
                     });
                     Ok(())

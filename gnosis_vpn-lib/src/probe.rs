@@ -97,6 +97,10 @@ pub(crate) enum Event {
     OpenFailed {
         error: String,
     },
+    /// The probe can never open a session with this config; retrying would loop forever.
+    OpenAborted {
+        error: String,
+    },
     Version {
         checked_at: SystemTime,
         versions: Versions,
@@ -118,9 +122,18 @@ pub(crate) enum Event {
     },
 }
 
+/// What Core knows about a probe that its task cannot derive itself.
+pub(crate) struct Start {
+    /// `probe <id>` asked for it; a probe opened on the way into a connection did not.
+    pub(crate) requested: bool,
+    /// A quick check of this exit is in flight; adopt its session instead of opening a second one.
+    pub(crate) adopt_quick_session: bool,
+}
+
 pub(crate) struct Probe {
     destination: Destination,
     generation: u64,
+    requested: bool,
     state: ProbeState,
     session: Option<SessionClientMetadata>,
     since: Option<SystemTime>,
@@ -144,13 +157,13 @@ impl Probe {
         options: Options,
         cancel_on_shutdown: &CancellationToken,
         sender: &mpsc::Sender<Results>,
-        adopt_quick_probe: bool,
+        start: Start,
     ) -> Self {
         let cancel = cancel_on_shutdown.child_token();
         let task_cancel = cancel.clone();
         let destination = dest.clone();
         let sender = sender.clone();
-        let (adoption, adopt) = match adopt_quick_probe {
+        let (adoption, adopt) = match start.adopt_quick_session {
             true => {
                 let (tx, rx) = oneshot::channel();
                 (Some(tx), Some(rx))
@@ -165,6 +178,7 @@ impl Probe {
         Self {
             destination: dest.clone(),
             generation,
+            requested: start.requested,
             state: ProbeState::Opening,
             session: None,
             since: None,
@@ -202,6 +216,10 @@ impl Probe {
         self.generation
     }
 
+    pub(crate) fn is_requested(&self) -> bool {
+        self.requested
+    }
+
     /// The session once every check has passed on it; what a connection may register over.
     pub(crate) fn ready_session(&self) -> Option<&SessionClientMetadata> {
         match self.state {
@@ -227,7 +245,7 @@ impl Probe {
                 self.load = None;
                 self.consecutive_failures = 0;
             }
-            Event::OpenFailed { error } => {
+            Event::OpenFailed { error } | Event::OpenAborted { error } => {
                 self.state = ProbeState::Opening;
                 self.last_error = Some(error);
             }
@@ -313,7 +331,7 @@ async fn run_probe(
         Ok(surb) => surb,
         Err(err) => {
             tracing::error!(%destination, %err, "probe cannot open a session with this surb config");
-            send(Event::OpenFailed { error: err.to_string() }).await;
+            send(Event::OpenAborted { error: err.to_string() }).await;
             return;
         }
     };
@@ -436,14 +454,15 @@ async fn run_quick_probe(
 
 async fn quick_checks(bound_host: std::net::SocketAddr) -> Result<QuickProbeOutcome, String> {
     let client = reqwest::Client::new();
-    let started = Instant::now();
     let versions = gvpn_client::versions(&client, bound_host, QUICKPROBE_HTTP_TIMEOUT)
         .await
         .map_err(|err| format!("versions check failed: {err}"))?;
-    let rtt = started.elapsed();
+    // The second request, because the first one still carries the session's warm-up cost.
+    let started = Instant::now();
     let health = gvpn_client::health(&client, bound_host, QUICKPROBE_HTTP_TIMEOUT)
         .await
         .map_err(|err| format!("health check failed: {err}"))?;
+    let rtt = started.elapsed();
     Ok(QuickProbeOutcome {
         api_version: select_api_version(&versions.versions).map(str::to_owned),
         versions,
@@ -692,6 +711,7 @@ mod tests {
         Probe {
             destination: destination(),
             generation: 1,
+            requested: true,
             state: ProbeState::Opening,
             session: None,
             since: None,
