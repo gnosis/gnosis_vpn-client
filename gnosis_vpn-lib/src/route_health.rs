@@ -610,4 +610,17 @@ mod tests {
         failing.apply_quick_probe(&Err("boom".to_string()), now);
         assert!(failing.is_routable(), "a failed check says nothing about the API");
     }
+
+    // The tag flattens into the check only because it is a newtype variant over a struct.
+    #[test]
+    fn a_checked_quick_probe_round_trips_internally_tagged() {
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        rh.apply_quick_probe(&Ok(outcome(&["v1"])), SystemTime::now());
+
+        let json = serde_json::to_string(rh.quick_probe().expect("a check was applied")).expect("serialize");
+        assert!(json.contains(r#""state":"Checked""#), "{json}");
+
+        let back: QuickProbeState = serde_json::from_str(&json).expect("deserialize");
+        assert!(matches!(back, QuickProbeState::Checked(check) if check.api_version.as_deref() == Some("v1")));
+    }
 }
