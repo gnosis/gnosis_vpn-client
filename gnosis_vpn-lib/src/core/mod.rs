@@ -90,8 +90,6 @@ pub struct Core {
     /// One graph walk in flight at a time; replaced on every spawn.
     cancel_routability: CancellationToken,
     announced_peers_loop_running: bool,
-    /// Live transport peers, kept because a 0-hop route only works against an exit we are connected to.
-    connected_peers: HashSet<Address>,
     /// Mirrors root's `probing`: it holds the idle countdown for an explicit probe until we say the probe is gone.
     root_probe_hold: bool,
 
@@ -222,7 +220,6 @@ impl Core {
             wg_pump_tasks: TaskTracker::new(),
             cancel_routability: cancel_on_shutdown.child_token(),
             announced_peers_loop_running: false,
-            connected_peers: HashSet::new(),
             root_probe_hold: false,
 
             // user provided data
@@ -721,18 +718,17 @@ impl Core {
                 self.on_hopr_running(results_sender);
             }
 
-            Results::Peers { res } => match res {
-                Ok(crate::peer::Peers { announced, connected }) => {
-                    tracing::info!(num_announced = %announced.len(), num_connected = %connected.len(), "fetched peers");
+            Results::AnnouncedPeers { res } => match res {
+                Ok(announced) => {
+                    tracing::info!(num_announced = %announced.len(), "fetched announced peers");
                     let peer_ips: Vec<net::Ipv4Addr> =
                         announced.values().flat_map(|p| p.ipv4_addrs.iter().copied()).collect();
-                    self.connected_peers = connected;
                     let _ = self
                         .outgoing_sender
                         .send(CoreToWorker::RequestToRoot(RequestToRoot::UpdatePeerIps { peer_ips }))
                         .await;
                 }
-                Err(err) => tracing::error!(?err, "failed to fetch peers"),
+                Err(err) => tracing::error!(?err, "failed to fetch announced peers"),
             },
 
             Results::Routability { map } => {
@@ -1651,13 +1647,12 @@ impl Core {
             .iter()
             .map(|(key, dest)| (*key, dest.address, dest.routing))
             .collect();
-        let connected = self.connected_peers.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(probe::jitter(delay)).await;
-                    runner::routability(hopr, targets, connected, results_sender).await;
+                    runner::routability(hopr, targets, results_sender).await;
                 })
                 .await
         });
