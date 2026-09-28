@@ -1364,10 +1364,13 @@ impl Core {
         if probe_stale {
             tracing::info!("probed exit gone or moved in discovery - closing its session");
             self.stop_probe();
-            let request = CoreToWorker::RequestToRoot(RequestToRoot::ProbeStopped);
-            let _ = self.outgoing_sender.send(request).await;
             // A target waiting on that probe needs a fresh one against the current endpoints.
             self.act_on_target(results_sender);
+            // Root's countdown hold belongs to an explicit probe; only release it if no replacement took over.
+            if !self.probe.as_ref().is_some_and(Probe::is_requested) {
+                let request = CoreToWorker::RequestToRoot(RequestToRoot::ProbeStopped);
+                let _ = self.outgoing_sender.send(request).await;
+            }
         }
 
         // A tracker that just started over needs a graph walk now, not on the lazy tick.
