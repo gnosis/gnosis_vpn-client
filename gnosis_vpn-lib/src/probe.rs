@@ -24,6 +24,8 @@ use crate::hopr::{Hopr, HoprError};
 pub use crate::gvpn_client::{Health, LoadAvg, Slots, Versions};
 
 const REOPEN_AFTER_FAILURES: u32 = 3;
+/// Roughly 50 s over the backoff curve below; past that a waiting target is better off in a fresh worker.
+const OPEN_ATTEMPTS: u32 = 5;
 const REOPEN_BACKOFF_STEP: Duration = Duration::from_secs(5);
 const REOPEN_BACKOFF_MAX: Duration = Duration::from_secs(60);
 
@@ -99,6 +101,10 @@ pub(crate) enum Event {
     },
     /// The probe can never open a session with this config; retrying would loop forever.
     OpenAborted {
+        error: String,
+    },
+    /// Every open attempt failed; a target waiting on this probe has to be told rather than left hanging.
+    OpenGaveUp {
         error: String,
     },
     Version {
@@ -250,7 +256,7 @@ impl Probe {
                 self.load = None;
                 self.consecutive_failures = 0;
             }
-            Event::OpenFailed { error } | Event::OpenAborted { error } => {
+            Event::OpenFailed { error } | Event::OpenAborted { error } | Event::OpenGaveUp { error } => {
                 self.state = ProbeState::Opening;
                 self.last_error = Some(error);
             }
@@ -351,7 +357,10 @@ async fn run_probe(
                 tracing::info!(%destination, "probe adopted the quick check's session");
                 session
             }
-            None => open_until_success(hopr.clone(), &destination, &options, &surb, &send).await,
+            None => match open_session(hopr.clone(), &destination, &options, &surb, &send).await {
+                Some(session) => session,
+                None => return,
+            },
         };
         send(Event::Opened {
             session: session.meta.clone(),
@@ -373,21 +382,21 @@ async fn run_probe(
     }
 }
 
-/// Retries with growing backoff until a bridge session is open; each failure is reported as `OpenFailed`.
-async fn open_until_success<F, Fut>(
+/// Opens a bridge session with growing backoff; `None` once `OPEN_ATTEMPTS` failed, reported as `OpenGaveUp`.
+async fn open_session<F, Fut>(
     hopr: Arc<Hopr>,
     destination: &Destination,
     options: &Options,
     surb: &SurbParams,
     send: &F,
-) -> ProbeSession
+) -> Option<ProbeSession>
 where
     F: Fn(Event) -> Fut,
     Fut: Future<Output = ()>,
 {
     let mut open_attempt = 0;
     loop {
-        match ProbeSession::open(
+        let err = match ProbeSession::open(
             hopr.clone(),
             destination,
             options,
@@ -396,15 +405,19 @@ where
         )
         .await
         {
-            Ok(session) => return session,
-            Err(err) => {
-                open_attempt += 1;
-                let delay = reopen_backoff(open_attempt);
-                tracing::warn!(%destination, ?err, ?delay, "opening probe session failed - retrying");
-                send(Event::OpenFailed { error: err.to_string() }).await;
-                time::sleep(delay).await;
-            }
+            Ok(session) => return Some(session),
+            Err(err) => err.to_string(),
+        };
+        open_attempt += 1;
+        if open_attempt >= OPEN_ATTEMPTS {
+            tracing::error!(%destination, %err, attempts = OPEN_ATTEMPTS, "opening probe session kept failing - giving up");
+            send(Event::OpenGaveUp { error: err }).await;
+            return None;
         }
+        let delay = reopen_backoff(open_attempt);
+        tracing::warn!(%destination, %err, ?delay, "opening probe session failed - retrying");
+        send(Event::OpenFailed { error: err }).await;
+        time::sleep(delay).await;
     }
 }
 

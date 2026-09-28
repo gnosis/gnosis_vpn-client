@@ -979,6 +979,18 @@ impl Core {
                     let _ = self.outgoing_sender.send(request).await;
                     return true;
                 }
+                if let probe::Event::OpenGaveUp { error } = &event {
+                    let key = probe.key();
+                    tracing::error!(destination = %probe.destination(), %error, "probe gave up opening a session - stopping it");
+                    self.stop_probe();
+                    if let Some(rh) = self.route_healths.get_mut(&key) {
+                        rh.with_error(error.clone());
+                    }
+                    let request = CoreToWorker::RequestToRoot(RequestToRoot::ProbeStopped);
+                    let _ = self.outgoing_sender.send(request).await;
+                    // Root keeps the killswitch and the target across a restart, so a fresh worker is the last thing left to try.
+                    return self.target_key() != Some(key);
+                }
                 let key = probe.key();
                 let was_ready = probe.ready_session().is_some();
                 let reopening = matches!(event, probe::Event::Reopening { .. });
