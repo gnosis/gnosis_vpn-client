@@ -3658,7 +3658,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "5.0.0"
-source = "git+https://github.com/0xCurvy/edge-client.git?rev=e087034eafd4ed94854340d47c2835adecccfbcc#e087034eafd4ed94854340d47c2835adecccfbcc"
+source = "git+https://github.com/0xCurvy/edge-client.git?rev=aa42fa26e4a92e1df029a02e4b5438e3aab48ae7#aa42fa26e4a92e1df029a02e4b5438e3aab48ae7"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -5151,7 +5151,6 @@ dependencies = [
  "futures-concurrency",
  "futures-time",
  "hopr-api",
- "hopr-chain-connector",
  "hopr-utilities 0.14.0",
  "humantime-serde",
  "lazy_static",

@@ -535,6 +535,6 @@ max_deposit_retries = 5
 
         let result = runtime_config(parse(toml));
         assert!(result.connection.pix.bridge.enabled);
-        assert_eq!(result.pix_strategy.max_deposit_retries, 5);
+        assert_eq!(result.pix_strategy.max_deposit_retries, Some(5));
     }
 }
