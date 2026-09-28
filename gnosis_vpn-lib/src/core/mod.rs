@@ -1359,21 +1359,15 @@ impl Core {
         }
 
         let probe_stale = self.probe.as_ref().is_some_and(|p| {
-            probe_is_stale(self.config.destinations.get(&p.key()), p.destination())
-                && !self.probe_session_busy(p.destination())
+            // An explicit probe holds its own destination like a connection does; only a connect-owned one follows discovery.
+            let droppable = !p.is_requested() && !self.probe_session_busy(p.destination());
+            droppable && probe_is_stale(self.config.destinations.get(&p.key()), p.destination())
         });
         if probe_stale {
             tracing::info!("probed exit gone or moved in discovery - closing its session");
-            let previous = self.probe.as_ref().map(|p| (p.key(), p.is_requested()));
             self.stop_probe();
             // A target waiting on that probe needs a fresh one against the current endpoints.
             self.act_on_target(results_sender);
-            // A discovery move relocates the exit; the user's own probe of it must not become connect-owned.
-            if let Some((key, true)) = previous
-                && let Some(probe) = self.probe.as_mut().filter(|p| p.key() == key)
-            {
-                probe.mark_requested();
-            }
         }
 
         // A tracker that just started over needs a graph walk now, not on the lazy tick.
