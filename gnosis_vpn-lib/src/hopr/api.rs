@@ -428,6 +428,16 @@ impl Hopr {
             tracing::debug!(%dest, "destination has no packet key on chain - not routable");
             return Ok(RouteWalk::NotAnnounced { walked_at: now });
         };
+        // hopr-lib resolves a 0-hop route directly, off the graph, so it needs no channel to the exit.
+        if routing.hop_count() == 0 {
+            return Ok(RouteWalk::Paths {
+                walked_at: now,
+                count: 1,
+                distinct_first_relays: 0,
+                best_relays: Vec::new(),
+                best_value: 1.0,
+            });
+        }
         let graph = self.edgli.graph();
         let length = NonZeroUsize::new(routing.hop_count() + 1).expect("hops + 1 is at least 1");
         let planner = &self.edgli.config().protocol.path_planner;
