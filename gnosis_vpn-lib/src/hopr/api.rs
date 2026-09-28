@@ -368,7 +368,6 @@ impl Hopr {
         &self,
         sizing: edgli::strategy::IncentiveConfiguration,
         pix: PixConfig,
-        blokli_url: &url::Url,
         state_home: &std::path::Path,
     ) -> Result<AbortHandle, HoprError> {
         let mut cfg = edgli::strategy::default_strategy_cfg(&sizing)
@@ -386,7 +385,7 @@ impl Hopr {
         cfg.strategies
             .retain(|s| !matches!(s, edgli::strategy::EdgeStrategyKind::Pix(_)));
         cfg.strategies.push(edgli::strategy::EdgeStrategyKind::Pix(Box::new(
-            pix.to_entry_config(blokli_url, state_home),
+            pix.to_entry_config(state_home),
         )));
         self.edgli
             .run_reactor_from_cfg(cfg)

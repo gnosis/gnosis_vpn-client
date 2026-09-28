@@ -258,9 +258,10 @@ path    = { hops = 1 }
 ## pix_strategy section - exit-incentivization payment strategy (pays the Exit per byte)
 ##
 ## Tunes the parameters of the global PIX settlement reactor, shared by every session that has
-## PIX enabled (see connection.pix above for per-session-type enablement). Deposits are paid
-## from the Safe (via execTransactionFromModule), same account the channel-lifecycle strategy
-## stakes channels from -- see min_safe_hopr_reserve below to keep PIX from spending that budget.
+## PIX enabled (see connection.pix above for per-session-type enablement). Deposits settle
+## through the Curvy deposit pool: on its first deposit it shields a float from the Safe (the same
+## account the channel-lifecycle strategy stakes channels from) and allocates every deposit out of
+## that float. Its deployment settings come from the HOPRD_CURVY_* environment variables.
 
 # [pix_strategy]
 # wxHOPR charged per byte of the agreed per-SSA quota; default: 1 wxHOPR
@@ -275,6 +276,7 @@ path    = { hops = 1 }
 # deposit_buffer_period = "500ms"
 # how long to poll a stealth address for a deposit to land; default: 60s
 # max_deposit_tracking_time = "60s"
+# pix-test pool only, ignored with a warning by the Curvy pool:
 # additional deposit-transfer attempts beyond the first; default: 3
 # max_deposit_retries = 3
 # wxHOPR the Safe must still hold after a deposit, refused if a deposit would breach it; default: 0

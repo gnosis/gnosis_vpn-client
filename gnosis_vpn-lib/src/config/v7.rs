@@ -547,14 +547,8 @@ impl From<Option<PixStrategy>> for PixConfig {
                 .as_ref()
                 .and_then(|p| p.max_deposit_tracking_time)
                 .unwrap_or(def.max_deposit_tracking_time),
-            max_deposit_retries: v
-                .as_ref()
-                .and_then(|p| p.max_deposit_retries)
-                .unwrap_or(def.max_deposit_retries),
-            min_safe_hopr_reserve: v
-                .as_ref()
-                .and_then(|p| p.min_safe_hopr_reserve)
-                .unwrap_or(def.min_safe_hopr_reserve),
+            max_deposit_retries: v.as_ref().and_then(|p| p.max_deposit_retries),
+            min_safe_hopr_reserve: v.as_ref().and_then(|p| p.min_safe_hopr_reserve),
         }
     }
 }
@@ -1802,8 +1796,8 @@ min_safe_hopr_reserve = "10 wxHOPR"
         assert_eq!(converted.spend_window, Duration::from_secs(2 * 60 * 60));
         assert_eq!(converted.deposit_buffer_period, Duration::from_millis(250));
         assert_eq!(converted.max_deposit_tracking_time, Duration::from_secs(30));
-        assert_eq!(converted.max_deposit_retries, 5);
-        assert_eq!(converted.min_safe_hopr_reserve, "10 wxHOPR".parse().unwrap());
+        assert_eq!(converted.max_deposit_retries, Some(5));
+        assert_eq!(converted.min_safe_hopr_reserve, Some("10 wxHOPR".parse().unwrap()));
     }
 
     #[test]
@@ -1819,7 +1813,7 @@ max_deposit_retries = 7
         let pix_strategy = cfg.pix_strategy.expect("pix_strategy section present");
         let converted: PixConfig = Some(pix_strategy).into();
         let def = PixConfig::default();
-        assert_eq!(converted.max_deposit_retries, 7);
+        assert_eq!(converted.max_deposit_retries, Some(7));
         assert_eq!(converted.price_per_byte, def.price_per_byte);
         assert_eq!(converted.max_ssa_allocation, def.max_ssa_allocation);
         assert_eq!(converted.max_spend_per_window, def.max_spend_per_window);
