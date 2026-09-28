@@ -1346,7 +1346,8 @@ impl Core {
         }
 
         let probe_stale = self.probe.as_ref().is_some_and(|p| {
-            probe_is_stale(self.config.destinations.get(&p.key()), p.destination()) && Some(p.key()) != active
+            probe_is_stale(self.config.destinations.get(&p.key()), p.destination())
+                && !self.probe_session_busy(p.destination())
         });
         if probe_stale {
             tracing::info!("probed exit gone or moved in discovery - closing its session");
@@ -1743,6 +1744,11 @@ impl Core {
         self.config.destinations.by_connect_id(target).map(Destination::key)
     }
 
+    /// Whether someone is mid-exchange over the probe's session right now.
+    fn probe_session_busy(&self, probed: &Destination) -> bool {
+        probe_session_busy(&self.phase, &self.ongoing_disconnections, probed)
+    }
+
     /// Whether dropping the probe of `probed` would pull the session out from under someone.
     fn probe_in_use(&self, probed: &Destination) -> bool {
         probe_in_use(&self.phase, &self.ongoing_disconnections, self.target_key(), probed)
@@ -2097,6 +2103,16 @@ impl Core {
                         tracing::warn!(destination = %dest, route_health = ?rh.state(), "waiting for a route before connecting");
                     }
                     ConnectStep::StartProbe => {
+                        // A disconnect may still be unregistering over the current probe; its result re-runs this.
+                        if let Some(busy) = self
+                            .probe
+                            .as_ref()
+                            .map(Probe::destination)
+                            .filter(|probed| self.probe_session_busy(probed))
+                        {
+                            tracing::debug!(destination = %dest, %busy, "waiting for the ongoing disconnect before replacing its probe");
+                            return;
+                        }
                         tracing::info!(destination = %dest, "opening probe session before connecting");
                         // Replacing this exit's own stale probe must not demote an explicit one to connect-owned.
                         let requested = self
@@ -2330,6 +2346,17 @@ fn probe_is_stale(current: Option<&Destination>, probed: &Destination) -> bool {
     })
 }
 
+/// Whether closing this probe would pull its session out from under an exchange still running over it.
+fn probe_session_busy(phase: &Phase, disconnecting: &[connection::down::Down], probed: &Destination) -> bool {
+    let bridging =
+        matches!(phase, Phase::Connecting(conn) | Phase::Connected(conn) if conn.destination.same_exit(probed));
+    // Past ClosingBridge the down runner is done with the session; before it, closing the probe fails the unregister.
+    let unregistering = disconnecting
+        .iter()
+        .any(|d| d.destination.same_exit(probed) && d.phase.1 != connection::down::Phase::ClosingBridge);
+    bridging || unregistering
+}
+
 /// The probe's session still has a user, or a target is waiting on it; either way it must not be dropped.
 fn probe_in_use(
     phase: &Phase,
@@ -2500,6 +2527,41 @@ mod tests {
         let probed = destination("exit");
         let connected = Phase::Connected(attempt("exit", UpPhase::RegisterWg));
         assert!(!probe_in_use(&connected, &[], Some(probed.key()), &probed));
+    }
+
+    #[test]
+    fn a_probe_a_disconnect_still_unregisters_over_is_busy() {
+        let probed = destination("exit");
+        assert!(probe_session_busy(
+            &Phase::HoprRunning,
+            &[disconnection(&probed)],
+            &probed
+        ));
+        assert!(!probe_session_busy(&Phase::HoprRunning, &[], &probed));
+        let mut other = destination("other");
+        other.address = Address::from([2u8; 20]);
+        assert!(!probe_session_busy(
+            &Phase::HoprRunning,
+            &[disconnection(&other)],
+            &probed
+        ));
+    }
+
+    #[test]
+    fn a_disconnect_past_its_unregister_frees_the_probe() {
+        let probed = destination("exit");
+        let mut closing = disconnection(&probed);
+        closing.disconnect_evt(connection::down::Event::CloseBridge);
+        assert!(!probe_session_busy(&Phase::HoprRunning, &[closing], &probed));
+    }
+
+    #[test]
+    fn a_connection_bridging_over_its_probe_keeps_it_busy() {
+        let probed = destination("exit");
+        let connected = Phase::Connected(attempt("exit", UpPhase::RegisterWg));
+        assert!(probe_session_busy(&connected, &[], &probed));
+        let connecting = Phase::Connecting(attempt("exit", UpPhase::RegisterWg));
+        assert!(probe_session_busy(&connecting, &[], &probed));
     }
 
     #[test]
