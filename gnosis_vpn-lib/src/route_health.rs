@@ -11,13 +11,15 @@ use crate::log_output;
 use crate::probe::{Health, QuickProbeOutcome, Versions, select_api_version};
 use crate::serde_utils;
 
-/// Terminal failure modes. `NotAllowed` needs a config change; `IncompatibleApiVersion` an exit upgrade.
+/// Terminal failure modes. `NotAllowed` and `CannotOpenSession` need a config change; `IncompatibleApiVersion` an exit upgrade.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum UnrecoverableReason {
     /// 0-hop without `--allow-insecure`, or 2+ hops without `--allow-experimental`.
     NotAllowed,
     /// The exit server only offers API versions we do not support.
     IncompatibleApiVersion { server_versions: Vec<String> },
+    /// No session can be opened with this client's session config, so every retry aborts the same way.
+    CannotOpenSession { error: String },
 }
 
 /// Also the wire format shown by the CLI, so variant names are user-visible.
@@ -229,6 +231,17 @@ impl RouteHealth {
         }
     }
 
+    /// Latch a route whose probe can never open a session; nothing retries it, so a waiting target must see why.
+    pub(crate) fn set_cannot_open_session(&mut self, error: String) {
+        if self.is_unrecoverable() {
+            return;
+        }
+        tracing::warn!(destination = %self.key, %error, "probe cannot open a session with this config");
+        self.state = RouteHealthState::Unrecoverable {
+            reason: UnrecoverableReason::CannotOpenSession { error },
+        };
+    }
+
     /// Latch on an exit that speaks no API version we support. `NotAllowed` keeps precedence.
     fn set_incompatible(&mut self, server_versions: Vec<String>) {
         if self.is_unrecoverable() {
@@ -282,6 +295,9 @@ impl Display for UnrecoverableReason {
                 "exit server offers no compatible API version (server offers: {})",
                 server_versions.join(", ")
             ),
+            UnrecoverableReason::CannotOpenSession { error } => {
+                write!(f, "cannot open a session with this connection config: {error}")
+            }
         }
     }
 }
@@ -451,6 +467,21 @@ mod tests {
             *RouteHealth::new(&destination(0), true, false).state(),
             RouteHealthState::NotRoutable
         );
+    }
+
+    #[test]
+    fn a_probe_that_cannot_open_a_session_latches_the_route() {
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        rh.set_cannot_open_session("surb buffer too small".to_string());
+        assert!(rh.is_unrecoverable());
+        assert!(!rh.is_routable());
+    }
+
+    #[test]
+    fn a_not_allowed_route_keeps_its_reason_over_a_failed_open() {
+        let mut rh = RouteHealth::new(&destination(0), false, false);
+        rh.set_cannot_open_session("surb buffer too small".to_string());
+        assert!(not_allowed(rh.state()));
     }
 
     #[test]

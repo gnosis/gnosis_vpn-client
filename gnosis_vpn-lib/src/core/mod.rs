@@ -971,9 +971,9 @@ impl Core {
                     let key = probe.key();
                     tracing::error!(destination = %probe.destination(), %error, "probe cannot open a session - stopping it");
                     self.stop_probe();
-                    // The same config aborts every retry, so reporting it is all a waiting target gets.
+                    // The same config aborts every retry, so latch it - a restart would only loop, and nothing else re-drives the target.
                     if let Some(rh) = self.route_healths.get_mut(&key) {
-                        rh.with_error(error.clone());
+                        rh.set_cannot_open_session(error.clone());
                     }
                     let request = CoreToWorker::RequestToRoot(RequestToRoot::ProbeStopped);
                     let _ = self.outgoing_sender.send(request).await;
