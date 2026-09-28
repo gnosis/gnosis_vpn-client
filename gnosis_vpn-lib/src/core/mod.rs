@@ -92,6 +92,8 @@ pub struct Core {
     announced_peers_loop_running: bool,
     /// Announced exits, kept because a 0-hop route is only usable against a peer we can reach directly.
     announced_peers: HashSet<Address>,
+    /// Mirrors root's `probing`: it holds the idle countdown for an explicit probe until we say the probe is gone.
+    root_probe_hold: bool,
 
     // user provided data
     /// The connect id, resolved live - a cached clone goes stale on a discovery tick and cannot outlive a restart.
@@ -221,6 +223,7 @@ impl Core {
             cancel_routability: cancel_on_shutdown.child_token(),
             announced_peers_loop_running: false,
             announced_peers: HashSet::new(),
+            root_probe_hold: false,
 
             // user provided data
             target,
@@ -264,20 +267,18 @@ impl Core {
             tokio::select! {
                 // React to an incoming worker events
                 Some(event) = self.incoming_receiver.recv() => {
-                    if self.on_event(event, &results_sender).await {
-                        continue;
-                    } else {
+                    if !self.on_event(event, &results_sender).await {
                         break;
                     }
+                    self.sync_root_probe_hold().await;
                 }
 
                 // React to internal results from spawned runner tasks
                 Some(results) = results_receiver.recv() => {
-                    if self.on_results(results, &results_sender).await {
-                        continue;
-                    } else {
+                    if !self.on_results(results, &results_sender).await {
                         break;
                     }
+                    self.sync_root_probe_hold().await;
                 }
 
                 else => {
@@ -495,13 +496,17 @@ impl Core {
 
                     WorkerCommand::Unprobe => {
                         let response = match self.probe.as_ref() {
-                            None => command::UnprobeResponse::NotProbing,
+                            None => {
+                                self.root_probe_hold = false;
+                                command::UnprobeResponse::NotProbing
+                            }
                             Some(p) if self.probe_in_use(p.destination()) => {
                                 command::UnprobeResponse::in_use(p.destination().clone())
                             }
                             Some(p) => {
                                 let destination = p.destination().clone();
                                 self.stop_probe();
+                                self.root_probe_hold = false;
                                 command::UnprobeResponse::closing(destination)
                             }
                         };
@@ -979,8 +984,6 @@ impl Core {
                     if let Some(rh) = self.route_healths.get_mut(&key) {
                         rh.set_cannot_open_session(error.clone());
                     }
-                    let request = CoreToWorker::RequestToRoot(RequestToRoot::ProbeStopped);
-                    let _ = self.outgoing_sender.send(request).await;
                     return true;
                 }
                 if let probe::Event::OpenGaveUp { error } = &event {
@@ -990,8 +993,6 @@ impl Core {
                     if let Some(rh) = self.route_healths.get_mut(&key) {
                         rh.with_error(error.clone());
                     }
-                    let request = CoreToWorker::RequestToRoot(RequestToRoot::ProbeStopped);
-                    let _ = self.outgoing_sender.send(request).await;
                     // Root keeps the killswitch and the target across a restart, so a fresh worker is the last thing left to try.
                     return self.target_key() != Some(key);
                 }
@@ -1367,13 +1368,15 @@ impl Core {
         });
         if probe_stale {
             tracing::info!("probed exit gone or moved in discovery - closing its session");
+            let previous = self.probe.as_ref().map(|p| (p.key(), p.is_requested()));
             self.stop_probe();
             // A target waiting on that probe needs a fresh one against the current endpoints.
             self.act_on_target(results_sender);
-            // Root's countdown hold belongs to an explicit probe; only release it if no replacement took over.
-            if !self.probe.as_ref().is_some_and(Probe::is_requested) {
-                let request = CoreToWorker::RequestToRoot(RequestToRoot::ProbeStopped);
-                let _ = self.outgoing_sender.send(request).await;
+            // A discovery move relocates the exit; the user's own probe of it must not become connect-owned.
+            if let Some((key, true)) = previous
+                && let Some(probe) = self.probe.as_mut().filter(|p| p.key() == key)
+            {
+                probe.mark_requested();
             }
         }
 
@@ -1680,6 +1683,7 @@ impl Core {
         // Root counts this answer towards the idle countdown, so the probe must outlive the target too.
         if let Some(probe) = self.probe.as_mut().filter(|p| p.key() == dest.key()) {
             probe.mark_requested();
+            self.root_probe_hold = true;
             return command::ProbeResponse::AlreadyProbing { destination: dest };
         }
         if let Some(in_use) = self
@@ -1692,6 +1696,7 @@ impl Core {
                 destination: Box::new(in_use.clone()),
             };
         }
+        self.root_probe_hold = true;
         match self.start_probe(&dest, true, results_sender) {
             Some(previous) => command::ProbeResponse::Replaced {
                 destination: dest,
@@ -1808,6 +1813,17 @@ impl Core {
             start,
         ));
         replaced
+    }
+
+    /// Root holds the idle countdown for an explicit probe; every way that probe can vanish ends up here.
+    async fn sync_root_probe_hold(&mut self) {
+        let held = self.probe.as_ref().is_some_and(Probe::is_requested);
+        if !self.root_probe_hold || held {
+            return;
+        }
+        self.root_probe_hold = false;
+        let request = CoreToWorker::RequestToRoot(RequestToRoot::ProbeStopped);
+        let _ = self.outgoing_sender.send(request).await;
     }
 
     /// Closes a probe that only existed for a target that is now gone; a requested one stays.
