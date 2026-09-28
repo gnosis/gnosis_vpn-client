@@ -85,8 +85,8 @@ pub(crate) enum Results {
     NodeWxhoprWithdraw {
         res: Result<(), Error>,
     },
-    AnnouncedPeers {
-        res: Result<HashMap<Address, peer::Peer>, Error>,
+    Peers {
+        res: Result<peer::Peers, Error>,
     },
     /// One graph walk over every configured destination.
     Routability {
@@ -280,10 +280,10 @@ pub(crate) async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Send
 }
 
 pub(crate) async fn announced_peers_loop(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
-    tracing::debug!("starting announced peers runner");
+    tracing::debug!("starting peers runner");
     loop {
-        let res = hopr.announced_peers().await.map_err(Error::from);
-        if results_sender.send(Results::AnnouncedPeers { res }).await.is_err() {
+        let res = hopr.peers().await.map_err(Error::from);
+        if results_sender.send(Results::Peers { res }).await.is_err() {
             return; // Core is gone
         }
         time::sleep(ANNOUNCED_PEERS_INTERVAL).await;
@@ -294,7 +294,7 @@ pub(crate) async fn announced_peers_loop(hopr: Arc<Hopr>, results_sender: mpsc::
 pub(crate) async fn routability(
     hopr: Arc<Hopr>,
     targets: Vec<(ExitKey, Address, HopRouting)>,
-    announced: HashSet<Address>,
+    connected: HashSet<Address>,
     results_sender: mpsc::Sender<Results>,
 ) {
     // simple_paths is synchronous and may be slow on a large graph; keep it off the async threads.
@@ -302,7 +302,7 @@ pub(crate) async fn routability(
         targets
             .into_iter()
             .map(|(key, address, routing)| {
-                let walked = hopr.walk_route(address, routing, &announced).map_err(|err| {
+                let walked = hopr.walk_route(address, routing, &connected).map_err(|err| {
                     tracing::warn!(%key, ?err, "graph walk failed");
                     err.to_string()
                 });
@@ -729,9 +729,14 @@ impl Display for Results {
                 Ok(()) => write!(f, "NodeWxhoprWithdraw: Success"),
                 Err(err) => write!(f, "NodeWxhoprWithdraw: Error({})", err),
             },
-            Results::AnnouncedPeers { res } => match res {
-                Ok(peers) => write!(f, "AnnouncedPeers: {}", peers.len()),
-                Err(err) => write!(f, "AnnouncedPeers: Error({})", err),
+            Results::Peers { res } => match res {
+                Ok(peers) => write!(
+                    f,
+                    "Peers: {} announced, {} connected",
+                    peers.announced.len(),
+                    peers.connected.len()
+                ),
+                Err(err) => write!(f, "Peers: Error({})", err),
             },
             Results::Routability { map } => {
                 let routable = map

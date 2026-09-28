@@ -33,7 +33,7 @@ use std::{
     time::SystemTime,
 };
 
-use crate::peer::Peer;
+use crate::peer::{Peer, Peers};
 use crate::route_health::RouteWalk;
 use crate::{
     balance::{self, Balances},
@@ -416,13 +416,31 @@ impl Hopr {
         Ok(peers)
     }
 
+    #[tracing::instrument(skip(self), level = "debug", ret)]
+    pub async fn connected_peers(&self) -> Result<HashSet<Address>, HoprError> {
+        tracing::debug!("query hopr connected peers");
+        let addresses = self.edgli.connected_peer_addresses().await?;
+        Ok(addresses.into_iter().collect())
+    }
+
+    /// One tick for both: announced peers come from chain, connected ones from the transport.
+    #[tracing::instrument(skip(self), level = "debug", ret)]
+    pub async fn peers(&self) -> Result<Peers, HoprError> {
+        tracing::debug!("query hopr peers");
+        let (announced, connected) = tokio::join!(self.announced_peers(), self.connected_peers());
+        Ok(Peers {
+            announced: announced?,
+            connected: connected?,
+        })
+    }
+
     /// Walks the graph for `dest` over `routing.hop_count()` hops with the path planner's own selector.
-    #[tracing::instrument(skip(self, announced), level = "debug", ret, err)]
+    #[tracing::instrument(skip(self, connected), level = "debug", ret, err)]
     pub fn walk_route(
         &self,
         dest: Address,
         routing: HopRouting,
-        announced: &HashSet<Address>,
+        connected: &HashSet<Address>,
     ) -> Result<RouteWalk, HoprError> {
         let chain_api = self.edgli.chain_api();
         let now = SystemTime::now();
@@ -433,10 +451,10 @@ impl Hopr {
             tracing::debug!(%dest, "destination has no packet key on chain - not routable");
             return Ok(RouteWalk::NotAnnounced { walked_at: now });
         };
-        // hopr-lib resolves a 0-hop route directly, off the graph: no channel, but the exit must be a reachable peer.
+        // hopr-lib resolves a 0-hop route directly, off the graph: no channel, but the exit must be a live transport peer.
         if routing.hop_count() == 0 {
-            if !announced.contains(&dest) {
-                tracing::debug!(%dest, "0-hop exit is not an announced peer - not routable");
+            if !connected.contains(&dest) {
+                tracing::debug!(%dest, "0-hop exit is not a connected peer - not routable");
                 return Ok(RouteWalk::NoPath { walked_at: now });
             }
             return Ok(RouteWalk::Paths {
