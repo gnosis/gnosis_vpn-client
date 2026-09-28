@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use url::Url;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -294,6 +294,7 @@ pub(crate) async fn announced_peers_loop(hopr: Arc<Hopr>, results_sender: mpsc::
 pub(crate) async fn routability(
     hopr: Arc<Hopr>,
     targets: Vec<(ExitKey, Address, HopRouting)>,
+    announced: HashSet<Address>,
     results_sender: mpsc::Sender<Results>,
 ) {
     // simple_paths is synchronous and may be slow on a large graph; keep it off the async threads.
@@ -301,7 +302,7 @@ pub(crate) async fn routability(
         targets
             .into_iter()
             .map(|(key, address, routing)| {
-                let walked = hopr.walk_route(address, routing).map_err(|err| {
+                let walked = hopr.walk_route(address, routing, &announced).map_err(|err| {
                     tracing::warn!(%key, ?err, "graph walk failed");
                     err.to_string()
                 });

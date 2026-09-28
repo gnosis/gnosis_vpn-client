@@ -90,6 +90,8 @@ pub struct Core {
     /// One graph walk in flight at a time; replaced on every spawn.
     cancel_routability: CancellationToken,
     announced_peers_loop_running: bool,
+    /// Announced exits, kept because a 0-hop route is only usable against a peer we can reach directly.
+    announced_peers: HashSet<Address>,
 
     // user provided data
     /// The connect id, resolved live - a cached clone goes stale on a discovery tick and cannot outlive a restart.
@@ -218,6 +220,7 @@ impl Core {
             wg_pump_tasks: TaskTracker::new(),
             cancel_routability: cancel_on_shutdown.child_token(),
             announced_peers_loop_running: false,
+            announced_peers: HashSet::new(),
 
             // user provided data
             target,
@@ -718,6 +721,7 @@ impl Core {
                     tracing::info!(num_announced = %announced.len(), "fetched announced peers");
                     let peer_ips: Vec<net::Ipv4Addr> =
                         announced.values().flat_map(|p| p.ipv4_addrs.iter().copied()).collect();
+                    self.announced_peers = announced.keys().copied().collect();
                     let _ = self
                         .outgoing_sender
                         .send(CoreToWorker::RequestToRoot(RequestToRoot::UpdatePeerIps { peer_ips }))
@@ -1644,12 +1648,13 @@ impl Core {
             .iter()
             .map(|(key, dest)| (*key, dest.address, dest.routing))
             .collect();
+        let announced = self.announced_peers.clone();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(probe::jitter(delay)).await;
-                    runner::routability(hopr, targets, results_sender).await;
+                    runner::routability(hopr, targets, announced, results_sender).await;
                 })
                 .await
         });

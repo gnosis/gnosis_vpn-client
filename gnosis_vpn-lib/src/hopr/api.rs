@@ -417,8 +417,13 @@ impl Hopr {
     }
 
     /// Walks the graph for `dest` over `routing.hop_count()` hops with the path planner's own selector.
-    #[tracing::instrument(skip(self), level = "debug", ret, err)]
-    pub fn walk_route(&self, dest: Address, routing: HopRouting) -> Result<RouteWalk, HoprError> {
+    #[tracing::instrument(skip(self, announced), level = "debug", ret, err)]
+    pub fn walk_route(
+        &self,
+        dest: Address,
+        routing: HopRouting,
+        announced: &HashSet<Address>,
+    ) -> Result<RouteWalk, HoprError> {
         let chain_api = self.edgli.chain_api();
         let now = SystemTime::now();
         let dest_key = chain_api
@@ -428,8 +433,12 @@ impl Hopr {
             tracing::debug!(%dest, "destination has no packet key on chain - not routable");
             return Ok(RouteWalk::NotAnnounced { walked_at: now });
         };
-        // hopr-lib resolves a 0-hop route directly, off the graph, so it needs no channel to the exit.
+        // hopr-lib resolves a 0-hop route directly, off the graph: no channel, but the exit must be a reachable peer.
         if routing.hop_count() == 0 {
+            if !announced.contains(&dest) {
+                tracing::debug!(%dest, "0-hop exit is not an announced peer - not routable");
+                return Ok(RouteWalk::NoPath { walked_at: now });
+            }
             return Ok(RouteWalk::Paths {
                 walked_at: now,
                 count: 1,
