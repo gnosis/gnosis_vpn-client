@@ -28,6 +28,8 @@ const REOPEN_AFTER_FAILURES: u32 = 3;
 const OPEN_ATTEMPTS: u32 = 5;
 const REOPEN_BACKOFF_STEP: Duration = Duration::from_secs(5);
 const REOPEN_BACKOFF_MAX: Duration = Duration::from_secs(60);
+/// Gap between retries of an initial check, whose own interval is far too long to wait out.
+const CHECK_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 /// Whole quick probe, session open included, so a blocking caller always gets an answer.
 const QUICKPROBE_BUDGET: Duration = Duration::from_secs(30);
@@ -503,12 +505,22 @@ impl Checker {
     /// Initial version → ping → load, then jittered timers; returns the error that broke the session.
     async fn run_until_broken(&self, intervals: &HealthCheckIntervals) -> String {
         let mut failures = 0;
-        for check in [Check::Version, Check::Ping, Check::Load] {
-            if let Err(error) = self.run(check).await {
-                failures += 1;
-                if failures >= REOPEN_AFTER_FAILURES {
-                    return error;
+        // Ready needs all three, and a check that fails here has no timer yet - retry it rather than wait one out.
+        let mut pending = vec![Check::Version, Check::Ping, Check::Load];
+        while !pending.is_empty() {
+            let mut failed = Vec::new();
+            for check in pending {
+                if let Err(error) = self.run(check).await {
+                    failures += 1;
+                    if failures >= REOPEN_AFTER_FAILURES {
+                        return error;
+                    }
+                    failed.push(check);
                 }
+            }
+            pending = failed;
+            if !pending.is_empty() {
+                time::sleep(CHECK_RETRY_DELAY).await;
             }
         }
 
