@@ -1563,12 +1563,16 @@ impl DaemonState {
 
     async fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {
         match cmd {
+            WorkerCommand::Connect(id) => {
+                tracing::debug!(?id, "remembering target destination from connect command");
+                self.target_dest_id = Some(id.clone());
+                let _ = self
+                    .keep_alive_instruction_sender
+                    .send(KeepAliveInstruction::Suspend)
+                    .await;
+            }
             // A probe is deliberate long-running activity, so it holds the idle countdown like a connection.
-            WorkerCommand::Connect(_) | WorkerCommand::Probe(_) => {
-                if let WorkerCommand::Connect(id) = cmd {
-                    tracing::debug!(?id, "remembering target destination from connect command");
-                    self.target_dest_id = Some(id.clone());
-                }
+            WorkerCommand::Probe(_) => {
                 let _ = self
                     .keep_alive_instruction_sender
                     .send(KeepAliveInstruction::Suspend)
