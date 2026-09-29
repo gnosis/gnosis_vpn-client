@@ -2254,8 +2254,9 @@ impl Core {
         match edgli
             .start_telemetry_reactor(
                 self.config.strategy.clone().into(),
-                self.config.pix_strategy.clone(),
-                &self.worker_params.state_home(),
+                self.config
+                    .pix_strategy
+                    .to_entry_config(self.worker_params.state_home()),
             )
             .await
         {

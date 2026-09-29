@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use edgli::hopr_lib::api::types::primitive::prelude::HoprBalance;
@@ -91,14 +92,8 @@ impl PixConfig {
         edgli::strategy::PixEntryPool::default().max_deposit_tracking_time
     }
 
-    /// The edgli form. Which pool the knobs reach, and whether it uses them, is edgli's call.
-    ///
-    /// `state_home` is where a pool with durable state keeps it, next to the rest of the client's
-    /// state rather than in the working directory. The pool's Blokli is the node's own, which edgli
-    /// already holds. The Curvy pool's deployment knobs — relayer URL, shielding, submission, token
-    /// id, note source, initial funding — are left at edgli's defaults and set through upstream's
-    /// `HOPRD_CURVY_*` environment overrides, as for a hoprd node.
-    pub fn to_entry_config(&self, state_home: &std::path::Path) -> edgli::strategy::PixEntryConfig {
+    /// The edgli form; which pool the knobs reach is edgli's call, deployment stays on `HOPRD_CURVY_*`.
+    pub fn to_entry_config(&self, state_home: PathBuf) -> edgli::strategy::PixEntryConfig {
         edgli::strategy::PixEntryConfig {
             strategy: edgli::strategy::PixEntryStrategy {
                 price_per_byte: self.price_per_byte,
@@ -112,7 +107,7 @@ impl PixConfig {
                 max_deposit_retries: self.max_deposit_retries,
                 min_safe_hopr_reserve: self.min_safe_hopr_reserve,
             }),
-            state_dir: Some(state_home.to_path_buf()),
+            state_dir: Some(state_home),
         }
     }
 }
@@ -133,5 +128,11 @@ mod tests {
         assert_eq!(parsed.deposit_buffer_period, def.deposit_buffer_period);
         assert_eq!(parsed.max_deposit_tracking_time, def.max_deposit_tracking_time);
         assert_eq!(parsed.min_safe_hopr_reserve, def.min_safe_hopr_reserve);
+    }
+
+    #[test]
+    fn to_entry_config_keeps_pool_state_in_state_home() {
+        let cfg = PixConfig::default().to_entry_config(PathBuf::from("/var/lib/gnosisvpn"));
+        assert_eq!(cfg.state_dir, Some(PathBuf::from("/var/lib/gnosisvpn")));
     }
 }
