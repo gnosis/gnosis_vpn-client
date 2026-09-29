@@ -25,10 +25,10 @@ chrono = { version = "~0.4.45", default-features = false, features = [
 ] }
 clap = { version = "~4.6.6", features = ["derive", "env"] }
 clap_complete = "~4.6.9"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "532efe78ec71a6a0cdf84a3507f758df41ee2b37", features = [
+# The PIX deposit pool is edgli's default `pix-curvy`; the pool has to match the curve the network's
+# exits run, so it is not a client-side choice.
+edgli = { git = "https://github.com/0xCurvy/edge-client.git", rev = "aa42fa26e4a92e1df029a02e4b5438e3aab48ae7", features = [
   "blokli",
-  "pix",
-  "pix-test",
   "telemetry",
 ] }
 exitcode = "~1.1.2"
