@@ -7,15 +7,15 @@ use gnosis_vpn_lib::balance::{BalanceRecommendation, Capacity, CapacityAllocatio
 use gnosis_vpn_lib::command::{
     ActiveSession, BalanceResponse, ChannelBalance, ChannelOut, Command, ConnStats, ConnectResponse, ConnectedInfo,
     ConnectingInfo, DestinationState, DisconnectResponse, DisconnectingInfo, FundingToolResponse, HoprInitStatus,
-    HoprStatus, Info, InfoResponse, NerdStatsConnection, NerdStatsResponse, ReconnectingInfo, Response,
-    RouteHealthView, RunMode, StartClientResponse, StatusResponse, StopClientResponse, SurbBalancerSetpoint, SurbStats,
-    TicketStats, TicketStatsStatus, WorkerCommand,
+    HoprStatus, Info, InfoResponse, NerdStatsConnection, NerdStatsResponse, ProbeResponse, ProbeView,
+    QuickProbeResponse, ReconnectingInfo, Response, RouteHealthView, RunMode, StartClientResponse, StatusResponse,
+    StopClientResponse, SurbBalancerSetpoint, SurbStats, TicketStats, TicketStatsStatus, UnprobeResponse,
+    WorkerCommand,
 };
 use gnosis_vpn_lib::connection::destination::{Address, Destination, HopRouting, Meta};
 use gnosis_vpn_lib::connection::{DownPhase, UpPhase};
-use gnosis_vpn_lib::route_health::{
-    ExitHealth, Health, LoadAvg, RouteHealthState, Slots, UnrecoverableReason, Versions,
-};
+use gnosis_vpn_lib::probe::{Health, LoadAvg, ProbeState, Slots, Versions};
+use gnosis_vpn_lib::route_health::{QuickProbeState, RouteHealthState, RouteWalk, UnrecoverableReason};
 use gnosis_vpn_lib::wg_tunnel::{TunnelStatsSample, WgTunnelStats};
 
 // This function exists only to force the compiler to verify that every type in
@@ -62,8 +62,14 @@ fn assert_types_are_accessible() {
     let _: UpPhase;
     let _: DownPhase;
     let _: RouteHealthState;
+    let _: QuickProbeState;
+    let _: RouteWalk;
     let _: UnrecoverableReason;
-    let _: ExitHealth;
+    let _: ProbeResponse;
+    let _: UnprobeResponse;
+    let _: QuickProbeResponse;
+    let _: ProbeView;
+    let _: ProbeState;
     let _: Versions;
     let _: Health;
     let _: Slots;

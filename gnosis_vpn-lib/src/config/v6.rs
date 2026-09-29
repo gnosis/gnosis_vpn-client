@@ -129,7 +129,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "surb_balancing" {
                         if let Some(surb) = v.as_table() {
                             for (k2, v2) in surb.iter() {
-                                if k2 == "ping" || k2 == "main" || k2 == "bridge" || k2 == "health_check" {
+                                if k2 == "ping" || k2 == "main" || k2 == "bridge" {
                                     if let Some(session) = v2.as_table() {
                                         for (k3, _) in session.iter() {
                                             if k3 == "enabled"
@@ -163,7 +163,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "pix" {
                         if let Some(pix) = v.as_table() {
                             for (k2, v2) in pix.iter() {
-                                if k2 == "ping_main" || k2 == "bridge" || k2 == "health_check" {
+                                if k2 == "ping_main" || k2 == "bridge" {
                                     if let Some(session) = v2.as_table() {
                                         for (k3, _) in session.iter() {
                                             if k3 == "enabled" {
@@ -182,9 +182,9 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "health_check_intervals" {
                         if let Some(hci) = v.as_table() {
                             for (k2, _) in hci.iter() {
-                                if k2 == "ping"
-                                    || k2 == "health_every_n_pings"
-                                    || k2 == "version_every_n_pings"
+                                if k2 == "version"
+                                    || k2 == "ping"
+                                    || k2 == "load"
                                     || k2 == "tunnel_ping"
                                     || k2 == "tunnel_ping_max_failures"
                                 {

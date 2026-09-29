@@ -16,6 +16,27 @@ pub mod address {
     }
 }
 
+/// `Vec<Address>` as a JSON array of checksum address strings.
+pub mod addresses {
+    use super::*;
+    use serde::ser::SerializeSeq;
+
+    pub fn serialize<S: Serializer>(addrs: &[Address], s: S) -> Result<S::Ok, S::Error> {
+        let mut seq = s.serialize_seq(Some(addrs.len()))?;
+        for addr in addrs {
+            seq.serialize_element(&addr.to_checksum())?;
+        }
+        seq.end()
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Address>, D::Error> {
+        let raw = Vec::<String>::deserialize(d)?;
+        raw.into_iter()
+            .map(|hex| hex.parse::<Address>().map_err(serde::de::Error::custom))
+            .collect()
+    }
+}
+
 /// `HashMap<Address, V>` as a JSON object keyed by checksum address strings.
 pub mod address_map {
     use super::*;

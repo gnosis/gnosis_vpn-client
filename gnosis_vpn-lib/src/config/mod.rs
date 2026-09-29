@@ -51,6 +51,8 @@ pub enum Error {
     SurbBalancingMismatch,
     #[error("surb_balancing.ramp interval and duration must both be greater than zero")]
     SurbRampZero,
+    #[error("health_check_intervals version, ping, load and tunnel_ping must all be greater than zero")]
+    HealthCheckIntervalZero,
     #[error("Error in hopr-lib: {0}")]
     HoprGeneral(#[from] GeneralError),
     #[error(
