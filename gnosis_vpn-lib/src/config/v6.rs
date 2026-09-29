@@ -79,11 +79,11 @@ pub(super) struct PingOptions {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct HealthCheckIntervalOptions {
     #[serde(default, with = "humantime_serde::option")]
+    pub(super) version: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
     pub(super) ping: Option<Duration>,
-    #[serde(default, deserialize_with = "validate_n_pings")]
-    pub(super) health_every_n_pings: Option<u32>,
-    #[serde(default, deserialize_with = "validate_n_pings")]
-    pub(super) version_every_n_pings: Option<u32>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) load: Option<Duration>,
     #[serde(default, with = "humantime_serde::option")]
     pub(super) tunnel_ping: Option<Duration>,
     #[serde(default, deserialize_with = "validate_tunnel_ping_max_failures")]
@@ -112,7 +112,6 @@ pub(super) struct SurbBalancingConfig {
     ping: Option<SessionSurbConfig>,
     main: Option<SessionSurbConfig>,
     bridge: Option<SessionSurbConfig>,
-    health_check: Option<SessionSurbConfig>,
     ramp: Option<SurbRampConfig>,
 }
 
@@ -156,18 +155,6 @@ where
             "path_planner_min_ack_rate must be in the range [0.0, 1.0]",
         )),
         other => Ok(other),
-    }
-}
-
-fn validate_n_pings<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<u32>::deserialize(deserializer)?;
-    if value == Some(0) {
-        Err(serde::de::Error::custom("value must be greater than zero"))
-    } else {
-        Ok(value)
     }
 }
 
@@ -248,6 +235,17 @@ impl Connection {
     }
 }
 
+/// Zero feeds `time::sleep(0)` timers, which would hammer the exit back to back.
+pub(super) fn reject_zero_intervals(intervals: &options::HealthCheckIntervals) -> Result<(), config::Error> {
+    let any_zero = [intervals.version, intervals.ping, intervals.load, intervals.tunnel_ping]
+        .iter()
+        .any(Duration::is_zero);
+    if any_zero {
+        return Err(config::Error::HealthCheckIntervalZero);
+    }
+    Ok(())
+}
+
 fn apply_session_surb(cfg: Option<SessionSurbConfig>, def: options::SessionSurbOptions) -> options::SessionSurbOptions {
     match cfg {
         None => def,
@@ -310,7 +308,6 @@ impl From<Option<Connection>> for options::Options {
             ping: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.ping.clone()), def.ping),
             main: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.main.clone()), def.main),
             bridge: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.bridge.clone()), def.bridge),
-            health_check: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.health_check.clone()), def.health_check),
             ramp: options::SurbRampOptions {
                 interval: surb_cfg
                     .as_ref()
@@ -334,9 +331,9 @@ impl From<Option<Connection>> for options::Options {
         let health_check_intervals = connection
             .and_then(|c| c.health_check_intervals.as_ref())
             .map(|h| options::HealthCheckIntervals {
+                version: h.version.unwrap_or(def_intervals.version),
                 ping: h.ping.unwrap_or(def_intervals.ping),
-                health_every_n_pings: h.health_every_n_pings.unwrap_or(def_intervals.health_every_n_pings),
-                version_every_n_pings: h.version_every_n_pings.unwrap_or(def_intervals.version_every_n_pings),
+                load: h.load.unwrap_or(def_intervals.load),
                 tunnel_ping: h.tunnel_ping.unwrap_or(def_intervals.tunnel_ping),
                 tunnel_ping_max_failures: h
                     .tunnel_ping_max_failures
@@ -534,28 +531,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
-<<<<<<< HEAD
-=======
-                    if k == "pix" {
-                        if let Some(pix) = v.as_table() {
-                            for (k2, v2) in pix.iter() {
-                                if k2 == "ping_main" || k2 == "bridge" {
-                                    if let Some(session) = v2.as_table() {
-                                        for (k3, _) in session.iter() {
-                                            if k3 == "enabled" {
-                                                continue;
-                                            }
-                                            wrong.push(format!("connection.pix.{k2}.{k3}"));
-                                        }
-                                    }
-                                    continue;
-                                }
-                                wrong.push(format!("connection.pix.{k2}"));
-                            }
-                        }
-                        continue;
-                    }
->>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
                     if k == "health_check_intervals" {
                         if let Some(hci) = v.as_table() {
                             for (k2, _) in hci.iter() {
@@ -759,6 +734,7 @@ impl TryFrom<Config> for config::Config {
         if ramp.interval.is_zero() || ramp.duration.is_zero() {
             return Err(config::Error::SurbRampZero);
         }
+        reject_zero_intervals(&connection.health_check_intervals)?;
         let destinations = convert_destinations(value.destinations)?;
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
@@ -1452,6 +1428,64 @@ nonsense = 1
         assert_eq!(
             wrong_keys(&table),
             vec!["connection.surb_balancing.ramp.nonsense".to_string()]
+        );
+    }
+
+    #[test]
+    fn health_check_intervals_reject_zero() {
+        for line in &[
+            "version = \"0s\"",
+            "ping = \"0s\"",
+            "load = \"0s\"",
+            "tunnel_ping = \"0s\"",
+        ] {
+            let cfg = parse(&format!(
+                r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.health_check_intervals]
+{line}
+"#####
+            ));
+            let result: Result<crate::config::Config, _> = cfg.try_into();
+            assert!(
+                matches!(result, Err(crate::config::Error::HealthCheckIntervalZero)),
+                "expected rejection for `{line}`"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_health_check_keys_are_reported_as_wrong() {
+        let table = r#####"
+version = 6
+
+[connection.health_check_intervals]
+ping = "10s"
+health_every_n_pings = 4
+version_every_n_pings = 20
+
+[connection.surb_balancing.health_check]
+enabled = false
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        let wrong = wrong_keys(&table);
+        assert!(
+            wrong.contains(&"connection.health_check_intervals.health_every_n_pings".to_string()),
+            "{wrong:?}"
+        );
+        assert!(
+            wrong.contains(&"connection.health_check_intervals.version_every_n_pings".to_string()),
+            "{wrong:?}"
+        );
+        assert!(
+            wrong.contains(&"connection.surb_balancing.health_check".to_string()),
+            "{wrong:?}"
         );
     }
 
