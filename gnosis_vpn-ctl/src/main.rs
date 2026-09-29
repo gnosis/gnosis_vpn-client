@@ -309,20 +309,13 @@ fn pretty_print(resp: &Response) {
             for dest_state in destinations {
                 str_resp.push_str(&format!("---\n{}\n", dest_state.destination));
                 if let Some(rh) = &dest_state.route_health {
-<<<<<<< HEAD
-                    str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.id, rh,));
-=======
-                    str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.connect_id, rh));
+                    str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.id, rh));
                     if let Some(walk) = &rh.walk {
-                        str_resp.push_str(&format!("{} Route walk: {}\n", dest_state.destination.connect_id, walk));
+                        str_resp.push_str(&format!("{} Route walk: {}\n", dest_state.destination.id, walk));
                     }
                     if let Some(quick) = &rh.quick_probe {
-                        str_resp.push_str(&format!(
-                            "{} Quick check: {}\n",
-                            dest_state.destination.connect_id, quick
-                        ));
+                        str_resp.push_str(&format!("{} Quick check: {}\n", dest_state.destination.id, quick));
                     }
->>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
                 }
             }
             println!("{str_resp}");

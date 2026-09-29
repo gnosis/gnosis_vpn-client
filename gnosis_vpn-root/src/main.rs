@@ -916,19 +916,14 @@ impl DaemonState {
                         .send(KeepAliveInstruction::Restart)
                         .await;
                     Ok(())
-<<<<<<< HEAD
                 } else if matches!(w_cmd, WorkerCommand::Status) {
                     let response = self.status_response_offline();
                     let _ = resp.send(response).map_err(|error| {
                         tracing::error!(?error, "socket command response channel closed");
                     });
                     Ok(())
-=======
->>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
                 } else {
-                    let response = self
-                        .offline_response(&w_cmd)
-                        .unwrap_or_else(|| self.worker_gone_response());
+                    let response = self.worker_gone_response();
                     // The command suspended the countdown before we knew there was no worker; undo that.
                     if matches!(w_cmd, WorkerCommand::Connect(_) | WorkerCommand::Probe(_)) {
                         self.probe_ended().await;
@@ -1142,20 +1137,7 @@ impl DaemonState {
         if matches!(resp, Response::ForceReconnectAcknowledged) {
             return Ok(());
         }
-<<<<<<< HEAD
-=======
-        // Only an accepted connect sets the target, and as the connect id, not the typed token.
-        if let Response::Connect(
-            command::ConnectResponse::Connecting { destination }
-            | command::ConnectResponse::WaitingToConnect { destination, .. }
-            | command::ConnectResponse::AlreadyConnected { destination },
-        ) = &resp
-        {
-            tracing::debug!(id = %destination.connect_id, "remembering target destination from connect response");
-            self.target_dest_id = Some(destination.connect_id.clone());
-        }
         self.track_probe(&resp).await;
->>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
         if let Some(resp_sender) = self.pending_responses.remove(&id) {
             if resp_sender.send(resp).is_err() {
                 tracing::error!(id, "unexpected channel closure");
@@ -1581,14 +1563,12 @@ impl DaemonState {
 
     async fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {
         match cmd {
-<<<<<<< HEAD
-            WorkerCommand::Connect(id) => {
-                tracing::debug!(?id, "remembering target destination from connect command");
-                self.target_dest_id = Some(id.clone());
-=======
             // A probe is deliberate long-running activity, so it holds the idle countdown like a connection.
             WorkerCommand::Connect(_) | WorkerCommand::Probe(_) => {
->>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
+                if let WorkerCommand::Connect(id) = cmd {
+                    tracing::debug!(?id, "remembering target destination from connect command");
+                    self.target_dest_id = Some(id.clone());
+                }
                 let _ = self
                     .keep_alive_instruction_sender
                     .send(KeepAliveInstruction::Suspend)

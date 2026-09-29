@@ -189,7 +189,11 @@ impl Core {
         for (id, dest) in config.destinations.clone() {
             route_healths.insert(
                 id,
-                RouteHealth::new(&dest, worker_params.allow_insecure(), worker_params.allow_experimental()),
+                RouteHealth::new(
+                    &dest,
+                    worker_params.allow_insecure(),
+                    worker_params.allow_experimental(),
+                ),
             );
         }
 

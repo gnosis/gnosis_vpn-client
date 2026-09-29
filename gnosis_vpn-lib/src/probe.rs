@@ -616,7 +616,13 @@ impl ProbeSession {
         };
         tracing::debug!(%destination, "opening probe session");
         let meta = hopr
-            .open_session(destination.address, options.sessions.bridge.target.clone(), None, None, cfg)
+            .open_session(
+                destination.address,
+                options.sessions.bridge.target.clone(),
+                None,
+                None,
+                cfg,
+            )
             .await?;
         Ok(Self {
             hopr,
