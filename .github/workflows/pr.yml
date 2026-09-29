@@ -155,3 +155,14 @@ jobs:
           SYSTEM_TEST_WORKER_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-worker
           SYSTEM_TEST_ROOT_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-root
         run: just system-tests ${{ github.workspace }}/result-system-tests/bin/gnosis_vpn-system_tests
+  ci-ok:
+    name: CI OK
+    # Single required status check: stable across matrix expansion, label gating and fork guards.
+    if: always() # a skipped job counts as passing, so never let a failed dependency skip this one
+    needs: [build-x86_64-linux, build-arm-binaries, checks, system-test]
+    runs-on: depot-ubuntu-22.04-4
+    permissions: {}
+    steps:
+      - name: Fail if any CI job failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
