@@ -298,7 +298,7 @@ impl Probe {
 
     pub(crate) fn view(&self) -> command::ProbeView {
         command::ProbeView {
-            destination_id: self.destination.connect_id.clone(),
+            destination_id: self.destination.id.clone(),
             state: self.state.clone(),
             session_since: self.since,
             versions: self.versions.clone(),
@@ -666,7 +666,7 @@ impl Display for ProbeState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::destination::{Address, DestinationSource, HopRouting};
+    use crate::connection::destination::{Address, HopRouting};
 
     fn destination() -> Destination {
         Destination::new(
@@ -674,9 +674,6 @@ mod tests {
             Address::from([1u8; 20]),
             HopRouting::try_from(1).unwrap(),
             Default::default(),
-            "172.30.0.1:8000".parse().unwrap(),
-            "172.30.0.1:51820".parse().unwrap(),
-            DestinationSource::Configured,
         )
     }
 

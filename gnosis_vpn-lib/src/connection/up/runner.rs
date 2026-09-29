@@ -226,64 +226,6 @@ impl Display for Runner {
     }
 }
 
-<<<<<<< HEAD
-#[tracing::instrument(
-    skip(hopr, options, destination, results_sender),
-    fields(
-        address = %destination.address,
-        routing = ?destination.routing,
-    ),
-    level = "debug",
-    ret
-)]
-async fn open_bridge_session(
-    hopr: &Hopr,
-    destination: &Destination,
-    options: &Options,
-    surb: SurbParams,
-    results_sender: &mpsc::Sender<Results>,
-) -> Result<SessionClientMetadata, HoprError> {
-    let cfg = HoprSessionClientConfig {
-        capabilities: options.sessions.bridge.capabilities,
-        forward_path: destination.routing,
-        return_path: destination.routing,
-        always_max_out_surbs: surb.always_max_out_surbs,
-        surb_management: surb.management,
-        // Robust tail-tolerance profile: the validated flow-control config for the
-        // throttled / multi-hop paths this data session runs over.
-        flow_control: Some(FlowControlConfig::robust()),
-        ..Default::default()
-    };
-    // Each open_session attempt times out after `initiation_timeout_base × (forward_hops + return_hops + 2)`,
-    // where initiation_timeout_base defaults to 500 ms. hopr-lib retries 3× with 2 s delays before giving up:
-    //   1-hop: ~2 s/attempt, ~15 s total
-    //   2-hop: ~3 s/attempt, ~19 s total
-    //   3-hop: ~4 s/attempt, ~23 s total
-    (|| async {
-        tracing::debug!(%destination, "attempting to open bridge session");
-        hopr.open_session(
-            destination.address,
-            options.sessions.bridge.target.clone(),
-            Some(1),
-            Some(1),
-            cfg.clone(),
-        )
-        .await
-    })
-    .retry(remote_data::backoff_expo_short_delay_bridge())
-    .notify(|err: &HoprError, dur: Duration| {
-        tracing::warn!(error = ?err, "error opening bridge session - will retry after {:?}", dur);
-        let tx = results_sender.clone();
-        let payload = setback(Setback::OpenBridge(err.to_string()));
-        tokio::spawn(async move {
-            let _ = tx.send(payload).await;
-        });
-    })
-    .await
-}
-
-=======
->>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
 async fn register(
     options: &Options,
     session_client_metadata: &SessionClientMetadata,

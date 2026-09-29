@@ -23,10 +23,7 @@ use std::time::Duration;
 
 use crate::command::{self, Response};
 use crate::compat::SafeModule;
-<<<<<<< HEAD
-=======
-use crate::connection::destination::{Destination, ExitKey};
->>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
+use crate::connection::destination::Destination;
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError, config as hopr_config};
@@ -87,7 +84,7 @@ pub(crate) enum Results {
     },
     /// One graph walk over every configured destination.
     Routability {
-        map: HashMap<ExitKey, Result<RouteWalk, String>>,
+        map: HashMap<String, Result<RouteWalk, String>>,
     },
     HoprConstruction(EdgliInitState),
     HoprRunning,
@@ -121,13 +118,6 @@ pub(crate) enum Results {
     },
     /// The SURB ramp ticker fired; Core nudges the active session's setpoint toward its target.
     SurbRampTick,
-<<<<<<< HEAD
-    HealthCheck {
-        id: String,
-        outcome: HealthCheckOutcome,
-    },
-=======
->>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
     RetryReactor,
     NerdStatsTicketStats {
         res: command::TicketStatsStatus,
@@ -285,12 +275,6 @@ pub(crate) async fn wait_for_running(hopr: Arc<Hopr>, results_sender: mpsc::Send
     let _ = results_sender.send(Results::HoprRunning).await;
 }
 
-<<<<<<< HEAD
-pub(crate) async fn peers(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
-    tracing::debug!("starting peers runner");
-    let res = hopr.peers().await.map_err(Error::from);
-    let _ = results_sender.send(Results::Peers { res }).await;
-=======
 pub(crate) async fn announced_peers_loop(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("starting announced peers runner");
     loop {
@@ -305,7 +289,7 @@ pub(crate) async fn announced_peers_loop(hopr: Arc<Hopr>, results_sender: mpsc::
 /// Walks the graph once for every target; a failed walk is reported as such, not as not routable.
 pub(crate) async fn routability(
     hopr: Arc<Hopr>,
-    targets: Vec<(ExitKey, Address, HopRouting)>,
+    targets: Vec<(String, Address, HopRouting)>,
     results_sender: mpsc::Sender<Results>,
 ) {
     // simple_paths is synchronous and may be slow on a large graph; keep it off the async threads.
@@ -328,7 +312,6 @@ pub(crate) async fn routability(
         }
         Err(err) => tracing::error!(?err, "graph walk task panicked"),
     }
->>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
 }
 
 /// Extra ramp ticks past the configured duration, so pushes that failed and retried can still land.
@@ -737,11 +720,7 @@ impl Display for Results {
                 Ok(None) => write!(f, "QuerySafe: No safe found"),
                 Err(err) => write!(f, "QuerySafe: Error({})", err),
             },
-<<<<<<< HEAD
-            Results::HealthCheck { id, outcome } => write!(f, "HealthCheck ({}): {:?}", id, outcome),
-=======
             Results::Probe { generation, event } => write!(f, "Probe (gen {generation}): {event:?}"),
->>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
             Results::RetryReactor => write!(f, "RetryReactor"),
             Results::NerdStatsTicketStats { .. } => write!(f, "NerdStatsTicketStats"),
             Results::QuickProbe {
