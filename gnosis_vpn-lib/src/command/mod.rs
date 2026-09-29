@@ -66,14 +66,9 @@ pub enum WorkerCommand {
     Balance,
     FundingTool(String),
     Telemetry,
-<<<<<<< HEAD
-=======
-    /// The worker answers this one because only it holds the discovery merge.
-    Destinations,
     Probe(String),
     Unprobe,
     QuickProbe(String),
->>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
     /// Reconnect the current HOPR session without clearing the target or disabling the killswitch.
     /// Used by the root process when a WAN interface change is detected.
     ForceReconnect,
@@ -958,13 +953,9 @@ impl TryFrom<Command> for WorkerCommand {
             Command::Balance => Ok(WorkerCommand::Balance),
             Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
             Command::Telemetry => Ok(WorkerCommand::Telemetry),
-<<<<<<< HEAD
-=======
-            Command::Destinations => Ok(WorkerCommand::Destinations),
             Command::Probe(dest) => Ok(WorkerCommand::Probe(dest)),
             Command::Unprobe => Ok(WorkerCommand::Unprobe),
             Command::QuickProbe(dest) => Ok(WorkerCommand::QuickProbe(dest)),
->>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
             // Commands that are not relevant for the worker
             Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient | Command::Destinations => {
                 Err(())
@@ -986,14 +977,8 @@ impl Display for RouteHealthView {
 #[cfg(test)]
 mod tests {
     use super::*;
-<<<<<<< HEAD
     use crate::connection::destination::HopRouting;
-    use crate::gvpn_client;
-    use crate::route_health::ExitHealth;
     use std::collections::HashMap;
-=======
-    use crate::connection::destination::{DestinationSource, HopRouting, Meta};
->>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
 
     fn address(byte: u8) -> Address {
         Address::from([byte; 20])
@@ -1025,14 +1010,6 @@ mod tests {
         let phase = connection::up::Phase::VerifyPing;
         let in_flight = reconnecting(Some(phase.clone())).to_string();
         assert!(in_flight.contains(&format!("phase {phase}")), "{in_flight}");
-    }
-
-<<<<<<< HEAD
-=======
-    /// Shell completion for `connect` lists these, so it must reach the merged map, not the config.
-    #[test]
-    fn listing_destinations_is_routed_to_the_worker() {
-        assert_eq!(Ok(WorkerCommand::Destinations), Command::Destinations.try_into());
     }
 
     #[test]
@@ -1116,7 +1093,6 @@ mod tests {
         }
     }
 
->>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
     // The app rejects a status it cannot parse, so the null shape is part of the contract.
     #[test]
     fn reconnecting_info_serializes_a_missing_phase_as_null() {
