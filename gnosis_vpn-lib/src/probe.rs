@@ -12,10 +12,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::command;
-use crate::connection::destination::{Destination, ExitKey};
-use crate::connection::options::{
-    HealthCheckIntervals, Options, SessionPixOptions, SessionSurbOptions, SurbParams, surb_config_for,
-};
+use crate::connection::destination::Destination;
+use crate::connection::options::{HealthCheckIntervals, Options, SessionSurbOptions, SurbParams, surb_config_for};
 use crate::core::runner::Results;
 use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
@@ -60,9 +58,9 @@ pub(crate) fn select_api_version(server_versions: &[String]) -> Option<&'static 
         .find(|&v| server_versions.iter().any(|sv| sv == v))
 }
 
-/// hopr-lib fixes SURB balancing and PIX at open, so only an identically opened session can be adopted.
-pub(crate) fn quick_session_matches_bridge(bridge: &SessionSurbOptions, pix: &SessionPixOptions) -> bool {
-    !bridge.enabled && !bridge.always_max_out_surbs && !pix.enabled
+/// hopr-lib fixes SURB balancing at open, so only an identically opened session can be adopted.
+pub(crate) fn quick_session_matches_bridge(bridge: &SessionSurbOptions) -> bool {
+    !bridge.enabled && !bridge.always_max_out_surbs
 }
 
 fn reopen_backoff(attempt: u32) -> Duration {
@@ -212,8 +210,8 @@ impl Probe {
         }
     }
 
-    pub(crate) fn key(&self) -> ExitKey {
-        self.destination.key()
+    pub(crate) fn key(&self) -> String {
+        self.destination.id.clone()
     }
 
     pub(crate) fn destination(&self) -> &Destination {
@@ -398,15 +396,7 @@ where
 {
     let mut open_attempt = 0;
     loop {
-        let err = match ProbeSession::open(
-            hopr.clone(),
-            destination,
-            options,
-            surb.clone(),
-            options.pix.bridge.enabled,
-        )
-        .await
-        {
+        let err = match ProbeSession::open(hopr.clone(), destination, options, surb.clone()).await {
             Ok(session) => return Some(session),
             Err(err) => err.to_string(),
         };
@@ -454,18 +444,18 @@ async fn run_quick_probe(
     destination: &Destination,
     options: &Options,
 ) -> (Result<QuickProbeOutcome, String>, Option<ProbeSession>) {
-    // No balancing and no PIX: the session lives for two requests unless a probe adopts it.
+    // No balancing: the session lives for two requests unless a probe adopts it.
     let surb = SurbParams {
         management: None,
         always_max_out_surbs: false,
     };
     tracing::debug!(%destination, "opening quick probe session");
-    let session = match ProbeSession::open(hopr, destination, options, surb, false).await {
+    let session = match ProbeSession::open(hopr, destination, options, surb).await {
         Ok(session) => session,
         Err(err) => return (Err(format!("opening session failed: {err}")), None),
     };
     let outcome = quick_checks(session.meta.bound_host).await;
-    let adoptable = quick_session_matches_bridge(&options.surb_balancing.bridge, &options.pix.bridge);
+    let adoptable = quick_session_matches_bridge(&options.surb_balancing.bridge);
     if outcome.is_ok() && adoptable {
         return (outcome, Some(session));
     }
@@ -614,7 +604,6 @@ impl ProbeSession {
         destination: &Destination,
         options: &Options,
         surb: SurbParams,
-        pix_enabled: bool,
     ) -> Result<Self, HoprError> {
         let cfg = HoprSessionClientConfig {
             capabilities: options.sessions.bridge.capabilities,
@@ -625,14 +614,9 @@ impl ProbeSession {
             flow_control: Some(FlowControlConfig::robust()),
             ..Default::default()
         };
-        let cfg = if pix_enabled {
-            hopr.pix_aware_session_cfg(cfg)?
-        } else {
-            cfg
-        };
         tracing::debug!(%destination, "opening probe session");
         let meta = hopr
-            .open_session(destination.address, destination.bridge_target(), None, None, cfg)
+            .open_session(destination.address, options.sessions.bridge.target.clone(), None, None, cfg)
             .await?;
         Ok(Self {
             hopr,
@@ -913,22 +897,18 @@ mod tests {
 
     #[test]
     fn quick_session_matches_the_default_bridge_only() {
-        use crate::connection::options::{PixOptions, SurbBalancing};
+        use crate::connection::options::SurbBalancing;
 
         let bridge = SurbBalancing::default().bridge;
-        let pix = PixOptions::default().bridge;
-        assert!(quick_session_matches_bridge(&bridge, &pix));
+        assert!(quick_session_matches_bridge(&bridge));
 
         let mut balanced = bridge.clone();
         balanced.enabled = true;
-        assert!(!quick_session_matches_bridge(&balanced, &pix));
+        assert!(!quick_session_matches_bridge(&balanced));
 
         let mut maxed_out = bridge.clone();
         maxed_out.always_max_out_surbs = true;
-        assert!(!quick_session_matches_bridge(&maxed_out, &pix));
-
-        let pix_on = SessionPixOptions { enabled: true };
-        assert!(!quick_session_matches_bridge(&bridge, &pix_on));
+        assert!(!quick_session_matches_bridge(&maxed_out));
     }
 
     #[test]
