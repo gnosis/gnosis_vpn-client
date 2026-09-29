@@ -17,12 +17,18 @@ use crate::command::{self, Response, RunMode, WorkerCommand};
 use crate::compat::SafeModule;
 use crate::config::{self, Config};
 use crate::connection;
+<<<<<<< HEAD
 use crate::connection::destination::{Address, Destination};
+=======
+use crate::connection::destination::{self, Address, Destination, Destinations, ExitKey, HopRouting};
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
+use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
-use crate::route_health::{self, RouteHealth};
+use crate::probe::{self, Probe};
+use crate::route_health::RouteHealth;
 use crate::worker_params::{self, WorkerParams};
-use crate::{balance, log_output, peer, ticket_stats, wireguard};
+use crate::{balance, log_output, ticket_stats, wireguard};
 
 pub(crate) mod runner;
 
@@ -35,6 +41,15 @@ enum Responder {
 }
 
 const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
+<<<<<<< HEAD
+=======
+/// Graph walk cadence while a destination is not routable yet or a target is pending.
+const ROUTABILITY_EAGER_INTERVAL: Duration = Duration::from_secs(10);
+/// Graph walk cadence once every destination has settled.
+const ROUTABILITY_LAZY_INTERVAL: Duration = Duration::from_secs(60);
+/// What a quick probe reports when discovery moved its exit out from under it.
+const QUICK_PROBE_MOVED: &str = "destination moved while the check was running";
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -80,6 +95,15 @@ pub struct Core {
     // replaced together with cancel_connection.
     wg_pump_tasks: TaskTracker,
 
+<<<<<<< HEAD
+=======
+    /// One graph walk in flight at a time; replaced on every spawn.
+    cancel_routability: CancellationToken,
+    announced_peers_loop_running: bool,
+    /// Mirrors root's `probing`: it holds the idle countdown for an explicit probe until we say the probe is gone.
+    root_probe_hold: bool,
+
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
     // user provided data
     target_destination: Option<Destination>,
 
@@ -94,7 +118,16 @@ pub struct Core {
     capacity_reconciler: balance::CapacityReconciler,
     balances: Option<balance::Balances>,
     strategy_handle: Option<AbortHandle>,
+<<<<<<< HEAD
     route_healths: HashMap<String, RouteHealth>,
+=======
+    route_healths: HashMap<ExitKey, RouteHealth>,
+    /// The one long-lived probe session; connections register over it.
+    probe: Option<Probe>,
+    probe_generation: u64,
+    /// A previous connection's key a force-reconnect could not unregister yet, for the next connection runner.
+    stale_wg_public_key: Option<String>,
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
     next_request_id: u64,
     // Maps a request_id to the oneshot sender waiting for root's response.
     // request_id is needed even though at most one request is in-flight at a time:
@@ -172,6 +205,7 @@ impl Core {
         let mut route_healths = HashMap::new();
         for (id, dest) in config.destinations.clone() {
             route_healths.insert(
+<<<<<<< HEAD
                 id,
                 RouteHealth::new(
                     &dest,
@@ -179,6 +213,10 @@ impl Core {
                     worker_params.allow_experimental(),
                     cancel_on_shutdown.clone(),
                 ),
+=======
+                *key,
+                RouteHealth::new(dest, worker_params.allow_insecure(), worker_params.allow_experimental()),
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
             );
         }
 
@@ -204,6 +242,12 @@ impl Core {
             cancel_balances: cancel_on_shutdown.child_token(),
             cancel_peers: cancel_on_shutdown.child_token(),
             wg_pump_tasks: TaskTracker::new(),
+<<<<<<< HEAD
+=======
+            cancel_routability: cancel_on_shutdown.child_token(),
+            announced_peers_loop_running: false,
+            root_probe_hold: false,
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
 
             // user provided data
             target_destination,
@@ -222,6 +266,9 @@ impl Core {
             ongoing_disconnections: Vec::new(),
             pending_unregisters: Vec::new(),
             route_healths,
+            probe: None,
+            probe_generation: 0,
+            stale_wg_public_key: None,
             next_request_id: 0,
             responders: HashMap::new(),
             // needed to keep working during enabled killswitch
@@ -244,20 +291,18 @@ impl Core {
             tokio::select! {
                 // React to an incoming worker events
                 Some(event) = self.incoming_receiver.recv() => {
-                    if self.on_event(event, &results_sender).await {
-                        continue;
-                    } else {
+                    if !self.on_event(event, &results_sender).await {
                         break;
                     }
+                    self.sync_root_probe_hold().await;
                 }
 
                 // React to internal results from spawned runner tasks
                 Some(results) = results_receiver.recv() => {
-                    if self.on_results(results, &results_sender).await {
-                        continue;
-                    } else {
+                    if !self.on_results(results, &results_sender).await {
                         break;
                     }
+                    self.sync_root_probe_hold().await;
                 }
 
                 else => {
@@ -277,6 +322,8 @@ impl Core {
                 self.phase = Phase::ShuttingDown;
                 // no need to recreate cancellation tokens after shutdown
                 self.cancel_on_shutdown.cancel();
+                // Dropping the probe detaches its session close before hopr aborts the listeners.
+                self.probe.take();
                 if let Some(hopr) = self.hopr.clone() {
                     let shutdown_tracker = TaskTracker::new();
                     if let Some(handle) = self.strategy_handle.take() {
@@ -391,6 +438,7 @@ impl Core {
                                 let _ = resp.send(Response::connect(command::ConnectResponse::already_connected(
                                     dest.clone(),
                                 )));
+<<<<<<< HEAD
                             } else if let Some(rh) = self.route_healths.get(&dest.id) {
                                 if rh.is_ready_to_connect() {
                                     let _ = resp
@@ -398,10 +446,20 @@ impl Core {
                                     self.target_destination = Some(dest.clone());
                                     self.act_on_target(results_sender);
                                 } else if rh.is_unrecoverable() {
+=======
+                            } else if let Some(rh) = self.route_healths.get(&dest.key()) {
+                                if rh.is_unrecoverable() {
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
                                     let _ = resp.send(Response::connect(command::ConnectResponse::unable(
                                         dest.clone(),
                                         rh.state().clone(),
                                     )));
+                                } else if rh.is_routable() {
+                                    // Opening the probe is part of connecting; act_on_target sequences it.
+                                    let _ = resp
+                                        .send(Response::connect(command::ConnectResponse::connecting(dest.clone())));
+                                    self.target = Some(dest.connect_id.clone());
+                                    self.act_on_target(results_sender);
                                 } else {
                                     let _ = resp.send(Response::connect(command::ConnectResponse::waiting(
                                         dest.clone(),
@@ -437,6 +495,48 @@ impl Core {
                             }
                         }
                         self.act_on_target(results_sender);
+                    }
+
+                    WorkerCommand::Probe(token) => {
+                        let response = match self.config.destinations.resolve(&token).cloned() {
+                            Ok(dest) => self.probe_destination(dest, results_sender),
+                            Err(destination::Unresolved::Ambiguous(ids)) => {
+                                command::ProbeResponse::DestinationAmbiguous { connect_ids: ids }
+                            }
+                            Err(destination::Unresolved::NotFound) => command::ProbeResponse::DestinationNotFound,
+                        };
+                        let _ = resp.send(Response::Probe(response));
+                    }
+
+                    WorkerCommand::QuickProbe(token) => match self.config.destinations.resolve(&token).cloned() {
+                        Ok(dest) => self.spawn_quick_probe(dest, resp, results_sender),
+                        Err(destination::Unresolved::Ambiguous(ids)) => {
+                            let _ = resp.send(Response::QuickProbe(
+                                command::QuickProbeResponse::DestinationAmbiguous { connect_ids: ids },
+                            ));
+                        }
+                        Err(destination::Unresolved::NotFound) => {
+                            let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::DestinationNotFound));
+                        }
+                    },
+
+                    WorkerCommand::Unprobe => {
+                        let response = match self.probe.as_ref() {
+                            None => {
+                                self.root_probe_hold = false;
+                                command::UnprobeResponse::NotProbing
+                            }
+                            Some(p) if self.probe_in_use(p.destination()) => {
+                                command::UnprobeResponse::in_use(p.destination().clone())
+                            }
+                            Some(p) => {
+                                let destination = p.destination().clone();
+                                self.stop_probe();
+                                self.root_probe_hold = false;
+                                command::UnprobeResponse::closing(destination)
+                            }
+                        };
+                        let _ = resp.send(Response::Unprobe(response));
                     }
 
                     WorkerCommand::Balance => {
@@ -541,6 +641,16 @@ impl Core {
                     };
                 }
             }
+<<<<<<< HEAD
+=======
+            Results::ExitNodesUpdated { nodes } => {
+                self.merge_discovered_destinations(nodes, results_sender).await;
+            }
+            Results::ExitNodesRetry { error } => {
+                tracing::warn!(%error, "exit node discovery failed - retrying");
+                self.spawn_exit_node_discovery_runner(results_sender, Duration::from_secs(30));
+            }
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
             Results::HoprConstruction(edgli_state) => {
                 if matches!(self.phase, Phase::Starting { .. }) {
                     self.phase = Phase::Starting {
@@ -578,8 +688,8 @@ impl Core {
                 Ok(caps) => {
                     let caps = self.capacity_reconciler.reconcile(caps);
                     tracing::info!(%caps, "received capacity allocations");
-                    let has_channels = !caps.peer_allocations.is_empty();
                     self.capacity_allocations = Some(caps);
+<<<<<<< HEAD
                     if has_channels && let Some(hopr) = self.hopr.clone() {
                         let dest_ids: Vec<String> = self.route_healths.keys().cloned().collect();
                         for id in &dest_ids {
@@ -596,6 +706,9 @@ impl Core {
                         Duration::from_secs(60)
                     };
                     self.spawn_capacity_allocations_runner(results_sender, delay);
+=======
+                    self.spawn_capacity_allocations_runner(results_sender, Duration::from_secs(60));
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
                 }
                 Err(err) => {
                     tracing::warn!(?err, "failed to fetch capacity allocations - retrying");
@@ -656,15 +769,20 @@ impl Core {
                 self.on_hopr_running(results_sender);
             }
 
-            Results::Peers { res } => {
-                let delay = match res {
-                    Ok(peer::Peers { announced, connected }) => {
-                        tracing::info!(
-                            num_announced = %announced.len(),
-                            num_connected = %connected.len(),
-                            "fetched peers"
-                        );
+            Results::AnnouncedPeers { res } => match res {
+                Ok(announced) => {
+                    tracing::info!(num_announced = %announced.len(), "fetched announced peers");
+                    let peer_ips: Vec<net::Ipv4Addr> =
+                        announced.values().flat_map(|p| p.ipv4_addrs.iter().copied()).collect();
+                    let _ = self
+                        .outgoing_sender
+                        .send(CoreToWorker::RequestToRoot(RequestToRoot::UpdatePeerIps { peer_ips }))
+                        .await;
+                }
+                Err(err) => tracing::error!(?err, "failed to fetch announced peers"),
+            },
 
+<<<<<<< HEAD
                         let peer_ips: Vec<net::Ipv4Addr> =
                             announced.values().flat_map(|p| p.ipv4_addrs.iter().copied()).collect();
                         let _ = self
@@ -716,6 +834,32 @@ impl Core {
                     }
                 };
                 self.spawn_peers(results_sender, delay);
+=======
+            Results::Routability { map } => {
+                let mut became_routable = false;
+                for (key, walked) in map {
+                    if let Some(rh) = self.route_healths.get_mut(&key) {
+                        match walked {
+                            Ok(walk) => became_routable |= rh.apply_walk(walk),
+                            Err(err) => rh.with_error(err),
+                        }
+                    }
+                }
+                if became_routable && self.target.is_some() {
+                    self.act_on_target(results_sender);
+                }
+                let settling = self
+                    .route_healths
+                    .values()
+                    .any(|rh| !rh.is_routable() && !rh.is_unrecoverable());
+                let target_pending = self.target.is_some() && !matches!(self.phase, Phase::Connected(_));
+                let delay = if settling || target_pending {
+                    ROUTABILITY_EAGER_INTERVAL
+                } else {
+                    ROUTABILITY_LAZY_INTERVAL
+                };
+                self.spawn_routability_runner(results_sender, delay);
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
             }
 
             Results::ConnectionEvent(evt) => {
@@ -730,7 +874,7 @@ impl Core {
                                 };
                                 let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                             }
-                            conn.connect_progress(e);
+                            conn.connect_progress(*e);
                             self.phase = Phase::Connecting(conn);
                         }
                         connection::up::Event::Setback(e) => {
@@ -756,10 +900,8 @@ impl Core {
                 } else {
                     tracing::warn!(%evt, ?self.phase, "received disconnection event for unknown connection");
                 }
-                // potentially reconnect early after wg disconnected
-                // this might only happen when reconnecting to a different destination after a
-                // connection established successfully
-                if matches!(evt, connection::down::Event::OpenBridge) {
+                // Not earlier: a probe swap would close the session the down runner still unregisters over.
+                if matches!(evt, connection::down::Event::CloseBridge) {
                     self.act_on_target(results_sender);
                 }
             }
@@ -782,9 +924,12 @@ impl Core {
                     if conn.surb_target.is_some() {
                         self.spawn_surb_ramp_ticker(results_sender);
                     }
+<<<<<<< HEAD
                     self.cancel_peers.cancel();
                     self.cancel_peers = self.cancel_on_shutdown.child_token();
                     self.spawn_peers(results_sender, Duration::from_secs(10));
+=======
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
                 }
                 (Ok(_), phase) => {
                     tracing::warn!(?phase, "unawaited connection established successfully");
@@ -852,10 +997,16 @@ impl Core {
             },
 
             Results::TunnelPingResult { rtt } => {
+<<<<<<< HEAD
                 if let Phase::Connected(conn) = self.phase.clone()
                     && let Some(rh) = self.route_healths.get_mut(&conn.destination.id)
                 {
                     let failures = rh.tunnel_ping_result(rtt);
+=======
+                if let Phase::Connected(mut conn) = self.phase.clone() {
+                    let failures = conn.tunnel_ping_result(rtt);
+                    self.phase = Phase::Connected(conn.clone());
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
                     let max = self.config.connection.health_check_intervals.tunnel_ping_max_failures;
                     if failures >= max {
                         tracing::warn!(%conn, failures, "tunnel ping exceeded max failures - reconnecting");
@@ -934,6 +1085,7 @@ impl Core {
                 }
             },
 
+<<<<<<< HEAD
             Results::HealthCheck { id, outcome } => {
                 tracing::info!(%id, ?outcome, "received health check");
                 if let Some(dest) = self.config.destinations.get(&id).cloned()
@@ -945,7 +1097,54 @@ impl Core {
                     // Trigger connection if we just became ready
                     if !was_ready && rh.is_ready_to_connect() {
                         self.act_on_target(results_sender);
+=======
+            Results::Probe { generation, event } => {
+                let Some(probe) = self.probe.as_mut().filter(|p| p.generation() == generation) else {
+                    tracing::debug!(generation, ?event, "dropping event of a replaced probe");
+                    return true;
+                };
+                if let probe::Event::OpenAborted { error } = &event {
+                    let key = probe.key();
+                    tracing::error!(destination = %probe.destination(), %error, "probe cannot open a session - stopping it");
+                    self.stop_probe();
+                    // The same config aborts every retry, so latch it - a restart would only loop, and nothing else re-drives the target.
+                    if let Some(rh) = self.route_healths.get_mut(&key) {
+                        rh.set_cannot_open_session(error.clone());
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
                     }
+                    return true;
+                }
+                if let probe::Event::OpenGaveUp { error } = &event {
+                    let key = probe.key();
+                    tracing::error!(destination = %probe.destination(), %error, "probe gave up opening a session - stopping it");
+                    self.stop_probe();
+                    if let Some(rh) = self.route_healths.get_mut(&key) {
+                        rh.with_error(error.clone());
+                    }
+                    // Root keeps the killswitch and the target across a restart, so a fresh worker is the last thing left to try.
+                    return self.target_key() != Some(key);
+                }
+                let key = probe.key();
+                let was_ready = probe.ready_session().is_some();
+                let reopening = matches!(event, probe::Event::Reopening { .. });
+                if let probe::Event::Version { versions, .. } = &event
+                    && let Some(rh) = self.route_healths.get_mut(&key)
+                {
+                    rh.apply_api_versions(&versions.versions);
+                }
+                probe.apply(event);
+                let is_ready = probe.ready_session().is_some();
+                if !was_ready && is_ready {
+                    self.act_on_target(results_sender);
+                }
+                // A connection still registering holds a bound_host that just died; restart the attempt.
+                if reopening
+                    && let Phase::Connecting(conn) = self.phase.clone()
+                    && conn.destination.key() == key
+                    && conn.registration.is_none()
+                {
+                    tracing::warn!(%conn, "probe session broke during registration - restarting the attempt");
+                    self.disconnect_from_connection(&conn, results_sender);
                 }
             }
 
@@ -953,20 +1152,51 @@ impl Core {
                 self.try_start_reactor(results_sender).await;
             }
 
+            Results::QuickProbe {
+                destination,
+                outcome,
+                session,
+            } => {
+                // Nobody waits on a quick probe anymore, so a failure would otherwise only show up in `status`.
+                if let Err(error) = &outcome {
+                    tracing::warn!(%destination, %error, "quick probe failed");
+                }
+                // Discovery may have moved this exit mid-check, leaving result and session on the old server.
+                let moved = probe_is_stale(self.config.destinations.get(&destination.key()), &destination);
+                let (outcome, session) = match moved {
+                    true => (Err(QUICK_PROBE_MOVED.to_string()), None),
+                    false => (outcome, session),
+                };
+                match self.route_healths.get_mut(&destination.key()) {
+                    Some(rh) => rh.apply_quick_probe(&outcome, SystemTime::now()),
+                    None => tracing::debug!(%destination, "quick probe finished for a destination that is gone"),
+                }
+                match self.probe.as_mut().filter(|p| p.key() == destination.key()) {
+                    // `None` tells a waiting probe task to open its own session.
+                    Some(probe) => probe.adopt(session),
+                    // Nobody wants it; ProbeSession's Drop closes it.
+                    None => drop(session),
+                }
+            }
+
             Results::NerdStatsTicketStats {
                 res: ticket_stats_status,
                 resp,
             } => match &self.phase {
                 Phase::Connecting(conn) => {
-                    let telemetry = nerd_stats_telemetry(conn);
-                    let conn_stats = command::ConnStats::from_conn(conn, self.node_address, telemetry.as_deref());
+                    let bridge = self.probe_session_for(conn);
+                    let telemetry = nerd_stats_telemetry(conn, bridge);
+                    let conn_stats =
+                        command::ConnStats::from_conn(conn, self.node_address, telemetry.as_deref(), bridge);
                     let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
                         connection: command::NerdStatsConnection::Connecting(ticket_stats_status, conn_stats),
                     }));
                 }
                 Phase::Connected(conn) => {
-                    let telemetry = nerd_stats_telemetry(conn);
-                    let conn_stats = command::ConnStats::from_conn(conn, self.node_address, telemetry.as_deref());
+                    let bridge = self.probe_session_for(conn);
+                    let telemetry = nerd_stats_telemetry(conn, bridge);
+                    let conn_stats =
+                        command::ConnStats::from_conn(conn, self.node_address, telemetry.as_deref(), bridge);
                     let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
                         connection: command::NerdStatsConnection::Connected(ticket_stats_status, conn_stats),
                     }));
@@ -1194,6 +1424,93 @@ impl Core {
         });
     }
 
+<<<<<<< HEAD
+=======
+    /// Only runs once the node is up, since tracking the registry needs its chain connector — so a
+    /// config with no `[destinations]` has none until then. The guard also stops the
+    /// `ExitNodesRetry` re-spawn from resurrecting discovery outside that window.
+    fn spawn_exit_node_discovery_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let Some(hopr) = self.hopr.clone() else { return };
+        let cancel = self.cancel_on_shutdown.clone();
+        let worker_params = self.worker_params.clone();
+        let blokli_config = self.config.blokli.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    runner::watch_exit_nodes(&worker_params, blokli_config, hopr, results_sender).await;
+                })
+                .await
+        });
+    }
+
+    /// Merges a discovery snapshot in and keeps `route_healths` in step, mirroring `Core::init`.
+    ///
+    /// Leaves the state machine alone: a live connection holds its own `Destination` regardless.
+    async fn merge_discovered_destinations(
+        &mut self,
+        nodes: HashMap<Address, edgli::ExitNodeInfo>,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
+        let targets_before: HashMap<ExitKey, (net::SocketAddr, net::SocketAddr)> = self
+            .config
+            .destinations
+            .iter()
+            .map(|(key, dest)| (*key, (dest.gnosis_vpn_server, dest.wireguard_server)))
+            .collect();
+        // Trackers are what is synced, so one kept past its exit is still seen by the next merge.
+        let before: HashSet<ExitKey> = self.route_healths.keys().copied().collect();
+        let defaults = self.config.default_targets;
+        self.config.destinations.merge_discovered(&nodes, defaults);
+        let after: HashSet<ExitKey> = self.config.destinations.keys().copied().collect();
+
+        let active = match &self.phase {
+            Phase::Connected(conn) | Phase::Connecting(conn) => Some(conn.destination.key()),
+            _ => None,
+        };
+        for removed in trackers_to_drop(&before, &after, active) {
+            self.route_healths.remove(&removed);
+        }
+
+        let mut fresh: Vec<ExitKey> = after.difference(&before).copied().collect();
+        fresh.extend(latched_on_a_moved_target(
+            &self.config.destinations,
+            &self.route_healths,
+            &targets_before,
+        ));
+        for key in &fresh {
+            if let Some(dest) = self.config.destinations.get(key) {
+                self.route_healths.insert(
+                    *key,
+                    RouteHealth::new(
+                        dest,
+                        self.worker_params.allow_insecure(),
+                        self.worker_params.allow_experimental(),
+                    ),
+                );
+            }
+        }
+
+        let probe_stale = self.probe.as_ref().is_some_and(|p| {
+            // An explicit probe holds its own destination like a connection does; only a connect-owned one follows discovery.
+            let droppable = !p.is_requested() && !self.probe_session_busy(p.destination());
+            droppable && probe_is_stale(self.config.destinations.get(&p.key()), p.destination())
+        });
+        if probe_stale {
+            tracing::info!("probed exit gone or moved in discovery - closing its session");
+            self.stop_probe();
+            // A target waiting on that probe needs a fresh one against the current endpoints.
+            self.act_on_target(results_sender);
+        }
+
+        // A tracker that just started over needs a graph walk now, not on the lazy tick.
+        if !fresh.is_empty() {
+            self.spawn_routability_runner(results_sender, Duration::ZERO);
+        }
+    }
+
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
     async fn determine_next_phase_from_safe_disk_query(&mut self, results_sender: &mpsc::Sender<Results>) {
         let res = hopr_config::read_safe(self.worker_params.state_home()).await;
         match res {
@@ -1434,6 +1751,7 @@ impl Core {
         }
     }
 
+<<<<<<< HEAD
     fn spawn_peers(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_peers.clone();
@@ -1447,12 +1765,239 @@ impl Core {
                     .await
             });
         }
+=======
+    fn start_announced_peers_loop(&mut self, results_sender: &mpsc::Sender<Results>) {
+        if self.announced_peers_loop_running {
+            return;
+        }
+        let Some(hopr) = self.hopr.clone() else { return };
+        let cancel = self.cancel_on_shutdown.clone();
+        let results_sender = results_sender.clone();
+        self.announced_peers_loop_running = true;
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(runner::announced_peers_loop(hopr, results_sender))
+                .await
+        });
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
+    }
+
+    /// Walks the graph for the destinations as configured right now; a pending walk is replaced.
+    fn spawn_routability_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let Some(hopr) = self.hopr.clone() else { return };
+        self.cancel_routability.cancel();
+        self.cancel_routability = self.cancel_on_shutdown.child_token();
+        let cancel = self.cancel_routability.clone();
+        let targets: Vec<(ExitKey, Address, HopRouting)> = self
+            .config
+            .destinations
+            .iter()
+            .map(|(key, dest)| (*key, dest.address, dest.routing))
+            .collect();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(probe::jitter(delay)).await;
+                    runner::routability(hopr, targets, results_sender).await;
+                })
+                .await
+        });
+    }
+
+    /// Answers `probe <id>`: refuses a latched route, keeps an existing probe of the same exit, else (re)starts.
+    fn probe_destination(
+        &mut self,
+        dest: Destination,
+        results_sender: &mpsc::Sender<Results>,
+    ) -> command::ProbeResponse {
+        if self.hopr.is_none() {
+            return command::ProbeResponse::NotReady;
+        }
+        if let Some(rh) = self.route_healths.get(&dest.key())
+            && rh.is_not_allowed()
+        {
+            return command::ProbeResponse::UnableToProbe {
+                destination: dest,
+                route_health: rh.state().clone(),
+            };
+        }
+        // Root counts this answer towards the idle countdown, so the probe must outlive the target too.
+        if let Some(probe) = self.probe.as_mut().filter(|p| p.key() == dest.key()) {
+            probe.mark_requested();
+            self.root_probe_hold = true;
+            return command::ProbeResponse::AlreadyProbing { destination: dest };
+        }
+        if let Some(in_use) = self
+            .probe
+            .as_ref()
+            .map(Probe::destination)
+            .filter(|probed| self.probe_in_use(probed))
+        {
+            return command::ProbeResponse::InUse {
+                destination: Box::new(in_use.clone()),
+            };
+        }
+        self.root_probe_hold = true;
+        match self.start_probe(&dest, true, results_sender) {
+            Some(previous) => command::ProbeResponse::Replaced {
+                destination: dest,
+                previous: Box::new(previous),
+            },
+            None => command::ProbeResponse::Probing { destination: dest },
+        }
+    }
+
+    /// Starts `quickprobe <id>` and answers right away; the result lands in the destination's route health.
+    fn spawn_quick_probe(
+        &mut self,
+        dest: Destination,
+        resp: oneshot::Sender<Response>,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
+        let Some(hopr) = self.hopr.clone() else {
+            let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::NotReady));
+            return;
+        };
+        let Some(route_health) = self.route_healths.get_mut(&dest.key()) else {
+            tracing::warn!(key = %dest.key(), "no route health found for destination - this should not happen");
+            let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::DestinationNotFound));
+            return;
+        };
+        if !route_health.is_routable() && !route_health.is_incompatible_api() {
+            let state = route_health.state().clone();
+            let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::unable(dest, state)));
+            return;
+        }
+        // The long-lived probe already reports on this exit; a second session would only add load.
+        if self.probe.as_ref().is_some_and(|p| p.key() == dest.key()) {
+            let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::already_probing(dest)));
+            return;
+        }
+        if !route_health.start_quick_probe(SystemTime::now()) {
+            let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::already_checking(
+                dest,
+            )));
+            return;
+        }
+        let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::checking(
+            dest.clone(),
+        )));
+
+        let options = self.config.connection.clone();
+        let cancel = self.cancel_on_shutdown.clone();
+        let sender = results_sender.clone();
+        tokio::spawn(async move {
+            let result = cancel
+                .run_until_cancelled(probe::quick_probe(hopr, dest.clone(), options))
+                .await;
+            let Some((outcome, session)) = result else {
+                tracing::debug!(destination = %dest, "quick probe cancelled by shutdown");
+                return;
+            };
+            let _ = sender
+                .send(Results::QuickProbe {
+                    destination: Box::new(dest),
+                    outcome,
+                    session,
+                })
+                .await;
+        });
+    }
+
+    /// The exit the current target resolves to, once discovery knows it.
+    fn target_key(&self) -> Option<ExitKey> {
+        let target = self.target.as_ref()?;
+        self.config.destinations.by_connect_id(target).map(Destination::key)
+    }
+
+    /// Whether someone is mid-exchange over the probe's session right now.
+    fn probe_session_busy(&self, probed: &Destination) -> bool {
+        probe_session_busy(&self.phase, &self.ongoing_disconnections, probed)
+    }
+
+    /// Whether dropping the probe of `probed` would pull the session out from under someone.
+    fn probe_in_use(&self, probed: &Destination) -> bool {
+        probe_in_use(&self.phase, &self.ongoing_disconnections, self.target_key(), probed)
+    }
+
+    /// Starts probing `dest`, replacing any other probe. Returns the destination it replaced.
+    fn start_probe(
+        &mut self,
+        dest: &Destination,
+        requested: bool,
+        results_sender: &mpsc::Sender<Results>,
+    ) -> Option<Destination> {
+        let hopr = self.hopr.clone()?;
+        let replaced = self.stop_probe();
+        self.probe_generation += 1;
+        let start = probe::Start {
+            requested,
+            // A quick check in flight for this exit already holds a session; the probe takes it over.
+            adopt_quick_session: self
+                .route_healths
+                .get(&dest.key())
+                .is_some_and(RouteHealth::is_quick_probing),
+        };
+        tracing::info!(
+            destination = %dest,
+            generation = self.probe_generation,
+            adopting = start.adopt_quick_session,
+            "starting probe"
+        );
+        self.probe = Some(Probe::start(
+            dest,
+            self.probe_generation,
+            hopr,
+            self.config.connection.clone(),
+            &self.cancel_on_shutdown,
+            results_sender,
+            start,
+        ));
+        replaced
+    }
+
+    /// Root holds the idle countdown for an explicit probe; every way that probe can vanish ends up here.
+    async fn sync_root_probe_hold(&mut self) {
+        let held = self.probe.as_ref().is_some_and(Probe::is_requested);
+        if !self.root_probe_hold || held {
+            return;
+        }
+        self.root_probe_hold = false;
+        let request = CoreToWorker::RequestToRoot(RequestToRoot::ProbeStopped);
+        let _ = self.outgoing_sender.send(request).await;
+    }
+
+    /// Closes a probe that only existed for a target that is now gone; a requested one stays.
+    fn stop_implicit_probe(&mut self) {
+        let orphaned = self
+            .probe
+            .as_ref()
+            .is_some_and(|p| !p.is_requested() && !self.probe_in_use(p.destination()));
+        if orphaned {
+            self.stop_probe();
+        }
+    }
+
+    /// Dropping the probe cancels its task, which closes the session.
+    fn stop_probe(&mut self) -> Option<Destination> {
+        let probe = self.probe.take()?;
+        tracing::info!(destination = %probe.destination(), "stopping probe");
+        Some(probe.destination().clone())
+    }
+
+    /// The probe session belonging to `conn`'s exit, if that is what is being probed.
+    fn probe_session_for(&self, conn: &connection::up::Up) -> Option<&SessionClientMetadata> {
+        self.probe
+            .as_ref()
+            .filter(|p| p.key() == conn.destination.key())
+            .and_then(Probe::any_session)
     }
 
     fn spawn_connection_runner(
         &mut self,
         destination: Destination,
-        exit: route_health::ExitHealth,
+        bridge_session: SessionClientMetadata,
         prev_public_key: Option<String>,
         results_sender: &mpsc::Sender<Results>,
     ) {
@@ -1470,6 +2015,7 @@ impl Core {
                 destination: conn.destination.clone(),
                 options: config_connection,
                 wg_config: config_wireguard,
+                bridge_session,
             };
             let pump_lifecycle = connection::up::runner::PumpLifecycle {
                 cancel: self.cancel_connection.clone(),
@@ -1483,9 +2029,12 @@ impl Core {
                 pump_lifecycle,
             );
             let results_sender = results_sender.clone();
+<<<<<<< HEAD
             if let Some(rh) = self.route_healths.get_mut(&destination.id) {
                 rh.connecting(&hopr, &destination, exit, &self.config.connection, &results_sender);
             }
+=======
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
             self.phase = Phase::Connecting(conn);
             tokio::spawn(async move {
                 cancel
@@ -1527,7 +2076,7 @@ impl Core {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_on_shutdown.clone();
             let config_connection = self.config.connection.clone();
-            let runner = connection::down::runner::Runner::new(disconn.clone(), hopr, config_connection);
+            let runner = connection::down::runner::Runner::new(disconn.clone(), hopr, config_connection, None);
             let results_sender = results_sender.clone();
             self.ongoing_disconnections.push(disconn.clone());
             tokio::spawn(async move {
@@ -1544,13 +2093,13 @@ impl Core {
         &mut self,
         disconn: &connection::down::Down,
         pump_tasks: TaskTracker,
+        reuse: Option<SessionClientMetadata>,
         results_sender: &mpsc::Sender<Results>,
     ) {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_on_shutdown.clone();
             let config_connection = self.config.connection.clone();
-            let hopr = hopr.clone();
-            let runner = connection::down::runner::Runner::new(disconn.clone(), hopr, config_connection);
+            let runner = connection::down::runner::Runner::new(disconn.clone(), hopr, config_connection, reuse);
             let results_sender = results_sender.clone();
             self.ongoing_disconnections.push(disconn.clone());
             let outgoing_sender = self.outgoing_sender.clone();
@@ -1664,6 +2213,7 @@ impl Core {
             Phase::Connected(conn) => Some(command::ConnectedInfo {
                 destination_id: conn.destination.id.clone(),
                 since: conn.phase.0,
+                tunnel_ping_rtt: conn.tunnel_ping.rtt,
             }),
             _ => None,
         };
@@ -1693,11 +2243,13 @@ impl Core {
             reconnecting,
             connected,
             disconnecting,
+            probe: self.probe.as_ref().map(Probe::view),
         }
     }
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     fn act_on_target(&mut self, results_sender: &mpsc::Sender<Results>) {
+<<<<<<< HEAD
         tracing::debug!(target = ?self.target_destination, phase = ?self.phase, "acting on target destination");
         match (self.target_destination.clone(), self.phase.clone()) {
             // Connecting from ready
@@ -1712,7 +2264,73 @@ impl Core {
                         tracing::warn!(destination = %dest,route_health = ?rh.state(),  "waiting for better route health before connecting");
                     }
                 } else {
+=======
+        tracing::debug!(target = ?self.target, phase = ?self.phase, "acting on target destination");
+
+        // Only an absent target means disconnect; an unresolved one still waits for discovery.
+        let Some(target) = self.target.clone() else {
+            match self.phase.clone() {
+                Phase::Connected(conn) => {
+                    tracing::info!(current = %conn.destination, "disconnecting from destination");
+                    self.disconnect_from_connection(&conn, results_sender);
+                }
+                Phase::Connecting(conn) => {
+                    tracing::info!(current = %conn.destination, "disconnecting from ongoing connection attempt");
+                    self.disconnect_from_connection(&conn, results_sender);
+                }
+                _ => {}
+            }
+            // Root never counted this one towards the idle countdown, so stopping it needs no message.
+            self.stop_implicit_probe();
+            return;
+        };
+        let Some(dest) = self.config.destinations.by_connect_id(&target).cloned() else {
+            tracing::debug!(%target, "target destination not known yet - waiting for discovery");
+            return;
+        };
+
+        match self.phase.clone() {
+            // Connecting from ready
+            Phase::HoprRunning => {
+                let Some(rh) = self.route_healths.get(&dest.key()) else {
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
                     tracing::warn!(destination = %dest, "refusing connection: destination has no route health tracker");
+                    return;
+                };
+                match connect_step(rh, self.probe.as_ref(), &dest) {
+                    ConnectStep::Refuse => {
+                        tracing::error!(destination = %dest, route_health = ?rh.state(), "refusing connection because of route health");
+                    }
+                    ConnectStep::WaitRoutable => {
+                        tracing::warn!(destination = %dest, route_health = ?rh.state(), "waiting for a route before connecting");
+                    }
+                    ConnectStep::StartProbe => {
+                        // A disconnect may still be unregistering over the current probe; its result re-runs this.
+                        if let Some(busy) = self
+                            .probe
+                            .as_ref()
+                            .map(Probe::destination)
+                            .filter(|probed| self.probe_session_busy(probed))
+                        {
+                            tracing::debug!(destination = %dest, %busy, "waiting for the ongoing disconnect before replacing its probe");
+                            return;
+                        }
+                        tracing::info!(destination = %dest, "opening probe session before connecting");
+                        // Replacing this exit's own stale probe must not demote an explicit one to connect-owned.
+                        let requested = self
+                            .probe
+                            .as_ref()
+                            .is_some_and(|p| p.key() == dest.key() && p.is_requested());
+                        self.start_probe(&dest, requested, results_sender);
+                    }
+                    ConnectStep::WaitProbe => {
+                        tracing::debug!(destination = %dest, "waiting for the probe's initial checks before connecting");
+                    }
+                    ConnectStep::Connect(bridge_session) => {
+                        tracing::info!(destination = %dest, "establishing connection to new destination");
+                        let prev_public_key = self.stale_wg_public_key.take();
+                        self.spawn_connection_runner(dest.clone(), bridge_session, prev_public_key, results_sender);
+                    }
                 }
             }
             // Connecting to different destination while already connected
@@ -1746,14 +2364,21 @@ impl Core {
         let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
         self.responders.clear();
         self.phase = Phase::HoprRunning;
+<<<<<<< HEAD
         if let Some(dest) = self.config.destinations.get(&conn.destination.id).cloned()
             && let Some(rh) = self.route_healths.get_mut(&conn.destination.id)
             && let Some(hopr) = self.hopr.as_ref()
         {
             rh.disconnecting(hopr, &dest, &self.config.connection, results_sender);
         }
+=======
+        // Discovery may have dropped this exit mid-connection; its tracker was kept only for the tunnel pings.
+        let configured = &self.config.destinations;
+        self.route_healths.retain(|key, _| configured.contains_key(key));
+        let reuse = self.probe_session_for(conn).cloned();
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
         if let Ok(disconn) = conn.try_into() {
-            self.spawn_disconnection_runner(&disconn, pump_tasks, results_sender);
+            self.spawn_disconnection_runner(&disconn, pump_tasks, reuse, results_sender);
         } else {
             // connection did not even generate a wg pub key - so we can immediately try to connect again
             self.act_on_target(results_sender);
@@ -1768,10 +2393,19 @@ impl Core {
     async fn force_reconnect(&mut self, conn: connection::up::Up, results_sender: &mpsc::Sender<Results>) {
         let destination = conn.destination.clone();
         let prev_public_key = conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone());
+<<<<<<< HEAD
         let exit_health = self
             .route_healths
             .get(&destination.id)
             .and_then(|rh| rh.current_exit_health());
+=======
+        let bridge_session = self
+            .probe
+            .as_ref()
+            .filter(|p| p.key() == destination.key())
+            .and_then(Probe::ready_session)
+            .cloned();
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
 
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
@@ -1790,15 +2424,15 @@ impl Core {
 
         self.phase = Phase::HoprRunning;
 
-        if let Some(exit) = exit_health {
-            self.spawn_connection_runner(destination, exit, prev_public_key, results_sender);
+        if let Some(bridge_session) = bridge_session {
+            self.spawn_connection_runner(destination, bridge_session, prev_public_key, results_sender);
         } else {
-            // Invariant violation: force_reconnect is only called from Connecting/Connected
-            // which always sets route health to Connecting. Log and wait for health check.
+            // The probe is not ready (or on another exit); the next runner unregisters the old key.
             tracing::warn!(
                 ?destination,
-                "force reconnect: no cached exit health — waiting for health check"
+                "force reconnect: probe session not ready - waiting for it"
             );
+            self.stale_wg_public_key = prev_public_key;
             self.act_on_target(results_sender);
         }
     }
@@ -1808,11 +2442,17 @@ impl Core {
         self.spawn_ideal_balance_recommendation_runner(results_sender, Duration::ZERO);
         self.spawn_capacity_allocations_runner(results_sender, Duration::ZERO);
         self.spawn_balances_runner(results_sender, Duration::ZERO);
+<<<<<<< HEAD
         if route_health::any_needs_peers(self.route_healths.values()) {
             self.spawn_peers(results_sender, Duration::ZERO);
         } else {
             self.act_on_target(results_sender);
         }
+=======
+        self.spawn_routability_runner(results_sender, Duration::ZERO);
+        self.start_announced_peers_loop(results_sender);
+        self.act_on_target(results_sender);
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
     }
 
     async fn try_start_reactor(&mut self, results_sender: &mpsc::Sender<Results>) {
@@ -1882,8 +2522,8 @@ fn connection_infos(
 }
 
 /// Best-effort SURB telemetry for nerd stats; the expensive scrape is skipped when no session uses it.
-fn nerd_stats_telemetry(conn: &connection::up::Up) -> Option<String> {
-    if conn.bridge_session.is_none() && conn.ping_session.is_none() {
+fn nerd_stats_telemetry(conn: &connection::up::Up, bridge: Option<&SessionClientMetadata>) -> Option<String> {
+    if bridge.is_none() && conn.ping_session.is_none() {
         return None;
     }
     match hopr::telemetry() {
@@ -1902,6 +2542,98 @@ async fn wait_for_pump_stop(pump_tasks: TaskTracker) {
     }
 }
 
+<<<<<<< HEAD
+=======
+/// What connecting to a destination needs next, given its route and the one probe.
+#[derive(Debug, PartialEq)]
+enum ConnectStep {
+    Refuse,
+    WaitRoutable,
+    StartProbe,
+    WaitProbe,
+    Connect(SessionClientMetadata),
+}
+
+fn connect_step(rh: &RouteHealth, probe: Option<&Probe>, dest: &Destination) -> ConnectStep {
+    if rh.is_unrecoverable() {
+        return ConnectStep::Refuse;
+    }
+    if !rh.is_routable() {
+        return ConnectStep::WaitRoutable;
+    }
+    // Same exit is not enough: a probe opened before discovery moved it still talks to the old server.
+    let ours = probe.filter(|p| p.key() == dest.key() && !probe_is_stale(Some(dest), p.destination()));
+    match ours {
+        Some(p) => match p.ready_session() {
+            Some(session) => ConnectStep::Connect(session.clone()),
+            None => ConnectStep::WaitProbe,
+        },
+        None => ConnectStep::StartProbe,
+    }
+}
+
+/// A probe whose exit is gone, or whose endpoints moved under it, talks to a server that is no longer current.
+fn probe_is_stale(current: Option<&Destination>, probed: &Destination) -> bool {
+    current.is_none_or(|current| {
+        current.gnosis_vpn_server != probed.gnosis_vpn_server || current.wireguard_server != probed.wireguard_server
+    })
+}
+
+/// Whether closing this probe would pull its session out from under an exchange still running over it.
+fn probe_session_busy(phase: &Phase, disconnecting: &[connection::down::Down], probed: &Destination) -> bool {
+    let bridging =
+        matches!(phase, Phase::Connecting(conn) | Phase::Connected(conn) if conn.destination.same_exit(probed));
+    // Past ClosingBridge the down runner is done with the session; before it, closing the probe fails the unregister.
+    let unregistering = disconnecting
+        .iter()
+        .any(|d| d.destination.same_exit(probed) && d.phase.1 != connection::down::Phase::ClosingBridge);
+    bridging || unregistering
+}
+
+/// The probe's session still has a user, or a target is waiting on it; either way it must not be dropped.
+fn probe_in_use(
+    phase: &Phase,
+    disconnecting: &[connection::down::Down],
+    target: Option<ExitKey>,
+    probed: &Destination,
+) -> bool {
+    let registering = matches!(phase, Phase::Connecting(conn) if conn.destination.same_exit(probed));
+    let unregistering = disconnecting.iter().any(|d| d.destination.same_exit(probed));
+    // Nothing restarts a probe for an already accepted target, so dropping it strands the connection.
+    let awaited = matches!(phase, Phase::HoprRunning) && target == Some(probed.key());
+    registering || unregistering || awaited
+}
+
+/// Trackers to restart: `Unrecoverable` latches, so a moved target needs a fresh tracker to be tried again.
+fn latched_on_a_moved_target(
+    destinations: &Destinations,
+    route_healths: &HashMap<ExitKey, RouteHealth>,
+    targets_before: &HashMap<ExitKey, (net::SocketAddr, net::SocketAddr)>,
+) -> Vec<ExitKey> {
+    let mut keys = Vec::new();
+    for (key, dest) in destinations.iter() {
+        let Some(previous) = targets_before.get(key) else {
+            continue;
+        };
+        let target_moved = *previous != (dest.gnosis_vpn_server, dest.wireguard_server);
+        let latched = route_healths.get(key).is_some_and(RouteHealth::is_unrecoverable);
+        if target_moved && latched {
+            keys.push(*key);
+        }
+    }
+    keys
+}
+
+/// The live connection keeps its tracker, since tunnel pings are judged through it, until the merge after it ends.
+fn trackers_to_drop(before: &HashSet<ExitKey>, after: &HashSet<ExitKey>, active: Option<ExitKey>) -> Vec<ExitKey> {
+    before
+        .difference(after)
+        .copied()
+        .filter(|key| Some(*key) != active)
+        .collect()
+}
+
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1917,6 +2649,24 @@ mod tests {
         )
     }
 
+<<<<<<< HEAD
+=======
+    fn latched_destination(id: &str) -> Destination {
+        let mut dest = destination(id);
+        // 0-hop without `allow_insecure` is the one latch reachable without a live health check.
+        dest.routing = HopRouting::try_from(0).expect("conversion cannot fail");
+        dest
+    }
+
+    fn tracker(dest: &Destination) -> RouteHealth {
+        RouteHealth::new(dest, false, false)
+    }
+
+    fn targets(dest: &Destination) -> HashMap<ExitKey, (net::SocketAddr, net::SocketAddr)> {
+        HashMap::from([(dest.key(), (dest.gnosis_vpn_server, dest.wireguard_server))])
+    }
+
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
     fn attempt(id: &str, phase: UpPhase) -> Up {
         let mut up = Up::new(destination(id));
         up.phase = (SystemTime::UNIX_EPOCH, phase);
@@ -1924,6 +2674,179 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
+=======
+    fn a_vanished_exit_keeps_its_tracker_while_it_is_the_live_connection() {
+        let live = destination("live").key();
+        let mut far = destination("gone");
+        far.routing = HopRouting::try_from(3).expect("conversion cannot fail");
+        let gone = far.key();
+        let before = HashSet::from([live, gone]);
+        let after = HashSet::new();
+
+        let dropped = trackers_to_drop(&before, &after, Some(live));
+
+        assert_eq!(vec![gone], dropped);
+    }
+
+    #[test]
+    fn a_kept_tracker_is_dropped_once_its_connection_is_over() {
+        let gone = destination("gone").key();
+        let before = HashSet::from([gone]);
+
+        let dropped = trackers_to_drop(&before, &HashSet::new(), None);
+
+        assert_eq!(vec![gone], dropped);
+    }
+
+    #[test]
+    fn a_latched_tracker_restarts_once_discovery_moves_its_target() {
+        let mut dest = latched_destination("exit");
+        let before = targets(&dest);
+        let route_healths = HashMap::from([(dest.key(), tracker(&dest))]);
+        dest.gnosis_vpn_server = "10.0.0.1:9000".parse().expect("valid socket address");
+        let destinations = Destinations::from_iter([dest]);
+
+        let keys = latched_on_a_moved_target(&destinations, &route_healths, &before);
+
+        assert_eq!(1, keys.len());
+        assert_eq!("exit", destinations.get(&keys[0]).unwrap().connect_id);
+    }
+
+    #[test]
+    fn a_latched_tracker_on_an_unchanged_target_is_left_alone() {
+        let dest = latched_destination("exit");
+        let before = targets(&dest);
+        let route_healths = HashMap::from([(dest.key(), tracker(&dest))]);
+        let destinations = Destinations::from_iter([dest]);
+
+        let keys = latched_on_a_moved_target(&destinations, &route_healths, &before);
+
+        assert!(keys.is_empty());
+    }
+
+    fn disconnection(dest: &Destination) -> connection::down::Down {
+        connection::down::Down {
+            destination: dest.clone(),
+            phase: (SystemTime::UNIX_EPOCH, connection::down::Phase::UnregisterWg),
+            wg_public_key: "key".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_free_probe_may_be_dropped() {
+        let probed = destination("exit");
+        assert!(!probe_in_use(&Phase::HoprRunning, &[], None, &probed));
+    }
+
+    #[test]
+    fn a_probe_being_registered_or_unregistered_over_is_in_use() {
+        let probed = destination("exit");
+        let connecting = Phase::Connecting(attempt("exit", UpPhase::RegisterWg));
+        assert!(probe_in_use(&connecting, &[], None, &probed));
+        assert!(probe_in_use(
+            &Phase::HoprRunning,
+            &[disconnection(&probed)],
+            None,
+            &probed
+        ));
+    }
+
+    #[test]
+    fn a_probe_an_accepted_target_waits_for_is_in_use() {
+        let probed = destination("exit");
+        assert!(probe_in_use(&Phase::HoprRunning, &[], Some(probed.key()), &probed));
+    }
+
+    #[test]
+    fn a_connected_target_no_longer_holds_its_probe() {
+        let probed = destination("exit");
+        let connected = Phase::Connected(attempt("exit", UpPhase::RegisterWg));
+        assert!(!probe_in_use(&connected, &[], Some(probed.key()), &probed));
+    }
+
+    #[test]
+    fn a_probe_a_disconnect_still_unregisters_over_is_busy() {
+        let probed = destination("exit");
+        assert!(probe_session_busy(
+            &Phase::HoprRunning,
+            &[disconnection(&probed)],
+            &probed
+        ));
+        assert!(!probe_session_busy(&Phase::HoprRunning, &[], &probed));
+        let mut other = destination("other");
+        other.address = Address::from([2u8; 20]);
+        assert!(!probe_session_busy(
+            &Phase::HoprRunning,
+            &[disconnection(&other)],
+            &probed
+        ));
+    }
+
+    #[test]
+    fn a_disconnect_past_its_unregister_frees_the_probe() {
+        let probed = destination("exit");
+        let mut closing = disconnection(&probed);
+        closing.disconnect_evt(connection::down::Event::CloseBridge);
+        assert!(!probe_session_busy(&Phase::HoprRunning, &[closing], &probed));
+    }
+
+    #[test]
+    fn a_connection_bridging_over_its_probe_keeps_it_busy() {
+        let probed = destination("exit");
+        let connected = Phase::Connected(attempt("exit", UpPhase::RegisterWg));
+        assert!(probe_session_busy(&connected, &[], &probed));
+        let connecting = Phase::Connecting(attempt("exit", UpPhase::RegisterWg));
+        assert!(probe_session_busy(&connecting, &[], &probed));
+    }
+
+    #[test]
+    fn a_probe_is_stale_once_its_exit_is_gone_or_has_moved() {
+        let probed = destination("exit");
+        assert!(probe_is_stale(None, &probed));
+        assert!(!probe_is_stale(Some(&probed), &probed));
+
+        let mut moved = probed.clone();
+        moved.gnosis_vpn_server = "172.30.0.2:8000".parse().expect("valid socket address");
+        assert!(probe_is_stale(Some(&moved), &probed));
+    }
+
+    #[test]
+    fn connect_step_refuses_a_latched_route() {
+        let dest = latched_destination("exit");
+        assert_eq!(connect_step(&tracker(&dest), None, &dest), ConnectStep::Refuse);
+    }
+
+    #[test]
+    fn connect_step_waits_for_a_route_before_probing() {
+        let dest = destination("exit");
+        assert_eq!(connect_step(&tracker(&dest), None, &dest), ConnectStep::WaitRoutable);
+    }
+
+    #[test]
+    fn connect_step_starts_a_probe_once_routable() {
+        let dest = destination("exit");
+        let mut rh = tracker(&dest);
+        rh.set_routable(true);
+        assert_eq!(connect_step(&rh, None, &dest), ConnectStep::StartProbe);
+    }
+
+    // The graph is what makes a moved target reachable again; the tracker just waits for the next walk.
+    #[test]
+    fn a_moved_target_alone_does_not_restart_a_live_tracker() {
+        let mut dest = destination("exit");
+        let before = targets(&dest);
+        let route_healths = HashMap::from([(dest.key(), tracker(&dest))]);
+        dest.wireguard_server = "10.0.0.1:9001".parse().expect("valid socket address");
+        let destinations = Destinations::from_iter([dest]);
+
+        let keys = latched_on_a_moved_target(&destinations, &route_healths, &before);
+
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
     fn waiting_on_route_health_reports_a_reconnect_without_a_phase() {
         let target = destination("exit");
         let since = SystemTime::UNIX_EPOCH;

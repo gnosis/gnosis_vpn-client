@@ -126,15 +126,15 @@ where
     }
 }
 
-/// Controls how often each tier of health check runs.
-/// Ping runs every cycle. Health and version piggyback every Nth cycle.
+/// Cadence of each check the probe session runs, plus the tunnel's own ICMP ping.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HealthCheckIntervals {
+    /// Exit API version check.
+    pub version: Duration,
+    /// Exit ping for latency.
     pub ping: Duration,
-    /// Run exit health check every Nth ping cycle.
-    pub health_every_n_pings: u32,
-    /// Run version check every Nth ping cycle.
-    pub version_every_n_pings: u32,
+    /// Exit load (slots, load average).
+    pub load: Duration,
     /// Interval between ICMP tunnel ping probes when connected.
     pub tunnel_ping: Duration,
     /// Consecutive tunnel ping failures before triggering reconnect.
@@ -172,7 +172,6 @@ pub struct SurbBalancing {
     pub ping: SessionSurbOptions,
     pub main: SessionSurbOptions,
     pub bridge: SessionSurbOptions,
-    pub health_check: SessionSurbOptions,
     pub ramp: SurbRampOptions,
 }
 
@@ -196,6 +195,96 @@ impl Default for SurbRampOptions {
     }
 }
 
+<<<<<<< HEAD
+=======
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionPixOptions {
+    pub enabled: bool,
+}
+
+/// Per-session-kind PIX enablement; `ping_main` is one toggle since ping and main share one session.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PixOptions {
+    pub ping_main: SessionPixOptions,
+    pub bridge: SessionPixOptions,
+    /// Overrides for the Entry-side share generator; empty keeps hopr-lib's defaults.
+    pub dimensions: PixDimensionOptions,
+}
+
+/// Optional `PixGlobalConfig` overrides for matching an Exit's advertised quota window.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(try_from = "PixDimensionOptionsRaw")]
+pub struct PixDimensionOptions {
+    /// Number of parts an SSA is split into. Range 8..=16192.
+    pub num_ssa_parts: Option<usize>,
+    /// Number of shares required to reconstruct an SSA part. Range 2..=255.
+    pub ssa_part_size: Option<usize>,
+    /// Extra shares for return-path loss; range 0..=255 and never above `ssa_part_size`.
+    pub additional_shares: Option<usize>,
+}
+
+/// Separate raw form so deserialization can enforce `additional_shares <= ssa_part_size`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PixDimensionOptionsRaw {
+    #[serde(default)]
+    num_ssa_parts: Option<usize>,
+    #[serde(default)]
+    ssa_part_size: Option<usize>,
+    #[serde(default)]
+    additional_shares: Option<usize>,
+}
+
+impl TryFrom<PixDimensionOptionsRaw> for PixDimensionOptions {
+    type Error = String;
+
+    fn try_from(raw: PixDimensionOptionsRaw) -> Result<Self, Self::Error> {
+        fn in_range(name: &str, value: Option<usize>, lo: usize, hi: usize) -> Result<(), String> {
+            match value {
+                Some(v) if !(lo..=hi).contains(&v) => Err(format!("{name} must be in the range {lo}..={hi}")),
+                _ => Ok(()),
+            }
+        }
+
+        in_range("num_ssa_parts", raw.num_ssa_parts, 8, 16192)?;
+        in_range("ssa_part_size", raw.ssa_part_size, 2, 255)?;
+        in_range("additional_shares", raw.additional_shares, 0, 255)?;
+
+        // Only compare explicit values; an unset threshold still means "use hopr-lib's default".
+        if let (Some(surplus), Some(threshold)) = (raw.additional_shares, raw.ssa_part_size)
+            && surplus > threshold
+        {
+            return Err(format!(
+                "additional_shares ({surplus}) must not exceed ssa_part_size ({threshold}) — the surplus is \
+                 billed, so this pays for more redundancy than payload"
+            ));
+        }
+
+        Ok(Self {
+            num_ssa_parts: raw.num_ssa_parts,
+            ssa_part_size: raw.ssa_part_size,
+            additional_shares: raw.additional_shares,
+        })
+    }
+}
+
+impl PixDimensionOptions {
+    /// Apply the set overrides onto `cfg`, leaving unset fields untouched.
+    pub fn apply(&self, cfg: &mut PixGlobalConfig) {
+        if let Some(v) = self.num_ssa_parts {
+            cfg.num_ssa_parts = v;
+        }
+        if let Some(v) = self.ssa_part_size {
+            cfg.ssa_part_size = v;
+        }
+        // Only overwrite this when requested so hopr-lib can keep deriving it from `ssa_part_size`.
+        if let Some(v) = self.additional_shares {
+            cfg.additional_shares = Some(v);
+        }
+    }
+}
+
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
 impl SessionParameters {
     pub fn new(target: SessionTarget, capabilities: SessionCapabilities) -> Self {
         Self { target, capabilities }
@@ -216,9 +305,9 @@ impl SessionSurbOptions {
 impl Default for HealthCheckIntervals {
     fn default() -> Self {
         Self {
-            ping: Duration::from_secs(15),
-            health_every_n_pings: 4,
-            version_every_n_pings: 20,
+            version: Duration::from_secs(60 * 60),
+            ping: Duration::from_secs(10),
+            load: Duration::from_secs(15),
             tunnel_ping: Duration::from_secs(10),
             tunnel_ping_max_failures: 3,
         }
@@ -232,12 +321,24 @@ impl Default for SurbBalancing {
             // maximum allowed buffer size is 10 MB
             main: SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(16)),
             bridge: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
-            health_check: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
             ramp: SurbRampOptions::default(),
         }
     }
 }
 
+<<<<<<< HEAD
+=======
+impl Default for PixOptions {
+    fn default() -> Self {
+        Self {
+            ping_main: SessionPixOptions { enabled: true },
+            bridge: SessionPixOptions { enabled: false },
+            dimensions: PixDimensionOptions::default(),
+        }
+    }
+}
+
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
 #[derive(Debug, Error)]
 pub(crate) enum SurbConfigError {
     #[error("Response buffer byte size too small")]
@@ -248,7 +349,7 @@ pub(crate) enum SurbConfigError {
     MaxSurbsPerSecOverflow,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct SurbParams {
     pub(crate) management: Option<SurbBalancerConfig>,
     pub(crate) always_max_out_surbs: bool,

@@ -1,243 +1,127 @@
-//! Per-destination route health tracking.
-//!
-//! Each `RouteHealth` models the progression of a single destination route
-//! from "just configured" to "usable for a tunnel", and it owns the background
-//! health-check task that keeps that assessment current.
-//!
-//! The progression is split into two concerns:
-//!
-//! * **Network reachability** — do we have the peering/channel relationship
-//!   that the routing option requires? This is driven from outside by Core
-//!   feeding in the current *connected* (transport-level) peer set
-//!   (`RouteHealth::peers`) and channel funding results
-//!   (`RouteHealth::any_channel_available`).
-//! * **Exit-node health** — once reachable, can we actually reach the exit
-//!   server behind the destination, and is it reporting healthy? This is
-//!   driven internally by a background task that opens a short-lived TCP
-//!   session to the exit and performs version, health, and ping checks.
-//!
-//! [`RouteHealthState`] captures the combined state. State changes flow
-//! outward through `HealthCheckOutcome` messages posted back on the runner channel.
-//!
-//! Core owns one `RouteHealth` per configured destination and uses the
-//! aggregate view (via `any_needs_peers`) to decide when to poll peers.
-use edgli::hopr_lib::HoprSessionClientConfig;
-use rand::prelude::*;
+//! Per-destination routability from Core's graph walks; exit health lives in [`crate::probe`].
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
-use tokio::time;
-use tokio_util::sync::CancellationToken;
 
-use std::collections::HashSet;
 use std::fmt::{self, Display};
-use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
+<<<<<<< HEAD
 use crate::connection::destination::{Address, Destination, HopRouting};
 use crate::connection::options::Options;
 use crate::connection::options::surb_config_for;
 use crate::core::runner::Results;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
+=======
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
+
+use crate::connection::destination::{Destination, ExitKey, HopRouting};
+use crate::log_output;
+use crate::probe::{Health, QuickProbeOutcome, Versions, select_api_version};
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
 use crate::serde_utils;
-use crate::{gvpn_client, log_output};
 
-pub use crate::gvpn_client::{Health, LoadAvg, Slots, Versions};
-
-const MAX_INTERVAL_BETWEEN_FAILURES: Duration = Duration::from_mins(5);
-const FAILURE_INTERVAL: Duration = Duration::from_secs(30);
-/// Retry interval for the first few health-check failures while the HOPR
-/// transport layer is still establishing P2P connections to relays.
-///
-/// Timing rationale:
-///   - The path planner caches selected relay paths for 60 s (PathPlannerConfig
-///     default, not YAML-configurable).  If the retry fires before the cache
-///     expires, the same relay set is reused — potentially picking the same
-///     unreachable relay again.
-///   - 90 s > 60 s cache TTL, so each warmup retry triggers a fresh relay
-///     selection with an up-to-date connected-peer set.
-///   - After GRAPH_WARMUP_RETRY_COUNT retries (≈ 396 s total) the path
-///     selector is expected to have discovered all reachable relays and
-///     session establishment succeeds.
-const GRAPH_WARMUP_RETRY_INTERVAL: Duration = Duration::from_secs(90);
-const GRAPH_WARMUP_RETRY_COUNT: u32 = 3;
-
-/// Add ±25 % random jitter to `base`. Zero durations (immediate triggers)
-/// are returned unchanged so initial spawns are not delayed.
-pub(crate) fn jitter(base: Duration) -> Duration {
-    if base.is_zero() {
-        return base;
-    }
-    // random factor in [-0.25, +0.25)
-    let factor = rand::rng().random::<f64>() * 0.5 - 0.25;
-    let jitter_secs = base.as_secs_f64() * factor;
-    if jitter_secs >= 0.0 {
-        let jitter = Duration::from_secs_f64(jitter_secs);
-        base.checked_add(jitter).unwrap_or(Duration::MAX)
-    } else {
-        base.saturating_sub(Duration::from_secs_f64(-jitter_secs))
-    }
-}
-
-/// Returns the first supported API version found in `server_versions`, or `None`
-/// if there is no compatible version.
-///
-/// This is the single place that maps API version strings to gvpn_client modules.
-/// Currently only "v1" is supported — all gvpn_client functions use the /api/v1/ prefix.
-/// Add new versions here when introducing a new API module.
-fn select_api_version(server_versions: &[String]) -> Option<&'static str> {
-    const SUPPORTED: &[&str] = &["v1"]; // v1 → gvpn_client
-    SUPPORTED
-        .iter()
-        .copied()
-        .find(|&v| server_versions.iter().any(|sv| sv == v))
-}
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/// The on-chain precondition a route needs before it can be considered
-/// reachable. Derived once from routing configuration and then constant for
-/// the lifetime of the `RouteHealth`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum StaticNeed {
-    /// Any outgoing channel is sufficient — used for all 1+ hop routes.
-    /// Multi-hop payments flow through relay channels kept open by the
-    /// AutoFunding strategy, independently of the destination.
-    AnyChannel,
-    /// Direct peering with the destination — no channel needed (0-hop route).
-    Peering(Address),
-}
-
-/// Terminal failure modes that cannot be recovered from without a config
-/// change or an exit-server upgrade. Once a route enters
-/// [`RouteHealthState::Unrecoverable`] it stays there.
+/// Terminal failure modes. `NotAllowed` and `CannotOpenSession` need a config change; `IncompatibleApiVersion` an exit upgrade.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum UnrecoverableReason {
-    /// Direct (0-hop) peering is configured but insecure peering is disabled.
+    /// 0-hop without `--allow-insecure`, or 2+ hops without `--allow-experimental`.
     NotAllowed,
-    /// The configured intermediate path is empty.
-    InvalidPath,
     /// The exit server only offers API versions we do not support.
     IncompatibleApiVersion { server_versions: Vec<String> },
+    /// No session can be opened with this client's session config, so every retry aborts the same way.
+    CannotOpenSession { error: String },
 }
 
-/// A successfully captured snapshot of exit-node health.
-///
-/// Not every check cycle fetches every field; when a
-/// field is skipped it is carried forward from the previous successful
-/// snapshot so the state always exposes a full picture.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExitHealth {
-    #[serde(with = "serde_utils::system_time")]
-    pub checked_at: SystemTime,
-    pub versions: gvpn_client::Versions,
-    #[serde(with = "serde_utils::duration_ms")]
-    pub ping_rtt: Duration,
-    pub health: gvpn_client::Health,
-}
-
-/// Combined route state: network reachability plus exit-node health.
-///
-/// Also the wire-format shown to the CLI via the command API, so variant
-/// names and payloads are part of the user-visible surface.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Also the wire format shown by the CLI, so variant names are user-visible.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "state")]
 pub enum RouteHealthState {
     Unrecoverable {
         reason: UnrecoverableReason,
     },
-    /// `has_channel` remembers whether the route has previously had a channel.
-    /// On re-peering after a transient peer loss we skip straight to `Routable`
-    /// instead of waiting for a channel to appear again.
-    NeedsPeering {
-        has_channel: bool,
-    },
-    /// Peers are available but no outgoing channel exists yet. Transitions to
-    /// `Routable` once the balances poll sees a non-empty `channels_out`.
-    NeedsChannel,
-    /// Static need met. Health checking in progress.
+    /// The graph holds no plannable path to the exit right now.
+    NotRoutable,
+    /// A path exists; connecting may proceed.
     Routable,
-    /// Exit health confirmed healthy. Safe to connect.
-    ReadyToConnect {
-        exit: ExitHealth,
+}
+
+/// The last graph walk for this exit; also the wire format shown by the CLI.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "found")]
+pub enum RouteWalk {
+    /// The exit's chain address maps to no packet key - it never announced itself.
+    NotAnnounced {
+        #[serde(with = "serde_utils::system_time")]
+        walked_at: SystemTime,
     },
-    /// Connecting or connected. Exit health and ping checks continue at reduced
-    /// frequency (version skipped).
-    Connecting {
-        exit: ExitHealth,
-        #[serde(with = "serde_utils::opt_duration_ms")]
-        tunnel_ping_rtt: Option<Duration>,
+    /// The selector accepted no path over this destination's hop count.
+    NoPath {
+        #[serde(with = "serde_utils::system_time")]
+        walked_at: SystemTime,
+    },
+    Paths {
+        #[serde(with = "serde_utils::system_time")]
+        walked_at: SystemTime,
+        /// Capped at the planner's own `max_cached_paths`.
+        count: usize,
+        /// Distinct first relays among them; 1 means a single point of failure.
+        distinct_first_relays: usize,
+        /// Relays of the best-valued path, in path order; empty on a 0-hop route.
+        #[serde(with = "serde_utils::addresses")]
+        best_relays: Vec<Address>,
+        /// The best path's value in (0.0, 1.0]; higher is better.
+        best_value: f64,
     },
 }
 
-/// Message a health-check runner task sends back to the main loop, consumed
-/// by `RouteHealth::health_check_result`.
-///
-/// `versions` and `health` are optional because a given cycle may skip
-/// fetching them (skipped based on the ping cycle interval settings); the main thread fills in the skipped
-/// fields from the previously stored [`ExitHealth`] before constructing the
-/// final snapshot.
+/// What one quick probe measured on the exit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) enum HealthCheckOutcome {
-    Started {
+pub struct QuickProbeCheck {
+    #[serde(with = "serde_utils::system_time")]
+    pub checked_at: SystemTime,
+    pub versions: Versions,
+    /// The API version this client selected from `versions`; None means incompatible.
+    pub api_version: Option<String>,
+    pub load: Health,
+    /// Round-trip of the status request, so it carries the exit's status-generation time too.
+    #[serde(with = "serde_utils::duration_ms")]
+    pub status_rtt: Duration,
+}
+
+/// The last `quickprobe` of this exit; also the wire format shown by the CLI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "state")]
+pub enum QuickProbeState {
+    Checking {
+        #[serde(with = "serde_utils::system_time")]
         since: SystemTime,
+        /// The result this check refreshes; kept so a re-check does not blank the exit's data.
+        last: Option<QuickProbeCheck>,
     },
-    Unrecoverable {
-        reason: UnrecoverableReason,
-    },
+    Checked(QuickProbeCheck),
     Failed {
+        #[serde(with = "serde_utils::system_time")]
         checked_at: SystemTime,
         error: String,
     },
-    Completed {
-        checked_at: SystemTime,
-        versions: Option<gvpn_client::Versions>,
-        ping_rtt: Option<Duration>,
-        health: Option<gvpn_client::Health>,
-    },
 }
 
-/// Per-destination route health tracker.
-///
-/// Owns the health-check lifecycle: state transitions, the background
-/// task's cancellation token, and failure bookkeeping used for backoff.
-/// Constructed once per destination and lives as long as the destination
-/// is configured.
 pub(crate) struct RouteHealth {
+<<<<<<< HEAD
     id: String,
     static_need: StaticNeed,
+=======
+    key: ExitKey,
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
     state: RouteHealthState,
-    health_check_cancel: CancellationToken,
-    cancel_on_shutdown: CancellationToken,
-    check_cycle: u32,
-    checking_since: Option<SystemTime>,
-    exit_failures: u32,
-    exit_last_error: Option<String>,
-    tunnel_ping_failures: u32,
-    tunnel_ping_last_error: Option<String>,
+    last_error: Option<String>,
+    last_walk: Option<RouteWalk>,
+    quick_probe: Option<QuickProbeState>,
 }
 
-// ---------------------------------------------------------------------------
-// Construction
-// ---------------------------------------------------------------------------
-
 impl RouteHealth {
-    /// Build an initial tracker for `dest`. `cancel_on_shutdown` is inherited
-    /// by every background task this tracker spawns so that they all stop
-    /// when the core shuts down. `allow_insecure` gates 0-hop routes;
-    /// `allow_experimental` gates 2+ hop routes.
-    pub(crate) fn new(
-        dest: &Destination,
-        allow_insecure: bool,
-        allow_experimental: bool,
-        cancel_on_shutdown: CancellationToken,
-    ) -> Self {
-        let static_need = derive_static_need(&dest.routing, dest.address);
-        let state = derive_initial_state(&dest.routing, allow_insecure, allow_experimental);
-        let health_check_cancel = cancel_on_shutdown.child_token();
+    pub(crate) fn new(dest: &Destination, allow_insecure: bool, allow_experimental: bool) -> Self {
         Self {
+<<<<<<< HEAD
             id: dest.id.clone(),
             static_need,
             state,
@@ -249,54 +133,71 @@ impl RouteHealth {
             exit_last_error: None,
             tunnel_ping_failures: 0,
             tunnel_ping_last_error: None,
+=======
+            key: dest.key(),
+            state: derive_initial_state(&dest.routing, allow_insecure, allow_experimental),
+            last_error: None,
+            last_walk: None,
+            quick_probe: None,
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
         }
     }
-}
 
-/// Derive the static need from routing alone.
-///
-/// For 0-hop routes the destination must be a direct transport peer and no
-/// channel is needed. For 1+ hop routes any connected relay peer is sufficient;
-/// the HOPR AutoFunding strategy keeps this node's outgoing channels (e.g.
-/// edge → relay) topped up, and the route advances once at least one such
-/// outgoing channel appears in the balance state (`AnyChannel`).
-fn derive_static_need(routing: &HopRouting, dest_address: Address) -> StaticNeed {
-    if routing.hop_count() == 0 {
-        StaticNeed::Peering(dest_address)
-    } else {
-        StaticNeed::AnyChannel
+    pub(crate) fn walk(&self) -> Option<&RouteWalk> {
+        self.last_walk.as_ref()
     }
-}
 
-/// Pick the starting state purely from routing config.
-/// 0-hop without `allow_insecure` and 2+-hop without `allow_experimental`
-/// both short-circuit to `Unrecoverable`; everything else starts at
-/// `NeedsPeering` and waits for Core to feed in the peer set.
-fn derive_initial_state(routing: &HopRouting, allow_insecure: bool, allow_experimental: bool) -> RouteHealthState {
-    let hops = routing.hop_count();
-    let not_allowed = (hops == 0 && !allow_insecure) || (hops > 1 && !allow_experimental);
-    if not_allowed {
-        RouteHealthState::Unrecoverable {
-            reason: UnrecoverableReason::NotAllowed,
+    pub(crate) fn quick_probe(&self) -> Option<&QuickProbeState> {
+        self.quick_probe.as_ref()
+    }
+
+    pub(crate) fn is_quick_probing(&self) -> bool {
+        matches!(self.quick_probe, Some(QuickProbeState::Checking { .. }))
+    }
+
+    /// Claims the exit for one quick probe; false while another is still running against it.
+    pub(crate) fn start_quick_probe(&mut self, now: SystemTime) -> bool {
+        if self.is_quick_probing() {
+            return false;
         }
-    } else {
-        RouteHealthState::NeedsPeering { has_channel: false }
+        // A re-check must not blank the exit it refreshes; `checked_at` still says how stale it is.
+        let last = match self.quick_probe.take() {
+            Some(QuickProbeState::Checked(check)) => Some(check),
+            _ => None,
+        };
+        self.quick_probe = Some(QuickProbeState::Checking { since: now, last });
+        true
     }
-}
 
-// ---------------------------------------------------------------------------
-// Queries
-// ---------------------------------------------------------------------------
+    /// Records what the quick probe found; a compatible API also unlatches the route like any probe does.
+    pub(crate) fn apply_quick_probe(&mut self, outcome: &Result<QuickProbeOutcome, String>, now: SystemTime) {
+        self.quick_probe = Some(match outcome {
+            Ok(found) => {
+                self.apply_api_versions(&found.versions.versions);
+                QuickProbeState::Checked(QuickProbeCheck {
+                    checked_at: now,
+                    versions: found.versions.clone(),
+                    api_version: found.api_version.clone(),
+                    load: found.health.clone(),
+                    status_rtt: found.status_rtt,
+                })
+            }
+            Err(error) => QuickProbeState::Failed {
+                checked_at: now,
+                error: error.clone(),
+            },
+        });
+    }
 
-impl RouteHealth {
     pub(crate) fn state(&self) -> &RouteHealthState {
         &self.state
     }
 
     pub(crate) fn last_error(&self) -> Option<&str> {
-        self.exit_last_error.as_deref()
+        self.last_error.as_deref()
     }
 
+<<<<<<< HEAD
     pub(crate) fn checking_since(&self) -> Option<SystemTime> {
         self.checking_since
     }
@@ -332,13 +233,17 @@ impl RouteHealth {
             RouteHealthState::ReadyToConnect { exit } | RouteHealthState::Connecting { exit, .. } => Some(exit.clone()),
             _ => None,
         }
+=======
+    pub(crate) fn is_routable(&self) -> bool {
+        matches!(self.state, RouteHealthState::Routable)
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
     }
 
     pub fn is_unrecoverable(&self) -> bool {
         matches!(self.state, RouteHealthState::Unrecoverable { .. })
     }
-}
 
+<<<<<<< HEAD
 // ---------------------------------------------------------------------------
 // State transitions
 // ---------------------------------------------------------------------------
@@ -393,8 +298,41 @@ impl RouteHealth {
                     // No channel was ever seen, so has_channel stays false.
                     self.state = RouteHealthState::NeedsPeering { has_channel: false };
                 }
+=======
+    /// A config-level refusal; only a config change lifts it, so probing it is pointless.
+    pub(crate) fn is_not_allowed(&self) -> bool {
+        matches!(
+            self.state,
+            RouteHealthState::Unrecoverable {
+                reason: UnrecoverableReason::NotAllowed
             }
+        )
+    }
+
+    /// The exit's own version latch; an upgrade lifts it, so it stays worth re-checking.
+    pub(crate) fn is_incompatible_api(&self) -> bool {
+        matches!(
+            self.state,
+            RouteHealthState::Unrecoverable {
+                reason: UnrecoverableReason::IncompatibleApiVersion { .. }
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
+            }
+        )
+    }
+
+    /// Record what the walk found. Returns true iff the route just became routable.
+    pub(crate) fn apply_walk(&mut self, walk: RouteWalk) -> bool {
+        let routable = matches!(walk, RouteWalk::Paths { .. });
+        self.last_walk = Some(walk);
+        self.last_error = None;
+        self.set_routable(routable)
+    }
+
+    /// Apply a graph walk result. Returns true iff the route just became routable.
+    pub(crate) fn set_routable(&mut self, routable: bool) -> bool {
+        let next = if routable {
             RouteHealthState::Routable
+<<<<<<< HEAD
             | RouteHealthState::ReadyToConnect { .. }
             | RouteHealthState::Connecting { .. } => {
                 if !is_peered {
@@ -632,24 +570,70 @@ impl RouteHealth {
                     self.tunnel_ping_failures
                 }
             }
+=======
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
         } else {
-            0
+            RouteHealthState::NotRoutable
+        };
+        match self.state {
+            RouteHealthState::Unrecoverable { .. } => false,
+            _ if self.state == next => false,
+            _ => {
+                tracing::debug!(destination = %self.key, from = %self.state, to = %next, "routability changed");
+                self.state = next;
+                routable
+            }
         }
     }
 
-    /// Record an error message on this route without changing state.
-    ///
-    /// Used to surface transient failures (e.g. from Core-side operations
-    /// like channel funding) in the CLI output. Ignored in `Unrecoverable`
-    /// states to preserve the original failure reason.
-    pub(crate) fn with_error(&mut self, err: String) {
-        if matches!(self.state, RouteHealthState::Unrecoverable { .. }) {
+    /// One rule for every probe kind: an exit's advertised API versions latch or unlatch the route.
+    pub(crate) fn apply_api_versions(&mut self, server_versions: &[String]) {
+        match select_api_version(server_versions) {
+            Some(_) => self.clear_incompatible(),
+            None => self.set_incompatible(server_versions.to_vec()),
+        }
+    }
+
+    /// Latch a route whose probe can never open a session; nothing retries it, so a waiting target must see why.
+    pub(crate) fn set_cannot_open_session(&mut self, error: String) {
+        if self.is_unrecoverable() {
             return;
         }
-        self.exit_last_error = Some(err);
+        tracing::warn!(destination = %self.key, %error, "probe cannot open a session with this config");
+        self.state = RouteHealthState::Unrecoverable {
+            reason: UnrecoverableReason::CannotOpenSession { error },
+        };
+    }
+
+    /// Latch on an exit that speaks no API version we support. `NotAllowed` keeps precedence.
+    fn set_incompatible(&mut self, server_versions: Vec<String>) {
+        if self.is_unrecoverable() {
+            return;
+        }
+        tracing::warn!(destination = %self.key, ?server_versions, "exit offers no compatible API version");
+        self.state = RouteHealthState::Unrecoverable {
+            reason: UnrecoverableReason::IncompatibleApiVersion { server_versions },
+        };
+    }
+
+    /// An exit upgrade unlatches the route; the next graph walk decides routability again.
+    fn clear_incompatible(&mut self) {
+        if self.is_incompatible_api() {
+            tracing::info!(destination = %self.key, "exit API version compatible again");
+            self.state = RouteHealthState::NotRoutable;
+        }
+    }
+
+    /// Surface a transient Core-side failure in the CLI; kept out of `Unrecoverable` to preserve its reason.
+    pub(crate) fn with_error(&mut self, err: String) {
+        if self.is_unrecoverable() {
+            return;
+        }
+        self.last_error = Some(err);
     }
 }
 
+<<<<<<< HEAD
 // ---------------------------------------------------------------------------
 // Health check spawn / cancel
 // ---------------------------------------------------------------------------
@@ -1027,7 +1011,18 @@ impl Display for CheckScope {
                 version: false,
                 health: false,
             } => write!(f, "Scope(ping)"),
+=======
+fn derive_initial_state(routing: &HopRouting, allow_insecure: bool, allow_experimental: bool) -> RouteHealthState {
+    let hops = routing.hop_count();
+    let insecure_without_optin = hops == 0 && !allow_insecure;
+    let experimental_without_optin = hops > 1 && !allow_experimental;
+    if insecure_without_optin || experimental_without_optin {
+        RouteHealthState::Unrecoverable {
+            reason: UnrecoverableReason::NotAllowed,
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
         }
+    } else {
+        RouteHealthState::NotRoutable
     }
 }
 
@@ -1038,13 +1033,96 @@ impl Display for UnrecoverableReason {
                 f,
                 "routing mode not allowed; use --allow-insecure for 0-hop or --allow-experimental for 2+ hops"
             ),
-            UnrecoverableReason::InvalidPath => write!(f, "path is empty"),
-            UnrecoverableReason::IncompatibleApiVersion { server_versions } => {
+            UnrecoverableReason::IncompatibleApiVersion { server_versions } => write!(
+                f,
+                "exit server offers no compatible API version (server offers: {})",
+                server_versions.join(", ")
+            ),
+            UnrecoverableReason::CannotOpenSession { error } => {
+                write!(f, "cannot open a session with this connection config: {error}")
+            }
+        }
+    }
+}
+
+impl Display for RouteWalk {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RouteWalk::NotAnnounced { walked_at } => {
                 write!(
                     f,
-                    "exit server offers no compatible API version (server offers: {})",
-                    server_versions.join(", ")
+                    "exit not announced on chain - walked {} ago",
+                    log_output::elapsed(walked_at)
                 )
+            }
+            RouteWalk::NoPath { walked_at } => {
+                write!(f, "no path found - walked {} ago", log_output::elapsed(walked_at))
+            }
+            RouteWalk::Paths {
+                walked_at,
+                count,
+                distinct_first_relays,
+                best_relays,
+                best_value,
+            } => {
+                let plural = if *count == 1 { "" } else { "s" };
+                write!(f, "{count} path{plural}, ")?;
+                // A 0-hop route has no relays, so there is no diversity or "via" to report.
+                if best_relays.is_empty() {
+                    write!(f, "direct")?;
+                } else {
+                    let via = best_relays
+                        .iter()
+                        .map(log_output::address)
+                        .collect::<Vec<_>>()
+                        .join(" -> ");
+                    write!(f, "{distinct_first_relays} distinct first relays, best via {via}")?;
+                }
+                write!(
+                    f,
+                    " (value {best_value:.3}) - walked {} ago",
+                    log_output::elapsed(walked_at)
+                )
+            }
+        }
+    }
+}
+
+impl Display for QuickProbeCheck {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let QuickProbeCheck {
+            checked_at,
+            versions,
+            api_version,
+            load,
+            status_rtt,
+        } = self;
+        write!(
+            f,
+            "checked {} ago - status RTT {:.2} s, {load}",
+            log_output::elapsed(checked_at),
+            status_rtt.as_secs_f32()
+        )?;
+        match api_version {
+            Some(api) => write!(f, ", API {api} ({versions})"),
+            None => write!(f, ", no compatible API ({versions})"),
+        }
+    }
+}
+
+impl Display for QuickProbeState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            QuickProbeState::Checking { since, last } => {
+                write!(f, "checking (since {})", log_output::elapsed(since))?;
+                match last {
+                    Some(check) => write!(f, " - last {check}"),
+                    None => Ok(()),
+                }
+            }
+            QuickProbeState::Checked(check) => write!(f, "{check}"),
+            QuickProbeState::Failed { checked_at, error } => {
+                write!(f, "failed {} ago: {error}", log_output::elapsed(checked_at))
             }
         }
     }
@@ -1054,44 +1132,18 @@ impl Display for RouteHealthState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             RouteHealthState::Unrecoverable { reason } => write!(f, "Unrecoverable: {reason}"),
-            RouteHealthState::NeedsPeering { has_channel: false } => write!(f, "Needs peering"),
-            RouteHealthState::NeedsPeering { has_channel: true } => write!(f, "Needs peering (has channel)"),
-            RouteHealthState::NeedsChannel => write!(f, "Needs channel"),
-            RouteHealthState::Routable => write!(f, "Routable - checking exit health"),
-            RouteHealthState::ReadyToConnect { exit } => match select_api_version(&exit.versions.versions) {
-                Some(selected) => {
-                    write!(f, "Ready to connect via API {selected}, exit health: {exit}")
-                }
-                // should never happen
-                None => {
-                    write!(f, "API version unsupported, exit health: {exit}")
-                }
-            },
-            RouteHealthState::Connecting { exit, tunnel_ping_rtt } => match tunnel_ping_rtt {
-                Some(rtt) => write!(f, "main tunnel ping RTT {:.2} s, exit: {exit}", rtt.as_secs_f32()),
-                None => write!(f, "main tunnel ping pending, exit: {exit}"),
-            },
+            RouteHealthState::NotRoutable => write!(f, "Not routable - no path in the network graph"),
+            RouteHealthState::Routable => write!(f, "Routable"),
         }
-    }
-}
-
-impl Display for ExitHealth {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{} ago: ping RTT {:.2} s, {}, API({})",
-            log_output::elapsed(&self.checked_at),
-            self.ping_rtt.as_secs_f32(),
-            self.health,
-            self.versions,
-        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connection::destination::{Address, DestinationSource};
 
+<<<<<<< HEAD
     fn addr(byte: u8) -> Address {
         Address::from([byte; 20])
     }
@@ -1196,10 +1248,15 @@ mod tests {
         use crate::connection::destination::{Destination, HopRouting};
         use tokio_util::sync::CancellationToken;
         let dest = Destination::new(
+=======
+    fn destination(hops: usize) -> Destination {
+        Destination::new(
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
             "test".to_string(),
-            addr(1),
-            HopRouting::try_from(1).unwrap(),
+            Address::from([1u8; 20]),
+            HopRouting::try_from(hops).unwrap(),
             Default::default(),
+<<<<<<< HEAD
         );
         let mut rh = RouteHealth::new(&dest, false, false, CancellationToken::new());
         rh.exit_failures = failures;
@@ -1214,79 +1271,254 @@ mod tests {
                 GRAPH_WARMUP_RETRY_INTERVAL,
                 "failure {n} should use warmup interval"
             );
+=======
+            "172.30.0.1:8000".parse().unwrap(),
+            "172.30.0.1:51820".parse().unwrap(),
+            DestinationSource::Configured,
+        )
+    }
+
+    fn outcome(server_versions: &[&str]) -> QuickProbeOutcome {
+        let versions = Versions {
+            versions: server_versions.iter().map(|v| v.to_string()).collect(),
+            latest: server_versions.last().unwrap_or(&"").to_string(),
+        };
+        QuickProbeOutcome {
+            api_version: select_api_version(&versions.versions).map(str::to_owned),
+            versions,
+            health: Health {
+                slots: crate::probe::Slots {
+                    total: 10,
+                    available: 9,
+                    connected: 1,
+                },
+                load_avg: crate::probe::LoadAvg {
+                    one: 0.1,
+                    five: 0.1,
+                    fifteen: 0.1,
+                    nproc: 4,
+                },
+            },
+            status_rtt: Duration::from_millis(120),
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
         }
     }
 
+    fn walk_with_paths(now: SystemTime) -> RouteWalk {
+        RouteWalk::Paths {
+            walked_at: now,
+            count: 3,
+            distinct_first_relays: 2,
+            best_relays: vec![Address::from([2u8; 20])],
+            best_value: 0.75,
+        }
+    }
+
+    fn not_allowed(state: &RouteHealthState) -> bool {
+        matches!(
+            state,
+            RouteHealthState::Unrecoverable {
+                reason: UnrecoverableReason::NotAllowed
+            }
+        )
+    }
+
     #[test]
-    fn failure_backoff_switches_to_linear_after_warmup() {
-        let first_normal = GRAPH_WARMUP_RETRY_COUNT + 1;
+    fn zero_hop_without_allow_insecure_is_unrecoverable() {
+        assert!(not_allowed(RouteHealth::new(&destination(0), false, false).state()));
+    }
+
+    #[test]
+    fn zero_hop_with_allow_insecure_starts_not_routable() {
         assert_eq!(
-            backoff_at(first_normal),
-            FAILURE_INTERVAL,
-            "first post-warmup failure should equal one FAILURE_INTERVAL"
+            *RouteHealth::new(&destination(0), true, false).state(),
+            RouteHealthState::NotRoutable
         );
+    }
+
+    #[test]
+    fn a_probe_that_cannot_open_a_session_latches_the_route() {
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        rh.set_cannot_open_session("surb buffer too small".to_string());
+        assert!(rh.is_unrecoverable());
+        assert!(!rh.is_routable());
+    }
+
+    #[test]
+    fn a_not_allowed_route_keeps_its_reason_over_a_failed_open() {
+        let mut rh = RouteHealth::new(&destination(0), false, false);
+        rh.set_cannot_open_session("surb buffer too small".to_string());
+        assert!(not_allowed(rh.state()));
+    }
+
+    #[test]
+    fn one_hop_always_allowed() {
         assert_eq!(
-            backoff_at(first_normal + 1),
-            FAILURE_INTERVAL * 2,
-            "second post-warmup failure should equal two FAILURE_INTERVALs"
+            *RouteHealth::new(&destination(1), false, false).state(),
+            RouteHealthState::NotRoutable
         );
     }
 
     #[test]
-    fn failure_backoff_clamps_at_max_interval() {
+    fn multi_hop_needs_allow_experimental() {
+        assert!(not_allowed(RouteHealth::new(&destination(2), false, false).state()));
         assert_eq!(
-            backoff_at(u32::MAX),
-            MAX_INTERVAL_BETWEEN_FAILURES,
-            "backoff must not exceed MAX_INTERVAL_BETWEEN_FAILURES"
+            *RouteHealth::new(&destination(2), false, true).state(),
+            RouteHealthState::NotRoutable
         );
     }
 
-    // --- select_api_version ---
-
     #[test]
-    fn select_api_version_finds_v1() {
-        let versions = vec!["v1".to_string()];
-        assert_eq!(select_api_version(&versions), Some("v1"));
-    }
-
-    #[test]
-    fn select_api_version_returns_none_for_empty_list() {
-        assert_eq!(select_api_version(&[]), None);
-    }
-
-    #[test]
-    fn select_api_version_returns_none_when_no_match() {
-        let versions = vec!["v2".to_string(), "v99".to_string()];
-        assert_eq!(select_api_version(&versions), None);
-    }
-
-    // --- jitter ---
-
-    #[test]
-    fn jitter_zero_returns_zero() {
-        assert_eq!(jitter(Duration::ZERO), Duration::ZERO);
-    }
-
-    // --- is_peered for Peering routes (0-hop) ---
-
-    #[test]
-    fn peering_route_requires_dest_to_be_direct_peer() {
-        let dest = addr(10);
-        let relay = addr(20);
-        let need = StaticNeed::Peering(dest);
-
-        let mut only_relay = HashSet::new();
-        only_relay.insert(relay);
+    fn set_routable_reports_only_the_transition_to_routable() {
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        assert!(rh.set_routable(true));
+        assert!(!rh.set_routable(true), "already routable");
         assert!(
-            !is_peered(&need, &only_relay),
-            "relay alone must not satisfy Peering need"
+            !rh.set_routable(false),
+            "losing the route is not a transition to routable"
+        );
+        assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
+    }
+
+    #[test]
+    fn apply_walk_reports_routable_only_when_the_walk_found_paths() {
+        let now = SystemTime::now();
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        rh.with_error("graph walk failed".to_string());
+
+        assert!(rh.apply_walk(walk_with_paths(now)));
+        assert!(rh.is_routable());
+        assert!(rh.last_error().is_none(), "a walk that ran clears the previous failure");
+        assert!(matches!(rh.walk(), Some(RouteWalk::Paths { count: 3, .. })));
+
+        assert!(!rh.apply_walk(RouteWalk::NoPath { walked_at: now }));
+        assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
+
+        assert!(!rh.apply_walk(RouteWalk::NotAnnounced { walked_at: now }));
+        assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
+        assert!(matches!(rh.walk(), Some(RouteWalk::NotAnnounced { .. })));
+    }
+
+    #[test]
+    fn apply_walk_never_unlatches_unrecoverable() {
+        let mut rh = RouteHealth::new(&destination(0), false, false);
+        assert!(!rh.apply_walk(walk_with_paths(SystemTime::now())));
+        assert!(
+            not_allowed(rh.state()),
+            "the walk still gets recorded, the verdict does not change"
+        );
+        assert!(rh.walk().is_some());
+    }
+
+    #[test]
+    fn set_routable_never_unlatches_unrecoverable() {
+        let mut rh = RouteHealth::new(&destination(0), false, false);
+        assert!(!rh.set_routable(true));
+        assert!(not_allowed(rh.state()));
+    }
+
+    #[test]
+    fn api_versions_latch_and_unlatch_only_an_incompatible_api_version() {
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        rh.set_routable(true);
+        rh.apply_api_versions(&["v99".to_string()]);
+        assert!(rh.is_unrecoverable());
+        rh.apply_api_versions(&["v1".to_string()]);
+        assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
+
+        let mut latched = RouteHealth::new(&destination(0), false, false);
+        latched.apply_api_versions(&["v99".to_string()]);
+        latched.apply_api_versions(&["v1".to_string()]);
+        assert!(not_allowed(latched.state()), "NotAllowed keeps precedence");
+    }
+
+    #[test]
+    fn only_the_config_latch_blocks_a_probe() {
+        let routable = RouteHealth::new(&destination(1), false, false);
+        assert!(!routable.is_not_allowed());
+        assert!(!routable.is_incompatible_api());
+
+        let insecure = RouteHealth::new(&destination(0), false, false);
+        assert!(insecure.is_not_allowed());
+        assert!(!insecure.is_incompatible_api());
+
+        let mut incompatible = RouteHealth::new(&destination(1), false, false);
+        incompatible.apply_api_versions(&["v99".to_string()]);
+        assert!(!incompatible.is_not_allowed(), "an upgrade can still lift this one");
+        assert!(incompatible.is_incompatible_api());
+    }
+
+    #[test]
+    fn quick_probe_is_claimed_once_until_it_reports() {
+        let now = SystemTime::now();
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        assert!(rh.quick_probe().is_none());
+        assert!(!rh.is_quick_probing());
+        assert!(rh.start_quick_probe(now));
+        assert!(!rh.start_quick_probe(now), "still checking");
+        assert!(rh.is_quick_probing());
+        assert!(matches!(
+            rh.quick_probe(),
+            Some(QuickProbeState::Checking { last: None, .. })
+        ));
+
+        rh.apply_quick_probe(&Err("boom".to_string()), now);
+        assert!(!rh.is_quick_probing(), "a failed check is no longer in flight");
+        assert!(matches!(rh.quick_probe(), Some(QuickProbeState::Failed { error, .. }) if error == "boom"));
+        assert!(rh.start_quick_probe(now), "a finished check can be redone");
+        assert!(
+            matches!(rh.quick_probe(), Some(QuickProbeState::Checking { last: None, .. })),
+            "a failed check leaves nothing to carry forward"
         );
 
-        let mut with_dest = HashSet::new();
-        with_dest.insert(dest);
+        rh.apply_quick_probe(&Ok(outcome(&["v1"])), now);
+        assert!(!rh.is_quick_probing(), "a successful check is no longer in flight");
         assert!(
-            is_peered(&need, &with_dest),
-            "dest as direct peer must satisfy Peering need"
+            matches!(rh.quick_probe(), Some(QuickProbeState::Checked(check)) if check.api_version.as_deref() == Some("v1"))
         );
+    }
+
+    #[test]
+    fn a_re_check_keeps_what_the_last_one_measured() {
+        let now = SystemTime::now();
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        rh.apply_quick_probe(&Ok(outcome(&["v1"])), now);
+
+        assert!(rh.start_quick_probe(now));
+        let Some(QuickProbeState::Checking { last: Some(last), .. }) = rh.quick_probe() else {
+            panic!("a re-check must carry the previous result");
+        };
+        assert_eq!(last.status_rtt, Duration::from_millis(120));
+        assert_eq!(last.checked_at, now);
+        assert_eq!(last.load.slots.available, 9);
+    }
+
+    #[test]
+    fn quick_probe_versions_latch_and_unlatch_the_route() {
+        let now = SystemTime::now();
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        rh.set_routable(true);
+        rh.apply_quick_probe(&Ok(outcome(&["v99"])), now);
+        assert!(rh.is_unrecoverable());
+        rh.apply_quick_probe(&Ok(outcome(&["v1"])), now);
+        assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
+
+        let mut failing = RouteHealth::new(&destination(1), false, false);
+        failing.set_routable(true);
+        failing.apply_quick_probe(&Err("boom".to_string()), now);
+        assert!(failing.is_routable(), "a failed check says nothing about the API");
+    }
+
+    // The tag flattens into the check only because it is a newtype variant over a struct.
+    #[test]
+    fn a_checked_quick_probe_round_trips_internally_tagged() {
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        rh.apply_quick_probe(&Ok(outcome(&["v1"])), SystemTime::now());
+
+        let json = serde_json::to_string(rh.quick_probe().expect("a check was applied")).expect("serialize");
+        assert!(json.contains(r#""state":"Checked""#), "{json}");
+
+        let back: QuickProbeState = serde_json::from_str(&json).expect("deserialize");
+        assert!(matches!(back, QuickProbeState::Checked(check) if check.api_version.as_deref() == Some("v1")));
     }
 }

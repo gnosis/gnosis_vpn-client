@@ -34,11 +34,9 @@ pub enum SessionKind {
 pub enum Progress {
     ResolveBlokliIps,
     GenerateWg(Vec<net::Ipv4Addr>),
-    OpenBridge(WireGuard),
-    BridgeOpened(SessionClientMetadata),
+    WgGenerated(WireGuard),
     RegisterWg,
     OpenPing(Registration),
-    BridgeClosed,
     PeerIps,
     KillswitchLockdown,
     StaticWgTunnel(SessionClientMetadata),
@@ -129,7 +127,6 @@ fn ramp_position(ramp: SurbRamp, target: SurbBalancerConfig, now: SystemTime) ->
 
 #[derive(Debug)]
 pub enum Setback {
-    OpenBridge(String),
     RegisterWg(String),
     OpenPing(String),
     Ping(String),
@@ -165,8 +162,8 @@ pub struct Up {
     pub phase: (SystemTime, Phase),
     pub wireguard: Option<WireGuard>,
     pub registration: Option<Registration>,
-    /// Temporary bridge session used during key registration; cleared once the background close completes.
-    pub bridge_session: Option<SessionClientMetadata>,
+    /// ICMP pings through the established tunnel; failures drive a reconnect.
+    pub tunnel_ping: TunnelPing,
     /// The ping session while connecting, promoted to Main once connected.
     pub ping_session: Option<(SessionKind, SessionClientMetadata)>,
     /// Bounded rolling window of tunnel telemetry, oldest first. Owned directly
@@ -183,12 +180,18 @@ pub struct Up {
     surb_ramp: Option<SurbRamp>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct TunnelPing {
+    pub rtt: Option<Duration>,
+    pub failures: u32,
+    pub last_error: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Phase {
     Init,
     ResolvingBlokliIps,
     GeneratingWg,
-    OpeningBridge,
     RegisterWg,
     OpeningPing,
     GatherPeerIps,
@@ -212,7 +215,7 @@ impl Up {
             phase: (SystemTime::now(), Phase::Init),
             wireguard: None,
             registration: None,
-            bridge_session: None,
+            tunnel_ping: TunnelPing::default(),
             ping_session: None,
             wg_stats: VecDeque::new(),
             session_configurator: None,
@@ -249,6 +252,22 @@ impl Up {
         }
     }
 
+    /// Returns the consecutive tunnel ping failure count after applying `rtt`.
+    pub fn tunnel_ping_result(&mut self, rtt: Result<Duration, String>) -> u32 {
+        match rtt {
+            Ok(rtt) => {
+                self.tunnel_ping.rtt = Some(rtt);
+                self.tunnel_ping.failures = 0;
+                self.tunnel_ping.last_error = None;
+            }
+            Err(err) => {
+                self.tunnel_ping.failures += 1;
+                self.tunnel_ping.last_error = Some(err);
+            }
+        }
+        self.tunnel_ping.failures
+    }
+
     /// Record a new WireGuard telemetry sample, evicting the oldest once at
     /// the retention bound.
     pub fn record_wg_stats(&mut self, sample: TunnelStatsSample) {
@@ -258,25 +277,16 @@ impl Up {
         self.wg_stats.push_back(sample);
     }
 
-    pub fn connect_progress(&mut self, evt: Box<Progress>) {
+    pub fn connect_progress(&mut self, evt: Progress) {
         let now = SystemTime::now();
-        match *evt {
+        match evt {
             Progress::ResolveBlokliIps => self.phase = (now, Phase::ResolvingBlokliIps),
             Progress::GenerateWg(_) => self.phase = (now, Phase::GeneratingWg),
-            Progress::OpenBridge(wg) => {
-                self.phase = (now, Phase::OpeningBridge);
-                self.wireguard = Some(wg);
-            }
-            Progress::BridgeOpened(meta) => {
-                self.bridge_session = Some(meta);
-            }
+            Progress::WgGenerated(wg) => self.wireguard = Some(wg),
             Progress::RegisterWg => self.phase = (now, Phase::RegisterWg),
             Progress::OpenPing(reg) => {
                 self.phase = (now, Phase::OpeningPing);
                 self.registration = Some(reg);
-            }
-            Progress::BridgeClosed => {
-                self.bridge_session = None;
             }
             Progress::PeerIps => self.phase = (now, Phase::GatherPeerIps),
             Progress::KillswitchLockdown => self.phase = (now, Phase::KillswitchLockdown),
@@ -327,7 +337,6 @@ impl Display for Phase {
             Phase::Init => "Init",
             Phase::ResolvingBlokliIps => "Resolving Blokli IPs",
             Phase::GeneratingWg => "Generating WireGuard keypairs",
-            Phase::OpeningBridge => "Opening bridge connection",
             Phase::RegisterWg => "Registering WireGuard public key",
             Phase::OpeningPing => "Opening main connection",
             Phase::GatherPeerIps => "Retrieving peer IPs",
@@ -355,11 +364,9 @@ impl Display for Progress {
         match self {
             Progress::ResolveBlokliIps => write!(f, "Resolving Blokli IPs"),
             Progress::GenerateWg(_) => write!(f, "Generating WireGuard keypairs"),
-            Progress::OpenBridge(_) => write!(f, "Opening bridge connection"),
-            Progress::BridgeOpened(_) => write!(f, "Bridge session opened"),
+            Progress::WgGenerated(_) => write!(f, "WireGuard keypair generated"),
             Progress::RegisterWg => write!(f, "Registering WireGuard public key"),
             Progress::OpenPing(_) => write!(f, "Opening main connection"),
-            Progress::BridgeClosed => write!(f, "Bridge session closed"),
             Progress::PeerIps => write!(f, "Retrieving peer IPs"),
             Progress::KillswitchLockdown => write!(f, "Activating killswitch"),
             Progress::StaticWgTunnel(_) => write!(f, "Establishing static WireGuard tunnel"),
@@ -376,7 +383,6 @@ impl Display for Progress {
 impl Display for Setback {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Setback::OpenBridge(err) => write!(f, "Failed to open bridge connection: {err}"),
             Setback::RegisterWg(err) => write!(f, "Failed to register WireGuard key: {err}"),
             Setback::OpenPing(err) => write!(f, "Failed to open main connection: {err}"),
             Setback::Ping(err) => write!(f, "Ping verification failed: {err}"),

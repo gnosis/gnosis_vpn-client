@@ -40,6 +40,8 @@ pub(crate) struct ConnectionSpec {
     pub destination: Destination,
     pub options: Options,
     pub wg_config: wireguard::Config,
+    /// The probe's long-lived bridge session; registration runs over it and it is never closed here.
+    pub bridge_session: SessionClientMetadata,
 }
 
 /// Scopes the spawned NepTUN pump task.
@@ -58,6 +60,7 @@ pub(crate) struct Runner {
     hopr: Arc<Hopr>,
     options: Options,
     wg_config: wireguard::Config,
+    bridge_session: SessionClientMetadata,
     worker_params: WorkerParams,
     prev_conn: PreviousConnection,
     cancel: CancellationToken,
@@ -76,6 +79,7 @@ impl Runner {
             destination,
             options,
             wg_config,
+            bridge_session,
         } = spec;
         let PumpLifecycle {
             cancel,
@@ -86,6 +90,7 @@ impl Runner {
             hopr,
             options,
             wg_config,
+            bridge_session,
             worker_params,
             prev_conn,
             cancel,
@@ -117,38 +122,23 @@ impl Runner {
         let wg = WireGuard::from_config(self.wg_config.clone()).await?;
         let public_key = wg.key_pair.public_key.clone();
 
-        // 3. open bridge session
-        let _ = results_sender.send(progress(Progress::OpenBridge(wg.clone()))).await;
-        let bridge_surb = surb_config_for(&self.options.surb_balancing.bridge)?;
-        let bridge_session = open_bridge_session(
-            &self.hopr,
-            &self.destination,
-            &self.options,
-            bridge_surb,
-            &results_sender,
-        )
-        .await?;
-        let _ = results_sender
-            .send(progress(Progress::BridgeOpened(bridge_session.clone())))
-            .await;
+        let _ = results_sender.send(progress(Progress::WgGenerated(wg.clone()))).await;
 
-        // 4. register wg public key
+        // 3. register wg public key over the probe's bridge session
         let _ = results_sender.send(progress(Progress::RegisterWg)).await;
-        let registration = register(&self.options, &bridge_session, public_key, &results_sender).await?;
+        let registration = register(&self.options, &self.bridge_session, public_key, &results_sender).await?;
 
-        // 5. signal ping phase (carries registration) and close bridge in background
+        // 4. signal ping phase (carries registration); a previous key is unregistered in the background
         let _ = results_sender
             .send(progress(Progress::OpenPing(registration.clone())))
             .await;
-        spawn_background_bridge_cleanup(
-            self.hopr.clone(),
-            bridge_session,
+        spawn_background_unregister(
+            self.bridge_session.clone(),
             self.options.clone(),
             self.prev_conn.wg_public_key.clone(),
-            results_sender.clone(),
         );
 
-        // 6. open the wg session (also carries the in-tunnel verification ping). The
+        // 5. open the wg session (also carries the in-tunnel verification ping). The
         //    raw session is spliced directly into the pump - no local listener and no
         //    loopback hop.
         let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
@@ -164,14 +154,14 @@ impl Runner {
             .send(progress(Progress::SessionConfigurator(configurator.clone())))
             .await;
 
-        // 7. gather ips of all announced peers
+        // 6. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
         let mut peer_ips = gather_peer_ips(&self.hopr).await?;
         // blokli must be in the initial snapshot so it becomes part of the permanent
         // firewall floor and stays reachable for the duration of the connection.
         peer_ips.extend(blokli_ips);
 
-        // 8. set up the NepTUN data plane — root provisions the TUN device + routing
+        // 7. set up the NepTUN data plane — root provisions the TUN device + routing
         //    and returns the resolved interface name; the worker then receives the
         //    TUN fd out-of-band and starts the pump. The pump's network side is the
         //    spliced session itself, driven directly by the WireGuard engine.
@@ -186,15 +176,15 @@ impl Runner {
         let net_rx = wg_tunnel::SessionReceiver::new(read_half);
         self.spawn_pump_task(engine, net_tx, net_rx, (tun_writer, tun_reader), &results_sender);
 
-        // 9. activate killswitch now that the interface name is known
+        // 8. activate killswitch now that the interface name is known
         let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
         request_killswitch_lockdown(peer_ips, interface, &results_sender).await?;
 
-        // 10. verify tunnel with ping — give it some leeway with 5 retries
+        // 9. verify tunnel with ping — give it some leeway with 5 retries
         let _ = results_sender.send(progress(Progress::Ping)).await;
         let round_trip_time = request_ping(&self.options.ping_options, 5, &results_sender).await?;
 
-        // 11. adjust to main session
+        // 10. adjust to main session
         let _ = results_sender
             .send(progress(Progress::AdjustToMain(round_trip_time)))
             .await;
@@ -236,6 +226,7 @@ impl Display for Runner {
     }
 }
 
+<<<<<<< HEAD
 #[tracing::instrument(
     skip(hopr, options, destination, results_sender),
     fields(
@@ -291,6 +282,8 @@ async fn open_bridge_session(
     .await
 }
 
+=======
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
 async fn register(
     options: &Options,
     session_client_metadata: &SessionClientMetadata,
@@ -313,24 +306,6 @@ async fn register(
         });
     })
     .await
-}
-
-async fn close_bridge_session(hopr: &Hopr, session_client_metadata: &SessionClientMetadata) -> Result<(), HoprError> {
-    tracing::debug!(
-        bound_host = ?session_client_metadata.bound_host,
-        "closing bridge session"
-    );
-    let res = hopr
-        .close_session(session_client_metadata.bound_host, session_client_metadata.protocol)
-        .await;
-    match res {
-        Ok(_) => Ok(()),
-        Err(HoprError::SessionNotFound) => {
-            tracing::warn!(bound_host = ?session_client_metadata.bound_host, "attempted to close bridge session but it was not found, possibly already closed");
-            Ok(())
-        }
-        Err(e) => Err(e),
-    }
 }
 
 /// Open the raw WireGuard session for the pump: the in-tunnel verification ping's
@@ -602,31 +577,23 @@ async fn request_ping(
     .await
 }
 
-fn spawn_background_bridge_cleanup(
-    hopr: Arc<Hopr>,
+/// Best-effort unregister of the previous connection's key; the probe session stays open.
+fn spawn_background_unregister(
     bridge_session: SessionClientMetadata,
     options: Options,
     prev_public_key: Option<String>,
-    results_sender: mpsc::Sender<Results>,
 ) {
+    let Some(old_key) = prev_public_key else { return };
     tokio::spawn(async move {
-        if let Some(old_key) = prev_public_key {
-            let input = gvpn_client::Input::new(old_key, bridge_session.bound_host, options.timeouts.http);
-            let client = reqwest::Client::new();
-            match gvpn_client::unregister(&client, &input).await {
-                Ok(()) => tracing::debug!("unregistered old wg public key"),
-                Err(gvpn_client::Error::RegistrationNotFound) => {
-                    tracing::warn!(wg_public_key = %input.public_key(), "old wg key not found during unregister, possibly already removed");
-                }
-                Err(err) => {
-                    tracing::warn!(%err, "failed to unregister old wg public key");
-                }
+        let input = gvpn_client::Input::new(old_key, bridge_session.bound_host, options.timeouts.http);
+        let client = reqwest::Client::new();
+        match gvpn_client::unregister(&client, &input).await {
+            Ok(()) => tracing::debug!("unregistered old wg public key"),
+            Err(gvpn_client::Error::RegistrationNotFound) => {
+                tracing::warn!(wg_public_key = %input.public_key(), "old wg key not found during unregister, possibly already removed");
             }
+            Err(err) => tracing::warn!(%err, "failed to unregister old wg public key"),
         }
-        if let Err(err) = close_bridge_session(&hopr, &bridge_session).await {
-            tracing::warn!(%err, "failed to close bridge session in background");
-        }
-        let _ = results_sender.send(progress(Progress::BridgeClosed)).await;
     });
 }
 

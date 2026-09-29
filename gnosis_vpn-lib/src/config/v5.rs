@@ -56,6 +56,7 @@ pub(super) struct MaxSurbUpstreamOptions {
     main: Option<Bandwidth>,
 }
 
+<<<<<<< HEAD
 impl Connection {
     pub fn default_bridge_capabilities() -> Vec<Capability> {
         vec![Capability::Segmentation, Capability::NoRateControl]
@@ -86,6 +87,12 @@ impl Connection {
 
 fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstreamOptions>) -> options::SurbBalancing {
     let def = options::SurbBalancing::default();
+=======
+/// Maps v5's separate `buffer`/`max_surb_upstream` sections onto v7's unified `surb_balancing`
+/// shape. `enabled`/`always_max_out_surbs` are left to v7's own defaults (`ping`/`main` on,
+/// `bridge` off) since v5 never had per-session enable flags.
+fn to_surb_balancing_config(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstreamOptions>) -> SurbBalancingConfig {
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
     let buf = buf.unwrap_or(BufferOptions {
         bridge: None,
         ping: None,
@@ -96,6 +103,7 @@ fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstrea
         ping: None,
         main: None,
     });
+<<<<<<< HEAD
     options::SurbBalancing {
         ping: options::SessionSurbOptions::new(
             true,
@@ -114,6 +122,19 @@ fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstrea
         ),
         health_check: def.health_check,
         ramp: def.ramp,
+=======
+    let session = |buffer: Option<ByteSize>, max_surb_upstream: Option<Bandwidth>| SessionSurbConfig {
+        enabled: None,
+        buffer,
+        max_surb_upstream,
+        always_max_out_surbs: None,
+    };
+    SurbBalancingConfig {
+        ping: Some(session(buf.ping, surbs.ping)),
+        main: Some(session(buf.main, surbs.main)),
+        bridge: Some(session(buf.bridge, surbs.bridge)),
+        ramp: None,
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
     }
 }
 
@@ -316,12 +337,21 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     }
                     if k == "health_check_intervals" {
                         if let Some(hci) = v.as_table() {
+<<<<<<< HEAD
                             for (k, _v) in hci.iter() {
                                 if k == "ping"
                                     || k == "health_every_n_pings"
                                     || k == "version_every_n_pings"
                                     || k == "tunnel_ping"
                                     || k == "tunnel_ping_max_failures"
+=======
+                            for (k2, _v) in hci.iter() {
+                                if k2 == "version"
+                                    || k2 == "ping"
+                                    || k2 == "load"
+                                    || k2 == "tunnel_ping"
+                                    || k2 == "tunnel_ping_max_failures"
+>>>>>>> 14212f2 (feat(route_health): expose graph data, path probing now API triggered (#843))
                                 {
                                     continue;
                                 }

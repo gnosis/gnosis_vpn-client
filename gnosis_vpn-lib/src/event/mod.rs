@@ -118,6 +118,8 @@ pub enum RequestToRoot {
     UpdatePeerIps {
         peer_ips: Vec<Ipv4Addr>,
     },
+    /// Fire-and-forget: core dropped its probe on its own, so root stops holding the idle countdown for it.
+    ProbeStopped,
 }
 
 /// Root execution response from root process.
