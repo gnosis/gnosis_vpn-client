@@ -12,6 +12,8 @@ use std::os::fd::BorrowedFd;
 
 pub(crate) mod dns;
 pub(crate) mod ipv6_blackhole;
+#[cfg(target_os = "linux")]
+pub(crate) mod resolv_conf;
 pub(crate) mod route_ops;
 pub(crate) mod sweep;
 pub(crate) mod tun;
