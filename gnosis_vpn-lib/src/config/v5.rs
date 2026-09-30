@@ -22,7 +22,7 @@ use crate::ping;
 pub(super) use super::v6::{
     BlokliConfig, Capability, ConnectionProtocol, HealthCheckIntervalOptions, PingOptions, WireGuard, to_flags,
 };
-use super::v6::{MAX_HOPS, validate_hops};
+use super::v6::{MAX_HOPS, reject_zero_intervals, validate_hops};
 
 // v5 defines its own Connection to carry the separate `buffer` and `max_surb_upstream`
 // sections which v6 replaced with the unified `surb_balancing` section.
@@ -112,7 +112,6 @@ fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstrea
             buf.bridge.unwrap_or(def.bridge.buffer),
             surbs.bridge.unwrap_or(def.bridge.max_surb_upstream),
         ),
-        health_check: def.health_check,
         ramp: def.ramp,
     }
 }
@@ -172,9 +171,9 @@ impl From<Option<Connection>> for options::Options {
         let health_check_intervals = connection
             .and_then(|c| c.health_check_intervals.as_ref())
             .map(|h| options::HealthCheckIntervals {
+                version: h.version.unwrap_or(def_intervals.version),
                 ping: h.ping.unwrap_or(def_intervals.ping),
-                health_every_n_pings: h.health_every_n_pings.unwrap_or(def_intervals.health_every_n_pings),
-                version_every_n_pings: h.version_every_n_pings.unwrap_or(def_intervals.version_every_n_pings),
+                load: h.load.unwrap_or(def_intervals.load),
                 tunnel_ping: h.tunnel_ping.unwrap_or(def_intervals.tunnel_ping),
                 tunnel_ping_max_failures: h
                     .tunnel_ping_max_failures
@@ -293,8 +292,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "surb_balancing" {
                         if let Some(sb) = v.as_table() {
                             for (session_key, session_val) in sb.iter() {
-                                let is_valid_session =
-                                    matches!(session_key.as_str(), "bridge" | "ping" | "main" | "health_check");
+                                let is_valid_session = matches!(session_key.as_str(), "bridge" | "ping" | "main");
                                 if !is_valid_session {
                                     wrong_keys.push(format!("connection.surb_balancing.{session_key}"));
                                     continue;
@@ -317,9 +315,9 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "health_check_intervals" {
                         if let Some(hci) = v.as_table() {
                             for (k, _v) in hci.iter() {
-                                if k == "ping"
-                                    || k == "health_every_n_pings"
-                                    || k == "version_every_n_pings"
+                                if k == "version"
+                                    || k == "ping"
+                                    || k == "load"
                                     || k == "tunnel_ping"
                                     || k == "tunnel_ping_max_failures"
                                 {
@@ -361,7 +359,8 @@ impl TryFrom<Config> for config::Config {
     type Error = config::Error;
 
     fn try_from(value: Config) -> Result<Self, Self::Error> {
-        let connection = value.connection.into();
+        let connection: options::Options = value.connection.into();
+        reject_zero_intervals(&connection.health_check_intervals)?;
         let destinations = convert_destinations(value.destinations)?;
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
@@ -541,12 +540,6 @@ enabled = true
 buffer = "10 MB"
 max_surb_upstream = "16 Mb/s"
 always_max_out_surbs = true
-
-[connection.surb_balancing.health_check]
-enabled = false
-buffer = "16 kB"
-max_surb_upstream = "128 Kb/s"
-always_max_out_surbs = false
 
 [wireguard]
 listen_port = 51820
