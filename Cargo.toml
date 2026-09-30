@@ -23,11 +23,9 @@ chrono = { version = "~0.4.45", default-features = false, features = [
   "serde",
   "std",
 ] }
-clap = { version = "~4.6.6", features = ["derive", "env"] }
-clap_complete = "~4.6.9"
-# The PIX deposit pool is edgli's default `pix-curvy`; the pool has to match the curve the network's
-# exits run, so it is not a client-side choice.
-edgli = { git = "https://github.com/0xCurvy/edge-client.git", rev = "aa42fa26e4a92e1df029a02e4b5438e3aab48ae7", features = [
+clap = { version = "~4.6.7", features = ["derive", "env"] }
+clap_complete = "~4.6.11"
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "a8fb4cd0f7964b6677c1379cc700d2ff357a93f2", features = [
   "blokli",
   "telemetry",
 ] }
@@ -51,7 +49,7 @@ notify = "~8.2.0"
 pfctl = "~0.7.0"
 ping = { version = "~0.9.0", features = ["tokio"] }
 rand = "~0.10.2"
-reqwest = { version = "~0.13.4", features = ["blocking", "json"] }
+reqwest = { version = "~0.13.5", features = ["blocking", "json"] }
 rtnetlink = "~0.23.0"
 rustix = { version = "~1.1.4", features = ["fs", "net", "pipe", "stdio"] }
 serde = { version = "~1.0.229", features = ["derive"] }
@@ -63,7 +61,7 @@ thiserror = "~2.0.20"
 tikv-jemallocator = "~0.7.0"
 tokio = { version = "~1.53.1", features = ["full"] }
 tokio-util = { version = "~0.7.19", features = ["rt"] }
-toml = "~1.1.5"
+toml = "~1.1.6"
 tracing = { version = "~0.1.44", features = ["release_max_level_debug"] }
 tracing-subscriber = "~0.3.23"
 url = { version = "~2.5.8", features = ["serde"] }

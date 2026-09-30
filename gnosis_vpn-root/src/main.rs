@@ -71,6 +71,8 @@ struct DaemonState {
     shutdown_ongoing: Shutdown,
     // keep track of the current target for restore/restart/reload logic
     target_dest_id: Option<String>,
+    /// Whether the worker runs a probe; it holds the idle countdown like a target does.
+    probing: bool,
     // used to forward messages incoming on unix socket to worker process
     incoming_worker_channel: (mpsc::Sender<String>, mpsc::Receiver<String>),
     // optional worker paramters set after construction
@@ -547,6 +549,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         reload_handle,
         shutdown_ongoing: Shutdown::None,
         target_dest_id: None,
+        probing: false,
         worker_child: None,
         worker_exit_channel: mpsc::channel(1),
         worker_params,
@@ -913,13 +916,15 @@ impl DaemonState {
                         .send(KeepAliveInstruction::Restart)
                         .await;
                     Ok(())
-                } else if let Some(response) = self.offline_response(&w_cmd) {
-                    let _ = resp.send(response).map_err(|error| {
-                        tracing::error!(?error, "socket command response channel closed");
-                    });
-                    Ok(())
                 } else {
-                    let _ = resp.send(self.worker_gone_response()).map_err(|error| {
+                    let response = self
+                        .offline_response(&w_cmd)
+                        .unwrap_or_else(|| self.worker_gone_response());
+                    // The command suspended the countdown before we knew there was no worker; undo that.
+                    if matches!(w_cmd, WorkerCommand::Connect(_) | WorkerCommand::Probe(_)) {
+                        self.probe_ended().await;
+                    }
+                    let _ = resp.send(response).map_err(|error| {
                         tracing::error!(?error, "socket command response channel closed");
                     });
                     Ok(())
@@ -1017,6 +1022,7 @@ impl DaemonState {
             reconnecting: None,
             connected: None,
             disconnecting: vec![],
+            probe: None,
         })
     }
 
@@ -1026,6 +1032,9 @@ impl DaemonState {
             LibCommand::NerdStats
             | LibCommand::Connect(_)
             | LibCommand::Disconnect
+            | LibCommand::Probe(_)
+            | LibCommand::Unprobe
+            | LibCommand::QuickProbe(_)
             | LibCommand::Balance
             | LibCommand::FundingTool(_)
             | LibCommand::Telemetry => Ok(self.worker_gone_response()),
@@ -1144,6 +1153,7 @@ impl DaemonState {
             tracing::debug!(id = %destination.connect_id, "remembering target destination from connect response");
             self.target_dest_id = Some(destination.connect_id.clone());
         }
+        self.track_probe(&resp).await;
         if let Some(resp_sender) = self.pending_responses.remove(&id) {
             if resp_sender.send(resp).is_err() {
                 tracing::error!(id, "unexpected channel closure");
@@ -1281,6 +1291,10 @@ impl DaemonState {
                 self.worker_params.set_cached_blokli_ips(ips);
                 Ok(())
             }
+            RequestToRoot::ProbeStopped => {
+                self.probe_ended().await;
+                Ok(())
+            }
             RequestToRoot::UpdatePeerIps { peer_ips } => {
                 let _ = self
                     .routing_actor_sender
@@ -1293,6 +1307,7 @@ impl DaemonState {
 
     async fn incoming_worker_exit(&mut self, status: process::ExitStatus) -> Result<(), exitcode::ExitCode> {
         self.worker_child = None;
+        self.probing = false;
         match self.shutdown_ongoing {
             Shutdown::None => {
                 if status.success() {
@@ -1300,10 +1315,7 @@ impl DaemonState {
                     // Ids issued to the dead worker are never answered by its replacement.
                     answer_pending(&mut self.pending_responses, Response::WorkerRestarting);
                     self.setup_worker().await?;
-                    let _ = self
-                        .keep_alive_instruction_sender
-                        .send(KeepAliveInstruction::Restart)
-                        .await;
+                    self.restart_idle_countdown().await;
                     Ok(())
                 } else {
                     tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
@@ -1336,13 +1348,19 @@ impl DaemonState {
                 }
                 self.shutdown_ongoing = Shutdown::None;
                 self.setup_worker().await?;
-                let _ = self
-                    .keep_alive_instruction_sender
-                    .send(KeepAliveInstruction::Restart)
-                    .await;
+                self.restart_idle_countdown().await;
                 Ok(())
             }
         }
+    }
+
+    /// Restart is a no-op while suspended, so a suspend whose answer died with the worker must not outlive it.
+    async fn restart_idle_countdown(&mut self) {
+        let instruction = match self.target_dest_id {
+            Some(_) => KeepAliveInstruction::Restart,
+            None => KeepAliveInstruction::Resume,
+        };
+        let _ = self.keep_alive_instruction_sender.send(instruction).await;
     }
 
     async fn keep_alive_expired(&mut self, duration: Duration) -> Result<(), exitcode::ExitCode> {
@@ -1495,6 +1513,7 @@ impl DaemonState {
     }
 
     async fn cleanup_worker_resources(&mut self) {
+        self.probing = false;
         self.ping_tasks.shutdown().await;
         self.teardown_any_routing().await;
         let worker_gone = self.worker_gone_response();
@@ -1529,12 +1548,49 @@ impl DaemonState {
         }
     }
 
+    /// Mirrors the worker's probe from its answers, the same way `target_dest_id` mirrors the target.
+    async fn track_probe(&mut self, resp: &Response) {
+        match resp {
+            Response::Probe(
+                command::ProbeResponse::Probing { .. }
+                | command::ProbeResponse::Replaced { .. }
+                | command::ProbeResponse::AlreadyProbing { .. },
+            ) => self.probing = true,
+            Response::Unprobe(command::UnprobeResponse::Closing { .. } | command::UnprobeResponse::NotProbing) => {
+                self.probing = false
+            }
+            // The probe command suspended the countdown before the worker refused it; undo that.
+            Response::Probe(_) if !self.probing => self.probe_ended().await,
+            _ => (),
+        }
+    }
+
+    /// No probe holds the countdown any more; only a connection target still can.
+    async fn probe_ended(&mut self) {
+        self.probing = false;
+        if self.target_dest_id.is_some() {
+            return;
+        }
+        let _ = self
+            .keep_alive_instruction_sender
+            .send(KeepAliveInstruction::Resume)
+            .await;
+    }
+
     async fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {
         match cmd {
-            WorkerCommand::Connect(_) => {
+            // A probe is deliberate long-running activity, so it holds the idle countdown like a connection.
+            WorkerCommand::Connect(_) | WorkerCommand::Probe(_) => {
                 let _ = self
                     .keep_alive_instruction_sender
                     .send(KeepAliveInstruction::Suspend)
+                    .await;
+            }
+            // Only resume when no connection target still holds the countdown.
+            WorkerCommand::Unprobe if self.target_dest_id.is_none() => {
+                let _ = self
+                    .keep_alive_instruction_sender
+                    .send(KeepAliveInstruction::Resume)
                     .await;
             }
             WorkerCommand::Disconnect => {
@@ -1542,10 +1598,13 @@ impl DaemonState {
                 self.target_dest_id = None;
                 self.worker_params.set_cached_blokli_ips(Vec::new());
                 self.disable_killswitch().await;
-                let _ = self
-                    .keep_alive_instruction_sender
-                    .send(KeepAliveInstruction::Resume)
-                    .await;
+                // A probe outlives the connection and keeps holding the countdown.
+                if !self.probing {
+                    let _ = self
+                        .keep_alive_instruction_sender
+                        .send(KeepAliveInstruction::Resume)
+                        .await;
+                }
             }
             _ => (),
         }
