@@ -60,7 +60,7 @@ impl Default for PixConfig {
             spend_window: strategy.spend_window,
             deposit_buffer_period: strategy.deposit_buffer_period,
             max_deposit_tracking_time: Self::default_max_deposit_tracking_time(),
-            max_deposit_retries: None,
+            max_deposit_retries: None, // Applies to pix-test pool only.
             min_safe_hopr_reserve: None,
         }
     }
