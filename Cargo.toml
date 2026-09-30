@@ -23,15 +23,9 @@ chrono = { version = "~0.4.45", default-features = false, features = [
   "serde",
   "std",
 ] }
-<<<<<<< HEAD
-clap = { version = "~4.6.6", features = ["derive", "env"] }
-clap_complete = "~4.6.9"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", branch = "release/4.1", features = [
-=======
 clap = { version = "~4.6.7", features = ["derive", "env"] }
 clap_complete = "~4.6.11"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "532efe78ec71a6a0cdf84a3507f758df41ee2b37", features = [
->>>>>>> 27cb1db (chore(deps): update rust crates (patch) (#847))
+edgli = { git = "https://github.com/hoprnet/edge-client.git", branch = "release/4.1", features = [
   "blokli",
   "telemetry",
 ] }
