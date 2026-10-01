@@ -5,6 +5,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -40,12 +41,14 @@ pub(super) fn apply(servers: &[&str]) -> bool {
             return false;
         }
     };
-    if let Err(e) = std::fs::write(BACKUP, &original) {
+    if let Err(e) = write_backup(&original) {
         tracing::warn!(%e, path = BACKUP, "cannot write resolv.conf backup (continuing)");
         return false;
     }
     if let Err(e) = std::fs::write(RESOLV_CONF, with_nameservers(&original, &servers)) {
         tracing::warn!(%e, path = RESOLV_CONF, "cannot write resolv.conf (continuing)");
+        // A backup left behind would pose as the original on the next connect.
+        restore_backup();
         return false;
     }
     start_watching(servers);
@@ -81,6 +84,15 @@ pub(super) fn restore_backup() -> bool {
         return false;
     }
     true
+}
+
+/// Atomic, so a crash mid-write cannot leave a partial backup for the sweep to restore.
+fn write_backup(content: &str) -> std::io::Result<()> {
+    let tmp = format!("{BACKUP}.tmp");
+    let mut file = std::fs::File::create(&tmp)?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&tmp, BACKUP)
 }
 
 fn read_optional(path: &str) -> std::io::Result<Option<String>> {
@@ -160,6 +172,13 @@ fn start_watching(servers: Vec<String>) {
                     // A rewrite arrives as a burst (tmp file, rename, chmod); settle first.
                     tokio::time::sleep(Duration::from_millis(250)).await;
                     while event_rx.try_recv().is_ok() {}
+                    // Holding the lock serializes with `restore`, which cancels under it before restoring.
+                    let Ok(_watch) = WATCH.lock() else {
+                        return;
+                    };
+                    if task_cancel.is_cancelled() {
+                        return;
+                    }
                     reapply(&servers);
                 }
             }
@@ -196,7 +215,7 @@ fn reapply(servers: &[String]) {
     }
     tracing::info!("resolv.conf was rewritten by another program - re-applying tunnel DNS");
     // The newcomer is what the host wants once we disconnect, so it becomes the backup.
-    if let Err(e) = std::fs::write(BACKUP, &current) {
+    if let Err(e) = write_backup(&current) {
         tracing::warn!(%e, path = BACKUP, "cannot update resolv.conf backup (continuing)");
         return;
     }

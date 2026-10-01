@@ -4,9 +4,10 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 #[cfg(target_os = "linux")]
-use std::ffi::OsStr;
-#[cfg(target_os = "linux")]
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
 #[cfg(target_os = "linux")]
 use super::resolv_conf;
@@ -200,14 +201,19 @@ fn resolved_owns_resolv_conf() -> bool {
 #[cfg(target_os = "linux")]
 fn resolved_in_use(resolv_conf_target: Option<&Path>, resolv_conf: &str, nsswitch: &str) -> bool {
     let is_resolved_file = resolv_conf_target.is_some_and(|p| p.starts_with("/run/systemd/resolve"));
+    if is_resolved_file {
+        return true;
+    }
     let uses_stub = resolv_conf::nameservers(resolv_conf)
         .iter()
         .any(|ns| ns == "127.0.0.53");
-    let nss_resolve = nsswitch
+    if uses_stub {
+        return true;
+    }
+    nsswitch
         .lines()
         .filter(|line| line.starts_with("hosts:"))
-        .any(|line| line.split_whitespace().any(|word| word == "resolve"));
-    is_resolved_file || uses_stub || nss_resolve
+        .any(|line| line.split_whitespace().any(|word| word == "resolve"))
 }
 
 /// Ubuntu's resolvconf is a resolvectl alias, and an installed resolvconf may not own the file; `-a` then changes nothing.
@@ -245,14 +251,13 @@ fn find_in_path(name: &str) -> Option<PathBuf> {
 /// Sweep a backup left by a root that died while connected; unlike the state file it survives a reboot.
 #[cfg(target_os = "linux")]
 pub fn restore_leftover_resolv_conf() {
-    if !resolv_conf::backup_exists() {
-        return;
+    if resolv_conf::backup_exists() {
+        tracing::info!(
+            backup = resolv_conf::BACKUP,
+            "found a resolv.conf backup from an unclean exit - restoring it"
+        );
+        resolv_conf::restore_backup();
     }
-    tracing::info!(
-        backup = resolv_conf::BACKUP,
-        "found a resolv.conf backup from an unclean exit - restoring it"
-    );
-    resolv_conf::restore_backup();
 }
 
 #[cfg(target_os = "linux")]
