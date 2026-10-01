@@ -10,8 +10,8 @@
 # Build and dependency surface.
 *.nix      @esterlus @Teebor-Choka @tolbrino
 /nix/      @esterlus @Teebor-Choka @tolbrino
-Cargo.toml @esterlus @Teebor-Choka @tolbrino
-Cargo.lock @esterlus @Teebor-Choka @tolbrino
+Cargo.toml @esterlus @Teebor-Choka @tolbrino @mjadach-iv
+Cargo.lock @esterlus @Teebor-Choka @tolbrino @mjadach-iv
 
 # Highest-trust artifacts: release signing key and disclosure policy.
 /gnosisvpn-public-key.asc @esterlus @tolbrino
