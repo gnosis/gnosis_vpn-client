@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub(super) const RESOLV_CONF: &str = "/etc/resolv.conf";
@@ -15,16 +15,26 @@ pub(super) const BACKUP: &str = "/etc/resolv.conf.gnosisvpn-backup";
 const MARKER: &str =
     "# nameserver lines set by gnosisvpn while connected; original in /etc/resolv.conf.gnosisvpn-backup";
 
-/// One tunnel per process, so a global keeps `dns::set`/`dns::restore` free of handles.
-static WATCH: Mutex<Option<Watch>> = Mutex::new(None);
-
-struct Watch {
-    _watcher: notify::RecommendedWatcher,
+/// Owns the management of the file: dropping it stops re-applying and hands the original back.
+pub(super) struct Managed {
+    /// `None` when the watcher could not be created; the file is managed regardless.
+    _watcher: Option<notify::RecommendedWatcher>,
     cancel: CancellationToken,
+    /// Held across a re-apply so a restore cannot interleave with one.
+    gate: Arc<Mutex<()>>,
 }
 
-/// Point the host resolver at `servers` until [`restore`]; false when the file cannot be read or written.
-pub(super) fn apply(servers: &[&str]) -> bool {
+impl Drop for Managed {
+    fn drop(&mut self) {
+        let _gate = self.gate.lock();
+        self.cancel.cancel();
+        // A no-op once the backup is already gone.
+        restore_backup();
+    }
+}
+
+/// Point the host resolver at `servers` until the returned guard drops; `None` when the file is unusable.
+pub(super) fn apply(servers: &[&str]) -> Option<Managed> {
     let servers: Vec<String> = servers.iter().map(|s| s.to_string()).collect();
     // A leftover backup means root died mid-connection: the backup is the real original, not the current file.
     let original = match read_optional(BACKUP) {
@@ -33,32 +43,25 @@ pub(super) fn apply(servers: &[&str]) -> bool {
             Ok(content) => content.unwrap_or_default(),
             Err(e) => {
                 tracing::warn!(%e, path = RESOLV_CONF, "cannot read resolv.conf (continuing)");
-                return false;
+                return None;
             }
         },
         Err(e) => {
             tracing::warn!(%e, path = BACKUP, "cannot read resolv.conf backup (continuing)");
-            return false;
+            return None;
         }
     };
     if let Err(e) = write_backup(&original) {
         tracing::warn!(%e, path = BACKUP, "cannot write resolv.conf backup (continuing)");
-        return false;
+        return None;
     }
     if let Err(e) = std::fs::write(RESOLV_CONF, with_nameservers(&original, &servers)) {
         tracing::warn!(%e, path = RESOLV_CONF, "cannot write resolv.conf (continuing)");
         // A backup left behind would pose as the original on the next connect.
         restore_backup();
-        return false;
+        return None;
     }
-    start_watching(servers);
-    true
-}
-
-/// Stop re-applying and hand the original file back.
-pub(super) fn restore() -> bool {
-    stop_watching();
-    restore_backup()
+    Some(start_watching(servers))
 }
 
 pub(super) fn backup_exists() -> bool {
@@ -138,8 +141,15 @@ fn is_nameserver_line(line: &str) -> bool {
 }
 
 /// Re-apply after an external rewrite; watches directories because NetworkManager replaces the file by rename.
-fn start_watching(servers: Vec<String>) {
-    stop_watching();
+fn start_watching(servers: Vec<String>) -> Managed {
+    let gate = Arc::new(Mutex::new(()));
+    let cancel = CancellationToken::new();
+    let managed = |watcher| Managed {
+        _watcher: watcher,
+        cancel: cancel.clone(),
+        gate: gate.clone(),
+    };
+
     let targets = watched_paths();
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
@@ -153,7 +163,8 @@ fn start_watching(servers: Vec<String>) {
         Ok(watcher) => watcher,
         Err(e) => {
             tracing::warn!(%e, "cannot watch resolv.conf; external rewrites will not be re-applied");
-            return;
+            // The file is ours either way, so the guard must still restore it.
+            return managed(None);
         }
     };
     for dir in watched_dirs() {
@@ -162,8 +173,8 @@ fn start_watching(servers: Vec<String>) {
         }
     }
 
-    let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
+    let task_gate = gate.clone();
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -172,10 +183,8 @@ fn start_watching(servers: Vec<String>) {
                     // A rewrite arrives as a burst (tmp file, rename, chmod); settle first.
                     tokio::time::sleep(Duration::from_millis(250)).await;
                     while event_rx.try_recv().is_ok() {}
-                    // Holding the lock serializes with `restore`, which cancels under it before restoring.
-                    let Ok(_watch) = WATCH.lock() else {
-                        return;
-                    };
+                    // Holding the gate serializes with the guard's drop, which cancels under it before restoring.
+                    let _gate = task_gate.lock();
                     if task_cancel.is_cancelled() {
                         return;
                     }
@@ -184,21 +193,7 @@ fn start_watching(servers: Vec<String>) {
             }
         }
     });
-    if let Ok(mut watch) = WATCH.lock() {
-        *watch = Some(Watch {
-            _watcher: watcher,
-            cancel,
-        });
-    }
-}
-
-fn stop_watching() {
-    let Ok(mut watch) = WATCH.lock() else {
-        return;
-    };
-    if let Some(watch) = watch.take() {
-        watch.cancel.cancel();
-    }
+    managed(Some(watcher))
 }
 
 fn reapply(servers: &[String]) {

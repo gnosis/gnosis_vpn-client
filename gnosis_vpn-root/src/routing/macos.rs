@@ -245,7 +245,7 @@ impl Routing for StaticRouter {
         // Phase 4: DNS (the IPv6 blackhole was installed up front for leak
         // protection; DNS waits here because it needs the resolved interface name).
         self.dns_mechanism = match self.dns.clone() {
-            Some(servers) => dns::set(&interface_name, &servers).await,
+            Some(servers) => dns::set(&interface_name, &servers).await.map(|d| d.mechanism),
             None => None,
         };
         // Record what was applied so a SIGKILLed root can be swept at next start.
