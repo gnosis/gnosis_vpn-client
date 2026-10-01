@@ -276,8 +276,8 @@ mod tests {
     use std::collections::VecDeque;
 
     use base64::prelude::{BASE64_STANDARD, Engine as _};
+    use neptun::x25519::{PublicKey, StaticSecret};
     use tokio::sync::mpsc::{Receiver, Sender, channel};
-    use x25519_dalek::{PublicKey, StaticSecret};
 
     use super::*;
     use crate::wg_tunnel::tunnel::{Outputs, TimerTick, WgTunnel};
@@ -774,8 +774,8 @@ mod tests {
     /// decapsulate, drain and both directions of data flow through the pump.
     #[tokio::test]
     async fn pump_carries_data_both_ways_against_a_real_peer() {
-        let client_secret = StaticSecret::random();
-        let server_secret = StaticSecret::random();
+        let client_secret = StaticSecret::from(rand::random::<[u8; 32]>());
+        let server_secret = StaticSecret::from(rand::random::<[u8; 32]>());
         let client_pub = BASE64_STANDARD.encode(PublicKey::from(&client_secret).to_bytes());
         let server_pub = BASE64_STANDARD.encode(PublicKey::from(&server_secret).to_bytes());
         let client_priv = BASE64_STANDARD.encode(client_secret.to_bytes());
@@ -865,8 +865,8 @@ mod tests {
     async fn pump_carries_data_over_the_session_splice_adapters() {
         use crate::wg_tunnel::{SessionReceiver, SessionSender};
 
-        let client_secret = StaticSecret::random();
-        let server_secret = StaticSecret::random();
+        let client_secret = StaticSecret::from(rand::random::<[u8; 32]>());
+        let server_secret = StaticSecret::from(rand::random::<[u8; 32]>());
         let client_pub = BASE64_STANDARD.encode(PublicKey::from(&client_secret).to_bytes());
         let server_pub = BASE64_STANDARD.encode(PublicKey::from(&server_secret).to_bytes());
         let client_priv = BASE64_STANDARD.encode(client_secret.to_bytes());
