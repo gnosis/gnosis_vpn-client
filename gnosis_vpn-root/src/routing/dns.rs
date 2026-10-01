@@ -204,16 +204,26 @@ fn resolved_in_use(resolv_conf_target: Option<&Path>, resolv_conf: &str, nsswitc
     if is_resolved_file {
         return true;
     }
-    let uses_stub = resolv_conf::nameservers(resolv_conf)
-        .iter()
-        .any(|ns| ns == "127.0.0.53");
-    if uses_stub {
+    // glibc fails over to any other nameserver listed, so only an all-stub file routes every query to resolved.
+    let nameservers = resolv_conf::nameservers(resolv_conf);
+    let only_stub = !nameservers.is_empty() && nameservers.iter().all(|ns| ns == "127.0.0.53");
+    if only_stub {
         return true;
     }
-    nsswitch
+    let hosts = nsswitch
         .lines()
-        .filter(|line| line.starts_with("hosts:"))
-        .any(|line| line.split_whitespace().any(|word| word == "resolve"))
+        .find(|line| line.starts_with("hosts:"))
+        .unwrap_or_default();
+    // glibc stops at the first service that answers, so a `dns` before `resolve` bypasses resolved (as Tailscale checks).
+    for service in hosts.split_whitespace() {
+        if service == "dns" {
+            return false;
+        }
+        if service == "resolve" {
+            return true;
+        }
+    }
+    false
 }
 
 /// Ubuntu's resolvconf is a resolvectl alias, and an installed resolvconf may not own the file; `-a` then changes nothing.
@@ -475,6 +485,33 @@ mod linux_tests {
             "hosts: files mdns4_minimal [NOTFOUND=return] dns\n"
         ));
         assert!(!resolved_in_use(None, "", ""));
+    }
+
+    #[test]
+    fn resolve_counts_only_before_dns() {
+        let plain = Some(Path::new("/etc/resolv.conf"));
+        let lan = "nameserver 192.168.1.1\n";
+        assert!(!resolved_in_use(plain, lan, "hosts: files dns resolve\n"));
+        assert!(resolved_in_use(
+            plain,
+            lan,
+            "hosts: files mdns4_minimal [NOTFOUND=return] resolve\n"
+        ));
+    }
+
+    #[test]
+    fn stub_counts_only_when_it_is_the_sole_nameserver() {
+        let plain = Some(Path::new("/etc/resolv.conf"));
+        assert!(!resolved_in_use(
+            plain,
+            "nameserver 127.0.0.53\nnameserver 192.168.1.1\n",
+            ""
+        ));
+        assert!(resolved_in_use(
+            plain,
+            "nameserver 127.0.0.53\nnameserver 127.0.0.53\n",
+            ""
+        ));
     }
 
     #[test]
