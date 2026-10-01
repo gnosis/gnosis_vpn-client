@@ -14,7 +14,7 @@ use std::time::SystemTime;
 use ipnetwork::IpNetwork;
 use neptun::noise::errors::WireGuardError;
 use neptun::noise::{Tunn, TunnResult};
-use x25519_dalek::{PublicKey, StaticSecret};
+use neptun::x25519::{PublicKey, StaticSecret};
 
 use super::Error;
 use super::stats::TunnelStatsSample;
@@ -256,7 +256,7 @@ mod tests {
 
     /// A fresh base64 (private, public) WireGuard key pair.
     fn key_pair() -> (String, String) {
-        let secret = StaticSecret::random();
+        let secret = StaticSecret::from(rand::random::<[u8; 32]>());
         let public = BASE64_STANDARD.encode(PublicKey::from(&secret).to_bytes());
         (BASE64_STANDARD.encode(secret.to_bytes()), public)
     }
