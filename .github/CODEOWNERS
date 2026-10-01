@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-* @gnosis/ext-hopr-admin
-=======
 # Default
 * @esterlus @Teebor-Choka @tolbrino
 
@@ -13,8 +10,8 @@
 # Build and dependency surface.
 *.nix      @esterlus @Teebor-Choka @tolbrino
 /nix/      @esterlus @Teebor-Choka @tolbrino
-Cargo.toml @esterlus @Teebor-Choka @tolbrino
-Cargo.lock @esterlus @Teebor-Choka @tolbrino
+Cargo.toml @esterlus @Teebor-Choka @tolbrino @mjadach-iv
+Cargo.lock @esterlus @Teebor-Choka @tolbrino @mjadach-iv
 
 # Highest-trust artifacts: release signing key and disclosure policy.
 /gnosisvpn-public-key.asc @esterlus @tolbrino
@@ -22,4 +19,3 @@ Cargo.lock @esterlus @Teebor-Choka @tolbrino
 
 # Changing ownership itself stays with org admins.
 /.github/CODEOWNERS @gnosis/ext-hopr-admin
->>>>>>> d9f83a5 (chore(codeowners): add @Teebor-Choka to the default owners (#859))
