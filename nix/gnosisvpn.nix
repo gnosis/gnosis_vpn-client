@@ -40,16 +40,10 @@ let
     main = nixLib.mkSrc {
       inherit fs;
       root = ../.;
-      extraFiles = [
-        ../gnosisvpn-public-key.asc
-      ];
     };
     test = nixLib.mkTestSrc {
       inherit fs;
       root = ../.;
-      extraFiles = [
-        ../gnosisvpn-public-key.asc
-      ];
     };
     deps = nixLib.mkDepsSrc {
       inherit fs;
