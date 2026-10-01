@@ -25,7 +25,7 @@ use std::os::fd::{AsFd, BorrowedFd};
 
 use super::route_ops::{RouteOps, WanRoute};
 use super::route_ops_linux::NetlinkRouteOps;
-use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET, dns, ipv6_blackhole, sweep, tun};
+use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET, dns, ipv6_blackhole, resolv_conf, sweep, tun};
 
 /// Public IP used to identify the WAN route and detect DHCP reassignments.
 const PUBLIC_INTERNET_ADDRESS: Ipv4Addr = Ipv4Addr::new(1, 1, 1, 1);
@@ -49,6 +49,7 @@ pub fn static_router(
         mtu,
         dns,
         dns_mechanism: None,
+        dns_guard: None,
         peer_ips,
         handle,
         route_ops,
@@ -73,6 +74,8 @@ struct StaticRouter {
     dns: Option<String>,
     /// Resolver mechanism that took effect at setup; teardown reverses exactly this one.
     dns_mechanism: Option<dns::Mechanism>,
+    /// Hands `/etc/resolv.conf` back when dropped, covering the paths that never reach teardown.
+    dns_guard: Option<resolv_conf::Managed>,
     peer_ips: Vec<Ipv4Addr>,
     /// Netlink handle used for address + link-state assignment on the TUN.
     handle: rtnetlink::Handle,
@@ -292,10 +295,14 @@ impl Routing for StaticRouter {
 
         // Phase 4: DNS (the IPv6 blackhole was installed up front for leak
         // protection; DNS waits here because it needs the resolved interface name).
-        self.dns_mechanism = match self.dns.clone() {
+        // Released before the new apply writes its backup, so a stale guard cannot restore over it.
+        self.dns_guard = None;
+        let diversion = match self.dns.clone() {
             Some(servers) => dns::set(&interface_name, &servers).await,
             None => None,
         };
+        self.dns_mechanism = diversion.as_ref().map(|d| d.mechanism);
+        self.dns_guard = diversion.and_then(|d| d.resolv_conf);
         // Record what was applied so a SIGKILLed root can be swept at next start.
         self.persist_teardown_state();
 
@@ -309,6 +316,8 @@ impl Routing for StaticRouter {
         if self.blackholes_added && ipv6_blackhole::remove().await {
             self.blackholes_added = false;
         }
+        // Released first: it stops the watcher, so nothing re-applies behind the restore.
+        self.dns_guard = None;
         if let Some(mechanism) = self.dns_mechanism
             && dns::restore(wireguard::WG_INTERFACE, mechanism).await
         {
