@@ -100,6 +100,10 @@ pub async fn startup_sweep() {
         state.killswitch_active = true;
     }
 
+    // The /etc backup outlives the state file and a reboot, so it is swept by its own presence.
+    #[cfg(target_os = "linux")]
+    dns::restore_leftover_resolv_conf();
+
     if state.is_empty() {
         clear_at(&paths);
         return;
