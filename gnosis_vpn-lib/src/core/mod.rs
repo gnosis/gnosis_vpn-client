@@ -1747,7 +1747,12 @@ impl Core {
         self.retry_pending_unregisters(&destination, key_in_use, results_sender);
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connection.clone();
-            let conn = connection::up::Up::new(destination.clone());
+            let mut conn = connection::up::Up::new(destination.clone());
+            // Seeded so a disconnect before the runner reports its key still unregisters and tears down.
+            if let Some(resume) = &resume {
+                conn.wireguard = Some(resume.wireguard.clone());
+                conn.registration = Some(resume.registration.clone());
+            }
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
             let prev_conn = connection::up::runner::PreviousConnection {
