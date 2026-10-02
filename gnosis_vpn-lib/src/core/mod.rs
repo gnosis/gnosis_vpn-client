@@ -2307,10 +2307,6 @@ impl Core {
     }
 }
 
-/// Wait for the (already cancelled) NepTUN pump task to finish so the worker's
-/// TUN fd is closed before root tears down routing and drops its own fd. On
-/// Linux the TUN is multi-queue: re-provisioning while a stale fd lives would
-/// attach a second queue to the old device instead of creating a fresh one.
 /// Connecting and reconnecting views of the phase; between attempts a reconnect has no phase.
 fn connection_infos(
     phase: &Phase,
@@ -2356,6 +2352,7 @@ fn nerd_stats_telemetry(conn: &connection::up::Up, bridge: Option<&SessionClient
     }
 }
 
+/// The worker's fd must close before root's: on Linux a stale fd turns the next TUN create into a second queue on the old device.
 async fn wait_for_pump_stop(pump_tasks: TaskTracker) -> bool {
     pump_tasks.close();
     let stopped = time::timeout(PUMP_STOP_BUDGET, pump_tasks.wait()).await.is_ok();
