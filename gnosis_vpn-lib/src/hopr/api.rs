@@ -38,7 +38,7 @@ use crate::route_health::RouteWalk;
 use crate::{
     balance::{self, Balances},
     hopr::{
-        HoprError, PixConfig,
+        HoprError,
         types::{SessionClientMetadata, SplicedWgSession},
     },
     info::Info,
@@ -367,7 +367,7 @@ impl Hopr {
     pub async fn start_telemetry_reactor(
         &self,
         sizing: edgli::strategy::IncentiveConfiguration,
-        pix: PixConfig,
+        pix: edgli::strategy::PixEntryConfig,
     ) -> Result<AbortHandle, HoprError> {
         let mut cfg = edgli::strategy::default_strategy_cfg(&sizing)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
@@ -383,7 +383,8 @@ impl Hopr {
         // Drop any pre-existing entry first so a future upstream default can't register it twice.
         cfg.strategies
             .retain(|s| !matches!(s, edgli::strategy::EdgeStrategyKind::Pix(_)));
-        cfg.strategies.push(edgli::strategy::EdgeStrategyKind::Pix(pix.into()));
+        cfg.strategies
+            .push(edgli::strategy::EdgeStrategyKind::Pix(Box::new(pix)));
         self.edgli
             .run_reactor_from_cfg(cfg)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))

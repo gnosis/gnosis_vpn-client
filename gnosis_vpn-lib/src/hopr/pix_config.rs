@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use edgli::hopr_lib::api::types::primitive::prelude::HoprBalance;
@@ -35,29 +36,32 @@ pub struct PixConfig {
     #[serde(with = "humantime_serde", default = "PixConfig::default_max_deposit_tracking_time")]
     pub max_deposit_tracking_time: Duration,
 
-    /// Attempts *in addition to* the first for a deposit transfer.
-    #[serde(default = "PixConfig::default_max_deposit_retries")]
-    pub max_deposit_retries: usize,
+    /// Attempts *in addition to* the first for a deposit transfer; unset keeps the pool's default.
+    /// `pix-test` pool only: edgli warns about and ignores it under the Curvy pool, which allocates
+    /// deposits out of a shielded float rather than transferring each.
+    #[serde(default)]
+    pub max_deposit_retries: Option<usize>,
 
     /// wxHOPR the Safe must still hold after a deposit; a deposit that would breach it is refused.
-    #[serde_as(as = "DisplayFromStr")]
-    #[serde(default = "PixConfig::default_min_safe_hopr_reserve")]
-    pub min_safe_hopr_reserve: HoprBalance,
+    /// Unset keeps the pool's default. `pix-test` pool only: edgli warns about and ignores it under
+    /// the Curvy pool, whose float is shielded once rather than paid out of the Safe per deposit.
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub min_safe_hopr_reserve: Option<HoprBalance>,
 }
 
 impl Default for PixConfig {
     fn default() -> Self {
         let strategy = edgli::strategy::PixEntryStrategy::default();
-        let pool = edgli::strategy::PixEntryPool::default();
         Self {
             price_per_byte: strategy.price_per_byte,
             max_ssa_allocation: strategy.max_ssa_allocation,
             max_spend_per_window: strategy.max_spend_per_window,
             spend_window: strategy.spend_window,
             deposit_buffer_period: strategy.deposit_buffer_period,
-            max_deposit_tracking_time: pool.max_deposit_tracking_time,
-            max_deposit_retries: pool.max_deposit_retries,
-            min_safe_hopr_reserve: pool.min_safe_hopr_reserve,
+            max_deposit_tracking_time: Self::default_max_deposit_tracking_time(),
+            max_deposit_retries: None, // Applies to pix-test pool only.
+            min_safe_hopr_reserve: None,
         }
     }
 }
@@ -88,30 +92,22 @@ impl PixConfig {
         edgli::strategy::PixEntryPool::default().max_deposit_tracking_time
     }
 
-    fn default_max_deposit_retries() -> usize {
-        edgli::strategy::PixEntryPool::default().max_deposit_retries
-    }
-
-    fn default_min_safe_hopr_reserve() -> HoprBalance {
-        edgli::strategy::PixEntryPool::default().min_safe_hopr_reserve
-    }
-}
-
-impl From<PixConfig> for edgli::strategy::PixEntryConfig {
-    fn from(c: PixConfig) -> Self {
-        Self {
+    /// The edgli form; which pool the knobs reach is edgli's call, deployment stays on `HOPRD_CURVY_*`.
+    pub fn to_entry_config(&self, state_home: PathBuf) -> edgli::strategy::PixEntryConfig {
+        edgli::strategy::PixEntryConfig {
             strategy: edgli::strategy::PixEntryStrategy {
-                price_per_byte: c.price_per_byte,
-                max_ssa_allocation: c.max_ssa_allocation,
-                max_spend_per_window: c.max_spend_per_window,
-                spend_window: c.spend_window,
-                deposit_buffer_period: c.deposit_buffer_period,
+                price_per_byte: self.price_per_byte,
+                max_ssa_allocation: self.max_ssa_allocation,
+                max_spend_per_window: self.max_spend_per_window,
+                spend_window: self.spend_window,
+                deposit_buffer_period: self.deposit_buffer_period,
             },
-            pool: edgli::strategy::PixEntryPool {
-                max_deposit_tracking_time: c.max_deposit_tracking_time,
-                max_deposit_retries: c.max_deposit_retries,
-                min_safe_hopr_reserve: c.min_safe_hopr_reserve,
-            },
+            pool: edgli::strategy::PixEntryPool::from_knobs(edgli::strategy::PixEntryPoolKnobs {
+                max_deposit_tracking_time: Some(self.max_deposit_tracking_time),
+                max_deposit_retries: self.max_deposit_retries,
+                min_safe_hopr_reserve: self.min_safe_hopr_reserve,
+            }),
+            state_dir: Some(state_home),
         }
     }
 }
@@ -124,7 +120,7 @@ mod tests {
     fn partial_toml_falls_back_to_pix_config_default() {
         let parsed: PixConfig = toml::from_str("max_deposit_retries = 7").expect("valid partial PixConfig");
         let def = PixConfig::default();
-        assert_eq!(parsed.max_deposit_retries, 7);
+        assert_eq!(parsed.max_deposit_retries, Some(7));
         assert_eq!(parsed.price_per_byte, def.price_per_byte);
         assert_eq!(parsed.max_ssa_allocation, def.max_ssa_allocation);
         assert_eq!(parsed.max_spend_per_window, def.max_spend_per_window);
@@ -132,5 +128,11 @@ mod tests {
         assert_eq!(parsed.deposit_buffer_period, def.deposit_buffer_period);
         assert_eq!(parsed.max_deposit_tracking_time, def.max_deposit_tracking_time);
         assert_eq!(parsed.min_safe_hopr_reserve, def.min_safe_hopr_reserve);
+    }
+
+    #[test]
+    fn to_entry_config_keeps_pool_state_in_state_home() {
+        let cfg = PixConfig::default().to_entry_config(PathBuf::from("/var/lib/gnosisvpn"));
+        assert_eq!(cfg.state_dir, Some(PathBuf::from("/var/lib/gnosisvpn")));
     }
 }
