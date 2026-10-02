@@ -41,6 +41,7 @@ pub struct WorkerParams {
     allow_experimental: bool,
     allow_funding_tool_rerun: bool,
     blokli_url: Url,
+    cow_api_url: Url,
     /// Address the Blokli host resolved to at service startup, see [`WorkerParams::resolve_blokli_ip`].
     resolved_blokli_ip: Option<Ipv4Addr>,
     state_home: PathBuf,
@@ -68,6 +69,7 @@ impl WorkerParams {
         config_mode: ConfigFileMode,
         allow: AllowFlags,
         blokli_url: Url,
+        cow_api_url: Url,
         state_home: PathBuf,
     ) -> Self {
         Self {
@@ -78,6 +80,7 @@ impl WorkerParams {
             allow_experimental: allow.experimental,
             allow_funding_tool_rerun: allow.funding_tool_rerun,
             blokli_url,
+            cow_api_url,
             resolved_blokli_ip: None,
             state_home,
             cached_blokli_ips: Vec::new(),
@@ -219,6 +222,10 @@ impl WorkerParams {
         self.blokli_url.clone()
     }
 
+    pub fn cow_api_url(&self) -> Url {
+        self.cow_api_url.clone()
+    }
+
     /// Resolves the Blokli host once, so later Blokli traffic needs no DNS lookup.
     ///
     /// Called at service startup while DNS is still reachable: an active killswitch blocks DNS
@@ -306,6 +313,7 @@ mod tests {
             ConfigFileMode::Generated,
             AllowFlags::default(),
             blokli_url,
+            crate::cowswap::DEFAULT_API_URL.parse().unwrap(),
             PathBuf::from("/tmp/gnosisvpn"),
         )
     }

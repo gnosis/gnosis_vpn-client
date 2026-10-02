@@ -9,6 +9,7 @@ use crate::connection::{
     destination::{DefaultTargets, Destinations},
     options::Options as ConnectionOptions,
 };
+use crate::cowswap::RefuelConfig;
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::pix_config::PixConfig;
 use crate::hopr::strategy_config::StrategyConfig;
@@ -33,6 +34,7 @@ pub struct Config {
     pub blokli: BlokliConfig,
     pub strategy: StrategyConfig,
     pub pix_strategy: PixConfig,
+    pub refuel: RefuelConfig,
 }
 
 #[derive(Debug, Error)]
@@ -53,6 +55,10 @@ pub enum Error {
     SurbRampZero,
     #[error("health_check_intervals version, ping, load and tunnel_ping must all be greater than zero")]
     HealthCheckIntervalZero,
+    #[error("refuel.target must be greater than zero")]
+    RefuelTargetZero,
+    #[error("refuel.order_validity must be at least 2 minutes")]
+    RefuelValidityTooShort,
     #[error("Error in hopr-lib: {0}")]
     HoprGeneral(#[from] GeneralError),
     #[error(
@@ -185,5 +191,19 @@ request_timeout = "45s"
         .await;
 
         assert_eq!(config.blokli.request_timeout, Duration::from_secs(45));
+    }
+
+    #[tokio::test]
+    async fn refuel_can_be_disabled_from_a_v6_config_file() {
+        let config = read_config(&with_blokli_section("[refuel]\nenabled = false")).await;
+
+        assert!(!config.refuel.enabled);
+    }
+
+    #[tokio::test]
+    async fn an_absent_refuel_section_is_enabled_by_default() {
+        let config = read_config(&with_blokli_section("")).await;
+
+        assert_eq!(config.refuel, RefuelConfig::default());
     }
 }

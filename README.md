@@ -94,6 +94,10 @@ There are three environment variables that control the worker process setup:
 - `GNOSISVPN_WORKER_BINARY`: The path to the worker binary. The worker process
   will be spawned with this binary.
 
+- `GNOSISVPN_COW_API_URL` (or `--cow-api-url`): The CoW Protocol orderbook the
+  gasless xDAI refuel talks to. Defaults to `https://api.cow.fi/xdai/api/v1`;
+  point it at `https://barn.api.cow.fi/xdai/api/v1` for CoW's staging orderbook.
+
 ## Testing
 
 ### Unit tests
