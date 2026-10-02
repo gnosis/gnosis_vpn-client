@@ -9,6 +9,7 @@ use crate::connection::{
     destination::{DefaultTargets, Destinations},
     options::Options as ConnectionOptions,
 };
+use crate::cowswap::RefuelConfig;
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::pix_config::PixConfig;
 use crate::hopr::strategy_config::StrategyConfig;
@@ -35,6 +36,7 @@ pub struct Config {
     pub pix_strategy: PixConfig,
     /// The country database, at the installer's location unless a v7 file points elsewhere.
     pub geoip_db: PathBuf,
+    pub refuel: RefuelConfig,
 }
 
 #[derive(Debug, Error)]
@@ -55,6 +57,10 @@ pub enum Error {
     SurbBalancingMismatch,
     #[error("surb_balancing.ramp interval and duration must both be greater than zero")]
     SurbRampZero,
+    #[error("refuel.target must be greater than zero")]
+    RefuelTargetZero,
+    #[error("refuel.order_validity must be at least 2 minutes")]
+    RefuelValidityTooShort,
     #[error("Error in hopr-lib: {0}")]
     HoprGeneral(#[from] GeneralError),
     #[error(
@@ -227,5 +233,19 @@ request_timeout = "45s"
         );
 
         assert_eq!(config.blokli.request_timeout, Duration::from_secs(45));
+    }
+
+    #[tokio::test]
+    async fn refuel_can_be_disabled_from_a_v6_config_file() {
+        let config = read_config(&with_blokli_section("[refuel]\nenabled = false"));
+
+        assert!(!config.refuel.enabled);
+    }
+
+    #[tokio::test]
+    async fn an_absent_refuel_section_is_enabled_by_default() {
+        let config = read_config(&with_blokli_section(""));
+
+        assert_eq!(config.refuel, RefuelConfig::default());
     }
 }

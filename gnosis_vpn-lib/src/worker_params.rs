@@ -42,6 +42,7 @@ pub struct WorkerParams {
     blokli_url: Url,
     /// Resolved once by root at startup; the killswitch blocks DNS for the rest of the session.
     blokli_ip: Ipv4Addr,
+    cow_api_url: Url,
     state_home: PathBuf,
 }
 
@@ -78,8 +79,16 @@ impl WorkerParams {
             allow_funding_tool_rerun: allow.funding_tool_rerun,
             blokli_url,
             blokli_ip,
+            cow_api_url: crate::cowswap::DEFAULT_API_URL
+                .parse()
+                .expect("valid default cow api url"),
             state_home,
         }
+    }
+
+    pub fn with_cow_api_url(mut self, cow_api_url: Url) -> Self {
+        self.cow_api_url = cow_api_url;
+        self
     }
 
     pub async fn persist_identity_generation(&self) -> Result<HoprKeys, Error> {
@@ -207,6 +216,10 @@ impl WorkerParams {
 
     pub fn blokli_url(&self) -> Url {
         self.blokli_url.clone()
+    }
+
+    pub fn cow_api_url(&self) -> Url {
+        self.cow_api_url.clone()
     }
 
     /// Pinned for the session: the Blokli client, the killswitch exemption and the WAN probe all use it.
