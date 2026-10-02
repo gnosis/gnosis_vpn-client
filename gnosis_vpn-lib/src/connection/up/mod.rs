@@ -277,6 +277,14 @@ impl Up {
         self.wg_stats.push_back(sample);
     }
 
+    /// Not past registration; judged by phase since a resumed attempt starts with its registration seeded.
+    pub fn is_registering(&self) -> bool {
+        matches!(
+            self.phase.1,
+            Phase::Init | Phase::ResolvingBlokliIps | Phase::GeneratingWg | Phase::RegisterWg
+        )
+    }
+
     pub fn connect_progress(&mut self, evt: Progress) {
         let now = SystemTime::now();
         match evt {
@@ -624,5 +632,15 @@ mod resume_tests {
         let resume = Resume::try_from(&up).expect("resumable");
         assert_eq!(resume.registration.address(), "10.128.0.5/32");
         assert_eq!(resume.wireguard.key_pair.public_key, "pub");
+    }
+
+    #[test]
+    fn registering_ends_when_the_ping_session_opens() {
+        let mut up = up_with_key();
+        assert!(up.is_registering());
+        up.phase.1 = Phase::RegisterWg;
+        assert!(up.is_registering());
+        up.phase.1 = Phase::OpeningPing;
+        assert!(!up.is_registering());
     }
 }
