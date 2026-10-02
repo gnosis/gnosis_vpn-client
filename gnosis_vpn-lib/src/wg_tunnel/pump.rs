@@ -145,7 +145,10 @@ async fn send_network<NS: NetworkSender>(net_tx: &mut NS, datagram: &[u8]) -> Re
 }
 
 async fn send_tun<TS: TunSender>(tun_tx: &mut TS, packet: &[u8]) -> Result<Sent, Error> {
-    classify(tokio::time::timeout(SEND_TIMEOUT, tun_tx.send(packet)).await)
+    match classify(tokio::time::timeout(SEND_TIMEOUT, tun_tx.send(packet)).await) {
+        Err(Error::Io(e)) => Err(Error::Tun(e)),
+        other => other,
+    }
 }
 
 /// Run the pump until an endpoint closes, the session expires, or a fatal error
@@ -196,7 +199,7 @@ where
         tokio::select! {
             // Outbound: a plaintext IP packet from the local TUN device.
             read = tun_rx.recv(&mut tun_buf) => {
-                match read? {
+                match read.map_err(Error::Tun)? {
                     None => return Ok(PumpExit::TunClosed),
                     Some(n) => {
                         debug_assert!(n <= tun_buf.len(), "TunReceiver reported oversized read");
@@ -345,6 +348,23 @@ mod tests {
     #[async_trait::async_trait]
     impl NetworkSender for FailingTx {
         async fn send(&mut self, _datagram: &[u8]) -> std::io::Result<()> {
+            Err(std::io::Error::new(self.0, "endpoint failure"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TunSender for FailingTx {
+        async fn send(&mut self, _packet: &[u8]) -> std::io::Result<()> {
+            Err(std::io::Error::new(self.0, "endpoint failure"))
+        }
+    }
+
+    /// A TUN reader whose reads fail with a fixed io error kind.
+    struct FailingRx(std::io::ErrorKind);
+
+    #[async_trait::async_trait]
+    impl TunReceiver for FailingRx {
+        async fn recv(&mut self, _buf: &mut [u8]) -> std::io::Result<Option<usize>> {
             Err(std::io::Error::new(self.0, "endpoint failure"))
         }
     }
@@ -643,6 +663,57 @@ mod tests {
             Error::Io(e) => assert_eq!(e.kind(), std::io::ErrorKind::TimedOut),
             other => panic!("expected an io timeout, got: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn pump_reports_a_tun_write_error_as_a_tun_error() {
+        let engine = ScriptedEngine {
+            init: vec![1],
+            decap: VecDeque::from([Outputs {
+                to_tun: vec![ipv4_packet([10, 128, 0, 1], [10, 0, 0, 2])],
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let (net_tx, _net_out) = channel(8);
+        let (net_in_tx, net_in) = channel::<Vec<u8>>(8);
+        let (_keep_tun_in, tun_in) = channel::<Vec<u8>>(8);
+        net_in_tx.send(vec![0x01]).await.unwrap();
+
+        let err = run(
+            engine,
+            ChannelTx(net_tx),
+            ChannelRx(net_in),
+            FailingTx(std::io::ErrorKind::PermissionDenied),
+            ChannelRx(tun_in),
+            stats_sender(),
+        )
+        .await
+        .expect_err("a TUN write error must be fatal");
+        assert!(matches!(err, Error::Tun(_)), "expected a tun error, got: {err:?}");
+    }
+
+    #[tokio::test]
+    async fn pump_reports_a_tun_read_error_as_a_tun_error() {
+        let engine = ScriptedEngine {
+            init: vec![1],
+            ..Default::default()
+        };
+        let (net_tx, _net_out) = channel(8);
+        let (tun_out_tx, _tun_out) = channel(8);
+        let (_keep_net_in, net_in) = channel::<Vec<u8>>(8);
+
+        let err = run(
+            engine,
+            ChannelTx(net_tx),
+            ChannelRx(net_in),
+            ChannelTx(tun_out_tx),
+            FailingRx(std::io::ErrorKind::PermissionDenied),
+            stats_sender(),
+        )
+        .await
+        .expect_err("a TUN read error must be fatal");
+        assert!(matches!(err, Error::Tun(_)), "expected a tun error, got: {err:?}");
     }
 
     #[tokio::test]

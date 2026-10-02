@@ -459,7 +459,17 @@ fn pump_exit_reason(outcome: Option<Result<wg_tunnel::PumpExit, wg_tunnel::Error
         None => None,
         // Only a dead TUN fd rules out reusing the device; a lost session is rebuilt on top of it.
         Some(Ok(exit)) => Some((format!("{exit:?}"), exit == wg_tunnel::PumpExit::TunClosed)),
-        Some(Err(e)) => Some((e.to_string(), true)),
+        Some(Err(e)) => {
+            let device_lost = match e {
+                wg_tunnel::Error::Tun(_) => true,
+                wg_tunnel::Error::Io(_)
+                | wg_tunnel::Error::Key(_)
+                | wg_tunnel::Error::Tunn(_)
+                | wg_tunnel::Error::WireGuard(_)
+                | wg_tunnel::Error::Unexpected(_) => false,
+            };
+            Some((e.to_string(), device_lost))
+        }
     }
 }
 
@@ -572,10 +582,17 @@ mod tests {
 
     #[test]
     fn pump_exit_reason_carries_the_error_message() {
-        let (reason, device_lost) =
-            pump_exit_reason(Some(Err(wg_tunnel::Error::Unexpected("boom")))).expect("a reason");
+        let (reason, _) = pump_exit_reason(Some(Err(wg_tunnel::Error::Unexpected("boom")))).expect("a reason");
         assert!(reason.contains("boom"), "reason should surface the error: {reason}");
-        assert!(device_lost);
+    }
+
+    #[test]
+    fn pump_exit_reason_flags_only_tun_errors_as_a_lost_device() {
+        let io = || std::io::Error::new(std::io::ErrorKind::TimedOut, "endpoint write timed out");
+        let device_lost = |e| pump_exit_reason(Some(Err(e))).expect("a reason").1;
+        assert!(device_lost(wg_tunnel::Error::Tun(io())));
+        assert!(!device_lost(wg_tunnel::Error::Io(io())));
+        assert!(!device_lost(wg_tunnel::Error::Unexpected("boom")));
     }
 
     fn nets(s: &[&str]) -> Vec<IpNetwork> {
