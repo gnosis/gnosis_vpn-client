@@ -18,11 +18,6 @@ backon = { version = "~1.6.0" }
 base64 = "~0.23.1"
 bytesize = "~2.7.0"
 cfg-if = "~1.0.4"
-chrono = { version = "~0.4.45", default-features = false, features = [
-  "clock",
-  "serde",
-  "std",
-] }
 clap = { version = "~4.6.7", features = ["derive", "env"] }
 clap_complete = "~4.6.11"
 edgli = { git = "https://github.com/hoprnet/edge-client.git", branch = "release/4.1", features = [

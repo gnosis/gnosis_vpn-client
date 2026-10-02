@@ -2,7 +2,6 @@ pub mod killswitch;
 
 pub mod app_nap;
 pub mod balance;
-pub mod check_update;
 pub mod command;
 pub mod config;
 pub mod connection;
