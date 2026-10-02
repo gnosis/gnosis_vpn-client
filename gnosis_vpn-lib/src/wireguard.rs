@@ -79,7 +79,7 @@ fn generate_key() -> String {
 /// Derive the base64 WireGuard public key for a base64 private key, replacing
 /// the former `wg pubkey` shell-out with an in-process Curve25519 basepoint
 /// multiplication.
-fn public_key(priv_key: &str) -> Result<String, Error> {
+pub(crate) fn public_key(priv_key: &str) -> Result<String, Error> {
     let secret = decode_secret(priv_key)?;
     let public = PublicKey::from(&secret);
     Ok(BASE64_STANDARD.encode(public.as_bytes()))
