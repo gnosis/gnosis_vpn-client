@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::config;
 
-pub(super) use super::v7::{BlokliConfig, Connection, DestinationPath, PixStrategy, Strategy, WireGuard};
+pub(super) use super::v7::{BlokliConfig, Connection, DestinationPath, PixStrategy, Refuel, Strategy, WireGuard};
 
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -19,6 +19,7 @@ pub struct Config {
     pub(super) blokli: Option<BlokliConfig>,
     pub(super) strategy: Option<Strategy>,
     pub(super) pix_strategy: Option<PixStrategy>,
+    pub(super) refuel: Option<Refuel>,
 }
 
 #[serde_as]
@@ -289,6 +290,20 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
+        if key == "refuel" {
+            if let Some(refuel) = value.as_table() {
+                for (k, _) in refuel.iter() {
+                    if matches!(
+                        k.as_str(),
+                        "enabled" | "target" | "slippage" | "cooldown" | "order_validity" | "request_timeout"
+                    ) {
+                        continue;
+                    }
+                    wrong.push(format!("refuel.{k}"));
+                }
+            }
+            continue;
+        }
         wrong.push(key.clone());
     }
     wrong
@@ -330,6 +345,7 @@ impl TryFrom<Config> for super::v7::Config {
             blokli: value.blokli,
             strategy: value.strategy,
             pix_strategy: value.pix_strategy,
+            refuel: value.refuel,
         })
     }
 }
@@ -536,5 +552,28 @@ max_deposit_retries = 5
         let result = runtime_config(parse(toml));
         assert!(result.connection.pix.bridge.enabled);
         assert_eq!(result.pix_strategy.max_deposit_retries, 5);
+    }
+
+    /// The shipped jura configs are v6, so the opt-out must work there too.
+    #[test]
+    fn a_v6_file_accepts_the_refuel_section() {
+        let toml = r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[refuel]
+enabled = false
+target = "0.02 xDai"
+"#####;
+        assert_eq!(
+            wrong_keys(&toml.parse::<toml::Table>().expect("valid TOML")),
+            Vec::<String>::new()
+        );
+
+        let result = runtime_config(parse(toml));
+        assert!(!result.refuel.enabled);
+        assert_eq!(result.refuel.target, "0.02 xDai".parse().unwrap());
     }
 }

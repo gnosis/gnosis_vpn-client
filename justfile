@@ -1,9 +1,9 @@
 default:
     just --list
 
-# run root binary locally with a config file and Blokli URL
+# run root binary locally with a config file and Blokli URL; GNOSISVPN_COW_API_URL overrides the CoW orderbook (e.g. staging)
 run-local config_file blokli_url binary="./target/release/gnosis_vpn-root" worker_binary="./target/release/gnosis_vpn-worker" rust_log="info":
-    sudo RUST_LOG="{{ rust_log }}" "{{ binary }}" --config-path "{{ config_file }}" --hopr-blokli-url "{{ blokli_url }}" --worker-binary "{{ worker_binary }}"
+    sudo RUST_LOG="{{ rust_log }}" GNOSISVPN_COW_API_URL="${GNOSISVPN_COW_API_URL:-https://api.cow.fi/xdai/api/v1}" "{{ binary }}" --config-path "{{ config_file }}" --hopr-blokli-url "{{ blokli_url }}" --worker-binary "{{ worker_binary }}"
 
 # build static linux binary (x86_64)
 build:
@@ -43,6 +43,7 @@ docker-run:
         --env RUST_LOG=${log_level} \
         --env GNOSISVPN_CONFIG_PATH=/config/client.toml \
         --env GNOSISVPN_HOPR_BLOKLI_URL="${blokli_url}" \
+        --env GNOSISVPN_COW_API_URL="${GNOSISVPN_COW_API_URL:-https://api.cow.fi/xdai/api/v1}" \
         --env GNOSISVPN_HOPR_IDENTITY_FILE=${GNOSISVPN_HOPR_IDENTITY_FILE:-} \
         --env GNOSISVPN_HOPR_IDENTITY_PASS=${GNOSISVPN_HOPR_IDENTITY_PASS:-} \
         --volume "${config_dir}:/config:ro" \

@@ -401,6 +401,17 @@ impl Display for Balances {
     }
 }
 
+/// Gas health of the node EOA alone; the refuel trigger needs it before the ideal/capacity inputs exist.
+pub fn gas_level(node_xdai: Balance<XDai>) -> FundingLevel {
+    if node_xdai < Balance::<XDai>::from(XDAI_EMPTY_BELOW_WEI) {
+        FundingLevel::Empty
+    } else if node_xdai < Balance::<XDai>::from(XDAI_LOW_BELOW_WEI) {
+        FundingLevel::Low
+    } else {
+        FundingLevel::Good
+    }
+}
+
 /// Pools every allocation location so funds sitting unswept on the node EOA still count.
 pub fn to_funding_status(
     ideal: BalanceRecommendation,
@@ -429,15 +440,8 @@ pub fn to_funding_status(
         FundingLevel::Good
     };
 
-    let xdai_empty_below = Balance::<XDai>::from(XDAI_EMPTY_BELOW_WEI);
     let xdai_low_below = Balance::<XDai>::from(XDAI_LOW_BELOW_WEI);
-    let gas = if node_xdai < xdai_empty_below {
-        FundingLevel::Empty
-    } else if node_xdai < xdai_low_below {
-        FundingLevel::Low
-    } else {
-        FundingLevel::Good
-    };
+    let gas = gas_level(node_xdai);
 
     // `-` on Balance saturates at zero; wxhopr_deficit is relative to `ideal` only, which ignores drained stake on already-open channels.
     let wxhopr_deficit = (traffic != FundingLevel::Good)

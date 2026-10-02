@@ -6,6 +6,7 @@ pub mod command;
 pub mod config;
 pub mod connection;
 pub mod core;
+pub mod cowswap;
 pub mod dirs;
 pub mod event;
 pub mod hopr;

@@ -24,7 +24,7 @@ use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::probe::{self, Probe};
 use crate::route_health::RouteHealth;
 use crate::worker_params::{self, WorkerParams};
-use crate::{balance, log_output, ticket_stats, wireguard};
+use crate::{balance, cowswap, log_output, ticket_stats, wireguard};
 
 pub(crate) mod runner;
 
@@ -100,6 +100,8 @@ pub struct Core {
     // runtime data
     phase: Phase,
     funding_tool: balance::FundingTool,
+    refuel: cowswap::State,
+    refuel_memory: cowswap::Memory,
     incentive_operations: Option<Arc<dyn IncentiveOperations>>,
     hopr: Option<Arc<Hopr>>,
     minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
@@ -228,6 +230,8 @@ impl Core {
             // runtime data
             phase: Phase::Initial { last_error: None },
             funding_tool: balance::FundingTool::NotStarted,
+            refuel: cowswap::State::Idle,
+            refuel_memory: cowswap::Memory::default(),
             hopr: None,
             incentive_operations: None,
             minimum_balance_recommendation: None,
@@ -667,7 +671,9 @@ impl Core {
             Results::Balances { res } => match res {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
+                    let node_xdai = balances.node_xdai;
                     self.balances = Some(balances);
+                    self.trigger_refuel(node_xdai, results_sender);
                     self.spawn_balances_runner(results_sender, Duration::from_secs(60));
                 }
                 Err(err) => {
@@ -680,6 +686,7 @@ impl Core {
             Results::QuerySafe { res } => self.on_results_query_safe(res, results_sender).await,
             Results::DeploySafe { res } => self.on_results_deploy_safe(res, results_sender).await,
             Results::FundingTool { res } => self.on_results_funding_tool(res),
+            Results::Refuel { res } => self.on_results_refuel(res),
 
             Results::PersistSafe { res, safe_module } => match res {
                 Ok(()) => {
@@ -1245,6 +1252,84 @@ impl Core {
             Ok(Some(reason)) => balance::FundingTool::CompletedError(reason),
             Err(err) => balance::FundingTool::CompletedError(err.to_string()),
         };
+    }
+
+    fn on_results_refuel(&mut self, res: Result<cowswap::Outcome, cowswap::Error>) {
+        self.refuel = match res {
+            Ok(cowswap::Outcome::Filled { uid, permit_used }) => {
+                tracing::info!(%uid, "refuel order filled - node xDAI topped up");
+                if permit_used {
+                    self.refuel_memory.permit_granted = true;
+                    self.refuel_memory.permit_nonce += 1;
+                }
+                cowswap::State::Done(SystemTime::now())
+            }
+            Ok(cowswap::Outcome::AlreadyRefueled) => cowswap::State::Done(SystemTime::now()),
+            Err(err) if err.is_permanent() => {
+                tracing::error!(%err, "refuel failed permanently - auto-refuel disabled until restart");
+                cowswap::State::Disabled
+            }
+            Err(cowswap::Error::Expired(uid)) => {
+                tracing::warn!(%uid, "refuel order expired unfilled - next attempt after cooldown");
+                cowswap::State::Done(SystemTime::now())
+            }
+            Err(err) => {
+                tracing::error!(%err, "refuel failed - next attempt after cooldown");
+                cowswap::State::Done(SystemTime::now())
+            }
+        };
+    }
+
+    fn trigger_refuel(&mut self, node_xdai: balance::Balance<balance::XDai>, results_sender: &mpsc::Sender<Results>) {
+        let cfg = &self.config.refuel;
+        if !cfg.enabled || balance::gas_level(node_xdai) != balance::FundingLevel::Empty {
+            return;
+        }
+        if matches!(self.refuel, cowswap::State::InFlight | cowswap::State::Disabled) {
+            return;
+        }
+        if let Some(remaining) = self.refuel.cooldown_remaining(cfg.cooldown, SystemTime::now()) {
+            tracing::debug!(?remaining, "refuel cooling down");
+            return;
+        }
+        // A target without a tunnel means the killswitch blocks api.cow.fi, or a WAN call would leak the real IP.
+        if self.target.is_some() && !matches!(self.phase, Phase::Connected(_)) {
+            tracing::info!("gas empty - refuel waits for the tunnel");
+            return;
+        }
+        let Some(hopr) = self.hopr.clone() else {
+            return;
+        };
+        // Set before spawning so the next balances tick cannot start a second run.
+        self.refuel = cowswap::State::InFlight;
+        tracing::info!(%node_xdai, "gas empty - refueling via cow protocol");
+        self.spawn_refuel_runner(hopr.info().safe_address, results_sender);
+    }
+
+    fn spawn_refuel_runner(&self, safe_address: Address, results_sender: &mpsc::Sender<Results>) {
+        let cancel = self.cancel_on_shutdown.clone();
+        let worker_params = self.worker_params.clone();
+        let blokli_config = self.config.blokli.clone();
+        let cfg = self.config.refuel.clone();
+        let node_address = self.node_address;
+        let memory = self.refuel_memory;
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    runner::refuel(
+                        worker_params,
+                        blokli_config,
+                        cfg,
+                        safe_address,
+                        node_address,
+                        memory,
+                        results_sender,
+                    )
+                    .await
+                })
+                .await;
+        });
     }
 
     fn trigger_deploy_safe(&mut self, results_sender: &mpsc::Sender<Results>) {
@@ -2237,6 +2322,9 @@ impl Core {
 
     fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
         self.phase = Phase::HoprRunning;
+        if !self.config.refuel.enabled {
+            tracing::info!("auto-refuel disabled by [refuel] enabled = false");
+        }
         self.spawn_exit_node_discovery_runner(results_sender, Duration::ZERO);
         self.spawn_ideal_balance_recommendation_runner(results_sender, Duration::ZERO);
         self.spawn_capacity_allocations_runner(results_sender, Duration::ZERO);

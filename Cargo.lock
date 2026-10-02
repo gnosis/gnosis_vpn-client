@@ -3749,6 +3749,7 @@ dependencies = [
  "cfg-if",
  "edgli",
  "futures-util",
+ "hopr-chain-connector",
  "hopr-utils-session",
  "human-bandwidth",
  "humantime",

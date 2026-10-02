@@ -26,6 +26,10 @@ pub struct SharedArgs {
     )]
     pub blokli_url: Url,
 
+    /// Optional CoW orderbook API URL handed to the service (`--cow-api-url`).
+    #[arg(long = "cowApiUrl", env = "SYSTEM_TEST_COW_API_URL", value_name = "URL", default_value = None)]
+    pub cow_api_url: Option<Url>,
+
     /// Optional HTTP proxy used for download/upload requests.
     #[arg(
         long = "proxy",

@@ -293,6 +293,7 @@ impl TryFrom<Config> for super::v7::Config {
             blokli: value.blokli,
             strategy: None,
             pix_strategy: None,
+            refuel: None,
         })
     }
 }

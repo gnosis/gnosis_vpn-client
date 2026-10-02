@@ -279,3 +279,25 @@ path    = { hops = 1 }
 # max_deposit_retries = 3
 # wxHOPR the Safe must still hold after a deposit, refused if a deposit would breach it; default: 0
 # min_safe_hopr_reserve = "0 wxHOPR"
+
+###
+## refuel section - tops up the node's xDAI by selling a little Safe wxHOPR on CoW Protocol
+##
+## Fires only while gas is Empty (node xDAI below 0.0015). The trade is gasless: the CoW solver
+## unwraps the wxHOPR and pays itself from the sold xHOPR, the node signs but never sends a
+## transaction. The refuel waits while a destination is set but the tunnel is down, because the
+## killswitch blocks api.cow.fi then. The orderbook URL comes from --cow-api-url / GNOSISVPN_COW_API_URL.
+
+# [refuel]
+# set to false to never trade Safe wxHOPR; default: true
+# enabled = true
+# xDAI bought per refuel; default: 0.01 xDai
+# target = "0.01 xDai"
+# extra xHOPR offered on top of the quoted price, as a fraction in [0.0, 0.5]; default: 0.02
+# slippage = 0.02
+# wait after a finished attempt before trying again; default: 30m
+# cooldown = "30m"
+# how long a placed order stays fillable, at least 2m; default: 30m
+# order_validity = "30m"
+# bound on a single request to api.cow.fi (Blokli requests use blokli.request_timeout); default: 20s
+# request_timeout = "20s"
