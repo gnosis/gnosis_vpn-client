@@ -1012,7 +1012,7 @@ impl Core {
                 if reopening
                     && let Phase::Connecting(conn) = self.phase.clone()
                     && conn.destination.key() == key
-                    && conn.registration.is_none()
+                    && conn.is_registering()
                 {
                     tracing::warn!(%conn, "probe session broke during registration - restarting the attempt");
                     self.disconnect_from_connection(&conn, results_sender);
