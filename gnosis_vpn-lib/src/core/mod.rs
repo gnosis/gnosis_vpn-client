@@ -408,7 +408,7 @@ impl Core {
                     WorkerCommand::Connect(token) => match self.config.destinations.resolve(&token).cloned() {
                         Ok(dest) => {
                             self.reconnecting_since = None;
-                            self.abandon_resume(results_sender);
+                            self.abandon_resume(results_sender).await;
                             let is_already_active = match &self.phase {
                                 Phase::Connected(conn) | Phase::Connecting(conn) => conn.destination.same_exit(&dest),
                                 _ => false,
@@ -454,7 +454,7 @@ impl Core {
                     WorkerCommand::Disconnect => {
                         self.target = None;
                         self.reconnecting_since = None;
-                        self.abandon_resume(results_sender);
+                        self.abandon_resume(results_sender).await;
                         self.cached_resolved_blokli_ips = Vec::new();
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
@@ -1851,14 +1851,17 @@ impl Core {
         results_sender: &mpsc::Sender<Results>,
     ) {
         // A user-initiated switch already abandoned it; this only guards the invariant.
-        let resume_is_for_another_exit = self
-            .resume
-            .as_ref()
-            .is_some_and(|r| !r.destination.same_exit(&destination));
-        if resume_is_for_another_exit {
-            self.abandon_resume(results_sender);
+        let mut resume = self.resume.take();
+        if let Some(stale) = resume.as_ref().filter(|r| !r.destination.same_exit(&destination)) {
+            tracing::warn!(resume = %stale, %destination, "dropping a resume kept for another exit");
+            let down = connection::down::Down {
+                destination: stale.destination.clone(),
+                phase: (SystemTime::now(), connection::down::Phase::Disconnecting),
+                wg_public_key: stale.wireguard.key_pair.public_key.clone(),
+            };
+            self.spawn_unregister_retry(&down, results_sender);
+            resume = None;
         }
-        let resume = self.resume.take();
         let key_in_use = upcoming_public_key(resume.as_ref(), &self.config.wireguard);
         self.retry_pending_unregisters(&destination, key_in_use.as_deref(), results_sender);
         if let Some(hopr) = self.hopr.clone() {
@@ -2249,13 +2252,14 @@ impl Core {
     }
 
     /// A user action rotates the key: the kept registration is removed at the exit and the device torn down.
-    fn abandon_resume(&mut self, results_sender: &mpsc::Sender<Results>) {
+    async fn abandon_resume(&mut self, results_sender: &mpsc::Sender<Results>) {
         let Some(resume) = self.resume.take() else { return };
         tracing::info!(%resume, "explicit command replaces pending reconnect - new key");
-        // Same FIFO channel as any later SetupTunnel; a dropped request only costs a rebuild root does anyway.
+        // Awaited: after a disconnect no later SetupTunnel would replace the kept device.
         if let Err(err) = self
             .outgoing_sender
-            .try_send(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
+            .send(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
+            .await
         {
             tracing::warn!(%err, "failed to request tunnel teardown for abandoned reconnect");
         }
