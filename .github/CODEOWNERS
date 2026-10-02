@@ -1,5 +1,5 @@
 # Default
-* @esterlus @tolbrino
+* @esterlus @Teebor-Choka @tolbrino
 
 # Privileged component: runs as root, owns routing and WireGuard devices.
 /gnosis_vpn-root/ @esterlus @Teebor-Choka @tolbrino
@@ -10,8 +10,8 @@
 # Build and dependency surface.
 *.nix      @esterlus @Teebor-Choka @tolbrino
 /nix/      @esterlus @Teebor-Choka @tolbrino
-Cargo.toml @esterlus @Teebor-Choka @tolbrino
-Cargo.lock @esterlus @Teebor-Choka @tolbrino
+Cargo.toml @esterlus @Teebor-Choka @tolbrino @mjadach-iv
+Cargo.lock @esterlus @Teebor-Choka @tolbrino @mjadach-iv
 
 # Highest-trust artifacts: release signing key and disclosure policy.
 /gnosisvpn-public-key.asc @esterlus @tolbrino

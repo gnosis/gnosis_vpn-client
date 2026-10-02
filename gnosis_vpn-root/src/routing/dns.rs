@@ -1,14 +1,16 @@
-//! DNS management for the NepTUN data plane, taking over what `wg-quick` used to
-//! do internally.
-//!
-//! Best-effort by design: a failure to set or restore DNS logs a warning and never
-//! fails the connection - traffic still routes, only DNS-leak prevention is
-//! affected. The exact resolver plumbing (systemd-resolved vs. resolvconf on Linux,
-//! `scutil` supplemental resolvers on macOS) is environment-specific and must be
-//! validated end-to-end with root on both platforms.
+//! Best-effort DNS diversion for the NepTUN data plane: a failure to set or restore DNS never fails the connection.
 
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
+
+#[cfg(target_os = "linux")]
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
+
+#[cfg(target_os = "linux")]
+use super::resolv_conf;
 
 /// The resolver mechanism used to apply DNS at setup, recorded so teardown (and the
 /// crash-recovery sweep after an unclean exit) reverses the matching one.
@@ -18,14 +20,35 @@ pub enum Mechanism {
     Resolvectl,
     /// resolvconf via `resolvconf -a`/`-d` (Linux distros without systemd-resolved).
     Resolvconf,
+    /// `/etc/resolv.conf` rewritten in place with a backup (Linux hosts where no resolver manager owns it).
+    StaticFile,
     /// Supplemental resolver in the dynamic store via `scutil` (macOS).
     Scutil,
 }
 
+/// What [`set`] put in place: the mechanism [`restore`] reverses, plus the guard handing `/etc/resolv.conf` back.
+pub struct Diversion {
+    pub(super) mechanism: Mechanism,
+    #[cfg(target_os = "linux")]
+    pub(super) resolv_conf: Option<resolv_conf::Managed>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Diversion {
+    /// A mechanism reversed by command, with no file of ours to hand back.
+    fn by_command(mechanism: Mechanism) -> Self {
+        Self {
+            mechanism,
+            #[cfg(target_os = "linux")]
+            resolv_conf: None,
+        }
+    }
+}
+
 /// Push `servers` (a comma-separated list) as the DNS resolvers scoped to the
-/// tunnel interface. An empty/blank list is a no-op. Returns the mechanism that
-/// took effect so [`restore`] can reverse it, or `None` if nothing was applied.
-pub async fn set(interface: &str, servers: &str) -> Option<Mechanism> {
+/// tunnel interface. An empty/blank list is a no-op. Returns what took effect so
+/// [`restore`] can reverse it, or `None` if nothing was applied.
+pub async fn set(interface: &str, servers: &str) -> Option<Diversion> {
     let list = split_servers(servers);
     if list.is_empty() {
         return None;
@@ -154,24 +177,119 @@ async fn run(what: &str, mut cmd: Command) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-async fn set_linux(interface: &str, servers: &[&str]) -> Option<Mechanism> {
-    // systemd-resolved: scope the resolvers to the tunnel interface and route all
-    // queries through it (`~.` is the catch-all routing domain).
-    let mut dns = Command::new("resolvectl");
-    dns.args(resolvectl_dns_args(interface, servers));
-    if run("resolvectl dns", dns).await {
-        let mut domain = Command::new("resolvectl");
-        domain.args(resolvectl_domain_args(interface));
-        run("resolvectl domain", domain).await;
-        return Some(Mechanism::Resolvectl);
+async fn set_linux(interface: &str, servers: &[&str]) -> Option<Diversion> {
+    let resolved_owns = resolved_owns_resolv_conf();
+    let resolvconf_owns = resolvconf_owns_resolv_conf();
+
+    // systemd-resolved: scope the resolvers to the tunnel interface; `~.` routes every query through it.
+    if resolved_owns {
+        let mut dns = Command::new("resolvectl");
+        dns.args(resolvectl_dns_args(interface, servers));
+        if run("resolvectl dns", dns).await {
+            let mut domain = Command::new("resolvectl");
+            domain.args(resolvectl_domain_args(interface));
+            run("resolvectl domain", domain).await;
+            return Some(Diversion::by_command(Mechanism::Resolvectl));
+        }
+    } else {
+        tracing::info!("systemd-resolved does not own /etc/resolv.conf - skipping resolvectl");
     }
-    // resolvconf fallback for distros without systemd-resolved, mirroring wg-quick.
-    tracing::info!("resolvectl unavailable - falling back to resolvconf");
-    if run_resolvconf_add(interface, servers).await {
-        return Some(Mechanism::Resolvconf);
+    // resolvconf for distros without systemd-resolved, mirroring wg-quick.
+    if resolvconf_owns {
+        if run_resolvconf_add(interface, servers).await {
+            return Some(Diversion::by_command(Mechanism::Resolvconf));
+        }
+    } else {
+        tracing::info!("resolvconf does not own /etc/resolv.conf - skipping resolvconf");
+    }
+    // Last resort, as in Mullvad: a manager-owned file is regenerated anyway, so a failed owner must not land here.
+    let no_manager_owns_the_file = !resolved_owns && !resolvconf_owns;
+    if no_manager_owns_the_file && let Some(managed) = resolv_conf::apply(servers) {
+        tracing::info!(backup = resolv_conf::BACKUP, "managing /etc/resolv.conf directly");
+        return Some(Diversion {
+            mechanism: Mechanism::StaticFile,
+            resolv_conf: Some(managed),
+        });
     }
     tracing::warn!("no DNS mechanism took effect; DNS is not diverted through the tunnel (continuing)");
     None
+}
+
+/// resolved can run beside a NetworkManager-written file; then `resolvectl dns` succeeds while glibc never asks it.
+#[cfg(target_os = "linux")]
+fn resolved_owns_resolv_conf() -> bool {
+    let content = std::fs::read_to_string(resolv_conf::RESOLV_CONF).unwrap_or_default();
+    let nsswitch = std::fs::read_to_string("/etc/nsswitch.conf").unwrap_or_default();
+    resolved_in_use(&content, &nsswitch)
+}
+
+/// True only where queries reach resolved - its stub or the NSS module, as Tailscale checks; who wrote the file says nothing.
+#[cfg(target_os = "linux")]
+fn resolved_in_use(resolv_conf: &str, nsswitch: &str) -> bool {
+    // glibc fails over to any other nameserver listed, so only an all-stub file routes every query to resolved.
+    let nameservers = resolv_conf::nameservers(resolv_conf);
+    let only_stub = !nameservers.is_empty() && nameservers.iter().all(|ns| ns == "127.0.0.53");
+    if only_stub {
+        return true;
+    }
+    let hosts = nsswitch
+        .lines()
+        .find(|line| line.starts_with("hosts:"))
+        .unwrap_or_default();
+    // glibc stops at the first service that answers, so a `dns` before `resolve` bypasses resolved (as Tailscale checks).
+    for service in hosts.split_whitespace() {
+        if service == "dns" {
+            return false;
+        }
+        if service == "resolve" {
+            return true;
+        }
+    }
+    false
+}
+
+/// Ubuntu's resolvconf is a resolvectl alias, and an installed resolvconf may not own the file; `-a` then changes nothing.
+#[cfg(target_os = "linux")]
+fn resolvconf_owns_resolv_conf() -> bool {
+    let Some(binary) = find_in_path("resolvconf") else {
+        return false;
+    };
+    let binary_target = std::fs::canonicalize(&binary).unwrap_or(binary);
+    let file_target = std::fs::canonicalize(resolv_conf::RESOLV_CONF).ok();
+    let content = std::fs::read_to_string(resolv_conf::RESOLV_CONF).unwrap_or_default();
+    resolvconf_in_use(&binary_target, file_target.as_deref(), &content)
+}
+
+#[cfg(target_os = "linux")]
+fn resolvconf_in_use(binary_target: &Path, resolv_conf_target: Option<&Path>, resolv_conf: &str) -> bool {
+    let is_resolvectl_alias = binary_target.file_name() == Some(OsStr::new("resolvectl"));
+    let links_into_run =
+        resolv_conf_target.is_some_and(|p| p.starts_with("/run/resolvconf") || p.starts_with("/var/run/resolvconf"));
+    // openresolv writes the file in place and only leaves its header behind.
+    let generated_by_resolvconf = resolv_conf
+        .lines()
+        .any(|line| line.starts_with('#') && line.contains("resolvconf"));
+    !is_resolvectl_alias && (links_into_run || generated_by_resolvconf)
+}
+
+#[cfg(target_os = "linux")]
+fn find_in_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|p| p.is_file())
+}
+
+/// Sweep a backup left by a root that died while connected; unlike the state file it survives a reboot.
+#[cfg(target_os = "linux")]
+pub fn restore_leftover_resolv_conf() {
+    if resolv_conf::backup_exists() {
+        tracing::info!(
+            backup = resolv_conf::BACKUP,
+            "found a resolv.conf backup from an unclean exit - restoring it"
+        );
+        resolv_conf::restore_backup();
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -221,6 +339,7 @@ async fn restore_linux(interface: &str, mechanism: Mechanism) -> bool {
             cmd.args(resolvconf_del_args(interface));
             run("resolvconf -d", cmd).await
         }
+        Mechanism::StaticFile => resolv_conf::restore_backup(),
         Mechanism::Scutil => {
             tracing::warn!("recorded DNS mechanism scutil does not apply on Linux (skipping restore)");
             false
@@ -229,11 +348,11 @@ async fn restore_linux(interface: &str, mechanism: Mechanism) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-async fn set_macos(interface: &str, servers: &[&str]) -> Option<Mechanism> {
+async fn set_macos(interface: &str, servers: &[&str]) -> Option<Diversion> {
     // Mirror wg-quick: register a supplemental resolver in the dynamic store keyed
     // by the tunnel interface. Removed on restore.
     if run_scutil(&scutil_set_script(interface, servers)).await {
-        Some(Mechanism::Scutil)
+        Some(Diversion::by_command(Mechanism::Scutil))
     } else {
         None
     }
@@ -243,7 +362,7 @@ async fn set_macos(interface: &str, servers: &[&str]) -> Option<Mechanism> {
 async fn restore_macos(interface: &str, mechanism: Mechanism) -> bool {
     match mechanism {
         Mechanism::Scutil => run_scutil(&scutil_remove_script(interface)).await,
-        Mechanism::Resolvectl | Mechanism::Resolvconf => {
+        Mechanism::Resolvectl | Mechanism::Resolvconf | Mechanism::StaticFile => {
             tracing::warn!(
                 ?mechanism,
                 "recorded DNS mechanism does not apply on macOS (skipping restore)"
@@ -355,5 +474,82 @@ mod tests {
             scutil_remove_script("utun8"),
             "open\nremove State:/Network/Service/utun8/DNS\nquit\n"
         );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::*;
+
+    #[test]
+    fn resolved_is_detected_by_stub_file_or_nss_module() {
+        assert!(resolved_in_use("nameserver 127.0.0.53\n", ""));
+        assert!(resolved_in_use(
+            "nameserver 192.168.1.1\n",
+            "hosts: files resolve [!UNAVAIL=return] dns\n"
+        ));
+    }
+
+    #[test]
+    fn resolved_running_next_to_a_networkmanager_file_does_not_count() {
+        let nm_file = "# Generated by NetworkManager\nnameserver 192.168.122.1\n";
+        assert!(!resolved_in_use(
+            nm_file,
+            "hosts: files mdns4_minimal [NOTFOUND=return] dns\n"
+        ));
+        assert!(!resolved_in_use("", ""));
+    }
+
+    /// resolved's uplink mode hands glibc the upstream servers, so `resolvectl domain ~.` never sees those queries.
+    #[test]
+    fn resolved_uplink_file_counts_only_through_the_nss_module() {
+        let uplink = "# This is /run/systemd/resolve/resolv.conf managed by man:systemd-resolved(8).\nnameserver 192.168.1.1\nnameserver 9.9.9.9\n";
+        assert!(!resolved_in_use(uplink, "hosts: files dns\n"));
+        assert!(resolved_in_use(uplink, "hosts: files resolve [!UNAVAIL=return] dns\n"));
+    }
+
+    #[test]
+    fn resolve_counts_only_before_dns() {
+        let lan = "nameserver 192.168.1.1\n";
+        assert!(!resolved_in_use(lan, "hosts: files dns resolve\n"));
+        assert!(resolved_in_use(
+            lan,
+            "hosts: files mdns4_minimal [NOTFOUND=return] resolve\n"
+        ));
+    }
+
+    #[test]
+    fn stub_counts_only_when_it_is_the_sole_nameserver() {
+        assert!(!resolved_in_use("nameserver 127.0.0.53\nnameserver 192.168.1.1\n", ""));
+        assert!(resolved_in_use("nameserver 127.0.0.53\nnameserver 127.0.0.53\n", ""));
+    }
+
+    #[test]
+    fn resolvconf_counts_only_when_it_owns_the_file() {
+        let debian = Path::new("/usr/sbin/resolvconf");
+        let run_file = Some(Path::new("/run/resolvconf/resolv.conf"));
+        let plain = Some(Path::new("/etc/resolv.conf"));
+        assert!(resolvconf_in_use(debian, run_file, ""));
+        assert!(resolvconf_in_use(
+            debian,
+            plain,
+            "# Generated by resolvconf\nnameserver 10.0.0.1\n"
+        ));
+        // Installed while another program still owns the file.
+        assert!(!resolvconf_in_use(
+            debian,
+            plain,
+            "# Generated by NetworkManager\nnameserver 10.0.0.1\n"
+        ));
+    }
+
+    #[test]
+    fn ubuntu_resolvectl_alias_is_not_resolvconf() {
+        let alias = Path::new("/usr/bin/resolvectl");
+        assert!(!resolvconf_in_use(
+            alias,
+            Some(Path::new("/run/resolvconf/resolv.conf")),
+            ""
+        ));
     }
 }

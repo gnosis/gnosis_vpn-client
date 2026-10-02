@@ -1,7 +1,8 @@
 use base64::prelude::{BASE64_STANDARD, Engine as _};
+// Via neptun's re-export, not a direct x25519-dalek dep: these keys go to `Tunn`, so a version skew would make them a different type.
+use neptun::x25519::{PublicKey, StaticSecret};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use x25519_dalek::{PublicKey, StaticSecret};
 
 use std::fmt::{self, Display};
 
@@ -71,7 +72,7 @@ fn decode_secret(priv_key: &str) -> Result<StaticSecret, Error> {
 /// Generate a fresh WireGuard private key, base64-encoded exactly as `wg genkey`
 /// would emit it. The secret is drawn from OS entropy and never leaves memory.
 fn generate_key() -> String {
-    let secret = StaticSecret::random();
+    let secret = StaticSecret::from(rand::random::<[u8; 32]>());
     BASE64_STANDARD.encode(secret.to_bytes())
 }
 
