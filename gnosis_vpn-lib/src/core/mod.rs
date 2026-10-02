@@ -2461,7 +2461,10 @@ mod tests {
             .expect("key generation");
         let forced = wireguard::Config::new(None, Some(fresh.key_pair.priv_key.clone()), None);
         assert_eq!(upcoming_public_key(None, &forced), Some(fresh.key_pair.public_key));
-        assert_eq!(upcoming_public_key(None, &wireguard::Config::new(None, None, None)), None);
+        assert_eq!(
+            upcoming_public_key(None, &wireguard::Config::new(None, None, None)),
+            None
+        );
     }
 
     #[test]
