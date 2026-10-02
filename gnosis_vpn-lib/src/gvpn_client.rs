@@ -10,13 +10,25 @@ use std::time::Duration;
 
 use crate::remote_data;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Registration {
     public_key: String,
     ip: Ipv4Addr,
     newly_registered: bool,
     server_public_key: String,
     preshared_key: String,
+}
+
+/// The preshared key is a secret and `Up` is debug-logged with its registration.
+impl fmt::Debug for Registration {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Registration")
+            .field("public_key", &self.public_key)
+            .field("ip", &self.ip)
+            .field("newly_registered", &self.newly_registered)
+            .field("server_public_key", &self.server_public_key)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -291,6 +303,21 @@ impl Display for Health {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registration_debug_hides_the_preshared_key() {
+        let registration: Registration = serde_json::from_value(json!({
+            "public_key": "pub",
+            "ip": "10.128.0.5",
+            "newly_registered": false,
+            "server_public_key": "srv",
+            "preshared_key": "secret-psk",
+        }))
+        .expect("valid registration");
+        let printed = format!("{registration:?}");
+        assert!(printed.contains("pub"));
+        assert!(!printed.contains("secret-psk"), "{printed}");
+    }
 
     fn slots(connected: u32, available: u32, total: u32) -> String {
         Slots {
