@@ -1848,7 +1848,7 @@ impl Core {
         prev_public_key: Option<String>,
         results_sender: &mpsc::Sender<Results>,
     ) {
-        self.retry_pending_unregisters(&destination, results_sender);
+        self.retry_pending_unregisters(&destination, None, results_sender);
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connection.clone();
             let conn = connection::up::Up::new(destination.clone());
@@ -1888,7 +1888,12 @@ impl Core {
     }
 
     /// Re-runs the failed disconnects of this exit; entries leave only on success or past the server's GC window.
-    fn retry_pending_unregisters(&mut self, destination: &Destination, results_sender: &mpsc::Sender<Results>) {
+    fn retry_pending_unregisters(
+        &mut self,
+        destination: &Destination,
+        key_in_use: Option<&str>,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
         let now = SystemTime::now();
         let still_registered =
             |p: &PendingUnregister| now.duration_since(p.since).unwrap_or_default() < PENDING_UNREGISTER_TTL;
@@ -1897,6 +1902,8 @@ impl Core {
             .pending_unregisters
             .iter()
             .filter(|p| p.down.destination.same_exit(destination))
+            // A forced key can be pending from an earlier disconnect while the new connection uses it.
+            .filter(|p| Some(p.down.wg_public_key.as_str()) != key_in_use)
             .map(|p| p.down.clone())
             .collect();
         for down in retries {
