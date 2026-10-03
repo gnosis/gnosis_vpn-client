@@ -185,6 +185,23 @@ impl Core {
     ) -> Result<(Core, mpsc::Sender<WorkerToCore>), Error> {
         let keys = worker_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
+        Ok(Self::from_parts(
+            config,
+            worker_params,
+            node_address,
+            target_dest_id,
+            outgoing_sender,
+        ))
+    }
+
+    /// Everything past the on-disk identity, so tests can build a core without one.
+    fn from_parts(
+        config: Config,
+        worker_params: WorkerParams,
+        node_address: Address,
+        target_dest_id: Option<String>,
+        outgoing_sender: mpsc::Sender<CoreToWorker>,
+    ) -> (Core, mpsc::Sender<WorkerToCore>) {
         let cancel_on_shutdown = CancellationToken::new();
         let mut route_healths = HashMap::new();
         for (id, dest) in config.destinations.clone() {
@@ -249,7 +266,7 @@ impl Core {
             cached_resolved_blokli_ips,
             reconnecting_since: None,
         };
-        Ok((core, incoming_sender))
+        (core, incoming_sender)
     }
 
     fn next_request_id(&mut self) -> u64 {
@@ -1739,15 +1756,9 @@ impl Core {
     ) {
         // A user-initiated switch already abandoned it; this only guards the invariant.
         let mut resume = self.resume.take();
-        if let Some(stale) = resume.as_ref().filter(|r| r.destination.id != destination.id) {
+        if let Some(stale) = resume.take_if(|r| r.destination.id != destination.id) {
             tracing::warn!(resume = %stale, %destination, "dropping a resume kept for another exit");
-            let down = connection::down::Down {
-                destination: stale.destination.clone(),
-                phase: (SystemTime::now(), connection::down::Phase::Disconnecting),
-                wg_public_key: stale.wireguard.key_pair.public_key.clone(),
-            };
-            self.spawn_unregister_retry(&down, results_sender);
-            resume = None;
+            self.spawn_unregister_retry(&stale.into(), results_sender);
         }
         self.retry_pending_unregisters(&destination, results_sender);
         if let Some(hopr) = self.hopr.clone() {
@@ -2130,12 +2141,7 @@ impl Core {
         {
             tracing::warn!(%err, "failed to request tunnel teardown for abandoned reconnect");
         }
-        let down = connection::down::Down {
-            destination: resume.destination,
-            phase: (SystemTime::now(), connection::down::Phase::Disconnecting),
-            wg_public_key: resume.wireguard.key_pair.public_key,
-        };
-        self.spawn_unregister_retry(&down, results_sender);
+        self.spawn_unregister_retry(&resume.into(), results_sender);
     }
 
     fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
@@ -2319,6 +2325,121 @@ mod tests {
         let mut up = Up::new(destination(id));
         up.phase = (SystemTime::UNIX_EPOCH, phase);
         up
+    }
+
+    /// A core past the identity step: no node, no target, root on the other end of `outgoing`.
+    async fn core_without_node() -> (Core, mpsc::Receiver<CoreToWorker>, mpsc::Sender<Results>) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("config.toml");
+        tokio::fs::write(
+            &path,
+            "version = 6\n\n[destinations.Germany]\naddress = \"0xD9c11f07BfBC1914877d7395459223aFF9Dc2739\"\n",
+        )
+        .await
+        .expect("write config");
+        let config = crate::config::read(&path).await.expect("valid config");
+        let worker_params = crate::worker_params::WorkerParams::new(
+            None,
+            None,
+            crate::worker_params::ConfigFileMode::Manual(path),
+            crate::worker_params::AllowFlags::default(),
+            Some("https://blokli.invalid".parse().expect("valid url")),
+            dir.keep(),
+        );
+        let (outgoing, from_core) = mpsc::channel(32);
+        let (core, _) = Core::from_parts(config, worker_params, Address::from([0u8; 20]), None, outgoing);
+        let (results, _) = mpsc::channel(32);
+        (core, from_core, results)
+    }
+
+    fn connected_with_key(id: &str) -> Up {
+        let mut up = attempt(id, UpPhase::ConnectionEstablished);
+        up.wireguard = Some(wireguard::WireGuard::new(
+            wireguard::Config::new(None, None),
+            wireguard::KeyPair {
+                priv_key: "priv".into(),
+                public_key: "pub".into(),
+            },
+        ));
+        up
+    }
+
+    fn teardown_requested(from_core: &mut mpsc::Receiver<CoreToWorker>) -> bool {
+        matches!(
+            from_core.try_recv(),
+            Ok(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
+        )
+    }
+
+    #[tokio::test]
+    async fn a_ping_failure_keeps_key_and_device() {
+        let (mut core, mut from_core, results) = core_without_node().await;
+        core.phase = Phase::Connected(connected_with_key("exit"));
+
+        core.reconnect_in_place(connected_with_key("exit"), true, &results)
+            .await;
+
+        assert!(!teardown_requested(&mut from_core));
+        assert!(matches!(core.phase, Phase::HoprRunning));
+        let resume = core.resume.as_ref().expect("key kept");
+        assert_eq!(resume.wireguard.key_pair.public_key, "pub");
+    }
+
+    #[tokio::test]
+    async fn a_wan_change_keeps_the_key_but_rebuilds_the_device() {
+        let (mut core, mut from_core, results) = core_without_node().await;
+
+        core.reconnect_in_place(connected_with_key("exit"), false, &results)
+            .await;
+
+        assert!(teardown_requested(&mut from_core));
+        assert_eq!(
+            core.resume.as_ref().map(|r| r.wireguard.key_pair.public_key.as_str()),
+            Some("pub")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pump_that_will_not_stop_forces_a_rebuild() {
+        let (mut core, mut from_core, results) = core_without_node().await;
+        let stuck = TaskTracker::new();
+        stuck.spawn(std::future::pending::<()>());
+        core.wg_pump_tasks = stuck;
+
+        core.reconnect_in_place(connected_with_key("exit"), true, &results)
+            .await;
+
+        assert!(teardown_requested(&mut from_core));
+        assert!(core.resume.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_connection_without_a_key_reconnects_fresh() {
+        let (mut core, _from_core, results) = core_without_node().await;
+
+        core.reconnect_in_place(attempt("exit", UpPhase::GeneratingWg), true, &results)
+            .await;
+
+        assert!(core.resume.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_user_action_abandons_the_resume_and_tears_down() {
+        let (mut core, mut from_core, results) = core_without_node().await;
+        core.resume = connection::up::Resume::try_from(&connected_with_key("exit")).ok();
+
+        core.abandon_resume(&results).await;
+
+        assert!(core.resume.is_none());
+        assert!(teardown_requested(&mut from_core));
+    }
+
+    #[test]
+    fn an_abandoned_resume_unregisters_its_key() {
+        let resume = connection::up::Resume::try_from(&connected_with_key("exit")).expect("resumable");
+        let down: connection::down::Down = resume.into();
+        assert_eq!(down.wg_public_key, "pub");
+        assert_eq!(down.destination.id, destination("exit").id);
     }
 
     #[tokio::test(start_paused = true)]
