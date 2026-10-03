@@ -101,6 +101,17 @@ struct SetupRequest {
     dns: Option<String>,
 }
 
+/// Floor ∪ expiring tier, deduplicated and sorted; blokli and the setup snapshot stay allowed when the tier is empty.
+fn allowed_ips(floor: &[IpAddr], active_bypass: &HashSet<Ipv4Addr>) -> Vec<IpAddr> {
+    floor
+        .iter()
+        .copied()
+        .chain(active_bypass.iter().map(|ip| IpAddr::V4(*ip)))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 /// Reuse is only sound when the live device matches and the WAN its bypass routes use is unchanged.
 fn can_reuse(last_setup: Option<&SetupRequest>, request: &SetupRequest, wan_changed: bool) -> bool {
     !wan_changed && last_setup == Some(request)
@@ -370,17 +381,8 @@ impl Actor {
         }
         self.active_bypass = reconciled;
 
-        // Union the static floor (policy.ips) with the dynamic delta (alive) so blokli
-        // and the initial peer snapshot stay allowed even when alive is empty.
         if let Some(ref policy) = self.applied_policy {
-            let combined: Vec<IpAddr> = policy
-                .ips
-                .iter()
-                .copied()
-                .chain(self.active_bypass.iter().map(|ip| IpAddr::V4(*ip)))
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect();
+            let combined = allowed_ips(&policy.ips, &self.active_bypass);
             if let Err(e) = self
                 .firewall
                 .reapply_policy(&policy.interface, &combined, policy.lan_lockdown)
@@ -403,12 +405,15 @@ impl Actor {
             .capture_recovery_state()
             .map_err(|error| error.to_string())?;
         routing::sweep::record_killswitch(recovery_state);
+        // A reused device keeps active_bypass alive; the lockdown must not drop those peers.
+        let combined = allowed_ips(&ips, &self.active_bypass);
         let result = self
             .firewall
-            .apply_policy(&interface, &ips, lan_lockdown)
+            .apply_policy(&interface, &combined, lan_lockdown)
             .map_err(|e| e.to_string());
         match result {
             Ok(()) => {
+                // Floor only; the expiring tier is re-added on every refresh.
                 self.applied_policy = Some(AppliedPolicy {
                     interface,
                     ips,
@@ -428,14 +433,7 @@ impl Actor {
             return;
         };
         tracing::info!("re-applying killswitch after network change");
-        let combined: Vec<IpAddr> = policy
-            .ips
-            .iter()
-            .copied()
-            .chain(self.active_bypass.iter().map(|ip| IpAddr::V4(*ip)))
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
+        let combined = allowed_ips(&policy.ips, &self.active_bypass);
         if let Err(error) = self
             .firewall
             .reapply_policy(&policy.interface, &combined, policy.lan_lockdown)
@@ -598,6 +596,19 @@ fn event_affects_firewall(event: &NetworkEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allowed_ips_keeps_the_floor_and_adds_peers_in_their_grace_period() {
+        let blokli: IpAddr = "34.159.222.233".parse().expect("valid ip");
+        let peer: IpAddr = "34.0.9.226".parse().expect("valid ip");
+        let grace: Ipv4Addr = "35.207.253.58".parse().expect("valid ip");
+        let active_bypass = HashSet::from([grace, "34.0.9.226".parse().expect("valid ip")]);
+        assert_eq!(
+            allowed_ips(&[peer, blokli], &active_bypass),
+            vec![peer, blokli, IpAddr::V4(grace)]
+        );
+        assert_eq!(allowed_ips(&[blokli], &HashSet::new()), vec![blokli]);
+    }
 
     fn request(address: &str) -> SetupRequest {
         SetupRequest {
