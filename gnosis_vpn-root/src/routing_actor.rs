@@ -236,8 +236,6 @@ impl Actor {
             dns,
         };
         if let Some(reused) = self.reuse_live_device(&request).await {
-            // Peers announced since the last setup still need their WAN bypass.
-            self.update_peer_ips(peer_ips).await;
             return Ok(reused);
         }
 
