@@ -89,6 +89,32 @@ struct Actor {
     /// Resolved WireGuard interface name (e.g. "utun8" on macOS, "wg0_gnosisvpn" on Linux).
     /// Populated after a successful routing setup; cleared on teardown.
     wg_interface_name: Option<String>,
+    /// What the live router was built for; a matching request reuses the device instead of rebuilding it.
+    last_setup: Option<SetupRequest>,
+}
+
+/// The parameters that decide whether an existing TUN device can serve a new connection.
+#[derive(Clone, Debug, PartialEq)]
+struct SetupRequest {
+    interface_address: String,
+    mtu: u32,
+    dns: Option<String>,
+}
+
+/// Floor ∪ expiring tier, deduplicated and sorted; blokli and the setup snapshot stay allowed when the tier is empty.
+fn allowed_ips(floor: &[IpAddr], active_bypass: &HashSet<Ipv4Addr>) -> Vec<IpAddr> {
+    floor
+        .iter()
+        .copied()
+        .chain(active_bypass.iter().map(|ip| IpAddr::V4(*ip)))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Reuse is only sound when the live device matches and the WAN its bypass routes use is unchanged.
+fn can_reuse(last_setup: Option<&SetupRequest>, request: &SetupRequest, wan_changed: bool) -> bool {
+    !wan_changed && last_setup == Some(request)
 }
 
 impl Actor {
@@ -100,6 +126,7 @@ impl Actor {
             peer_ip_last_seen: std::collections::HashMap::new(),
             active_bypass: HashSet::new(),
             wg_interface_name: None,
+            last_setup: None,
         })
     }
 
@@ -214,9 +241,23 @@ impl Actor {
         dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
     ) -> Result<(String, OwnedFd), String> {
+        let request = SetupRequest {
+            interface_address,
+            mtu,
+            dns,
+        };
+        if let Some(reused) = self.reuse_live_device(&request).await {
+            return Ok(reused);
+        }
+
         // ensure clean slate
         self.teardown_routing().await;
 
+        let SetupRequest {
+            interface_address,
+            mtu,
+            dns,
+        } = request.clone();
         let mut router = match routing::static_router(interface_address, mtu, dns, peer_ips) {
             Ok(router) => router,
             Err(error) => {
@@ -237,6 +278,7 @@ impl Actor {
             Ok(interface_name) => match tun_fd {
                 Ok(Some(fd)) => {
                     self.wg_interface_name = Some(interface_name.clone());
+                    self.last_setup = Some(request);
                     tracing::debug!(
                         fd = std::os::fd::AsRawFd::as_raw_fd(&fd),
                         "duplicated TUN fd for worker handoff"
@@ -263,6 +305,27 @@ impl Actor {
         }
     }
 
+    /// A dup of the live TUN fd keeps the interface, its address and routes - established flows survive.
+    async fn reuse_live_device(&mut self, request: &SetupRequest) -> Option<(String, OwnedFd)> {
+        let (Some(router), Some(interface_name)) = (self.router.as_mut(), self.wg_interface_name.clone()) else {
+            return None;
+        };
+        let wan_changed = router.wan_changed().await.unwrap_or(true);
+        if !can_reuse(self.last_setup.as_ref(), request, wan_changed) {
+            return None;
+        }
+        let fd = match router.tun_fd().map(|fd| rustix::io::fcntl_dupfd_cloexec(fd, 0)) {
+            Some(Ok(fd)) => fd,
+            Some(Err(error)) => {
+                tracing::warn!(?error, "failed to duplicate live TUN fd - rebuilding device");
+                return None;
+            }
+            None => return None,
+        };
+        tracing::info!(interface = %interface_name, "reusing live tunnel device");
+        Some((interface_name, fd))
+    }
+
     async fn teardown_routing(&mut self) {
         if let Some(ref mut router) = self.router {
             for ip in self.active_bypass.drain().collect::<Vec<_>>() {
@@ -274,6 +337,7 @@ impl Actor {
         }
         self.router = None;
         self.wg_interface_name = None;
+        self.last_setup = None;
         self.peer_ip_last_seen.clear();
         self.active_bypass.clear();
     }
@@ -317,17 +381,8 @@ impl Actor {
         }
         self.active_bypass = reconciled;
 
-        // Union the static floor (policy.ips) with the dynamic delta (alive) so blokli
-        // and the initial peer snapshot stay allowed even when alive is empty.
         if let Some(ref policy) = self.applied_policy {
-            let combined: Vec<IpAddr> = policy
-                .ips
-                .iter()
-                .copied()
-                .chain(self.active_bypass.iter().map(|ip| IpAddr::V4(*ip)))
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect();
+            let combined = allowed_ips(&policy.ips, &self.active_bypass);
             if let Err(e) = self
                 .firewall
                 .reapply_policy(&policy.interface, &combined, policy.lan_lockdown)
@@ -350,12 +405,15 @@ impl Actor {
             .capture_recovery_state()
             .map_err(|error| error.to_string())?;
         routing::sweep::record_killswitch(recovery_state);
+        // A reused device keeps active_bypass alive; the lockdown must not drop those peers.
+        let combined = allowed_ips(&ips, &self.active_bypass);
         let result = self
             .firewall
-            .apply_policy(&interface, &ips, lan_lockdown)
+            .apply_policy(&interface, &combined, lan_lockdown)
             .map_err(|e| e.to_string());
         match result {
             Ok(()) => {
+                // Floor only; the expiring tier is re-added on every refresh.
                 self.applied_policy = Some(AppliedPolicy {
                     interface,
                     ips,
@@ -375,14 +433,7 @@ impl Actor {
             return;
         };
         tracing::info!("re-applying killswitch after network change");
-        let combined: Vec<IpAddr> = policy
-            .ips
-            .iter()
-            .copied()
-            .chain(self.active_bypass.iter().map(|ip| IpAddr::V4(*ip)))
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
+        let combined = allowed_ips(&policy.ips, &self.active_bypass);
         if let Err(error) = self
             .firewall
             .reapply_policy(&policy.interface, &combined, policy.lan_lockdown)
@@ -545,6 +596,36 @@ fn event_affects_firewall(event: &NetworkEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allowed_ips_keeps_the_floor_and_adds_peers_in_their_grace_period() {
+        let blokli: IpAddr = "34.159.222.233".parse().expect("valid ip");
+        let peer: IpAddr = "34.0.9.226".parse().expect("valid ip");
+        let grace: Ipv4Addr = "35.207.253.58".parse().expect("valid ip");
+        let active_bypass = HashSet::from([grace, "34.0.9.226".parse().expect("valid ip")]);
+        assert_eq!(
+            allowed_ips(&[peer, blokli], &active_bypass),
+            vec![peer, blokli, IpAddr::V4(grace)]
+        );
+        assert_eq!(allowed_ips(&[blokli], &HashSet::new()), vec![blokli]);
+    }
+
+    fn request(address: &str) -> SetupRequest {
+        SetupRequest {
+            interface_address: address.to_string(),
+            mtu: 1280,
+            dns: Some("10.128.0.1".to_string()),
+        }
+    }
+
+    #[test]
+    fn device_is_reused_only_for_an_identical_request_on_a_stable_wan() {
+        let live = request("10.128.0.5/32");
+        assert!(can_reuse(Some(&live), &request("10.128.0.5/32"), false));
+        assert!(!can_reuse(Some(&live), &request("10.128.0.9/32"), false));
+        assert!(!can_reuse(Some(&live), &request("10.128.0.5/32"), true));
+        assert!(!can_reuse(None, &request("10.128.0.5/32"), false));
+    }
 
     #[test]
     fn route_events_do_not_trigger_a_killswitch_reapply() {

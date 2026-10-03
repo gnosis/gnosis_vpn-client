@@ -38,6 +38,9 @@ pub(crate) const MAX_FRAME: usize = 2048;
 pub enum Error {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// Kept apart from `Io` so a dead device can be told from a broken session.
+    #[error("tun device error: {0}")]
+    Tun(std::io::Error),
     #[error(transparent)]
     Key(#[from] crate::wireguard::Error),
     #[error("failed to initialize wireguard tunnel: {0}")]
