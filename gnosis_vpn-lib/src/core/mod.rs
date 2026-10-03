@@ -109,7 +109,7 @@ pub struct Core {
     /// The one long-lived probe session; connections register over it.
     probe: Option<Probe>,
     probe_generation: u64,
-    /// Key, registration and exit of a connection we dropped ourselves; the next runner to that exit resumes it.
+    /// Key and exit of a connection we dropped ourselves; the next runner to that exit resumes it.
     resume: Option<connection::up::Resume>,
     next_request_id: u64,
     // Maps a request_id to the oneshot sender waiting for root's response.
@@ -1756,7 +1756,6 @@ impl Core {
             // Seeded so a disconnect before the runner reports its key still unregisters and tears down.
             if let Some(resume) = &resume {
                 conn.wireguard = Some(resume.wireguard.clone());
-                conn.registration = Some(resume.registration.clone());
             }
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
