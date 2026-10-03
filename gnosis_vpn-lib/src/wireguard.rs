@@ -29,7 +29,6 @@ pub struct KeyPair {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Config {
-    pub force_private_key: Option<String>,
     /// Source-address filter applied to packets decrypted from the VPN exit
     /// (ingress only). Egress is unconditionally full-tunnel via the OS split
     /// routes and does not consult this value, so a range narrower than the
@@ -40,12 +39,8 @@ pub struct Config {
 }
 
 impl Config {
-    pub(crate) fn new(allowed_ips: Option<String>, force_private_key: Option<String>, dns: Option<String>) -> Self {
-        Config {
-            allowed_ips,
-            force_private_key,
-            dns,
-        }
+    pub(crate) fn new(allowed_ips: Option<String>, dns: Option<String>) -> Self {
+        Config { allowed_ips, dns }
     }
 }
 
@@ -79,7 +74,7 @@ fn generate_key() -> String {
 /// Derive the base64 WireGuard public key for a base64 private key, replacing
 /// the former `wg pubkey` shell-out with an in-process Curve25519 basepoint
 /// multiplication.
-pub(crate) fn public_key(priv_key: &str) -> Result<String, Error> {
+fn public_key(priv_key: &str) -> Result<String, Error> {
     let secret = decode_secret(priv_key)?;
     let public = PublicKey::from(&secret);
     Ok(BASE64_STANDARD.encode(public.as_bytes()))
@@ -91,10 +86,7 @@ impl WireGuard {
     }
 
     pub async fn from_config(config: Config) -> Result<Self, Error> {
-        let priv_key = match config.force_private_key.clone() {
-            Some(key) => key,
-            None => generate_key(),
-        };
+        let priv_key = generate_key();
         let public_key = public_key(&priv_key)?;
         let key_pair = KeyPair { priv_key, public_key };
         Ok(WireGuard { config, key_pair })
@@ -177,11 +169,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn from_config_derives_public_key_for_forced_private_key() {
-        let priv_b64 = BASE64_STANDARD.encode(hex32(RFC7748_ALICE_PRIV));
-        let config = Config::new(None, Some(priv_b64.clone()), None);
-        let wg = WireGuard::from_config(config).await.expect("config accepted");
-        assert_eq!(wg.key_pair.priv_key, priv_b64);
-        assert_eq!(wg.key_pair.public_key, BASE64_STANDARD.encode(hex32(RFC7748_ALICE_PUB)));
+    async fn from_config_generates_a_fresh_key_per_connection() {
+        let first = WireGuard::from_config(Config::new(None, None))
+            .await
+            .expect("key generation");
+        let second = WireGuard::from_config(Config::new(None, None))
+            .await
+            .expect("key generation");
+        assert_ne!(first.key_pair.priv_key, second.key_pair.priv_key);
+        assert_eq!(
+            first.key_pair.public_key,
+            public_key(&first.key_pair.priv_key).expect("valid key")
+        );
     }
 }

@@ -1749,8 +1749,7 @@ impl Core {
             self.spawn_unregister_retry(&down, results_sender);
             resume = None;
         }
-        let key_in_use = upcoming_public_key(resume.as_ref(), &self.config.wireguard);
-        self.retry_pending_unregisters(&destination, key_in_use.as_deref(), results_sender);
+        self.retry_pending_unregisters(&destination, results_sender);
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connection.clone();
             let mut conn = connection::up::Up::new(destination.clone());
@@ -1795,12 +1794,7 @@ impl Core {
     }
 
     /// Re-runs the failed disconnects of this exit; entries leave only on success or past the server's GC window.
-    fn retry_pending_unregisters(
-        &mut self,
-        destination: &Destination,
-        key_in_use: Option<&str>,
-        results_sender: &mpsc::Sender<Results>,
-    ) {
+    fn retry_pending_unregisters(&mut self, destination: &Destination, results_sender: &mpsc::Sender<Results>) {
         let now = SystemTime::now();
         let still_registered =
             |p: &PendingUnregister| now.duration_since(p.since).unwrap_or_default() < PENDING_UNREGISTER_TTL;
@@ -1809,8 +1803,6 @@ impl Core {
             .pending_unregisters
             .iter()
             .filter(|p| p.down.destination.id == destination.id)
-            // A forced key can be pending from an earlier disconnect while the new connection uses it.
-            .filter(|p| Some(p.down.wg_public_key.as_str()) != key_in_use)
             .map(|p| p.down.clone())
             .collect();
         for down in retries {
@@ -2188,15 +2180,6 @@ impl Core {
     }
 }
 
-/// The key the next runner registers: the resumed one, else a forced key, else a fresh one nobody can hold yet.
-fn upcoming_public_key(resume: Option<&connection::up::Resume>, wg_config: &wireguard::Config) -> Option<String> {
-    if let Some(resume) = resume {
-        return Some(resume.wireguard.key_pair.public_key.clone());
-    }
-    let forced = wg_config.force_private_key.as_deref()?;
-    wireguard::public_key(forced).ok()
-}
-
 /// Connecting and reconnecting views of the phase; between attempts a reconnect has no phase.
 fn connection_infos(
     phase: &Phase,
@@ -2452,19 +2435,6 @@ mod tests {
         assert_eq!(info.destination_id, "exit");
         assert_eq!(info.since, since);
         assert!(info.phase.is_none());
-    }
-
-    #[tokio::test]
-    async fn upcoming_public_key_covers_a_forced_key() {
-        let fresh = wireguard::WireGuard::from_config(wireguard::Config::new(None, None, None))
-            .await
-            .expect("key generation");
-        let forced = wireguard::Config::new(None, Some(fresh.key_pair.priv_key.clone()), None);
-        assert_eq!(upcoming_public_key(None, &forced), Some(fresh.key_pair.public_key));
-        assert_eq!(
-            upcoming_public_key(None, &wireguard::Config::new(None, None, None)),
-            None
-        );
     }
 
     #[test]
