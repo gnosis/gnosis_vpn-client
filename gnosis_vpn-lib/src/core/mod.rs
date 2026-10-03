@@ -188,23 +188,6 @@ impl Core {
     ) -> Result<(Core, mpsc::Sender<WorkerToCore>), Error> {
         let keys = worker_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
-        Ok(Self::from_parts(
-            config,
-            worker_params,
-            node_address,
-            target_dest_id,
-            outgoing_sender,
-        ))
-    }
-
-    /// Everything past the on-disk identity, so tests can build a core without one.
-    fn from_parts(
-        config: Config,
-        worker_params: WorkerParams,
-        node_address: Address,
-        target_dest_id: Option<String>,
-        outgoing_sender: mpsc::Sender<CoreToWorker>,
-    ) -> (Core, mpsc::Sender<WorkerToCore>) {
         let cancel_on_shutdown = CancellationToken::new();
         let mut route_healths = HashMap::new();
         for (key, dest) in config.destinations.iter() {
@@ -266,7 +249,7 @@ impl Core {
             cached_resolved_blokli_ips,
             reconnecting_since: None,
         };
-        (core, incoming_sender)
+        Ok((core, incoming_sender))
     }
 
     fn next_request_id(&mut self) -> u64 {
@@ -2499,10 +2482,23 @@ mod tests {
         up
     }
 
-    /// A core past the identity step: no node, no target, root on the other end of `outgoing`.
-    async fn core_without_node() -> (Core, mpsc::Receiver<CoreToWorker>, mpsc::Sender<Results>) {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("config.toml");
+    /// A freshly initialised core: new identity in a temp state home, no node, no target, root on `from_core`.
+    struct TestCore {
+        core: Core,
+        from_core: mpsc::Receiver<CoreToWorker>,
+        results: mpsc::Sender<Results>,
+        _state_home: tempfile::TempDir,
+    }
+
+    async fn fresh_core() -> TestCore {
+        let state_home = tempfile::tempdir().expect("temp dir");
+        // Service start creates this; the generated pass file lands in it.
+        let pass_dir = identity::pass_file(state_home.path().to_path_buf())
+            .parent()
+            .expect("pass file dir")
+            .to_path_buf();
+        tokio::fs::create_dir_all(pass_dir).await.expect("state home layout");
+        let path = state_home.path().join("config.toml");
         tokio::fs::write(&path, "version = 7\n").await.expect("write config");
         let config = crate::config::read(&path).await.expect("valid config");
         let worker_params = crate::worker_params::WorkerParams::new(
@@ -2511,12 +2507,19 @@ mod tests {
             crate::worker_params::ConfigFileMode::Manual(path),
             crate::worker_params::AllowFlags::default(),
             "https://blokli.invalid".parse().expect("valid url"),
-            dir.keep(),
+            state_home.path().to_path_buf(),
         );
         let (outgoing, from_core) = mpsc::channel(32);
-        let (core, _) = Core::from_parts(config, worker_params, Address::from([0u8; 20]), None, outgoing);
+        let (core, _) = Core::init(config, worker_params, None, outgoing)
+            .await
+            .expect("core init");
         let (results, _) = mpsc::channel(32);
-        (core, from_core, results)
+        TestCore {
+            core,
+            from_core,
+            results,
+            _state_home: state_home,
+        }
     }
 
     fn connected_with_key(id: &str) -> Up {
@@ -2540,7 +2543,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_ping_failure_keeps_key_and_device() {
-        let (mut core, mut from_core, results) = core_without_node().await;
+        let TestCore {
+            mut core,
+            mut from_core,
+            results,
+            ..
+        } = fresh_core().await;
         core.phase = Phase::Connected(connected_with_key("exit"));
 
         core.reconnect_in_place(connected_with_key("exit"), true, &results)
@@ -2554,7 +2562,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_wan_change_keeps_the_key_but_rebuilds_the_device() {
-        let (mut core, mut from_core, results) = core_without_node().await;
+        let TestCore {
+            mut core,
+            mut from_core,
+            results,
+            ..
+        } = fresh_core().await;
 
         core.reconnect_in_place(connected_with_key("exit"), false, &results)
             .await;
@@ -2568,7 +2581,12 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_pump_that_will_not_stop_forces_a_rebuild() {
-        let (mut core, mut from_core, results) = core_without_node().await;
+        let TestCore {
+            mut core,
+            mut from_core,
+            results,
+            ..
+        } = fresh_core().await;
         let stuck = TaskTracker::new();
         stuck.spawn(std::future::pending::<()>());
         core.wg_pump_tasks = stuck;
@@ -2582,7 +2600,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_connection_without_a_key_reconnects_fresh() {
-        let (mut core, _from_core, results) = core_without_node().await;
+        let TestCore { mut core, results, .. } = fresh_core().await;
 
         core.reconnect_in_place(attempt("exit", UpPhase::GeneratingWg), true, &results)
             .await;
@@ -2592,7 +2610,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_user_action_abandons_the_resume_and_tears_down() {
-        let (mut core, mut from_core, results) = core_without_node().await;
+        let TestCore {
+            mut core,
+            mut from_core,
+            results,
+            ..
+        } = fresh_core().await;
         core.resume = connection::up::Resume::try_from(&connected_with_key("exit")).ok();
 
         core.abandon_resume(&results).await;
