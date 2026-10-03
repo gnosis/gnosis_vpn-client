@@ -157,7 +157,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
                 for (k, _v) in wg.iter() {
-                    if k == "listen_port" || k == "allowed_ips" || k == "force_private_key" {
+                    if k == "listen_port" || k == "allowed_ips" {
                         continue;
                     }
                     if k == "dns" {
@@ -451,7 +451,6 @@ main = "16 Mb/s"
 [wireguard]
 listen_port = 51820
 allowed_ips = "10.128.0.1/9"
-force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
 dns = { overwrite = true, servers = "1.1.1.1,8.8.8.8" }
 
 [blokli]

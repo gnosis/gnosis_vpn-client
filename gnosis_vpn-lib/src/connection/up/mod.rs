@@ -608,7 +608,7 @@ mod resume_tests {
         );
         let mut up = Up::new(destination);
         up.wireguard = Some(WireGuard::new(
-            wireguard::Config::new(None, None, None),
+            wireguard::Config::new(None, None),
             KeyPair {
                 priv_key: "priv".into(),
                 public_key: "pub".into(),
