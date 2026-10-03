@@ -91,8 +91,6 @@ struct Actor {
     wg_interface_name: Option<String>,
     /// What the live router was built for; a matching request reuses the device instead of rebuilding it.
     last_setup: Option<SetupRequest>,
-    /// Bypass routes the live router installed at setup (blokli included); permanent until teardown.
-    static_bypass: HashSet<Ipv4Addr>,
 }
 
 /// The parameters that decide whether an existing TUN device can serve a new connection.
@@ -101,10 +99,6 @@ struct SetupRequest {
     interface_address: String,
     mtu: u32,
     dns: Option<String>,
-}
-
-fn peers_beyond(static_bypass: &HashSet<Ipv4Addr>, peer_ips: Vec<Ipv4Addr>) -> Vec<Ipv4Addr> {
-    peer_ips.into_iter().filter(|ip| !static_bypass.contains(ip)).collect()
 }
 
 /// Reuse is only sound when the live device matches and the WAN its bypass routes use is unchanged.
@@ -122,7 +116,6 @@ impl Actor {
             active_bypass: HashSet::new(),
             wg_interface_name: None,
             last_setup: None,
-            static_bypass: HashSet::new(),
         })
     }
 
@@ -243,9 +236,8 @@ impl Actor {
             dns,
         };
         if let Some(reused) = self.reuse_live_device(&request).await {
-            // Static ones stay out: the expiring tier would delete their routes, blokli's included.
-            let new_peers = peers_beyond(&self.static_bypass, peer_ips);
-            self.update_peer_ips(new_peers).await;
+            // Peers announced since the last setup still need their WAN bypass.
+            self.update_peer_ips(peer_ips).await;
             return Ok(reused);
         }
 
@@ -257,7 +249,6 @@ impl Actor {
             mtu,
             dns,
         } = request.clone();
-        let static_bypass: HashSet<Ipv4Addr> = peer_ips.iter().copied().collect();
         let mut router = match routing::static_router(interface_address, mtu, dns, peer_ips) {
             Ok(router) => router,
             Err(error) => {
@@ -279,7 +270,6 @@ impl Actor {
                 Ok(Some(fd)) => {
                     self.wg_interface_name = Some(interface_name.clone());
                     self.last_setup = Some(request);
-                    self.static_bypass = static_bypass;
                     tracing::debug!(
                         fd = std::os::fd::AsRawFd::as_raw_fd(&fd),
                         "duplicated TUN fd for worker handoff"
@@ -339,7 +329,6 @@ impl Actor {
         self.router = None;
         self.wg_interface_name = None;
         self.last_setup = None;
-        self.static_bypass.clear();
         self.peer_ip_last_seen.clear();
         self.active_bypass.clear();
     }
@@ -611,18 +600,6 @@ fn event_affects_firewall(event: &NetworkEvent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reuse_hands_only_new_peers_to_the_expiring_tier() {
-        let blokli: Ipv4Addr = "34.159.222.233".parse().expect("valid ip");
-        let known_peer: Ipv4Addr = "34.0.9.226".parse().expect("valid ip");
-        let new_peer: Ipv4Addr = "35.207.253.58".parse().expect("valid ip");
-        let static_bypass = HashSet::from([blokli, known_peer]);
-        assert_eq!(
-            peers_beyond(&static_bypass, vec![known_peer, new_peer, blokli]),
-            vec![new_peer]
-        );
-    }
 
     fn request(address: &str) -> SetupRequest {
         SetupRequest {
