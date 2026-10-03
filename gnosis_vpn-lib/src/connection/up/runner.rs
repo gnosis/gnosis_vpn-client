@@ -400,22 +400,25 @@ impl Runner {
         let cancel = self.cancel.clone();
         let results_sender = results_sender.clone();
 
-        // Forward each stats sample into core's Results channel on a small
-        // dedicated task, so `wg_tunnel` stays unaware of core's Results enum.
-        // The forwarder exits on its own once the pump task below drops
-        // `sample_tx`, so it needs no separate cancellation wiring.
+        // Forwards stats samples so `wg_tunnel` stays unaware of core's Results enum.
+        // Cancellable: core awaits this tracker from its own Results handler, so a blocked send would never drain.
         let (sample_tx, mut sample_rx) = mpsc::channel(4);
         let forward_results_sender = results_sender.clone();
+        let forward_cancel = self.cancel.clone();
         self.pump_tasks.spawn(async move {
-            while let Some(sample) = sample_rx.recv().await {
-                if forward_results_sender
-                    .send(Results::WgStatsSample(sample))
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
-            }
+            forward_cancel
+                .run_until_cancelled(async move {
+                    while let Some(sample) = sample_rx.recv().await {
+                        if forward_results_sender
+                            .send(Results::WgStatsSample(sample))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                })
+                .await;
         });
 
         self.pump_tasks.spawn(async move {
