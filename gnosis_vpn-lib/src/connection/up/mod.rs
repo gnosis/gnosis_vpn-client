@@ -319,38 +319,30 @@ impl Up {
     }
 }
 
-/// What an automatic reconnect carries over so the exit keeps the peer, its address and the live device.
+/// What an automatic reconnect carries over; re-registering the same key returns the exit's existing peer and address.
 #[derive(Clone)]
 pub struct Resume {
     pub destination: Destination,
     pub wireguard: WireGuard,
-    pub registration: Registration,
 }
 
 impl TryFrom<&Up> for Resume {
     type Error = &'static str;
 
     fn try_from(up: &Up) -> Result<Self, Self::Error> {
-        let (Some(wireguard), Some(registration)) = (up.wireguard.clone(), up.registration.clone()) else {
-            return Err("connection has no registered WireGuard key yet");
+        let Some(wireguard) = up.wireguard.clone() else {
+            return Err("connection has no WireGuard key yet");
         };
         Ok(Self {
             destination: up.destination.clone(),
             wireguard,
-            registration,
         })
     }
 }
 
 impl Display for Resume {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Resume of {} ({} at {})",
-            self.destination,
-            self.wireguard,
-            self.registration.address()
-        )
+        write!(f, "Resume of {} ({})", self.destination, self.wireguard)
     }
 }
 
@@ -610,21 +602,14 @@ mod resume_tests {
     }
 
     #[test]
-    fn resume_needs_both_key_and_registration() {
+    fn resume_needs_only_the_key() {
         let mut up = up_with_key();
-        assert!(Resume::try_from(&up).is_err());
-
-        let registration: Registration = serde_json::from_value(serde_json::json!({
-            "public_key": "pub",
-            "ip": "10.128.0.5",
-            "newly_registered": false,
-            "server_public_key": "srv",
-            "preshared_key": "psk",
-        }))
-        .expect("valid registration");
-        up.registration = Some(registration);
+        // Interrupted before the exit answered: the key is still reused.
+        assert!(up.registration.is_none());
         let resume = Resume::try_from(&up).expect("resumable");
-        assert_eq!(resume.registration.address(), "10.128.0.5/32");
         assert_eq!(resume.wireguard.key_pair.public_key, "pub");
+
+        up.wireguard = None;
+        assert!(Resume::try_from(&up).is_err());
     }
 }
