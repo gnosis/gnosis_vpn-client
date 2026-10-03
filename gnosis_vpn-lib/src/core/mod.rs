@@ -985,14 +985,14 @@ impl Core {
                 if !was_ready && is_ready {
                     self.act_on_target(results_sender);
                 }
-                // A connection still registering holds a bound_host that just died; restart the attempt.
+                // A connection still registering holds a bound_host that just died; restart in place so its key and device survive.
                 if reopening
                     && let Phase::Connecting(conn) = self.phase.clone()
                     && conn.destination.id == key
                     && conn.registration.is_none()
                 {
                     tracing::warn!(%conn, "probe session broke during registration - restarting the attempt");
-                    self.disconnect_from_connection(&conn, results_sender);
+                    self.reconnect_in_place(conn, true, results_sender).await;
                 }
             }
 
