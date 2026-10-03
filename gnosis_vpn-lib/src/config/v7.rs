@@ -138,7 +138,6 @@ pub(super) struct PixOptionsConfig {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct WireGuard {
     pub(super) allowed_ips: Option<String>,
-    pub(super) force_private_key: Option<String>,
     pub(super) dns: Option<WireGuardDNS>,
 }
 
@@ -394,7 +393,6 @@ impl From<Option<Connection>> for options::Options {
 impl From<Option<WireGuard>> for WireGuardConfig {
     fn from(value: Option<WireGuard>) -> Self {
         let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
-        let force_private_key = value.as_ref().and_then(|wg| wg.force_private_key.clone());
         let dns = value
             .as_ref()
             .and_then(|wg| {
@@ -407,7 +405,7 @@ impl From<Option<WireGuard>> for WireGuardConfig {
                 })
             })
             .unwrap_or(Some(WireGuardDNS::default_server()));
-        WireGuardConfig::new(allowed_ips, force_private_key, dns)
+        WireGuardConfig::new(allowed_ips, dns)
     }
 }
 
@@ -603,7 +601,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
                 for (k, v) in wg.iter() {
-                    if k == "allowed_ips" || k == "force_private_key" {
+                    if k == "allowed_ips" {
                         continue;
                     }
                     if k == "dns" {
@@ -1283,6 +1281,27 @@ allowed_ips = "10.0.0.0/8"
     }
 
     #[test]
+    fn a_leftover_force_private_key_is_ignored_and_reported() {
+        let raw = r#####"
+version = 7
+
+[wireguard]
+force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
+"#####;
+        let table: toml::Table = raw.parse().expect("valid TOML");
+        assert_eq!(
+            super::wrong_keys(&table),
+            vec!["wireguard.force_private_key".to_string()]
+        );
+        let cfg: Config = toml::from_str(raw).expect("old configs keep loading");
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(
+            result.wireguard,
+            WireGuardConfig::new(None, Some("1.1.1.1,8.8.8.8".to_string()))
+        );
+    }
+
+    #[test]
     fn wireguard_section_converts_to_config() {
         let cfg = parse(
             r#####"
@@ -1296,11 +1315,7 @@ allowed_ips = "10.0.0.0/8"
         let converted: WireGuardConfig = Some(wg).into();
         assert_eq!(
             converted,
-            WireGuardConfig::new(
-                Some("10.0.0.0/8".to_string()),
-                None,
-                Some("1.1.1.1,8.8.8.8".to_string())
-            )
+            WireGuardConfig::new(Some("10.0.0.0/8".to_string()), Some("1.1.1.1,8.8.8.8".to_string()))
         );
     }
 

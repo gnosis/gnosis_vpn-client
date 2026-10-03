@@ -1308,6 +1308,8 @@ impl DaemonState {
     async fn incoming_worker_exit(&mut self, status: process::ExitStatus) -> Result<(), exitcode::ExitCode> {
         self.worker_child = None;
         self.probing = false;
+        // A dead worker's device must never be handed to its replacement as a reusable one.
+        self.teardown_any_routing().await;
         match self.shutdown_ongoing {
             Shutdown::None => {
                 if status.success() {

@@ -13,6 +13,7 @@ use std::fmt::{self, Display};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::time;
 
 use crate::connection::destination::Destination;
 use crate::connection::options::{Options, SurbParams, surb_config_for};
@@ -25,14 +26,16 @@ use crate::wireguard::{self, WireGuard};
 use crate::worker_params::WorkerParams;
 use crate::{ping, remote_data, wg_tunnel};
 
-use super::{Error, Event, Progress, Setback};
+use super::{Error, Event, Progress, Resume, Setback};
 
 /// State carried over from a previous connection attempt.
+const SESSION_CLOSE_BUDGET: Duration = Duration::from_secs(2);
+
 pub(crate) struct PreviousConnection {
     /// Blokli IPs resolved during the previous connection (reused when killswitch blocks DNS).
     pub blokli_ips: Vec<Ipv4Addr>,
     /// WireGuard public key from the previous connection to unregister during bridge cleanup.
-    pub wg_public_key: Option<String>,
+    pub resume: Option<Resume>,
 }
 
 /// What to connect to and how to configure it, as supplied by the caller.
@@ -115,11 +118,17 @@ impl Runner {
             None => remote_data::resolve_ips(&blokli_url).await?,
         };
 
-        // 2. generate wg keys
+        // 2. generate wg keys - or keep the previous ones so the exit returns the same address
         let _ = results_sender
             .send(progress(Progress::GenerateWg(blokli_ips.clone())))
             .await;
-        let wg = WireGuard::from_config(self.wg_config.clone()).await?;
+        let wg = match &self.prev_conn.resume {
+            Some(resume) => {
+                tracing::info!(%resume, "resuming connection with the previous key");
+                resume.wireguard.clone()
+            }
+            None => WireGuard::from_config(self.wg_config.clone()).await?,
+        };
         let public_key = wg.key_pair.public_key.clone();
 
         let _ = results_sender.send(progress(Progress::WgGenerated(wg.clone()))).await;
@@ -128,15 +137,10 @@ impl Runner {
         let _ = results_sender.send(progress(Progress::RegisterWg)).await;
         let registration = register(&self.options, &self.bridge_session, public_key, &results_sender).await?;
 
-        // 4. signal ping phase (carries registration); a previous key is unregistered in the background
+        // 4. signal ping phase (carries registration)
         let _ = results_sender
             .send(progress(Progress::OpenPing(registration.clone())))
             .await;
-        spawn_background_unregister(
-            self.bridge_session.clone(),
-            self.options.clone(),
-            self.prev_conn.wg_public_key.clone(),
-        );
 
         // 5. open the wg session (also carries the in-tunnel verification ping). The
         //    raw session is spliced directly into the pump - no local listener and no
@@ -402,22 +406,25 @@ impl Runner {
         let cancel = self.cancel.clone();
         let results_sender = results_sender.clone();
 
-        // Forward each stats sample into core's Results channel on a small
-        // dedicated task, so `wg_tunnel` stays unaware of core's Results enum.
-        // The forwarder exits on its own once the pump task below drops
-        // `sample_tx`, so it needs no separate cancellation wiring.
+        // Forwards stats samples so `wg_tunnel` stays unaware of core's Results enum.
+        // Cancellable: core awaits this tracker from its own Results handler, so a blocked send would never drain.
         let (sample_tx, mut sample_rx) = mpsc::channel(4);
         let forward_results_sender = results_sender.clone();
+        let forward_cancel = self.cancel.clone();
         self.pump_tasks.spawn(async move {
-            while let Some(sample) = sample_rx.recv().await {
-                if forward_results_sender
-                    .send(Results::WgStatsSample(sample))
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
-            }
+            forward_cancel
+                .run_until_cancelled(async move {
+                    while let Some(sample) = sample_rx.recv().await {
+                        if forward_results_sender
+                            .send(Results::WgStatsSample(sample))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                })
+                .await;
         });
 
         self.pump_tasks.spawn(async move {
@@ -432,29 +439,40 @@ impl Runner {
                 ))
                 .await;
             // Owned out here: cancellation drops `run`, and a dropped session never reaches the manager.
-            if let Err(error) = net_tx.close().await {
-                tracing::warn!(%error, "failed to close spliced wg session");
+            // Bounded: a dead session can stall shutdown, and core waits on this task before reusing the TUN device.
+            match time::timeout(SESSION_CLOSE_BUDGET, net_tx.close()).await {
+                Ok(Err(error)) => tracing::warn!(%error, "failed to close spliced wg session"),
+                Err(_) => tracing::warn!("closing spliced wg session timed out"),
+                Ok(Ok(())) => {}
             }
             match pump_exit_reason(outcome) {
                 None => tracing::debug!("wg pump stopped (connection cancelled)"),
-                Some(reason) => {
-                    tracing::warn!(%reason, "wg pump exited - requesting reconnect");
-                    let _ = results_sender.send(Results::WgPumpExited { reason }).await;
+                Some((reason, device_lost)) => {
+                    tracing::warn!(%reason, device_lost, "wg pump exited - requesting reconnect");
+                    let _ = results_sender.send(Results::WgPumpExited { reason, device_lost }).await;
                 }
             }
         });
     }
 }
 
-/// Map a pump task outcome to the reconnect reason to report, or `None` when the
-/// pump stopped because the connection was cancelled (a deliberate teardown that
-/// needs no reconnect). Both a clean [`wg_tunnel::PumpExit`] and a pump error ask
-/// core to reconnect via [`Results::WgPumpExited`].
-fn pump_exit_reason(outcome: Option<Result<wg_tunnel::PumpExit, wg_tunnel::Error>>) -> Option<String> {
+/// The reconnect reason and whether the TUN side is gone, or `None` for a cancelled pump (deliberate teardown).
+fn pump_exit_reason(outcome: Option<Result<wg_tunnel::PumpExit, wg_tunnel::Error>>) -> Option<(String, bool)> {
     match outcome {
         None => None,
-        Some(Ok(exit)) => Some(format!("{exit:?}")),
-        Some(Err(e)) => Some(e.to_string()),
+        // Only a dead TUN fd rules out reusing the device; a lost session is rebuilt on top of it.
+        Some(Ok(exit)) => Some((format!("{exit:?}"), exit == wg_tunnel::PumpExit::TunClosed)),
+        Some(Err(e)) => {
+            let device_lost = match e {
+                wg_tunnel::Error::Tun(_) => true,
+                wg_tunnel::Error::Io(_)
+                | wg_tunnel::Error::Key(_)
+                | wg_tunnel::Error::Tunn(_)
+                | wg_tunnel::Error::WireGuard(_)
+                | wg_tunnel::Error::Unexpected(_) => false,
+            };
+            Some((e.to_string(), device_lost))
+        }
     }
 }
 
@@ -525,26 +543,6 @@ async fn request_ping(
     .await
 }
 
-/// Best-effort unregister of the previous connection's key; the probe session stays open.
-fn spawn_background_unregister(
-    bridge_session: SessionClientMetadata,
-    options: Options,
-    prev_public_key: Option<String>,
-) {
-    let Some(old_key) = prev_public_key else { return };
-    tokio::spawn(async move {
-        let input = gvpn_client::Input::new(old_key, bridge_session.bound_host, options.timeouts.http);
-        let client = reqwest::Client::new();
-        match gvpn_client::unregister(&client, &input).await {
-            Ok(()) => tracing::debug!("unregistered old wg public key"),
-            Err(gvpn_client::Error::RegistrationNotFound) => {
-                tracing::warn!(wg_public_key = %input.public_key(), "old wg key not found during unregister, possibly already removed");
-            }
-            Err(err) => tracing::warn!(%err, "failed to unregister old wg public key"),
-        }
-    });
-}
-
 fn setback(setback: Setback) -> Results {
     Results::ConnectionEvent(Event::Setback(Box::new(setback)))
 }
@@ -569,18 +567,35 @@ mod tests {
         // A clean pump exit reports a reason naming the variant, driving a reconnect.
         assert_eq!(
             pump_exit_reason(Some(Ok(wg_tunnel::PumpExit::DecapStalled))),
-            Some("DecapStalled".to_string())
+            Some(("DecapStalled".to_string(), false))
         );
         assert_eq!(
             pump_exit_reason(Some(Ok(wg_tunnel::PumpExit::Expired))),
-            Some("Expired".to_string())
+            Some(("Expired".to_string(), false))
+        );
+    }
+
+    #[test]
+    fn pump_exit_reason_flags_a_lost_device() {
+        assert_eq!(
+            pump_exit_reason(Some(Ok(wg_tunnel::PumpExit::TunClosed))),
+            Some(("TunClosed".to_string(), true))
         );
     }
 
     #[test]
     fn pump_exit_reason_carries_the_error_message() {
-        let reason = pump_exit_reason(Some(Err(wg_tunnel::Error::Unexpected("boom")))).expect("a reason");
+        let (reason, _) = pump_exit_reason(Some(Err(wg_tunnel::Error::Unexpected("boom")))).expect("a reason");
         assert!(reason.contains("boom"), "reason should surface the error: {reason}");
+    }
+
+    #[test]
+    fn pump_exit_reason_flags_only_tun_errors_as_a_lost_device() {
+        let io = || std::io::Error::new(std::io::ErrorKind::TimedOut, "endpoint write timed out");
+        let device_lost = |e| pump_exit_reason(Some(Err(e))).expect("a reason").1;
+        assert!(device_lost(wg_tunnel::Error::Tun(io())));
+        assert!(!device_lost(wg_tunnel::Error::Io(io())));
+        assert!(!device_lost(wg_tunnel::Error::Unexpected("boom")));
     }
 
     fn nets(s: &[&str]) -> Vec<IpNetwork> {
