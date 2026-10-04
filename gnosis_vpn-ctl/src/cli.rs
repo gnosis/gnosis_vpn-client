@@ -108,16 +108,6 @@ pub enum Command {
     #[command()]
     StopClient {},
 
-    /// Fetch and display the latest available version from the update manifest
-    ///
-    /// Refuses to run unless the VPN is connected. Pass --force to bypass the connection check.
-    #[command()]
-    CheckUpdate {
-        /// Perform the connection even if VPN is currently inactive (insecure)
-        #[arg(short = 'f', long)]
-        force: bool,
-    },
-
     /// Print shell completion script for the given shell to stdout
     #[command(hide = true)]
     Completions { shell: clap_complete::Shell },
@@ -145,7 +135,6 @@ impl From<Command> for LibCommand {
             Command::StartClient { keep_alive } => LibCommand::StartClient(keep_alive.into()),
             Command::StopClient {} => LibCommand::StopClient,
             Command::Destinations {} => LibCommand::Destinations,
-            Command::CheckUpdate { .. } => unreachable!("CheckUpdate is handled before socket dispatch"),
             Command::Completions { .. } => unreachable!("Completions is handled before socket dispatch"),
         }
     }

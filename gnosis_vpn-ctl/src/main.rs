@@ -1,12 +1,10 @@
 use bytesize::ByteSize;
 use exitcode::{self, ExitCode};
 
-use std::fmt;
 use std::process;
 use std::time::Duration;
 
 use gnosis_vpn_lib::balance;
-use gnosis_vpn_lib::check_update;
 use gnosis_vpn_lib::command::{self, Command, Response};
 use gnosis_vpn_lib::socket;
 
@@ -30,11 +28,6 @@ async fn main() {
         process::exit(exitcode::OK);
     }
 
-    if let cli::Command::CheckUpdate { force } = args.command {
-        let exit = run_check_update(format, &args.socket_path, force).await;
-        process::exit(exit);
-    }
-
     let cmd: Command = args.command.into();
     let resp = match socket::root::process_cmd(&args.socket_path, &cmd).await {
         Ok(resp) => resp,
@@ -52,128 +45,6 @@ async fn main() {
 
     let exit = determine_exitcode(&resp);
     process::exit(exit);
-}
-
-async fn run_check_update(format: OutputFormat, socket_path: &std::path::Path, force: bool) -> ExitCode {
-    let client = match reqwest::Client::builder().timeout(Duration::from_secs(30)).build() {
-        Ok(c) => c,
-        Err(e) => return emit_check_update_error(format, CheckUpdateErrorKind::Internal, &e.to_string()),
-    };
-    let gate = (!force).then_some(socket_path);
-    match check_update::download(&client, gate).await {
-        Ok(manifest) => {
-            match format {
-                OutputFormat::Json => match serde_json::to_string_pretty(&manifest) {
-                    Ok(s) => println!("{s}"),
-                    Err(e) => {
-                        return emit_check_update_error(
-                            OutputFormat::Json,
-                            CheckUpdateErrorKind::Internal,
-                            &e.to_string(),
-                        );
-                    }
-                },
-                OutputFormat::Yaml => match serde_saphyr::to_string(&manifest) {
-                    Ok(s) => print!("{s}"),
-                    Err(e) => {
-                        return emit_check_update_error(
-                            OutputFormat::Yaml,
-                            CheckUpdateErrorKind::Internal,
-                            &e.to_string(),
-                        );
-                    }
-                },
-                OutputFormat::Plain => {
-                    if let Some(stable) = &manifest.channels.stable {
-                        println!(
-                            "Stable: {}, published at {}, download at: {}",
-                            stable.version, stable.published_at, stable.download_url
-                        );
-                    }
-                    if let Some(snapshot) = &manifest.channels.snapshot {
-                        println!(
-                            "Latest Snapshot: {}, published at {}, download at: {}",
-                            snapshot.version, snapshot.published_at, snapshot.download_url
-                        );
-                    }
-                }
-            }
-            exitcode::OK
-        }
-        Err(check_update::Error::VpnNotConnected) => emit_check_update_error(
-            format,
-            CheckUpdateErrorKind::VpnNotConnected,
-            "pass -f/--force to bypass the VPN connection check",
-        ),
-        Err(e @ check_update::Error::Integrity(_)) => {
-            emit_check_update_error(format, CheckUpdateErrorKind::IntegrityError, &e.to_string())
-        }
-        Err(e) => emit_check_update_error(format, CheckUpdateErrorKind::Unavailable, &e.to_string()),
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum CheckUpdateErrorKind {
-    Unavailable,
-    IntegrityError,
-    Internal,
-    VpnNotConnected,
-}
-
-impl CheckUpdateErrorKind {
-    fn slug(self) -> &'static str {
-        match self {
-            Self::Unavailable => "unavailable",
-            Self::IntegrityError => "integrity_error",
-            Self::Internal => "internal",
-            Self::VpnNotConnected => "vpn_not_connected",
-        }
-    }
-
-    fn exit_code(self) -> ExitCode {
-        match self {
-            Self::Unavailable => exitcode::UNAVAILABLE,
-            Self::VpnNotConnected => exitcode::NOPERM,
-            Self::IntegrityError | Self::Internal => exitcode::SOFTWARE,
-        }
-    }
-}
-
-impl fmt::Display for CheckUpdateErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let label = match self {
-            Self::Unavailable => "Update manifest unavailable",
-            Self::IntegrityError => "Update manifest integrity check failed",
-            Self::Internal => "Internal error",
-            Self::VpnNotConnected => "VPN not connected",
-        };
-        f.write_str(label)
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct CheckUpdateErrorPayload {
-    r#type: String,
-    error: String,
-}
-
-fn emit_check_update_error(format: OutputFormat, kind: CheckUpdateErrorKind, message: &str) -> ExitCode {
-    let payload = CheckUpdateErrorPayload {
-        r#type: kind.slug().to_string(),
-        error: message.to_string(),
-    };
-    match format {
-        OutputFormat::Json => {
-            eprintln!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
-        }
-        OutputFormat::Yaml => {
-            eprintln!("{}", serde_saphyr::to_string(&payload).unwrap_or_default());
-        }
-        OutputFormat::Plain => {
-            eprintln!("{kind}: {message}");
-        }
-    }
-    kind.exit_code()
 }
 
 fn json_print(resp: &Response) {
