@@ -96,6 +96,8 @@ pub(super) struct HealthCheckIntervalOptions {
     pub(super) tunnel_ping: Option<Duration>,
     #[serde(default, deserialize_with = "validate_tunnel_ping_max_failures")]
     pub(super) tunnel_ping_max_failures: Option<u32>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) tunnel_ping_max_rtt: Option<Duration>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -370,6 +372,7 @@ impl From<Option<Connection>> for options::Options {
                 tunnel_ping_max_failures: h
                     .tunnel_ping_max_failures
                     .unwrap_or(def_intervals.tunnel_ping_max_failures),
+                tunnel_ping_max_rtt: h.tunnel_ping_max_rtt.unwrap_or(def_intervals.tunnel_ping_max_rtt),
             })
             .unwrap_or(def_intervals);
 
@@ -762,6 +765,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                     || k2 == "load"
                                     || k2 == "tunnel_ping"
                                     || k2 == "tunnel_ping_max_failures"
+                                    || k2 == "tunnel_ping_max_rtt"
                                 {
                                     continue;
                                 }
@@ -898,11 +902,17 @@ impl TryFrom<Config> for config::Config {
         if ramp.interval.is_zero() || ramp.duration.is_zero() {
             return Err(config::Error::SurbRampZero);
         }
-        // Zero feeds `time::sleep(0)` timers, which would hammer the exit back to back.
+        // Zero intervals feed `time::sleep(0)` and hammer the exit; a zero RTT ceiling calls every reply slow.
         let intervals = &connection.health_check_intervals;
-        let any_interval_zero = [intervals.version, intervals.ping, intervals.load, intervals.tunnel_ping]
-            .iter()
-            .any(Duration::is_zero);
+        let any_interval_zero = [
+            intervals.version,
+            intervals.ping,
+            intervals.load,
+            intervals.tunnel_ping,
+            intervals.tunnel_ping_max_rtt,
+        ]
+        .iter()
+        .any(Duration::is_zero);
         if any_interval_zero {
             return Err(config::Error::HealthCheckIntervalZero);
         }
@@ -1477,12 +1487,37 @@ version = 7
     }
 
     #[test]
+    fn tunnel_ping_max_rtt_defaults_and_parses() {
+        let cfg = parse("version = 7\n");
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(
+            result.connection.health_check_intervals.tunnel_ping_max_rtt,
+            Duration::from_secs(3)
+        );
+
+        let cfg = parse(
+            r#####"
+version = 7
+
+[connection.health_check_intervals]
+tunnel_ping_max_rtt = "5s"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(
+            result.connection.health_check_intervals.tunnel_ping_max_rtt,
+            Duration::from_secs(5)
+        );
+    }
+
+    #[test]
     fn health_check_intervals_reject_zero() {
         for line in &[
             "version = \"0s\"",
             "ping = \"0s\"",
             "load = \"0s\"",
             "tunnel_ping = \"0s\"",
+            "tunnel_ping_max_rtt = \"0s\"",
         ] {
             let cfg = parse(&format!(
                 r#####"
