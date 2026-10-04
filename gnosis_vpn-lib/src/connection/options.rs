@@ -139,6 +139,8 @@ pub struct HealthCheckIntervals {
     pub tunnel_ping: Duration,
     /// Consecutive tunnel ping failures before triggering reconnect.
     pub tunnel_ping_max_failures: u32,
+    /// A reply slower than this is judged by the WireGuard counters instead of resetting the failures.
+    pub tunnel_ping_max_rtt: Duration,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -220,6 +222,7 @@ impl Default for HealthCheckIntervals {
             load: Duration::from_secs(15),
             tunnel_ping: Duration::from_secs(10),
             tunnel_ping_max_failures: 3,
+            tunnel_ping_max_rtt: Duration::from_secs(3),
         }
     }
 }

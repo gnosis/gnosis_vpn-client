@@ -178,6 +178,7 @@ impl From<Option<Connection>> for options::Options {
                 tunnel_ping_max_failures: h
                     .tunnel_ping_max_failures
                     .unwrap_or(def_intervals.tunnel_ping_max_failures),
+                tunnel_ping_max_rtt: def_intervals.tunnel_ping_max_rtt,
             })
             .unwrap_or(def_intervals);
 

@@ -124,6 +124,9 @@ path    = { hops = 1 }
 # tunnel_ping = "10s"
 # consecutive tunnel ping failures before triggering reconnect
 # tunnel_ping_max_failures = 3
+# tunnel_ping_max_rtt - a reply slower than this counts as a failure when WireGuard inbound
+# stalled meanwhile and is ignored otherwise; only a fast reply resets the counter (humantime).
+# tunnel_ping_max_rtt = "3s"
 
 # adjust SURB balancing per session type
 # each section enables balancing for that session; omit to use the defaults below
