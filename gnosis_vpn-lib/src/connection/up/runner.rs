@@ -265,7 +265,7 @@ async fn open_spliced_wg_session(
         capabilities: options.sessions.wg.capabilities,
         forward_path: destination.routing,
         return_path: destination.routing,
-        always_max_out_surbs: surb.always_max_out_surbs,
+        max_surbs_per_data_packet: surb.max_surbs_per_data_packet,
         surb_management: surb.management,
         // Robust tail-tolerance profile for the WireGuard data session.
         flow_control: Some(FlowControlConfig::robust()),
