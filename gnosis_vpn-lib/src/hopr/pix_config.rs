@@ -112,6 +112,8 @@ impl From<PixConfig> for edgli::strategy::PixEntryConfig {
                 max_deposit_retries: c.max_deposit_retries,
                 min_safe_hopr_reserve: c.min_safe_hopr_reserve,
             },
+            // Where a pool keeps durable state; the `pix-test` pool has none.
+            state_dir: None,
         }
     }
 }
