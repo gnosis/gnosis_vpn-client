@@ -28,9 +28,9 @@ use crate::{ping, remote_data, wg_tunnel};
 
 use super::{Error, Event, Progress, Resume, Setback};
 
-/// State carried over from a previous connection attempt.
 const SESSION_CLOSE_BUDGET: Duration = Duration::from_secs(2);
 
+/// State carried over from a previous connection attempt.
 pub(crate) struct PreviousConnection {
     /// Blokli IPs resolved during the previous connection (reused when killswitch blocks DNS).
     pub blokli_ips: Vec<Ipv4Addr>,
