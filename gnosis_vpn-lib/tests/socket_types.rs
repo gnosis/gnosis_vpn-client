@@ -9,7 +9,7 @@ use gnosis_vpn_lib::command::{
     ConnectingInfo, DestinationState, DisconnectResponse, DisconnectingInfo, FundingToolResponse, HoprInitStatus,
     HoprStatus, Info, InfoResponse, NerdStatsConnection, NerdStatsResponse, ProbeResponse, ProbeView,
     QuickProbeResponse, ReconnectingInfo, Response, RouteHealthView, RunMode, StartClientResponse, StatusResponse,
-    StopClientResponse, SurbBalancerSetpoint, SurbStats, TicketStats, TicketStatsStatus, UnprobeResponse,
+    StopClientResponse, SurbBalancerSetpoint, SurbStats, TicketStats, TicketStatsStatus, TunnelStall, UnprobeResponse,
     WorkerCommand,
 };
 use gnosis_vpn_lib::connection::destination::{Address, Destination, HopRouting, Meta};
@@ -29,6 +29,7 @@ fn assert_types_are_accessible() {
     let _: ConnectingInfo;
     let _: ReconnectingInfo;
     let _: ConnectedInfo;
+    let _: TunnelStall;
     let _: DisconnectingInfo;
     let _: DestinationState;
     let _: RunMode;
