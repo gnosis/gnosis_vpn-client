@@ -20,13 +20,10 @@ bytesize = "~2.7.0"
 cfg-if = "~1.0.4"
 clap = { version = "~4.6.7", features = ["derive", "env"] }
 clap_complete = "~4.6.11"
-# edge-client main defaults to the `pix-curvy` pool; the two pools are mutually exclusive, so
-# keeping `pix-test` means opting out of the defaults and naming the rest explicitly.
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "f17d64d554f92c89614d9a10abc973f9ad020626", default-features = false, features = [
-  "runtime-tokio",
+# The PIX deposit pool is edgli's default `pix-curvy`; the pool has to match the curve the network's
+# exits run, so it is not a client-side choice.
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "f17d64d554f92c89614d9a10abc973f9ad020626", features = [
   "blokli",
-  "pix",
-  "pix-test",
   "telemetry",
 ] }
 exitcode = "~1.1.2"
