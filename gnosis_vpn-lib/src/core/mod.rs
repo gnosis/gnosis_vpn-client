@@ -120,7 +120,6 @@ pub struct Core {
     responders: HashMap<u64, Responder>,
     ongoing_disconnections: Vec<connection::down::Down>,
     pending_unregisters: Vec<PendingUnregister>,
-    cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
     reconnecting_since: Option<SystemTime>,
 }
 
@@ -201,7 +200,6 @@ impl Core {
         let target_destination = target_dest_id.and_then(|id| config.destinations.get(&id).cloned());
 
         let (incoming_sender, incoming_receiver) = mpsc::channel(32);
-        let cached_resolved_blokli_ips = worker_params.cached_blokli_ips().to_vec();
         let core = Core {
             // config data
             config,
@@ -245,8 +243,6 @@ impl Core {
             resume: None,
             next_request_id: 0,
             responders: HashMap::new(),
-            // needed to keep working during enabled killswitch
-            cached_resolved_blokli_ips,
             reconnecting_since: None,
         };
         Ok((core, incoming_sender))
@@ -447,7 +443,6 @@ impl Core {
                         self.target_destination = None;
                         self.reconnecting_since = None;
                         self.abandon_resume(results_sender).await;
-                        self.cached_resolved_blokli_ips = Vec::new();
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
                                 tracing::info!(current = %conn.destination, "disconnecting");
@@ -742,13 +737,6 @@ impl Core {
                 match self.phase.clone() {
                     Phase::Connecting(mut conn) => match evt {
                         connection::up::Event::Progress(e) => {
-                            if let connection::up::Progress::GenerateWg(blokli_ips) = e.as_ref() {
-                                self.cached_resolved_blokli_ips = blokli_ips.clone();
-                                let request = RequestToRoot::CacheBlokliIps {
-                                    ips: blokli_ips.clone(),
-                                };
-                                let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
-                            }
                             conn.connect_progress(*e);
                             self.phase = Phase::Connecting(conn);
                         }
@@ -1754,10 +1742,7 @@ impl Core {
             }
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
-            let prev_conn = connection::up::runner::PreviousConnection {
-                blokli_ips: self.cached_resolved_blokli_ips.clone(),
-                resume,
-            };
+            let prev_conn = connection::up::runner::PreviousConnection { resume };
             let spec = connection::up::runner::ConnectionSpec {
                 destination: conn.destination.clone(),
                 options: config_connection,
@@ -2346,6 +2331,7 @@ mod tests {
             crate::worker_params::ConfigFileMode::Manual(path),
             crate::worker_params::AllowFlags::default(),
             Some("https://blokli.invalid".parse().expect("valid url")),
+            net::Ipv4Addr::new(203, 0, 113, 7),
             state_home.path().to_path_buf(),
         );
         let (outgoing, from_core) = mpsc::channel(32);

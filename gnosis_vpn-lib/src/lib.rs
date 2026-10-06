@@ -33,5 +33,5 @@ pub(crate) mod ticket_stats;
 
 mod log_output;
 mod peer;
-mod remote_data;
+pub mod remote_data;
 mod serde_utils;
