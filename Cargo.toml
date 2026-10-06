@@ -32,9 +32,7 @@ futures-util = "~0.3.34"
 # commits -- mixing the two builds hoprnet twice and fails with `expected
 # hopr_lib::HoprSessionClientConfig, found HoprSessionClientConfig`. Keep both entries in the
 # same form.
-# INTEGRATION PIN (GNO-805): on the path-finding PR branch to match edgli's hopr-lib pin (one
-# hoprnet source). Reverts to branch = "release/4.0" once hoprnet#8483 merges.
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "kauki/fix/path-finding/gno-805-starved-channel", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "release/4.0", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
