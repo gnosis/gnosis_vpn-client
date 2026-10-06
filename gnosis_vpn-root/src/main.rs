@@ -1529,6 +1529,7 @@ impl DaemonState {
                 mtu,
                 dns,
                 peer_ips,
+                blokli_ip: self.worker_params.blokli_ip(),
                 reply: reply_tx,
             })
             .await;
