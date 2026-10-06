@@ -896,8 +896,13 @@ impl Core {
                     self.phase = Phase::Connecting(conn);
                 }
                 Phase::Connected(mut conn) => {
-                    conn.record_wg_stats(sample);
-                    self.phase = Phase::Connected(conn);
+                    let stall = conn.record_wg_stats(sample);
+                    self.phase = Phase::Connected(conn.clone());
+                    if stall >= connection::up::COUNTER_STALL_RECONNECT {
+                        tracing::warn!(%conn, ?stall, "inbound counters stalled - reconnecting");
+                        self.reconnecting_since = Some(SystemTime::now());
+                        self.reconnect_in_place(conn, true, results_sender).await;
+                    }
                 }
                 phase => {
                     tracing::debug!(?phase, "received wg stats sample outside an active connection");
