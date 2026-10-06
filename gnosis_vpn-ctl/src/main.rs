@@ -314,16 +314,26 @@ fn format_probability(p: f64) -> String {
 }
 
 fn format_funding_status(status: &balance::FundingStatus) -> String {
-    let wxhopr_deficit = status
-        .wxhopr_deficit
-        .map(|d| format!(" (top up {d} recommended)"))
-        .unwrap_or_default();
+    // A deficit (not yet funded) takes precedence; otherwise surface any top-up
+    // headroom recommended for already-open channels so it isn't shown blank.
+    let wxhopr_note = match (status.wxhopr_deficit, status.topup_headroom) {
+        (Some(deficit), _) => format!(" (top up {deficit} recommended)"),
+        (None, Some(headroom)) => format!(" (top up {headroom})"),
+        (None, None) => String::new(),
+    };
     let xdai_deficit = status
         .xdai_deficit
         .map(|d| format!(" (top up {d} recommended)"))
         .unwrap_or_default();
+    // Running is the healthy default and needs no line; only surface trouble.
+    let strategy = match status.strategy_state {
+        Some(state @ (balance::StrategyState::Degraded | balance::StrategyState::Failed)) => {
+            format!("Strategy: {state}\n")
+        }
+        _ => String::new(),
+    };
     format!(
-        "Traffic: {}{wxhopr_deficit}\nGas: {}{xdai_deficit}\n",
+        "Traffic: {}{wxhopr_note}\nGas: {}{xdai_deficit}\n{strategy}",
         status.traffic, status.gas
     )
 }
@@ -650,4 +660,61 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
         }
     }
     str_resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use balance::{Balance, FundingLevel, FundingStatus, StrategyState, WxHOPR};
+
+    fn good() -> FundingStatus {
+        FundingStatus {
+            traffic: FundingLevel::Good,
+            gas: FundingLevel::Good,
+            wxhopr_deficit: None,
+            xdai_deficit: None,
+            topup_headroom: None,
+            strategy_state: None,
+        }
+    }
+
+    #[test]
+    fn renders_topup_headroom_when_no_deficit() {
+        let status = FundingStatus {
+            topup_headroom: Some(Balance::<WxHOPR>::from(5u64)),
+            ..good()
+        };
+        let out = format_funding_status(&status);
+        assert!(out.contains("top up"), "headroom must render, not blank: {out}");
+        // a deficit would read "recommended"; a bare headroom must not.
+        assert!(!out.contains("recommended"), "{out}");
+    }
+
+    #[test]
+    fn deficit_takes_precedence_over_headroom() {
+        let status = FundingStatus {
+            wxhopr_deficit: Some(Balance::<WxHOPR>::from(9u64)),
+            topup_headroom: Some(Balance::<WxHOPR>::from(5u64)),
+            ..good()
+        };
+        assert!(format_funding_status(&status).contains("recommended"));
+    }
+
+    #[test]
+    fn renders_degraded_strategy_state() {
+        let status = FundingStatus {
+            strategy_state: Some(StrategyState::Degraded),
+            ..good()
+        };
+        assert!(format_funding_status(&status).contains("Degraded"));
+    }
+
+    #[test]
+    fn running_strategy_state_is_not_shown() {
+        let status = FundingStatus {
+            strategy_state: Some(StrategyState::Running),
+            ..good()
+        };
+        assert!(!format_funding_status(&status).contains("Strategy"));
+    }
 }
