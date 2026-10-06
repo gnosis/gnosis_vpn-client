@@ -110,10 +110,6 @@ pub enum RequestToRoot {
         request_id: u64,
         options: ping::Options,
     },
-    /// Fire-and-forget: ask root to hold resolved IPs so they survive a worker restart.
-    CacheBlokliIps {
-        ips: Vec<Ipv4Addr>,
-    },
     /// Fire-and-forget: refresh the peer-IP allowlist used by the killswitch and routing bypass.
     UpdatePeerIps {
         peer_ips: Vec<Ipv4Addr>,

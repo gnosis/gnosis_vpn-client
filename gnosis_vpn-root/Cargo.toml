@@ -9,6 +9,7 @@ version      = { workspace = true }
 
 [dependencies]
 async-trait.workspace    = true
+backon.workspace         = true
 cfg-if.workspace         = true
 clap.workspace           = true
 exitcode.workspace       = true
