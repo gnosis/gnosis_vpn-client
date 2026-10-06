@@ -46,6 +46,7 @@ pub trait RouteOps: Send + Sync {
     /// brought down, or its route was deleted). Used by `wan_changed()` to detect
     /// DHCP reassignments on the original WAN device without triggering a false
     /// reconnect when a second network interface is added.
+    /// Host routes are ignored so this sees what `setup()` snapshotted, not our own /32 bypass.
     async fn get_route_via_device(&self, dest: Ipv4Addr, device: &str) -> Result<Option<WanRoute>, Error>;
 
     /// Add a route: destination via optional gateway through device.

@@ -27,9 +27,6 @@ use super::route_ops::{RouteOps, WanRoute};
 use super::route_ops_linux::NetlinkRouteOps;
 use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET, dns, ipv6_blackhole, resolv_conf, sweep, tun};
 
-/// Public IP used to identify the WAN route and detect DHCP reassignments.
-const PUBLIC_INTERNET_ADDRESS: Ipv4Addr = Ipv4Addr::new(1, 1, 1, 1);
-
 /// VPN split routes: two /1 halves cover all IPv4 space.
 /// More specific than the WAN /0 default, routing all non-bypass internet traffic into the tunnel.
 const VPN_SPLIT_ROUTES: &[(&str, u8)] = &[("0.0.0.0", 1), ("128.0.0.0", 1)];
@@ -40,6 +37,7 @@ pub fn static_router(
     mtu: u32,
     dns: Option<String>,
     peer_ips: Vec<Ipv4Addr>,
+    blokli_ip: Ipv4Addr,
 ) -> Result<impl Routing, Error> {
     let (conn, handle, _) = rtnetlink::new_connection()?;
     tokio::task::spawn(conn);
@@ -51,6 +49,7 @@ pub fn static_router(
         dns_mechanism: None,
         dns_guard: None,
         peer_ips,
+        blokli_ip,
         handle,
         route_ops,
         wan_info: None,
@@ -77,6 +76,8 @@ struct StaticRouter {
     /// Hands `/etc/resolv.conf` back when dropped, covering the paths that never reach teardown.
     dns_guard: Option<resolv_conf::Managed>,
     peer_ips: Vec<Ipv4Addr>,
+    /// Real WAN-bound destination whose route picks the bypass device; a lookup key, never contacted.
+    blokli_ip: Ipv4Addr,
     /// Netlink handle used for address + link-state assignment on the TUN.
     handle: rtnetlink::Handle,
     route_ops: NetlinkRouteOps,
@@ -238,7 +239,7 @@ impl Routing for StaticRouter {
 
         let wan_route = self
             .route_ops
-            .get_wan_route_for(PUBLIC_INTERNET_ADDRESS, wireguard::WG_INTERFACE)
+            .get_wan_route_for(self.blokli_ip, wireguard::WG_INTERFACE)
             .await?
             .ok_or(Error::NoInterface)?;
         let device = wan_route.device.clone();
@@ -348,7 +349,7 @@ impl Routing for StaticRouter {
         };
         let current = self
             .route_ops
-            .get_route_via_device(PUBLIC_INTERNET_ADDRESS, &snapshot.device)
+            .get_route_via_device(self.blokli_ip, &snapshot.device)
             .await?;
         match current {
             None => Ok(true),
