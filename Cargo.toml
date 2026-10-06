@@ -32,7 +32,9 @@ futures-util = "~0.3.34"
 # commits -- mixing the two builds hoprnet twice and fails with `expected
 # hopr_lib::HoprSessionClientConfig, found HoprSessionClientConfig`. Keep both entries in the
 # same form.
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "release/4.0", features = [
+# INTEGRATION PIN (GNO-805): on the redemption-balance fix branch to match edgli's hopr-lib pin
+# (one hoprnet source). Reverts to branch = "release/4.0" once hoprnet#8485 merges.
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "kauki/fix/chain/gno-805-redeemed-updates-graph-balance", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
