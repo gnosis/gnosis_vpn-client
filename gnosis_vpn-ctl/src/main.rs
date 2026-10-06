@@ -149,8 +149,16 @@ fn pretty_print(resp: &Response) {
             connected,
             disconnecting,
             probe,
+            strategy_advisory,
         }) => {
-            let mut str_resp = format!("{run_mode}\n");
+            let mut str_resp = String::new();
+            // Lead with the funding advisory so a Critical/Warning can't be missed
+            // under the run-mode and connection detail that follow.
+            if let Some(advisory) = strategy_advisory {
+                str_resp.push_str(&format_strategy_advisory(advisory));
+                str_resp.push_str("---\n");
+            }
+            str_resp.push_str(&format!("{run_mode}\n"));
             if let Some(id) = target_destination {
                 let is_active = connecting.as_ref().is_some_and(|c| c.destination_id == *id)
                     || reconnecting.as_ref().is_some_and(|c| c.destination_id == *id)
@@ -311,6 +319,14 @@ fn format_probability(p: f64) -> String {
     let s = format!("{:.8}", p);
     let trimmed = s.trim_end_matches('0');
     trimmed.trim_end_matches('.').to_string()
+}
+
+fn format_strategy_advisory(advisory: &command::StrategyAdvisory) -> String {
+    let label = match advisory.level {
+        command::AdvisoryLevel::Critical => "CRITICAL",
+        command::AdvisoryLevel::Warning => "WARNING",
+    };
+    format!("[!] {label}: {}\n", advisory.message)
 }
 
 fn format_funding_status(status: &balance::FundingStatus) -> String {
@@ -716,5 +732,23 @@ mod tests {
             ..good()
         };
         assert!(!format_funding_status(&status).contains("Strategy"));
+    }
+
+    #[test]
+    fn renders_critical_advisory_for_failed_strategy() {
+        let advisory = command::StrategyAdvisory::from_strategy_state(Some(StrategyState::Failed))
+            .expect("Failed must raise an advisory");
+        let out = format_strategy_advisory(&advisory);
+        assert!(out.contains("CRITICAL"), "{out}");
+        assert!(out.contains("Funding exhausted"), "{out}");
+    }
+
+    #[test]
+    fn renders_warning_advisory_for_degraded_strategy() {
+        let advisory = command::StrategyAdvisory::from_strategy_state(Some(StrategyState::Degraded))
+            .expect("Degraded must raise an advisory");
+        let out = format_strategy_advisory(&advisory);
+        assert!(out.contains("WARNING"), "{out}");
+        assert!(!out.contains("CRITICAL"), "{out}");
     }
 }

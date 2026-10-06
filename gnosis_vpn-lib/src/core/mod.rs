@@ -1996,6 +1996,7 @@ impl Core {
             connected,
             disconnecting,
             probe: self.probe.as_ref().map(Probe::view),
+            strategy_advisory: command::StrategyAdvisory::from_strategy_state(self.current_strategy_state()),
         }
     }
 
