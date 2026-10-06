@@ -105,6 +105,8 @@ pub struct Core {
     capacity_reconciler: balance::CapacityReconciler,
     balances: Option<balance::Balances>,
     strategy_handle: Option<AbortHandle>,
+    /// Read handle to the strategy reactor's health, paired with `strategy_handle`.
+    strategy_state: Option<edgli::StrategyStateHandle>,
     route_healths: HashMap<String, RouteHealth>,
     /// The one long-lived probe session; connections register over it.
     probe: Option<Probe>,
@@ -235,6 +237,7 @@ impl Core {
             capacity_reconciler: balance::CapacityReconciler::default(),
             balances: None,
             strategy_handle: None,
+            strategy_state: None,
             ongoing_disconnections: Vec::new(),
             pending_unregisters: Vec::new(),
             route_healths,
@@ -297,6 +300,7 @@ impl Core {
                 if let Some(hopr) = self.hopr.clone() {
                     let shutdown_tracker = TaskTracker::new();
                     if let Some(handle) = self.strategy_handle.take() {
+                        self.strategy_state = None;
                         shutdown_tracker.spawn(async move {
                             tracing::debug!("aborting strategy task");
                             handle.abort();
@@ -497,9 +501,12 @@ impl Core {
                             (Some(hopr), Some(balances)) => {
                                 let funding_status =
                                     match (&self.ideal_balance_recommendation, &self.capacity_allocations) {
-                                        (Some(ideal), Some(allocs)) => {
-                                            Some(balance::to_funding_status(*ideal, allocs, balances.node_xdai))
-                                        }
+                                        (Some(ideal), Some(allocs)) => Some(balance::to_funding_status(
+                                            *ideal,
+                                            allocs,
+                                            balances.node_xdai,
+                                            self.current_strategy_state(),
+                                        )),
                                         _ => None,
                                     };
                                 Ok(command::BalanceResponse::build(
@@ -1876,6 +1883,12 @@ impl Core {
     }
 
     /// Snapshot of everything `Command::Status` reports.
+    /// The strategy reactor's current health verdict as the serde-friendly mirror,
+    /// or `None` while no reactor is running.
+    fn current_strategy_state(&self) -> Option<balance::StrategyState> {
+        self.strategy_state.as_ref().map(|h| h.state().into())
+    }
+
     fn build_status(&self) -> command::StatusResponse {
         let runmode = match self.phase.clone() {
             Phase::Initial { last_error } => RunMode::Init { last_error },
@@ -1928,9 +1941,12 @@ impl Core {
                     &self.capacity_allocations,
                     &self.balances,
                 ) {
-                    (Some(ideal), Some(allocs), Some(bals)) => {
-                        Some(balance::to_funding_status(*ideal, allocs, bals.node_xdai))
-                    }
+                    (Some(ideal), Some(allocs), Some(bals)) => Some(balance::to_funding_status(
+                        *ideal,
+                        allocs,
+                        bals.node_xdai,
+                        self.current_strategy_state(),
+                    )),
                     _ => None,
                 };
                 RunMode::running(self.hopr.as_ref().map(|h| h.status()), funding_status)
@@ -2139,9 +2155,10 @@ impl Core {
         }
         let Some(edgli) = self.hopr.as_ref() else { return };
         match edgli.start_telemetry_reactor(self.config.strategy.clone().into()).await {
-            Ok(strategy_process) => {
+            Ok(reactor) => {
                 tracing::info!("started edge node telemetry reactor");
-                self.strategy_handle = Some(strategy_process);
+                self.strategy_handle = Some(reactor.abort_handle);
+                self.strategy_state = Some(reactor.strategy_state);
             }
             Err(err) => {
                 tracing::error!(?err, "failed to start edge node telemetry reactor - retrying in 10s");
