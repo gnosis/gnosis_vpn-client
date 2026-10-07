@@ -853,7 +853,7 @@ impl Display for RunMode {
                     Some(status) => write!(f, " - traffic: {}, gas: {}", status.traffic, status.gas)?,
                 }
                 if let ChannelMaintenance::Unavailable { since } = channel_maintenance {
-                    write!(f, ", channels: down {}", log_output::elapsed(since))?;
+                    write!(f, ", channel maintenance: unavailable {}", log_output::elapsed(since))?;
                 }
                 Ok(())
             }
@@ -1307,7 +1307,7 @@ mod tests {
         );
 
         let shown = RunMode::running(None, None, down).to_string();
-        assert!(shown.contains("channels: down"), "{shown}");
+        assert!(shown.contains("channel maintenance: unavailable"), "{shown}");
         let quiet = RunMode::running(None, None, ChannelMaintenance::Ok).to_string();
         assert!(!quiet.contains("channels"), "{quiet}");
     }
