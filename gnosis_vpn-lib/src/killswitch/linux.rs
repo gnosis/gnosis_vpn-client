@@ -83,9 +83,14 @@ impl Firewall {
     }
 
     /// Apply killswitch policy: block everything except `allowed_ips` and infrastructure.
-    /// `interface` is the resolved WireGuard interface name (e.g. "wg0_gnosisvpn" or "utun8").
+    /// `interface` is the resolved WireGuard interface name (e.g. "wg0_gnosisvpn"), None before the tunnel exists.
     /// When `lan_lockdown` is false, private LAN ranges are also let through.
-    pub fn apply_policy(&mut self, interface: &str, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
+    pub fn apply_policy(
+        &mut self,
+        interface: Option<&str>,
+        allowed_ips: &[IpAddr],
+        lan_lockdown: bool,
+    ) -> Result<(), Error> {
         let table = Table::new(TABLE_NAME, ProtoFamily::Inet);
         let batch = PolicyBatch::new(&table).finalize(interface, allowed_ips, lan_lockdown);
         send_batch(&batch)
@@ -94,7 +99,12 @@ impl Firewall {
     /// Re-assert an already applied policy (e.g. after a network change).
     /// On Linux applying is an atomic table replace with no side effects on
     /// existing connections, so this is identical to `apply_policy`.
-    pub fn reapply_policy(&mut self, interface: &str, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
+    pub fn reapply_policy(
+        &mut self,
+        interface: Option<&str>,
+        allowed_ips: &[IpAddr],
+        lan_lockdown: bool,
+    ) -> Result<(), Error> {
         self.apply_policy(interface, allowed_ips, lan_lockdown)
     }
 
@@ -154,11 +164,13 @@ impl<'a> PolicyBatch<'a> {
         }
     }
 
-    fn finalize(mut self, interface: &str, allowed_ips: &[IpAddr], lan_lockdown: bool) -> FinalizedBatch {
+    fn finalize(mut self, interface: Option<&str>, allowed_ips: &[IpAddr], lan_lockdown: bool) -> FinalizedBatch {
         self.add_loopback_rules();
         self.add_dhcp_client_rules();
         self.add_ndp_rules();
-        self.add_tunnel_rules(interface);
+        if let Some(interface) = interface {
+            self.add_tunnel_rules(interface);
+        }
         for &ip in allowed_ips {
             self.add_allowed_ip_rules(ip);
         }
