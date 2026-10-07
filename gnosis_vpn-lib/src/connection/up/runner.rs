@@ -108,7 +108,18 @@ impl Runner {
         // 1. the blokli address root pinned at startup; the killswitch must exempt exactly that one
         let blokli_ip = self.worker_params.blokli_ip();
 
-        // 2. generate wg keys - or keep the previous ones so the exit returns the same address
+        // 2. gather ips of all announced peers
+        let _ = results_sender.send(progress(Progress::PeerIps)).await;
+        let mut peer_ips = gather_peer_ips(&self.hopr).await?;
+        // blokli must be in the initial snapshot so it becomes part of the permanent
+        // firewall floor and stays reachable for the duration of the connection.
+        peer_ips.push(blokli_ip);
+
+        // 3. arm the killswitch first so leaks stop as the attempt starts; the tunnel is attached at step 9
+        let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
+        request_killswitch_lockdown(peer_ips.clone(), None, &results_sender).await?;
+
+        // 4. generate wg keys - or keep the previous ones so the exit returns the same address
         let _ = results_sender.send(progress(Progress::GenerateWg)).await;
         let wg = match &self.prev_conn.resume {
             Some(resume) => {
@@ -121,16 +132,16 @@ impl Runner {
 
         let _ = results_sender.send(progress(Progress::WgGenerated(wg.clone()))).await;
 
-        // 3. register wg public key over the probe's bridge session
+        // 5. register wg public key over the probe's bridge session
         let _ = results_sender.send(progress(Progress::RegisterWg)).await;
         let registration = register(&self.options, &self.bridge_session, public_key, &results_sender).await?;
 
-        // 4. signal ping phase (carries registration)
+        // 6. signal ping phase (carries registration)
         let _ = results_sender
             .send(progress(Progress::OpenPing(registration.clone())))
             .await;
 
-        // 5. open the wg session (also carries the in-tunnel verification ping). The
+        // 7. open the wg session (also carries the in-tunnel verification ping). The
         //    raw session is spliced directly into the pump - no local listener and no
         //    loopback hop.
         let ping_surb = surb_config_for(&self.options.surb_balancing.ping)?;
@@ -146,14 +157,7 @@ impl Runner {
             .send(progress(Progress::SessionConfigurator(configurator.clone())))
             .await;
 
-        // 6. gather ips of all announced peers
-        let _ = results_sender.send(progress(Progress::PeerIps)).await;
-        let mut peer_ips = gather_peer_ips(&self.hopr).await?;
-        // blokli must be in the initial snapshot so it becomes part of the permanent
-        // firewall floor and stays reachable for the duration of the connection.
-        peer_ips.push(blokli_ip);
-
-        // 7. set up the NepTUN data plane — root provisions the TUN device + routing
+        // 8. set up the NepTUN data plane — root provisions the TUN device + routing
         //    and returns the resolved interface name; the worker then receives the
         //    TUN fd out-of-band and starts the pump. The pump's network side is the
         //    spliced session itself, driven directly by the WireGuard engine.
@@ -168,15 +172,14 @@ impl Runner {
         let net_rx = wg_tunnel::SessionReceiver::new(read_half);
         self.spawn_pump_task(engine, net_tx, net_rx, (tun_writer, tun_reader), &results_sender);
 
-        // 8. activate killswitch now that the interface name is known
-        let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
-        request_killswitch_lockdown(peer_ips, interface, &results_sender).await?;
+        // 9. let tunnel traffic through the already active killswitch
+        request_killswitch_lockdown(peer_ips, Some(interface), &results_sender).await?;
 
-        // 9. verify tunnel with ping — give it some leeway with 5 retries
+        // 10. verify tunnel with ping — give it some leeway with 5 retries
         let _ = results_sender.send(progress(Progress::Ping)).await;
         let round_trip_time = request_ping(&self.options.ping_options, 5, &results_sender).await?;
 
-        // 10. adjust to main session
+        // 11. adjust to main session
         let _ = results_sender
             .send(progress(Progress::AdjustToMain(round_trip_time)))
             .await;
@@ -281,7 +284,7 @@ async fn open_spliced_wg_session(
 
 async fn request_killswitch_lockdown(
     peer_ips: Vec<Ipv4Addr>,
-    interface: String,
+    interface: Option<String>,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<(), Error> {
     let (tx, rx) = oneshot::channel();
