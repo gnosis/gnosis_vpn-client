@@ -53,6 +53,9 @@ pub struct FundingStatus {
     /// xDAI still needed to reach the ideal recommendation; `None` while `gas` is `Good`.
     #[serde(with = "serde_utils::opt_balance")]
     pub xdai_deficit: Option<Balance<XDai>>,
+    /// wxHOPR the Safe lacks for the next top-up pass over open channels; `None` when covered.
+    #[serde(default, with = "serde_utils::opt_balance")]
+    pub refill_shortfall: Option<Balance<WxHOPR>>,
 }
 
 impl Display for FundingLevel {
@@ -346,6 +349,9 @@ pub struct BalanceRecommendation {
     /// Maximum xDAI fee per transaction (gas).
     #[serde(with = "serde_utils::balance")]
     pub xdai_fee_per_tx: Balance<XDai>,
+    /// wxHOPR the next top-up pass over open channels will try to spend; not part of `wxhopr`.
+    #[serde(default, with = "serde_utils::balance")]
+    pub topup_headroom: Balance<WxHOPR>,
 }
 
 impl From<edgli::strategy::BalanceRecommendation> for BalanceRecommendation {
@@ -357,6 +363,7 @@ impl From<edgli::strategy::BalanceRecommendation> for BalanceRecommendation {
             fee_to_start: rec.fee_to_start,
             txs_to_start: rec.txs_to_start,
             xdai_fee_per_tx: rec.xdai_fee_per_tx,
+            topup_headroom: rec.topup_headroom,
         }
     }
 }
@@ -406,6 +413,7 @@ pub fn to_funding_status(
     ideal: BalanceRecommendation,
     capacity_allocations: &CapacityAllocations,
     node_xdai: Balance<XDai>,
+    safe_wxhopr: Balance<WxHOPR>,
 ) -> FundingStatus {
     let peer_stake = capacity_allocations
         .peer_allocations
@@ -421,12 +429,21 @@ pub fn to_funding_status(
         .sum();
     let total_bytes = capacity_allocations.node.byte_capacity + capacity_allocations.safe.byte_capacity + peer_bytes;
 
-    let traffic = if total_bytes <= TRAFFIC_EMPTY_MAX_BYTES {
+    let pooled_traffic = if total_bytes <= TRAFFIC_EMPTY_MAX_BYTES {
         FundingLevel::Empty
     } else if total_bytes <= TRAFFIC_LOW_MAX_BYTES {
         FundingLevel::Low
     } else {
         FundingLevel::Good
+    };
+
+    // What the next fund pass will try to spend minus what the Safe holds; `-` saturates at zero.
+    let refill_shortfall = Some(ideal.topup_headroom - safe_wxhopr).filter(|d| !d.is_zero());
+    // Only lowers: a pooled Good hides a Safe that can no longer refill its channels.
+    let traffic = if pooled_traffic == FundingLevel::Good && refill_shortfall.is_some() {
+        FundingLevel::Low
+    } else {
+        pooled_traffic
     };
 
     let xdai_empty_below = Balance::<XDai>::from(XDAI_EMPTY_BELOW_WEI);
@@ -453,6 +470,7 @@ pub fn to_funding_status(
         gas,
         wxhopr_deficit,
         xdai_deficit,
+        refill_shortfall,
     }
 }
 
@@ -468,6 +486,7 @@ mod tests {
             fee_to_start: Balance::<WxHOPR>::zero(),
             txs_to_start: 0,
             xdai_fee_per_tx: Balance::<XDai>::from(xdai),
+            topup_headroom: Balance::<WxHOPR>::zero(),
         }
     }
 
@@ -494,7 +513,12 @@ mod tests {
 
     #[test]
     fn traffic_empty_when_no_capacity_anywhere() {
-        let status = to_funding_status(ideal(0, 0), &CapacityAllocations::default(), Balance::<XDai>::zero());
+        let status = to_funding_status(
+            ideal(0, 0),
+            &CapacityAllocations::default(),
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
+        );
         assert_eq!(status.traffic, FundingLevel::Empty);
     }
 
@@ -506,14 +530,24 @@ mod tests {
             capacity(0, 320 * MB),
             capacity(0, 320 * MB),
         );
-        let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero());
+        let status = to_funding_status(
+            ideal(0, 0),
+            &allocations,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
+        );
         assert_eq!(status.traffic, FundingLevel::Low);
     }
 
     #[test]
     fn traffic_empty_up_to_768mb_inclusive() {
         let allocations = allocs(None, capacity(0, 768 * MB), Capacity::default());
-        let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero());
+        let status = to_funding_status(
+            ideal(0, 0),
+            &allocations,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
+        );
         assert_eq!(status.traffic, FundingLevel::Empty);
     }
 
@@ -521,7 +555,12 @@ mod tests {
     fn traffic_low_between_thresholds_up_to_1536mb_inclusive() {
         for bytes in [768 * MB + 1, 1536 * MB] {
             let allocations = allocs(None, capacity(0, bytes), Capacity::default());
-            let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero());
+            let status = to_funding_status(
+                ideal(0, 0),
+                &allocations,
+                Balance::<XDai>::zero(),
+                Balance::<WxHOPR>::zero(),
+            );
             assert_eq!(status.traffic, FundingLevel::Low);
         }
     }
@@ -530,7 +569,12 @@ mod tests {
     fn traffic_good_above_1536mb() {
         // unswept EOA wxHOPR alone counts toward traffic.
         let allocations = allocs(None, capacity(0, 1536 * MB + 1), Capacity::default());
-        let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero());
+        let status = to_funding_status(
+            ideal(0, 0),
+            &allocations,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
+        );
         assert_eq!(status.traffic, FundingLevel::Good);
     }
 
@@ -540,6 +584,7 @@ mod tests {
             ideal(0, 0),
             &CapacityAllocations::default(),
             Balance::<XDai>::from(1_000_000_000_000_000_u64), // 0.001 xDAI < 0.0015 threshold
+            Balance::<WxHOPR>::zero(),
         );
         assert_eq!(status.gas, FundingLevel::Empty);
     }
@@ -550,6 +595,7 @@ mod tests {
             ideal(0, 0),
             &CapacityAllocations::default(),
             Balance::<XDai>::from(2_000_000_000_000_000_u64), // 0.002 xDAI
+            Balance::<WxHOPR>::zero(),
         );
         assert_eq!(status.gas, FundingLevel::Low);
     }
@@ -560,6 +606,7 @@ mod tests {
             ideal(0, 0),
             &CapacityAllocations::default(),
             Balance::<XDai>::from(3_500_000_000_000_000_u64), // 0.0035 xDAI, at the boundary
+            Balance::<WxHOPR>::zero(),
         );
         assert_eq!(status.gas, FundingLevel::Good);
     }
@@ -589,7 +636,12 @@ mod tests {
     #[test]
     fn wxhopr_deficit_none_when_traffic_good() {
         let allocations = allocs(None, capacity(1_000, 5 * GB), Capacity::default());
-        let status = to_funding_status(ideal(100, 0), &allocations, Balance::<XDai>::zero());
+        let status = to_funding_status(
+            ideal(100, 0),
+            &allocations,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
+        );
         assert_eq!(status.traffic, FundingLevel::Good);
         assert_eq!(status.wxhopr_deficit, None);
     }
@@ -597,7 +649,12 @@ mod tests {
     #[test]
     fn wxhopr_deficit_reported_when_traffic_not_good() {
         let allocations = allocs(None, capacity(30, 0), Capacity::default());
-        let status = to_funding_status(ideal(100, 0), &allocations, Balance::<XDai>::zero());
+        let status = to_funding_status(
+            ideal(100, 0),
+            &allocations,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
+        );
         assert_eq!(status.traffic, FundingLevel::Empty);
         assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(70u64)));
     }
@@ -608,6 +665,7 @@ mod tests {
             ideal(0, 100),
             &CapacityAllocations::default(),
             Balance::<XDai>::from(3_500_000_000_000_000_u64),
+            Balance::<WxHOPR>::zero(),
         );
         assert_eq!(status.gas, FundingLevel::Good);
         assert_eq!(status.xdai_deficit, None);
@@ -619,6 +677,7 @@ mod tests {
             ideal(0, 1_000_000_000_000_000_000_u64), // 1 xDAI ideal
             &CapacityAllocations::default(),
             Balance::<XDai>::from(1_000_000_000_000_000_u64), // 0.001 xDAI on hand
+            Balance::<WxHOPR>::zero(),
         );
         assert_eq!(status.gas, FundingLevel::Empty);
         assert_eq!(
@@ -630,7 +689,12 @@ mod tests {
     #[test]
     fn xdai_deficit_reported_even_when_ideal_is_below_low_threshold() {
         let node_xdai = Balance::<XDai>::from(2_000_000_000_000_000_u64); // 0.002 xDAI, in the Low band
-        let status = to_funding_status(ideal(0, 0), &CapacityAllocations::default(), node_xdai);
+        let status = to_funding_status(
+            ideal(0, 0),
+            &CapacityAllocations::default(),
+            node_xdai,
+            Balance::<WxHOPR>::zero(),
+        );
         assert_eq!(status.gas, FundingLevel::Low);
         assert_eq!(
             status.xdai_deficit,
@@ -647,6 +711,7 @@ mod tests {
             ideal(100, 100),
             &allocations,
             Balance::<XDai>::from(3_500_000_000_000_000_u64), // 0.0035 xDAI — at the Good threshold
+            Balance::<WxHOPR>::zero(),
         );
         assert_eq!(status.traffic, FundingLevel::Good);
         assert_eq!(status.gas, FundingLevel::Good);
@@ -821,5 +886,71 @@ mod tests {
         // correction back to 200 is masked until expiry (documented trade-off), never below 200
         let out = r.reconcile(allocs(None, Capacity::default(), cap10(200)));
         assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(300u64));
+    }
+
+    // 1 wxHOPR in wei, for the refill-shortfall fixtures below.
+    const WXHOPR: u64 = 1_000_000_000_000_000_000;
+
+    fn ideal_with_headroom(wxhopr: u64) -> BalanceRecommendation {
+        BalanceRecommendation {
+            topup_headroom: Balance::<WxHOPR>::from(wxhopr * WXHOPR),
+            ..ideal(0, 0)
+        }
+    }
+
+    #[test]
+    fn refill_shortfall_none_when_the_safe_covers_the_topups() {
+        let allocations = allocs(None, capacity(0, 2 * GB), Capacity::default());
+        let status = to_funding_status(
+            ideal_with_headroom(7),
+            &allocations,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::from(7 * WXHOPR),
+        );
+        assert_eq!(status.traffic, FundingLevel::Good);
+        assert_eq!(status.refill_shortfall, None);
+    }
+
+    #[test]
+    fn refill_shortfall_caps_good_at_low_and_reports_the_gap() {
+        // The pool reads Good, but the Safe holds 2 of the 7 wxHOPR the next fund pass wants.
+        let allocations = allocs(None, capacity(0, 2 * GB), Capacity::default());
+        let status = to_funding_status(
+            ideal_with_headroom(7),
+            &allocations,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::from(2 * WXHOPR),
+        );
+        assert_eq!(status.traffic, FundingLevel::Low);
+        assert_eq!(status.refill_shortfall, Some(Balance::<WxHOPR>::from(5 * WXHOPR)));
+    }
+
+    #[test]
+    fn refill_shortfall_only_lowers_never_raises() {
+        let status = to_funding_status(
+            ideal_with_headroom(1),
+            &CapacityAllocations::default(),
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
+        );
+        assert_eq!(status.traffic, FundingLevel::Empty);
+        assert_eq!(status.refill_shortfall, Some(Balance::<WxHOPR>::from(WXHOPR)));
+    }
+
+    #[test]
+    fn funding_status_deserializes_without_refill_shortfall() {
+        // A payload predating the field must still load, leaving it None.
+        let old = r#"{"traffic":"Good","gas":"Low","wxhopr_deficit":null,"xdai_deficit":null}"#;
+        let status: FundingStatus = serde_json::from_str(old).expect("old payload must deserialize");
+        assert_eq!(status.traffic, FundingLevel::Good);
+        assert_eq!(status.refill_shortfall, None);
+    }
+
+    #[test]
+    fn balance_recommendation_deserializes_without_topup_headroom() {
+        let mut json = serde_json::to_value(ideal(1, 1)).unwrap();
+        json.as_object_mut().unwrap().remove("topup_headroom");
+        let rec: BalanceRecommendation = serde_json::from_value(json).expect("old payload must deserialize");
+        assert!(rec.topup_headroom.is_zero());
     }
 }
