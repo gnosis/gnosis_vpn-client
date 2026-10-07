@@ -26,10 +26,17 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.4#0aebe247729574acc449f9debd62fc8d419dbf07" =
       "sha256-oxCxToa9dE2TslRNxvO19qZrOrf9qsUlB4u+ZNwzA28=";
+<<<<<<< HEAD
     "git+https://github.com/hoprnet/edge-client.git?rev=532efe78ec71a6a0cdf84a3507f758df41ee2b37#532efe78ec71a6a0cdf84a3507f758df41ee2b37" =
       "sha256-fvbHVs3qDBM3JsGDSWysOqj4jgLcobb4SOm78Otwo1Q=";
     "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda" =
       "sha256-eWhdldN6vFSOng5AjjP6iYOwhxrDDVLrEoYQlDAhB/k=";
+=======
+    "git+https://github.com/hoprnet/edge-client.git?branch=release/4.1#9808b1767f9c6ad97472797cf7bf63eb58eb7f15" =
+      "sha256-R2c8v3nuKmjnTQvuJkZ1YwvQhKoCxgWjEAMefPPUWyM=";
+    "git+https://github.com/hoprnet/hoprnet?branch=release/4.0#e89c5462d666e41b406f4da204b768a8bff493dd" =
+      "sha256-WEhG11ff9OcncdfGlNw2o4wMbSCcsQiYBl/Vim5pp34=";
+>>>>>>> 953df97 (fix(nix): refresh outputHashes for the edge-client and hoprnet lock revs (#889))
   };
 
   builders = nixLib.mkRustBuilders {
