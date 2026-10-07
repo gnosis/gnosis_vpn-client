@@ -315,11 +315,10 @@ fn format_probability(p: f64) -> String {
 }
 
 fn format_funding_status(status: &balance::FundingStatus) -> String {
-    // A deficit (not yet funded) takes precedence; otherwise surface any top-up
-    // headroom recommended for already-open channels so it isn't shown blank.
-    let wxhopr_note = match (status.wxhopr_deficit, status.topup_headroom) {
+    // A deficit (not yet funded) takes precedence over the Safe's shortfall for the next top-up pass.
+    let wxhopr_note = match (status.wxhopr_deficit, status.refill_shortfall) {
         (Some(deficit), _) => format!(" (top up {deficit} recommended)"),
-        (None, Some(headroom)) => format!(" (top up {headroom})"),
+        (None, Some(shortfall)) => format!(" (top up {shortfall})"),
         (None, None) => String::new(),
     };
     let xdai_deficit = status
@@ -667,27 +666,27 @@ mod tests {
             gas: FundingLevel::Good,
             wxhopr_deficit: None,
             xdai_deficit: None,
-            topup_headroom: None,
+            refill_shortfall: None,
         }
     }
 
     #[test]
-    fn renders_topup_headroom_when_no_deficit() {
+    fn renders_refill_shortfall_when_no_deficit() {
         let status = FundingStatus {
-            topup_headroom: Some(Balance::<WxHOPR>::from(5u64)),
+            refill_shortfall: Some(Balance::<WxHOPR>::from(5u64)),
             ..good()
         };
         let out = format_funding_status(&status);
-        assert!(out.contains("top up"), "headroom must render, not blank: {out}");
+        assert!(out.contains("top up"), "shortfall must render, not blank: {out}");
         // a deficit would read "recommended"; a bare headroom must not.
         assert!(!out.contains("recommended"), "{out}");
     }
 
     #[test]
-    fn deficit_takes_precedence_over_headroom() {
+    fn deficit_takes_precedence_over_refill_shortfall() {
         let status = FundingStatus {
             wxhopr_deficit: Some(Balance::<WxHOPR>::from(9u64)),
-            topup_headroom: Some(Balance::<WxHOPR>::from(5u64)),
+            refill_shortfall: Some(Balance::<WxHOPR>::from(5u64)),
             ..good()
         };
         assert!(format_funding_status(&status).contains("recommended"));

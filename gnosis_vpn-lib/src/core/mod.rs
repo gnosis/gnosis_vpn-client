@@ -504,9 +504,12 @@ impl Core {
                             (Some(hopr), Some(balances)) => {
                                 let funding_status =
                                     match (&self.ideal_balance_recommendation, &self.capacity_allocations) {
-                                        (Some(ideal), Some(allocs)) => {
-                                            Some(balance::to_funding_status(*ideal, allocs, balances.node_xdai))
-                                        }
+                                        (Some(ideal), Some(allocs)) => Some(balance::to_funding_status(
+                                            *ideal,
+                                            allocs,
+                                            balances.node_xdai,
+                                            balances.safe_wxhopr,
+                                        )),
                                         _ => None,
                                     };
                                 Ok(command::BalanceResponse::build(
@@ -1942,9 +1945,12 @@ impl Core {
                     &self.capacity_allocations,
                     &self.balances,
                 ) {
-                    (Some(ideal), Some(allocs), Some(bals)) => {
-                        Some(balance::to_funding_status(*ideal, allocs, bals.node_xdai))
-                    }
+                    (Some(ideal), Some(allocs), Some(bals)) => Some(balance::to_funding_status(
+                        *ideal,
+                        allocs,
+                        bals.node_xdai,
+                        bals.safe_wxhopr,
+                    )),
                     _ => None,
                 };
                 RunMode::running(
