@@ -1173,7 +1173,7 @@ impl DaemonState {
         Ok(())
     }
 
-    async fn apply_killswitch(&self, interface: String, ips: Vec<IpAddr>) -> Result<(), String> {
+    async fn apply_killswitch(&self, interface: Option<String>, ips: Vec<IpAddr>) -> Result<(), String> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = self
             .routing_actor_sender
