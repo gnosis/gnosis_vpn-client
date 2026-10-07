@@ -386,10 +386,6 @@ pub struct BalanceRecommendation {
     /// Maximum xDAI fee per transaction (gas).
     #[serde(with = "serde_utils::balance")]
     pub xdai_fee_per_tx: Balance<XDai>,
-    /// One ticket's face value: the minimum stake a channel needs to be usable.
-    /// A reported figure, not part of `wxhopr`.
-    #[serde(with = "serde_utils::balance")]
-    pub face_value: Balance<WxHOPR>,
     /// wxHOPR recommended to top up already-open channels back toward full strength.
     /// A reported figure, not part of `wxhopr`.
     #[serde(with = "serde_utils::balance")]
@@ -405,7 +401,6 @@ impl From<edgli::strategy::BalanceRecommendation> for BalanceRecommendation {
             fee_to_start: rec.fee_to_start,
             txs_to_start: rec.txs_to_start,
             xdai_fee_per_tx: rec.xdai_fee_per_tx,
-            face_value: rec.face_value,
             topup_headroom: rec.topup_headroom,
         }
     }
@@ -481,14 +476,19 @@ pub fn to_funding_status(
     };
 
     // A peer channel is unusable when its stake can't cover one ticket's face value
-    // (the same boundary the router uses, GNO-805 REQ-8), so a pooled total that reads
-    // `Good` can still hide a starved channel. The weakest-channel check may only lower
-    // the level, never raise it: cap a pooled `Good` at `Low`, leave `Low`/`Empty` alone.
-    let has_unusable_channel = !ideal.face_value.is_zero()
-        && capacity_allocations
-            .peer_allocations
-            .values()
-            .any(|c| c.stake < ideal.face_value);
+    // (the router's usability boundary, GNO-805 REQ-8) -- i.e. it can guarantee zero
+    // tickets. The edge client already resolves that boundary into each channel's
+    // `min_guaranteed_messages` (`floor(stake / face_value)`), so read it off the
+    // per-channel capacity rather than recomputing it from a surfaced face value.
+    // A pooled total that reads `Good` can still hide such a channel; the check only
+    // lowers the level, never raises it: cap a pooled `Good` at `Low`, leave
+    // `Low`/`Empty` alone. No explicit unknown-price guard is needed: when the ticket
+    // price is unknown every channel's `byte_capacity` is zero, so the pool is `Empty`
+    // and this branch (gated on `Good`) never runs.
+    let has_unusable_channel = capacity_allocations
+        .peer_allocations
+        .values()
+        .any(|c| c.min_guaranteed_messages == 0);
     let traffic = if pooled_traffic == FundingLevel::Good && has_unusable_channel {
         FundingLevel::Low
     } else {
@@ -540,24 +540,28 @@ mod tests {
             fee_to_start: Balance::<WxHOPR>::zero(),
             txs_to_start: 0,
             xdai_fee_per_tx: Balance::<XDai>::from(xdai),
-            face_value: Balance::<WxHOPR>::zero(),
             topup_headroom: Balance::<WxHOPR>::zero(),
         }
     }
 
-    /// `ideal` with a non-zero ticket face value, for the weakest-channel checks.
-    fn ideal_with_face_value(wxhopr: u64, face_value: u64) -> BalanceRecommendation {
-        BalanceRecommendation {
-            face_value: Balance::<WxHOPR>::from(face_value),
-            ..ideal(wxhopr, 0)
-        }
-    }
-
+    /// A channel that can guarantee no tickets (`min_guaranteed_messages == 0`) --
+    /// starved, however many bytes it reports. This is the weakest-channel trigger.
     fn capacity(stake: u64, bytes: u64) -> Capacity {
         Capacity {
             stake: Balance::<WxHOPR>::from(stake),
             expected_messages: 0,
             min_guaranteed_messages: 0,
+            byte_capacity: bytes,
+        }
+    }
+
+    /// A channel that can guarantee at least one ticket -- usable, so it never
+    /// trips the weakest-channel check.
+    fn usable_capacity(stake: u64, bytes: u64) -> Capacity {
+        Capacity {
+            stake: Balance::<WxHOPR>::from(stake),
+            expected_messages: 0,
+            min_guaranteed_messages: 1,
             byte_capacity: bytes,
         }
     }
@@ -662,12 +666,10 @@ mod tests {
             txs_to_start: 3,
             xdai_fee_per_tx: Balance::<XDai>::from(100u64),
             xdai_fund_amount: Balance::<XDai>::from(5_000u64),
-            face_value: Balance::<WxHOPR>::from(7u64),
             topup_headroom: Balance::<WxHOPR>::from(42u64),
         };
         let mirrored: BalanceRecommendation = rec.into();
         assert_eq!(mirrored.wxhopr, Balance::<WxHOPR>::from(10_800u64));
-        assert_eq!(mirrored.face_value, Balance::<WxHOPR>::from(7u64));
         assert_eq!(
             mirrored.topup_headroom,
             Balance::<WxHOPR>::from(42u64),
@@ -742,7 +744,12 @@ mod tests {
     #[test]
     fn good_traffic_and_gas_when_well_funded() {
         // 2 GB each on the channel, Safe, and node EOA = 6 GB pooled, above the 5 GB threshold.
-        let allocations = allocs(Some(capacity(100, 2 * GB)), capacity(0, 2 * GB), capacity(100, 2 * GB));
+        // The peer channel is usable, so the weakest-channel check leaves the pooled Good alone.
+        let allocations = allocs(
+            Some(usable_capacity(100, 2 * GB)),
+            capacity(0, 2 * GB),
+            capacity(100, 2 * GB),
+        );
         let status = to_funding_status(
             ideal(100, 100),
             &allocations,
@@ -755,22 +762,15 @@ mod tests {
         assert_eq!(status.xdai_deficit, None);
     }
 
-    // 1 wxHOPR in wei. 55 wxHOPR (the GNO-805 pooled total) overflows u64, but the
-    // traffic level keys off bytes, not stake, so the fixtures only need stake large
-    // enough to compare against a ticket face value.
+    // 1 wxHOPR in wei, for the topup-headroom fixture below.
     const WXHOPR: u64 = 1_000_000_000_000_000_000;
 
     #[test]
     fn weakest_usable_channel_caps_good_pool_at_low() {
-        // Pool of 2 GB (> 1536 MiB) reads Good, but the single channel's stake is one
-        // wei — below a 10-wei face value — so the channel is unusable and traffic is capped.
+        // Pool of 2 GB (> 1536 MiB) reads Good, but the single channel can guarantee no
+        // ticket (min_guaranteed_messages == 0), so it is unusable and traffic is capped.
         let allocations = allocs(Some(capacity(1, 2 * GB)), Capacity::default(), Capacity::default());
-        let status = to_funding_status(
-            ideal_with_face_value(0, 10),
-            &allocations,
-            Balance::<XDai>::zero(),
-            None,
-        );
+        let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero(), None);
         assert_ne!(status.traffic, FundingLevel::Good);
         assert_eq!(status.traffic, FundingLevel::Low);
     }
@@ -778,29 +778,27 @@ mod tests {
     #[test]
     fn gno_805_starved_channel_is_not_falsely_good() {
         // The reported state: ~2640 MiB pooled (pooled logic reads Good) with one channel
-        // staked at 2.5 wxHOPR and a face value of 3 wxHOPR above it. The channel can't
-        // afford a ticket, so the honest verdict is not Good.
-        let weak_channel = capacity(2_500_000_000_000_000_000, 40 * MB); // 2.5 wxHOPR
+        // that can guarantee no ticket. The channel can't relay, so the honest verdict is
+        // not Good.
         let bulk = capacity(0, 2600 * MB);
-        let allocations = allocs(Some(weak_channel), Capacity::default(), bulk);
-        let face_value = 3 * WXHOPR; // above the 2.5 wxHOPR channel stake
-
+        let starved = capacity(2_500_000_000_000_000_000, 40 * MB); // 2.5 wxHOPR, guarantees nothing
         let status = to_funding_status(
-            ideal_with_face_value(0, face_value),
-            &allocations,
+            ideal(0, 0),
+            &allocs(Some(starved), Capacity::default(), bulk),
             Balance::<XDai>::zero(),
             None,
         );
         assert_ne!(
             status.traffic,
             FundingLevel::Good,
-            "a channel below face value is starved"
+            "a channel that can guarantee no ticket is starved"
         );
 
-        // Same pool, but a face value the channel can cover: the pooled Good stands.
+        // Same pool, but the channel can guarantee a ticket: the pooled Good stands.
+        let usable = usable_capacity(2_500_000_000_000_000_000, 40 * MB);
         let ok = to_funding_status(
-            ideal_with_face_value(0, 2 * WXHOPR),
-            &allocations,
+            ideal(0, 0),
+            &allocs(Some(usable), Capacity::default(), bulk),
             Balance::<XDai>::zero(),
             None,
         );
@@ -811,21 +809,18 @@ mod tests {
     fn weakest_channel_check_only_lowers_never_raises() {
         // An unusable channel over an Empty pool must not be lifted to Low.
         let allocations = allocs(Some(capacity(1, 100 * MB)), Capacity::default(), Capacity::default());
-        let status = to_funding_status(
-            ideal_with_face_value(0, 10),
-            &allocations,
-            Balance::<XDai>::zero(),
-            None,
-        );
+        let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero(), None);
         assert_eq!(status.traffic, FundingLevel::Empty);
     }
 
     #[test]
-    fn weakest_channel_check_disabled_when_face_value_zero() {
-        // face_value zero (unknown ticket price) can't declare any channel unusable.
-        let allocations = allocs(Some(capacity(1, 2 * GB)), Capacity::default(), Capacity::default());
-        let status = to_funding_status(ideal_with_face_value(0, 0), &allocations, Balance::<XDai>::zero(), None);
-        assert_eq!(status.traffic, FundingLevel::Good);
+    fn unknown_ticket_price_does_not_spuriously_downgrade() {
+        // With an unknown ticket price the edge client reports zero byte capacity on every
+        // channel, so the pool is Empty and the weakest-channel check -- gated on a Good pool
+        // -- never runs. A channel reporting zero guaranteed tickets can't drag the level down.
+        let allocations = allocs(Some(capacity(1, 0)), Capacity::default(), Capacity::default());
+        let status = to_funding_status(ideal(0, 0), &allocations, Balance::<XDai>::zero(), None);
+        assert_eq!(status.traffic, FundingLevel::Empty);
     }
 
     #[test]
