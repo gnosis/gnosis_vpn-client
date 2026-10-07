@@ -185,6 +185,28 @@ pub struct TunnelPing {
     pub rtt: Option<Duration>,
     pub failures: u32,
     pub last_error: Option<String>,
+<<<<<<< HEAD
+=======
+    /// WireGuard samples recorded since the previous ping result; they judge the next one.
+    samples_since_result: usize,
+}
+
+/// Inbound flat while outbound still grows for this long is a stalled path, whatever a late reply says.
+const INBOUND_STALL: Duration = Duration::from_secs(8);
+
+/// A counter stall this long is reconnected in place; ~12 h of field pings showed no self-healing gap between 16 s and 26 s.
+pub(crate) const COUNTER_STALL_RECONNECT: Duration = Duration::from_secs(20);
+
+/// What the WireGuard counters say about the inbound path over one ping's window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Inbound {
+    /// rx flat while tx grew for at least `INBOUND_STALL`.
+    Stalled,
+    /// rx grew between every pair of samples.
+    Flowing,
+    /// Too few samples, or an idle tunnel: the ping result stands on its own.
+    Unclear,
+>>>>>>> 4da15a1 (feat(connection): reconnect on a 20 s inbound counter stall (release/hoprdv4) (#881))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -268,13 +290,79 @@ impl Up {
         self.tunnel_ping.failures
     }
 
+<<<<<<< HEAD
     /// Record a new WireGuard telemetry sample, evicting the oldest once at
     /// the retention bound.
     pub fn record_wg_stats(&mut self, sample: TunnelStatsSample) {
+=======
+    fn count_ping_failure(&mut self) {
+        self.tunnel_ping.failures += 1;
+        if self.tunnel_ping.failing_since.is_none() {
+            self.tunnel_ping.failing_since = Some(SystemTime::now());
+        }
+    }
+
+    /// Judges the samples since the previous ping result, with the one before them as baseline.
+    fn inbound_over_ping_window(&self) -> Inbound {
+        let window_len = (self.tunnel_ping.samples_since_result + 1).min(self.wg_stats.len());
+        if window_len < 2 {
+            return Inbound::Unclear;
+        }
+        let window: Vec<&TunnelStatsSample> = self.wg_stats.range(self.wg_stats.len() - window_len..).collect();
+        let mut longest_stall = Duration::ZERO;
+        let mut current_stall = Duration::ZERO;
+        let mut rx_grew_every_step = true;
+        for pair in window.windows(2) {
+            let (before, after) = (pair[0], pair[1]);
+            let rx_grew = after.rx_bytes > before.rx_bytes;
+            let tx_grew = after.tx_bytes > before.tx_bytes;
+            rx_grew_every_step &= rx_grew;
+            let stalling = !rx_grew && tx_grew;
+            if stalling {
+                // Measured by timestamps: the pump's sampling cadence stretches under load.
+                current_stall += after.at.duration_since(before.at).unwrap_or(Duration::ZERO);
+                longest_stall = longest_stall.max(current_stall);
+            } else {
+                current_stall = Duration::ZERO;
+            }
+        }
+        if longest_stall >= INBOUND_STALL {
+            Inbound::Stalled
+        } else if rx_grew_every_step {
+            Inbound::Flowing
+        } else {
+            Inbound::Unclear
+        }
+    }
+
+    /// Length of the inbound stall the newest samples are in: rx flat while tx grew, counted back from the latest sample.
+    fn trailing_inbound_stall(&self) -> Duration {
+        let newest_first = self.wg_stats.iter().rev();
+        let mut stall = Duration::ZERO;
+        for (after, before) in newest_first.clone().zip(newest_first.skip(1)) {
+            let rx_grew = after.rx_bytes > before.rx_bytes;
+            let tx_grew = after.tx_bytes > before.tx_bytes;
+            if rx_grew || !tx_grew {
+                break;
+            }
+            stall += after.at.duration_since(before.at).unwrap_or(Duration::ZERO);
+        }
+        stall
+    }
+
+    /// Records a WireGuard telemetry sample (evicting the oldest at the retention bound) and returns how long inbound has been stalled as of it.
+    pub fn record_wg_stats(&mut self, sample: TunnelStatsSample) -> Duration {
+>>>>>>> 4da15a1 (feat(connection): reconnect on a 20 s inbound counter stall (release/hoprdv4) (#881))
         if self.wg_stats.len() >= wg_tunnel::HISTORY_CAPACITY {
             self.wg_stats.pop_front();
         }
         self.wg_stats.push_back(sample);
+<<<<<<< HEAD
+=======
+        self.tunnel_ping.samples_since_result =
+            (self.tunnel_ping.samples_since_result + 1).min(wg_tunnel::HISTORY_CAPACITY);
+        self.trailing_inbound_stall()
+>>>>>>> 4da15a1 (feat(connection): reconnect on a 20 s inbound counter stall (release/hoprdv4) (#881))
     }
 
     pub fn connect_progress(&mut self, evt: Progress) {
@@ -546,3 +634,227 @@ mod surb_ramp_tests {
         );
     }
 }
+<<<<<<< HEAD
+=======
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+    use crate::connection::destination::{Address, HopRouting};
+    use crate::wireguard::KeyPair;
+    use std::collections::HashMap;
+
+    fn up_with_key() -> Up {
+        let destination = Destination::new(
+            "exit".to_string(),
+            Address::from([7u8; 20]),
+            HopRouting::try_from(1).expect("conversion cannot fail"),
+            HashMap::new(),
+        );
+        let mut up = Up::new(destination);
+        up.wireguard = Some(WireGuard::new(
+            wireguard::Config::new(None, None),
+            KeyPair {
+                priv_key: "priv".into(),
+                public_key: "pub".into(),
+            },
+        ));
+        up
+    }
+
+    #[test]
+    fn resume_needs_only_the_key() {
+        let mut up = up_with_key();
+        // Interrupted before the exit answered: the key is still reused.
+        assert!(up.registration.is_none());
+        let resume = Resume::try_from(&up).expect("resumable");
+        assert_eq!(resume.wireguard.key_pair.public_key, "pub");
+
+        up.wireguard = None;
+        assert!(Resume::try_from(&up).is_err());
+    }
+}
+
+#[cfg(test)]
+mod tunnel_ping_tests {
+    use super::*;
+    use crate::connection::destination::{Address, HopRouting};
+    use std::collections::HashMap;
+    use std::time::UNIX_EPOCH;
+
+    const MAX_RTT: Duration = Duration::from_secs(3);
+    const SAMPLE_GAP: Duration = Duration::from_secs(4);
+    const TIMEOUT: Result<Duration, String> = Err(String::new());
+
+    fn up() -> Up {
+        Up::new(Destination::new(
+            "exit".to_string(),
+            Address::from([7u8; 20]),
+            HopRouting::try_from(1).expect("conversion cannot fail"),
+            HashMap::new(),
+        ))
+    }
+
+    /// Records `count` samples one gap apart; tx always grows, rx grows only when `rx_flowing`.
+    fn record_samples(up: &mut Up, count: usize, rx_flowing: bool) -> Duration {
+        let mut stall = Duration::ZERO;
+        for _ in 0..count {
+            let previous = up.wg_stats.back().cloned().unwrap_or_default();
+            stall = up.record_wg_stats(TunnelStatsSample {
+                at: previous.at + SAMPLE_GAP,
+                tx_bytes: previous.tx_bytes + 1_000,
+                rx_bytes: previous.rx_bytes + if rx_flowing { 100_000 } else { 0 },
+                ..Default::default()
+            });
+        }
+        stall
+    }
+
+    fn drive(up: &mut Up, results: &[Result<Duration, String>], rx_flowing: bool) -> Vec<u32> {
+        results
+            .iter()
+            .map(|rtt| {
+                record_samples(up, 3, rx_flowing);
+                up.tunnel_ping_result(rtt.clone(), MAX_RTT)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn buffered_drain_no_longer_resets_the_counter_during_a_stall() {
+        let mut up = up();
+        let sequence = [TIMEOUT, Ok(Duration::from_secs(8)), TIMEOUT, TIMEOUT];
+        assert_eq!(drive(&mut up, &sequence, false), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn timeouts_and_slow_replies_are_excused_while_inbound_flows() {
+        let mut up = up();
+        let sequence = [TIMEOUT, Ok(Duration::from_secs(8)), TIMEOUT, TIMEOUT];
+        assert_eq!(drive(&mut up, &sequence, true), vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn fast_reply_resets_after_failures() {
+        let mut up = up();
+        up.tunnel_ping_result(TIMEOUT, MAX_RTT);
+        assert_eq!(up.tunnel_ping_result(TIMEOUT, MAX_RTT), 2);
+        assert_eq!(up.tunnel_ping_result(Ok(Duration::from_millis(100)), MAX_RTT), 0);
+        assert_eq!(up.tunnel_ping.rtt, Some(Duration::from_millis(100)));
+        assert!(up.tunnel_ping.last_error.is_none());
+    }
+
+    #[test]
+    fn slow_reply_with_inbound_flowing_leaves_the_counter_alone() {
+        let mut up = up();
+        up.tunnel_ping_result(TIMEOUT, MAX_RTT);
+        up.tunnel_ping_result(TIMEOUT, MAX_RTT);
+        record_samples(&mut up, 3, true);
+        assert_eq!(up.tunnel_ping_result(Ok(Duration::from_secs(5)), MAX_RTT), 2);
+        assert_eq!(up.tunnel_ping.rtt, Some(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn without_samples_the_ping_alone_decides() {
+        let mut up = up();
+        assert_eq!(up.tunnel_ping_result(TIMEOUT, MAX_RTT), 1);
+        assert_eq!(up.tunnel_ping_result(Ok(Duration::from_secs(8)), MAX_RTT), 1);
+    }
+
+    #[test]
+    fn a_window_is_judged_only_once() {
+        let mut up = up();
+        record_samples(&mut up, 3, true);
+        up.tunnel_ping_result(TIMEOUT, MAX_RTT);
+        // The next result has no samples of its own: the earlier flow may not excuse it.
+        assert_eq!(up.tunnel_ping_result(TIMEOUT, MAX_RTT), 1);
+    }
+
+    #[test]
+    fn stall_survives_a_late_burst() {
+        let mut up = up();
+        record_samples(&mut up, 3, false);
+        record_samples(&mut up, 1, true);
+        assert_eq!(up.inbound_over_ping_window(), Inbound::Stalled);
+    }
+
+    #[test]
+    fn counter_stall_counts_from_the_last_flowing_sample_and_resets() {
+        let mut up = up();
+        assert_eq!(record_samples(&mut up, 2, true), Duration::ZERO);
+        let stall = record_samples(&mut up, 4, false);
+        assert_eq!(stall, SAMPLE_GAP * 4);
+        assert!(stall < COUNTER_STALL_RECONNECT);
+        assert!(record_samples(&mut up, 1, false) >= COUNTER_STALL_RECONNECT);
+        assert_eq!(record_samples(&mut up, 1, true), Duration::ZERO);
+    }
+
+    #[test]
+    fn idle_tunnel_never_counts_as_a_counter_stall() {
+        let mut up = up();
+        for n in 1..=6u64 {
+            let stall = up.record_wg_stats(TunnelStatsSample {
+                at: UNIX_EPOCH + SAMPLE_GAP * n as u32,
+                tx_bytes: 500,
+                rx_bytes: 500,
+                ..Default::default()
+            });
+            assert_eq!(stall, Duration::ZERO);
+        }
+    }
+
+    #[test]
+    fn idle_tunnel_is_neither_stalled_nor_flowing() {
+        let mut up = up();
+        for n in 1..=4u64 {
+            up.record_wg_stats(TunnelStatsSample {
+                at: UNIX_EPOCH + SAMPLE_GAP * n as u32,
+                tx_bytes: 500,
+                rx_bytes: 500,
+                ..Default::default()
+            });
+        }
+        assert_eq!(up.inbound_over_ping_window(), Inbound::Unclear);
+        assert_eq!(up.tunnel_ping_result(TIMEOUT, MAX_RTT), 1);
+        record_samples(&mut up, 0, false);
+        assert_eq!(up.tunnel_ping_result(Ok(Duration::from_secs(8)), MAX_RTT), 1);
+    }
+
+    #[test]
+    fn stall_is_measured_by_timestamps() {
+        let mut up = up();
+        // One flat gap of 4 s is not a stall; the same bytes 8 s apart are.
+        record_samples(&mut up, 2, false);
+        assert_eq!(up.inbound_over_ping_window(), Inbound::Unclear);
+        let last = up.wg_stats.back().cloned().expect("sample");
+        up.record_wg_stats(TunnelStatsSample {
+            at: last.at + SAMPLE_GAP,
+            tx_bytes: last.tx_bytes + 1,
+            ..last
+        });
+        assert_eq!(up.inbound_over_ping_window(), Inbound::Stalled);
+    }
+
+    #[test]
+    fn failing_since_marks_the_first_counted_failure_until_a_fast_reply() {
+        let mut up = up();
+        assert!(up.tunnel_ping.failing_since.is_none());
+        up.tunnel_ping_result(TIMEOUT, MAX_RTT);
+        let started = up
+            .tunnel_ping
+            .failing_since
+            .expect("first counted failure starts the stall");
+        up.tunnel_ping_result(TIMEOUT, MAX_RTT);
+        assert_eq!(up.tunnel_ping.failing_since, Some(started));
+        up.tunnel_ping_result(Ok(Duration::from_millis(100)), MAX_RTT);
+        assert!(up.tunnel_ping.failing_since.is_none());
+    }
+
+    #[test]
+    fn excused_results_do_not_start_a_stall() {
+        let mut up = up();
+        drive(&mut up, &[TIMEOUT, Ok(Duration::from_secs(8))], true);
+        assert!(up.tunnel_ping.failing_since.is_none());
+    }
+}
+>>>>>>> 4da15a1 (feat(connection): reconnect on a 20 s inbound counter stall (release/hoprdv4) (#881))
