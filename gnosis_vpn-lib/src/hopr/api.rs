@@ -18,7 +18,7 @@ use edgli::{
         },
     },
 };
-use futures_util::{StreamExt, future::AbortHandle};
+use futures_util::StreamExt;
 use hopr_utils_session::{
     HopSessionFactory, ListenerId, ListenerJoinHandles, SessionFactory, SessionTargetSpec, create_tcp_client_binding,
     create_udp_client_binding,
@@ -363,12 +363,12 @@ impl Hopr {
             .map_err(|e| HoprError::ExitNodeWatch(e.to_string()))
     }
 
-    #[tracing::instrument(skip(self), level = "debug", ret)]
+    #[tracing::instrument(skip(self), level = "debug")]
     pub async fn start_telemetry_reactor(
         &self,
         sizing: edgli::strategy::IncentiveConfiguration,
         pix: PixConfig,
-    ) -> Result<AbortHandle, HoprError> {
+    ) -> Result<edgli::ReactorHandle, HoprError> {
         let mut cfg = edgli::strategy::default_strategy_cfg(&sizing)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
         match cfg.strategies.first_mut() {
