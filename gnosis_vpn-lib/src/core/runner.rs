@@ -120,6 +120,8 @@ pub(crate) enum Results {
     /// The SURB ramp ticker fired; Core nudges the active session's setpoint toward its target.
     SurbRampTick,
     RetryReactor,
+    /// Periodic read of the strategy reactor's health verdict.
+    StrategySampleTick,
     NerdStatsTicketStats {
         res: command::TicketStatsStatus,
         resp: oneshot::Sender<Response>,
@@ -725,6 +727,7 @@ impl Display for Results {
             },
             Results::Probe { generation, event } => write!(f, "Probe (gen {generation}): {event:?}"),
             Results::RetryReactor => write!(f, "RetryReactor"),
+            Results::StrategySampleTick => write!(f, "StrategySampleTick"),
             Results::NerdStatsTicketStats { .. } => write!(f, "NerdStatsTicketStats"),
             Results::QuickProbe {
                 destination, outcome, ..

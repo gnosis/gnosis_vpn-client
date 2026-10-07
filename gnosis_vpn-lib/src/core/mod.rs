@@ -26,6 +26,7 @@ use crate::route_health::RouteHealth;
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, log_output, ticket_stats, wireguard};
 
+mod channel_maintenance;
 pub(crate) mod runner;
 
 use runner::Results;
@@ -105,6 +106,9 @@ pub struct Core {
     capacity_reconciler: balance::CapacityReconciler,
     balances: Option<balance::Balances>,
     strategy_handle: Option<AbortHandle>,
+    /// Read handle to the strategy reactor's health, paired with `strategy_handle`.
+    strategy_state: Option<edgli::StrategyStateHandle>,
+    channel_maintenance: channel_maintenance::Supervisor,
     route_healths: HashMap<String, RouteHealth>,
     /// The one long-lived probe session; connections register over it.
     probe: Option<Probe>,
@@ -235,6 +239,8 @@ impl Core {
             capacity_reconciler: balance::CapacityReconciler::default(),
             balances: None,
             strategy_handle: None,
+            strategy_state: None,
+            channel_maintenance: channel_maintenance::Supervisor::default(),
             ongoing_disconnections: Vec::new(),
             pending_unregisters: Vec::new(),
             route_healths,
@@ -297,6 +303,7 @@ impl Core {
                 if let Some(hopr) = self.hopr.clone() {
                     let shutdown_tracker = TaskTracker::new();
                     if let Some(handle) = self.strategy_handle.take() {
+                        self.strategy_state = None;
                         shutdown_tracker.spawn(async move {
                             tracing::debug!("aborting strategy task");
                             handle.abort();
@@ -497,9 +504,12 @@ impl Core {
                             (Some(hopr), Some(balances)) => {
                                 let funding_status =
                                     match (&self.ideal_balance_recommendation, &self.capacity_allocations) {
-                                        (Some(ideal), Some(allocs)) => {
-                                            Some(balance::to_funding_status(*ideal, allocs, balances.node_xdai))
-                                        }
+                                        (Some(ideal), Some(allocs)) => Some(balance::to_funding_status(
+                                            *ideal,
+                                            allocs,
+                                            balances.node_xdai,
+                                            balances.safe_wxhopr,
+                                        )),
                                         _ => None,
                                     };
                                 Ok(command::BalanceResponse::build(
@@ -673,6 +683,7 @@ impl Core {
                     self.hopr = Some(Arc::new(hopr));
                     self.spawn_node_wxhopr_withdraw_runner(results_sender, Duration::ZERO);
                     self.try_start_reactor(results_sender).await;
+                    self.spawn_strategy_sample_runner(results_sender, Duration::ZERO);
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
@@ -992,6 +1003,12 @@ impl Core {
 
             Results::RetryReactor => {
                 self.try_start_reactor(results_sender).await;
+            }
+
+            Results::StrategySampleTick => {
+                let sample = self.strategy_state.as_ref().map(|h| h.state());
+                self.channel_maintenance.on_sample(sample, SystemTime::now());
+                self.spawn_strategy_sample_runner(results_sender, channel_maintenance::SAMPLE_INTERVAL);
             }
 
             Results::QuickProbe {
@@ -1928,12 +1945,19 @@ impl Core {
                     &self.capacity_allocations,
                     &self.balances,
                 ) {
-                    (Some(ideal), Some(allocs), Some(bals)) => {
-                        Some(balance::to_funding_status(*ideal, allocs, bals.node_xdai))
-                    }
+                    (Some(ideal), Some(allocs), Some(bals)) => Some(balance::to_funding_status(
+                        *ideal,
+                        allocs,
+                        bals.node_xdai,
+                        bals.safe_wxhopr,
+                    )),
                     _ => None,
                 };
-                RunMode::running(self.hopr.as_ref().map(|h| h.status()), funding_status)
+                RunMode::running(
+                    self.hopr.as_ref().map(|h| h.status()),
+                    funding_status,
+                    self.channel_maintenance.health(),
+                )
             }
             Phase::ShuttingDown => RunMode::Shutdown,
         };
@@ -2139,15 +2163,29 @@ impl Core {
         }
         let Some(edgli) = self.hopr.as_ref() else { return };
         match edgli.start_telemetry_reactor(self.config.strategy.clone().into()).await {
-            Ok(strategy_process) => {
+            Ok(reactor) => {
                 tracing::info!("started edge node telemetry reactor");
-                self.strategy_handle = Some(strategy_process);
+                self.strategy_handle = Some(reactor.abort_handle);
+                self.strategy_state = Some(reactor.strategy_state);
             }
             Err(err) => {
                 tracing::error!(?err, "failed to start edge node telemetry reactor - retrying in 10s");
                 self.spawn_retry_reactor(results_sender, Duration::from_secs(10));
             }
         }
+    }
+
+    fn spawn_strategy_sample_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_on_shutdown.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    let _ = results_sender.send(Results::StrategySampleTick).await;
+                })
+                .await
+        });
     }
 
     fn spawn_retry_reactor(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
