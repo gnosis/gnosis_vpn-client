@@ -2279,6 +2279,7 @@ mod tests {
     use super::*;
     use crate::connection::destination::HopRouting;
     use crate::connection::up::{Phase as UpPhase, Up};
+    use crate::wg_tunnel::TunnelStatsSample;
 
     fn destination(id: &str) -> Destination {
         Destination::new(
@@ -2364,6 +2365,26 @@ mod tests {
         up
     }
 
+    const WG_SAMPLE_GAP: Duration = Duration::from_secs(4);
+
+    /// Feeds `count` samples a gap apart through the real results path; tx always grows, rx only when `rx_flowing`.
+    async fn feed_wg_samples(
+        core: &mut Core,
+        results: &mpsc::Sender<Results>,
+        sample: &mut TunnelStatsSample,
+        count: usize,
+        rx_flowing: bool,
+    ) {
+        for _ in 0..count {
+            sample.at += WG_SAMPLE_GAP;
+            sample.tx_bytes += 1_000;
+            if rx_flowing {
+                sample.rx_bytes += 100_000;
+            }
+            core.on_results(Results::WgStatsSample(sample.clone()), results).await;
+        }
+    }
+
     fn teardown_requested(from_core: &mut mpsc::Receiver<CoreToWorker>) -> bool {
         matches!(
             from_core.try_recv(),
@@ -2388,6 +2409,39 @@ mod tests {
         assert!(matches!(core.phase, Phase::HoprRunning));
         let resume = core.resume.as_ref().expect("key kept");
         assert_eq!(resume.wireguard.key_pair.public_key, "pub");
+    }
+
+    #[tokio::test]
+    async fn a_counter_stall_below_the_threshold_keeps_the_connection() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        core.phase = Phase::Connected(connected_with_key("exit"));
+        let mut sample = TunnelStatsSample::default();
+
+        // the stall is counted back to the last sample rx moved on, so it needs a flowing baseline
+        feed_wg_samples(&mut core, &results, &mut sample, 2, true).await;
+        feed_wg_samples(&mut core, &results, &mut sample, 4, false).await;
+
+        assert!(matches!(core.phase, Phase::Connected(_)));
+        assert!(core.resume.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_counter_stall_at_the_threshold_reconnects_in_place() {
+        let TestCore {
+            mut core,
+            mut from_core,
+            results,
+            ..
+        } = fresh_core().await;
+        core.phase = Phase::Connected(connected_with_key("exit"));
+        let mut sample = TunnelStatsSample::default();
+
+        feed_wg_samples(&mut core, &results, &mut sample, 2, true).await;
+        feed_wg_samples(&mut core, &results, &mut sample, 5, false).await;
+
+        assert!(matches!(core.phase, Phase::HoprRunning));
+        assert!(core.resume.is_some());
+        assert!(!teardown_requested(&mut from_core));
     }
 
     #[tokio::test]
