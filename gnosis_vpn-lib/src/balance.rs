@@ -451,8 +451,9 @@ pub fn to_funding_status(
         .peer_allocations
         .values()
         .any(|c| c.min_guaranteed_messages == 0);
-    // What the next fund pass will try to spend minus what the Safe holds; `-` saturates at zero.
-    let refill_shortfall = Some(ideal.topup_headroom - safe_wxhopr).filter(|d| !d.is_zero());
+    // Safe funds missing channels first (wxhopr_deficit counts it there), only the rest can refill; `-` saturates.
+    let safe_after_missing = safe_wxhopr - ideal.wxhopr;
+    let refill_shortfall = Some(ideal.topup_headroom - safe_after_missing).filter(|d| !d.is_zero());
     let topups_starved = refill_shortfall.is_some();
     let traffic = if pooled_traffic == FundingLevel::Good && (has_unusable_channel || topups_starved) {
         FundingLevel::Low
@@ -865,6 +866,23 @@ mod tests {
         );
         assert_eq!(status.traffic, FundingLevel::Low);
         assert_eq!(status.refill_shortfall, Some(Balance::<WxHOPR>::from(5 * WXHOPR)));
+    }
+
+    #[test]
+    fn refill_shortfall_counts_the_safe_once_across_missing_channels_and_refills() {
+        // The Safe's 7 covers the refills or the missing channels alone, not both.
+        let both = BalanceRecommendation {
+            wxhopr: Balance::<WxHOPR>::from(4 * WXHOPR),
+            ..ideal_with_headroom(7)
+        };
+        let allocations = allocs(None, capacity(0, 2 * GB), Capacity::default());
+        let status = to_funding_status(
+            both,
+            &allocations,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::from(7 * WXHOPR),
+        );
+        assert_eq!(status.refill_shortfall, Some(Balance::<WxHOPR>::from(4 * WXHOPR)));
     }
 
     #[test]
