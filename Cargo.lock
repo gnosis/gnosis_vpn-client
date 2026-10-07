@@ -3003,8 +3003,13 @@ dependencies = [
 
 [[package]]
 name = "edgli"
+<<<<<<< HEAD
 version = "5.0.0"
 source = "git+https://github.com/hoprnet/edge-client.git?rev=532efe78ec71a6a0cdf84a3507f758df41ee2b37#532efe78ec71a6a0cdf84a3507f758df41ee2b37"
+=======
+version = "4.1.1"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=release%2F4.1#9808b1767f9c6ad97472797cf7bf63eb58eb7f15"
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 dependencies = [
  "anyhow",
  "async-signal",
@@ -4268,8 +4273,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-crypto-packet"
+<<<<<<< HEAD
 version = "2.0.0"
 source = "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda"
+=======
+version = "1.4.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#e89c5462d666e41b406f4da204b768a8bff493dd"
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 dependencies = [
  "bimap",
  "const-hex",
@@ -4305,8 +4315,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-lib"
+<<<<<<< HEAD
 version = "5.0.0-rc.4"
 source = "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda"
+=======
+version = "4.0.5"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#e89c5462d666e41b406f4da204b768a8bff493dd"
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -4358,7 +4373,11 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-app"
 version = "1.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda"
+=======
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#e89c5462d666e41b406f4da204b768a8bff493dd"
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 dependencies = [
  "hopr-crypto-packet",
  "hopr-types",
@@ -4370,8 +4389,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-protocol-hopr"
+<<<<<<< HEAD
 version = "6.3.1"
 source = "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda"
+=======
+version = "6.2.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#e89c5462d666e41b406f4da204b768a8bff493dd"
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4423,7 +4447,11 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-session"
 version = "1.5.0"
+<<<<<<< HEAD
 source = "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda"
+=======
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#e89c5462d666e41b406f4da204b768a8bff493dd"
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 dependencies = [
  "aquamarine",
  "asynchronous-codec",
@@ -4453,8 +4481,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-protocol-start"
+<<<<<<< HEAD
 version = "2.0.0"
 source = "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda"
+=======
+version = "1.1.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#e89c5462d666e41b406f4da204b768a8bff493dd"
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 dependencies = [
  "aquamarine",
  "flagset",
@@ -4469,9 +4502,15 @@ dependencies = [
 
 [[package]]
 name = "hopr-strategy"
+<<<<<<< HEAD
 version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d5dd54fec09bedcb66a251397fb6c62feea9ec39f880b772fd3b242de4ab852"
+=======
+version = "0.28.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90ef05e2cb6b2a54fc0178e4a99c80336facb613261a54ca03da1604a011c46f"
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4530,8 +4569,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport"
+<<<<<<< HEAD
 version = "0.50.2"
 source = "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda"
+=======
+version = "0.48.6"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#e89c5462d666e41b406f4da204b768a8bff493dd"
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 dependencies = [
  "ahash",
  "anyhow",
@@ -4577,7 +4621,11 @@ dependencies = [
 [[package]]
 name = "hopr-transport-mixer"
 version = "0.4.1"
+<<<<<<< HEAD
 source = "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda"
+=======
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#e89c5462d666e41b406f4da204b768a8bff493dd"
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 dependencies = [
  "futures",
  "futures-timer",
@@ -4616,7 +4664,11 @@ dependencies = [
 [[package]]
 name = "hopr-transport-probe"
 version = "0.8.0"
+<<<<<<< HEAD
 source = "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda"
+=======
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#e89c5462d666e41b406f4da204b768a8bff493dd"
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4641,8 +4693,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport-session"
+<<<<<<< HEAD
 version = "0.31.0"
 source = "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda"
+=======
+version = "0.30.3"
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#e89c5462d666e41b406f4da204b768a8bff493dd"
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4676,7 +4733,11 @@ dependencies = [
 [[package]]
 name = "hopr-transport-tag-allocator"
 version = "0.1.1"
+<<<<<<< HEAD
 source = "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda"
+=======
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#e89c5462d666e41b406f4da204b768a8bff493dd"
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 dependencies = [
  "hopr-protocol-app",
  "serde",
@@ -4845,7 +4906,11 @@ dependencies = [
 [[package]]
 name = "hopr-utils-session"
 version = "1.2.1"
+<<<<<<< HEAD
 source = "git+https://github.com/hoprnet/hoprnet?branch=master#e63f800de46714897071f103b81d91a6ac4b7dda"
+=======
+source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#e89c5462d666e41b406f4da204b768a8bff493dd"
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 dependencies = [
  "anyhow",
  "async-trait",

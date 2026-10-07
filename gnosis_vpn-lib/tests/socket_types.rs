@@ -5,12 +5,21 @@
 
 use gnosis_vpn_lib::balance::{BalanceRecommendation, Capacity, CapacityAllocations, FundingLevel, FundingStatus};
 use gnosis_vpn_lib::command::{
+<<<<<<< HEAD
     ActiveSession, BalanceResponse, ChannelBalance, ChannelOut, Command, ConnStats, ConnectResponse, ConnectedInfo,
     ConnectingInfo, DestinationState, DisconnectResponse, DisconnectingInfo, FundingToolResponse, HoprInitStatus,
     HoprStatus, Info, InfoResponse, NerdStatsConnection, NerdStatsResponse, ProbeResponse, ProbeView,
     QuickProbeResponse, ReconnectingInfo, Response, RouteHealthView, RunMode, StartClientResponse, StatusResponse,
     StopClientResponse, SurbBalancerSetpoint, SurbStats, TicketStats, TicketStatsStatus, UnprobeResponse,
     WorkerCommand,
+=======
+    ActiveSession, BalanceResponse, ChannelBalance, ChannelMaintenance, ChannelOut, Command, ConnStats,
+    ConnectResponse, ConnectedInfo, ConnectingInfo, DestinationState, DisconnectResponse, DisconnectingInfo,
+    FundingToolResponse, HoprInitStatus, HoprStatus, Info, InfoResponse, NerdStatsConnection, NerdStatsResponse,
+    ProbeResponse, ProbeView, QuickProbeResponse, ReconnectingInfo, Response, RouteHealthView, RunMode,
+    StartClientResponse, StatusResponse, StopClientResponse, SurbBalancerSetpoint, SurbStats, TicketStats,
+    TicketStatsStatus, TunnelStall, UnprobeResponse, WorkerCommand,
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
 };
 use gnosis_vpn_lib::connection::destination::{Address, Destination, HopRouting, Meta};
 use gnosis_vpn_lib::connection::{DownPhase, UpPhase};
@@ -29,6 +38,11 @@ fn assert_types_are_accessible() {
     let _: ConnectingInfo;
     let _: ReconnectingInfo;
     let _: ConnectedInfo;
+<<<<<<< HEAD
+=======
+    let _: TunnelStall;
+    let _: ChannelMaintenance;
+>>>>>>> 0d6a2c7 (fix(balance): flag starved channels, surface headroom and strategy state (GNO-805) (#878))
     let _: DisconnectingInfo;
     let _: DestinationState;
     let _: RunMode;
