@@ -149,15 +149,8 @@ fn pretty_print(resp: &Response) {
             connected,
             disconnecting,
             probe,
-            strategy_advisory,
         }) => {
             let mut str_resp = String::new();
-            // Lead with the funding advisory so a Critical/Warning can't be missed
-            // under the run-mode and connection detail that follow.
-            if let Some(advisory) = strategy_advisory {
-                str_resp.push_str(&format_strategy_advisory(advisory));
-                str_resp.push_str("---\n");
-            }
             str_resp.push_str(&format!("{run_mode}\n"));
             if let Some(id) = target_destination {
                 let is_active = connecting.as_ref().is_some_and(|c| c.destination_id == *id)
@@ -321,14 +314,6 @@ fn format_probability(p: f64) -> String {
     trimmed.trim_end_matches('.').to_string()
 }
 
-fn format_strategy_advisory(advisory: &command::StrategyAdvisory) -> String {
-    let label = match advisory.level {
-        command::AdvisoryLevel::Critical => "CRITICAL",
-        command::AdvisoryLevel::Warning => "WARNING",
-    };
-    format!("[!] {label}: {}\n", advisory.message)
-}
-
 fn format_funding_status(status: &balance::FundingStatus) -> String {
     // A deficit (not yet funded) takes precedence; otherwise surface any top-up
     // headroom recommended for already-open channels so it isn't shown blank.
@@ -341,15 +326,8 @@ fn format_funding_status(status: &balance::FundingStatus) -> String {
         .xdai_deficit
         .map(|d| format!(" (top up {d} recommended)"))
         .unwrap_or_default();
-    // Running is the healthy default and needs no line; only surface trouble.
-    let strategy = match status.strategy_state {
-        Some(state @ (balance::StrategyState::Degraded | balance::StrategyState::Failed)) => {
-            format!("Strategy: {state}\n")
-        }
-        _ => String::new(),
-    };
     format!(
-        "Traffic: {}{wxhopr_note}\nGas: {}{xdai_deficit}\n{strategy}",
+        "Traffic: {}{wxhopr_note}\nGas: {}{xdai_deficit}\n",
         status.traffic, status.gas
     )
 }
@@ -681,7 +659,7 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use balance::{Balance, FundingLevel, FundingStatus, StrategyState, WxHOPR};
+    use balance::{Balance, FundingLevel, FundingStatus, WxHOPR};
 
     fn good() -> FundingStatus {
         FundingStatus {
@@ -690,7 +668,6 @@ mod tests {
             wxhopr_deficit: None,
             xdai_deficit: None,
             topup_headroom: None,
-            strategy_state: None,
         }
     }
 
@@ -714,43 +691,5 @@ mod tests {
             ..good()
         };
         assert!(format_funding_status(&status).contains("recommended"));
-    }
-
-    #[test]
-    fn renders_degraded_strategy_state() {
-        let status = FundingStatus {
-            strategy_state: Some(StrategyState::Degraded),
-            ..good()
-        };
-        assert!(format_funding_status(&status).contains("Degraded"));
-    }
-
-    #[test]
-    fn running_strategy_state_is_not_shown() {
-        let status = FundingStatus {
-            strategy_state: Some(StrategyState::Running),
-            ..good()
-        };
-        assert!(!format_funding_status(&status).contains("Strategy"));
-    }
-
-    #[test]
-    fn renders_critical_advisory_for_failed_strategy() {
-        let advisory = command::StrategyAdvisory::from_strategy_state(Some(StrategyState::Failed))
-            .expect("Failed must raise an advisory");
-        let out = format_strategy_advisory(&advisory);
-        assert!(out.contains("CRITICAL"), "{out}");
-        // Failed means a chain read was unavailable, not funding exhaustion.
-        assert!(out.contains("Channel maintenance stopped"), "{out}");
-        assert!(!out.contains("wxHOPR"), "{out}");
-    }
-
-    #[test]
-    fn renders_warning_advisory_for_degraded_strategy() {
-        let advisory = command::StrategyAdvisory::from_strategy_state(Some(StrategyState::Degraded))
-            .expect("Degraded must raise an advisory");
-        let out = format_strategy_advisory(&advisory);
-        assert!(out.contains("WARNING"), "{out}");
-        assert!(!out.contains("CRITICAL"), "{out}");
     }
 }

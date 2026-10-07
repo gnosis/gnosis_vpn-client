@@ -109,48 +109,6 @@ pub struct StatusResponse {
     pub disconnecting: Vec<DisconnectingInfo>,
     /// The one probe session, if any.
     pub probe: Option<ProbeView>,
-    /// Top-level funding advisory for the user, raised from the strategy reactor's
-    /// verdict so the app can surface it prominently rather than buried in funding
-    /// detail. `None` while the strategy is healthy or unknown; `default` for
-    /// payloads predating the field.
-    #[serde(default)]
-    pub strategy_advisory: Option<StrategyAdvisory>,
-}
-
-/// Severity of a user-facing advisory.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-pub enum AdvisoryLevel {
-    Warning,
-    Critical,
-}
-
-/// A funding advisory for the user, derived from the strategy reactor's state.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct StrategyAdvisory {
-    pub level: AdvisoryLevel,
-    pub message: String,
-}
-
-impl StrategyAdvisory {
-    /// The user-facing advisory for a strategy verdict. `Failed` is critical: the
-    /// channel-lifecycle strategy could not read required on-chain data (the channel
-    /// list, funding inputs, or the peer-address map) and stopped, so channel
-    /// maintenance is not running — a connectivity or node fault, not a funding one.
-    /// `Degraded` is a warning: a maintenance pass ran but fell short (an affordability
-    /// gate, or missing peer data on the close pass). `Running` and unknown raise nothing.
-    pub fn from_strategy_state(state: Option<balance::StrategyState>) -> Option<Self> {
-        match state? {
-            balance::StrategyState::Failed => Some(StrategyAdvisory {
-                level: AdvisoryLevel::Critical,
-                message: "Channel maintenance stopped — the node could not read its on-chain channel state. Check the node's connectivity and logs.".to_string(),
-            }),
-            balance::StrategyState::Degraded => Some(StrategyAdvisory {
-                level: AdvisoryLevel::Warning,
-                message: "Channel maintenance degraded — a maintenance pass fell short. If your Safe is low, add wxHOPR; otherwise check the node's connectivity and logs.".to_string(),
-            }),
-            balance::StrategyState::Running => None,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1449,37 +1407,5 @@ mod tests {
 
         assert!(SurbStats::from_telemetry(telemetry, "unknown").is_none());
         assert!(SurbStats::from_telemetry("", "aabbcc").is_none());
-    }
-
-    #[test]
-    fn strategy_advisory_is_critical_when_strategy_failed() {
-        let advisory = StrategyAdvisory::from_strategy_state(Some(balance::StrategyState::Failed))
-            .expect("Failed must raise an advisory");
-        assert_eq!(advisory.level, AdvisoryLevel::Critical);
-        // Failed means a chain read was unavailable, not funding exhaustion, so the advisory
-        // must point at the node/connectivity rather than tell the user to add funds.
-        assert!(
-            advisory.message.contains("Channel maintenance stopped"),
-            "{}",
-            advisory.message
-        );
-        assert!(!advisory.message.contains("wxHOPR"), "{}", advisory.message);
-    }
-
-    #[test]
-    fn strategy_advisory_is_warning_when_funding_degraded() {
-        let advisory = StrategyAdvisory::from_strategy_state(Some(balance::StrategyState::Degraded))
-            .expect("Degraded must raise an advisory");
-        assert_eq!(advisory.level, AdvisoryLevel::Warning);
-        assert!(advisory.message.contains("degraded"), "{}", advisory.message);
-    }
-
-    #[test]
-    fn strategy_advisory_is_absent_when_running_or_unknown() {
-        assert_eq!(
-            StrategyAdvisory::from_strategy_state(Some(balance::StrategyState::Running)),
-            None
-        );
-        assert_eq!(StrategyAdvisory::from_strategy_state(None), None);
     }
 }

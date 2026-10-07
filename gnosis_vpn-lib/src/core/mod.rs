@@ -501,12 +501,9 @@ impl Core {
                             (Some(hopr), Some(balances)) => {
                                 let funding_status =
                                     match (&self.ideal_balance_recommendation, &self.capacity_allocations) {
-                                        (Some(ideal), Some(allocs)) => Some(balance::to_funding_status(
-                                            *ideal,
-                                            allocs,
-                                            balances.node_xdai,
-                                            self.current_strategy_state(),
-                                        )),
+                                        (Some(ideal), Some(allocs)) => {
+                                            Some(balance::to_funding_status(*ideal, allocs, balances.node_xdai))
+                                        }
                                         _ => None,
                                     };
                                 Ok(command::BalanceResponse::build(
@@ -1883,17 +1880,7 @@ impl Core {
     }
 
     /// Snapshot of everything `Command::Status` reports.
-    /// The strategy reactor's current health verdict as the serde-friendly mirror,
-    /// or `None` while no reactor is running.
-    fn current_strategy_state(&self) -> Option<balance::StrategyState> {
-        self.strategy_state.as_ref().map(|h| h.state().into())
-    }
-
     fn build_status(&self) -> command::StatusResponse {
-        // Snapshot the reactor's state once: the atomic is updated concurrently, so a second
-        // read could disagree with the first and yield a response whose funding status and
-        // advisory reflect different verdicts (e.g. Running beside a critical advisory).
-        let strategy_state = self.current_strategy_state();
         let runmode = match self.phase.clone() {
             Phase::Initial { last_error } => RunMode::Init { last_error },
             Phase::CheckingSafe {
@@ -1945,12 +1932,9 @@ impl Core {
                     &self.capacity_allocations,
                     &self.balances,
                 ) {
-                    (Some(ideal), Some(allocs), Some(bals)) => Some(balance::to_funding_status(
-                        *ideal,
-                        allocs,
-                        bals.node_xdai,
-                        strategy_state,
-                    )),
+                    (Some(ideal), Some(allocs), Some(bals)) => {
+                        Some(balance::to_funding_status(*ideal, allocs, bals.node_xdai))
+                    }
                     _ => None,
                 };
                 RunMode::running(self.hopr.as_ref().map(|h| h.status()), funding_status)
@@ -2000,7 +1984,6 @@ impl Core {
             connected,
             disconnecting,
             probe: self.probe.as_ref().map(Probe::view),
-            strategy_advisory: command::StrategyAdvisory::from_strategy_state(strategy_state),
         }
     }
 

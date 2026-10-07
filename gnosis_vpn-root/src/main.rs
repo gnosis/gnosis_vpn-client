@@ -1022,7 +1022,6 @@ impl DaemonState {
             connected: None,
             disconnecting: vec![],
             probe: None,
-            strategy_advisory: None,
         })
     }
 
