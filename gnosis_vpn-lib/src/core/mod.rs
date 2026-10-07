@@ -1890,6 +1890,10 @@ impl Core {
     }
 
     fn build_status(&self) -> command::StatusResponse {
+        // Snapshot the reactor's state once: the atomic is updated concurrently, so a second
+        // read could disagree with the first and yield a response whose funding status and
+        // advisory reflect different verdicts (e.g. Running beside a critical advisory).
+        let strategy_state = self.current_strategy_state();
         let runmode = match self.phase.clone() {
             Phase::Initial { last_error } => RunMode::Init { last_error },
             Phase::CheckingSafe {
@@ -1945,7 +1949,7 @@ impl Core {
                         *ideal,
                         allocs,
                         bals.node_xdai,
-                        self.current_strategy_state(),
+                        strategy_state,
                     )),
                     _ => None,
                 };
@@ -1996,7 +2000,7 @@ impl Core {
             connected,
             disconnecting,
             probe: self.probe.as_ref().map(Probe::view),
-            strategy_advisory: command::StrategyAdvisory::from_strategy_state(self.current_strategy_state()),
+            strategy_advisory: command::StrategyAdvisory::from_strategy_state(strategy_state),
         }
     }
 

@@ -132,14 +132,17 @@ pub struct StrategyAdvisory {
 }
 
 impl StrategyAdvisory {
-    /// The user-facing advisory for a strategy verdict: `Failed` is critical
-    /// (the Safe is empty and no funding is possible), `Degraded` is a warning
-    /// (a transient skipped funding pass). `Running` and unknown raise nothing.
+    /// The user-facing advisory for a strategy verdict. `Failed` is critical: the
+    /// channel-lifecycle strategy could not read required on-chain data (the channel
+    /// list, funding inputs, or the peer-address map) and stopped, so channel
+    /// maintenance is not running — a connectivity or node fault, not a funding one.
+    /// `Degraded` is a warning: a funding pass ran but fell short (an affordability
+    /// gate or missing peer data). `Running` and unknown raise nothing.
     pub fn from_strategy_state(state: Option<balance::StrategyState>) -> Option<Self> {
         match state? {
             balance::StrategyState::Failed => Some(StrategyAdvisory {
                 level: AdvisoryLevel::Critical,
-                message: "Funding exhausted — the tunnel cannot be sustained. Add wxHOPR to your Safe.".to_string(),
+                message: "Channel maintenance stopped — the node could not read its on-chain channel state. Check the node's connectivity and logs.".to_string(),
             }),
             balance::StrategyState::Degraded => Some(StrategyAdvisory {
                 level: AdvisoryLevel::Warning,
@@ -1449,11 +1452,18 @@ mod tests {
     }
 
     #[test]
-    fn strategy_advisory_is_critical_when_funding_failed() {
+    fn strategy_advisory_is_critical_when_strategy_failed() {
         let advisory = StrategyAdvisory::from_strategy_state(Some(balance::StrategyState::Failed))
             .expect("Failed must raise an advisory");
         assert_eq!(advisory.level, AdvisoryLevel::Critical);
-        assert!(advisory.message.contains("Funding exhausted"), "{}", advisory.message);
+        // Failed means a chain read was unavailable, not funding exhaustion, so the advisory
+        // must point at the node/connectivity rather than tell the user to add funds.
+        assert!(
+            advisory.message.contains("Channel maintenance stopped"),
+            "{}",
+            advisory.message
+        );
+        assert!(!advisory.message.contains("wxHOPR"), "{}", advisory.message);
     }
 
     #[test]
