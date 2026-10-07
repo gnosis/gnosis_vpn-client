@@ -73,9 +73,14 @@ impl Firewall {
     }
 
     /// Apply killswitch policy: block everything except `allowed_ips` and infrastructure.
-    /// `interface` is the resolved WireGuard interface name (e.g. "utun8" on macOS).
+    /// `interface` is the resolved WireGuard interface name (e.g. "utun8"), None before the tunnel exists.
     /// When `lan_lockdown` is false, private LAN ranges are also let through.
-    pub fn apply_policy(&mut self, interface: &str, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
+    pub fn apply_policy(
+        &mut self,
+        interface: Option<&str>,
+        allowed_ips: &[IpAddr],
+        lan_lockdown: bool,
+    ) -> Result<(), Error> {
         self.enable()?;
         self.add_anchor()?;
         self.set_rules(interface, allowed_ips, lan_lockdown)?;
@@ -86,7 +91,12 @@ impl Firewall {
     /// Re-assert an already applied policy (e.g. after a network change).
     /// Unlike `apply_policy` this does not flush PF states: killing established
     /// flows is only needed on first apply, and network events can fire often.
-    pub fn reapply_policy(&mut self, interface: &str, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
+    pub fn reapply_policy(
+        &mut self,
+        interface: Option<&str>,
+        allowed_ips: &[IpAddr],
+        lan_lockdown: bool,
+    ) -> Result<(), Error> {
         self.enable()?;
         self.add_anchor()?;
         self.set_rules(interface, allowed_ips, lan_lockdown)
@@ -121,13 +131,15 @@ impl Firewall {
         Ok(())
     }
 
-    fn set_rules(&mut self, interface: &str, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
+    fn set_rules(&mut self, interface: Option<&str>, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
         let mut rules = vec![];
 
         rules.append(&mut loopback_rules()?);
         rules.append(&mut dhcp_rules()?);
         rules.append(&mut ndp_rules()?);
-        rules.push(tunnel_rule(interface)?);
+        if let Some(interface) = interface {
+            rules.push(tunnel_rule(interface)?);
+        }
         for &ip in allowed_ips {
             rules.append(&mut allowed_ip_rules(ip)?);
         }
