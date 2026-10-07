@@ -37,6 +37,8 @@ pub enum Msg {
         mtu: u32,
         dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
+        /// Real WAN-bound destination the router picks and re-checks the WAN route with.
+        blokli_ip: Ipv4Addr,
         reply: oneshot::Sender<Result<(String, OwnedFd), String>>,
     },
     TeardownRouting {
@@ -114,9 +116,12 @@ impl Actor {
                 mtu,
                 dns,
                 peer_ips,
+                blokli_ip,
                 reply,
             } => {
-                let result = self.setup_routing(interface_address, mtu, dns, peer_ips).await;
+                let result = self
+                    .setup_routing(interface_address, mtu, dns, peer_ips, blokli_ip)
+                    .await;
                 let _ = reply.send(result);
                 None
             }
@@ -213,11 +218,21 @@ impl Actor {
         mtu: u32,
         dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
+        blokli_ip: Ipv4Addr,
     ) -> Result<(String, OwnedFd), String> {
         // ensure clean slate
         self.teardown_routing().await;
 
+<<<<<<< HEAD
         let mut router = match routing::static_router(interface_address, mtu, dns, peer_ips) {
+=======
+        let SetupRequest {
+            interface_address,
+            mtu,
+            dns,
+        } = request.clone();
+        let mut router = match routing::static_router(interface_address, mtu, dns, peer_ips, blokli_ip) {
+>>>>>>> c160f46 (fix(routing): pick the WAN route via the blokli IP instead of 1.1.1.1 (release/hoprdv4) (#880))
             Ok(router) => router,
             Err(error) => {
                 tracing::error!(?error, "failed to build static router");

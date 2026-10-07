@@ -123,7 +123,6 @@ pub struct Core {
     responders: HashMap<u64, Responder>,
     ongoing_disconnections: Vec<connection::down::Down>,
     pending_unregisters: Vec<PendingUnregister>,
-    cached_resolved_blokli_ips: Vec<net::Ipv4Addr>,
     reconnecting_since: Option<SystemTime>,
 }
 
@@ -200,7 +199,6 @@ impl Core {
         let target = target_dest_id;
 
         let (incoming_sender, incoming_receiver) = mpsc::channel(32);
-        let cached_resolved_blokli_ips = worker_params.cached_blokli_ips().to_vec();
         let core = Core {
             // config data
             config,
@@ -244,8 +242,6 @@ impl Core {
             stale_wg_public_key: None,
             next_request_id: 0,
             responders: HashMap::new(),
-            // needed to keep working during enabled killswitch
-            cached_resolved_blokli_ips,
             reconnecting_since: None,
         };
         Ok((core, incoming_sender))
@@ -452,7 +448,11 @@ impl Core {
                     WorkerCommand::Disconnect => {
                         self.target = None;
                         self.reconnecting_since = None;
+<<<<<<< HEAD
                         self.cached_resolved_blokli_ips = Vec::new();
+=======
+                        self.abandon_resume(results_sender).await;
+>>>>>>> c160f46 (fix(routing): pick the WAN route via the blokli IP instead of 1.1.1.1 (release/hoprdv4) (#880))
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
                                 tracing::info!(current = %conn.destination, "disconnecting");
@@ -762,13 +762,6 @@ impl Core {
                 match self.phase.clone() {
                     Phase::Connecting(mut conn) => match evt {
                         connection::up::Event::Progress(e) => {
-                            if let connection::up::Progress::GenerateWg(blokli_ips) = e.as_ref() {
-                                self.cached_resolved_blokli_ips = blokli_ips.clone();
-                                let request = RequestToRoot::CacheBlokliIps {
-                                    ips: blokli_ips.clone(),
-                                };
-                                let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
-                            }
                             conn.connect_progress(*e);
                             self.phase = Phase::Connecting(conn);
                         }
@@ -1854,10 +1847,14 @@ impl Core {
             let conn = connection::up::Up::new(destination.clone());
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
+<<<<<<< HEAD
             let prev_conn = connection::up::runner::PreviousConnection {
                 blokli_ips: self.cached_resolved_blokli_ips.clone(),
                 wg_public_key: prev_public_key,
             };
+=======
+            let prev_conn = connection::up::runner::PreviousConnection { resume };
+>>>>>>> c160f46 (fix(routing): pick the WAN route via the blokli IP instead of 1.1.1.1 (release/hoprdv4) (#880))
             let spec = connection::up::runner::ConnectionSpec {
                 destination: conn.destination.clone(),
                 options: config_connection,
@@ -2473,7 +2470,47 @@ mod tests {
         let before = HashSet::from([live, gone]);
         let after = HashSet::new();
 
+<<<<<<< HEAD
         let dropped = trackers_to_drop(&before, &after, Some(live));
+=======
+    async fn fresh_core() -> TestCore {
+        let state_home = tempfile::tempdir().expect("temp dir");
+        // Service start creates this; the generated pass file lands in it.
+        let pass_dir = identity::pass_file(state_home.path().to_path_buf())
+            .parent()
+            .expect("pass file dir")
+            .to_path_buf();
+        tokio::fs::create_dir_all(pass_dir).await.expect("state home layout");
+        let path = state_home.path().join("config.toml");
+        tokio::fs::write(
+            &path,
+            "version = 6\n\n[destinations.Germany]\naddress = \"0xD9c11f07BfBC1914877d7395459223aFF9Dc2739\"\n",
+        )
+        .await
+        .expect("write config");
+        let config = crate::config::read(&path).await.expect("valid config");
+        let worker_params = crate::worker_params::WorkerParams::new(
+            None,
+            None,
+            crate::worker_params::ConfigFileMode::Manual(path),
+            crate::worker_params::AllowFlags::default(),
+            Some("https://blokli.invalid".parse().expect("valid url")),
+            net::Ipv4Addr::new(203, 0, 113, 7),
+            state_home.path().to_path_buf(),
+        );
+        let (outgoing, from_core) = mpsc::channel(32);
+        let (core, _) = Core::init(config, worker_params, None, outgoing)
+            .await
+            .expect("core init");
+        let (results, _) = mpsc::channel(32);
+        TestCore {
+            core,
+            from_core,
+            results,
+            _state_home: state_home,
+        }
+    }
+>>>>>>> c160f46 (fix(routing): pick the WAN route via the blokli IP instead of 1.1.1.1 (release/hoprdv4) (#880))
 
         assert_eq!(vec![gone], dropped);
     }

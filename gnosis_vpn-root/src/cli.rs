@@ -1,6 +1,7 @@
 use clap::Parser;
 use url::Url;
 
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -103,26 +104,27 @@ pub fn parse() -> Cli {
     Cli::parse()
 }
 
-impl From<&Cli> for WorkerParams {
-    fn from(cli: &Cli) -> Self {
-        let config_mode = match cli.hopr_config_path.clone() {
+impl Cli {
+    /// The worker's view of these arguments plus the blokli address root resolved at startup.
+    pub fn worker_params(&self, blokli_ip: Ipv4Addr) -> WorkerParams {
+        let config_mode = match self.hopr_config_path.clone() {
             Some(path) => worker_params::ConfigFileMode::Manual(path),
             None => worker_params::ConfigFileMode::Generated,
         };
         let allow = worker_params::AllowFlags {
-            insecure: cli.allow_insecure,
-            experimental: cli.allow_experimental,
-            funding_tool_rerun: cli.allow_funding_tool_rerun,
+            insecure: self.allow_insecure,
+            experimental: self.allow_experimental,
+            funding_tool_rerun: self.allow_funding_tool_rerun,
         };
-        let state_home = cli.state_home.clone();
 
         WorkerParams::new(
-            cli.hopr_identity_file.clone(),
-            cli.hopr_identity_pass.clone(),
+            self.hopr_identity_file.clone(),
+            self.hopr_identity_pass.clone(),
             config_mode,
             allow,
-            cli.hopr_blokli_url.clone(),
-            state_home,
+            self.hopr_blokli_url.clone(),
+            blokli_ip,
+            self.state_home.clone(),
         )
     }
 }

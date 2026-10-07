@@ -29,8 +29,6 @@ use super::{Error, Event, Progress, Setback};
 
 /// State carried over from a previous connection attempt.
 pub(crate) struct PreviousConnection {
-    /// Blokli IPs resolved during the previous connection (reused when killswitch blocks DNS).
-    pub blokli_ips: Vec<Ipv4Addr>,
     /// WireGuard public key from the previous connection to unregister during bridge cleanup.
     pub wg_public_key: Option<String>,
 }
@@ -104,6 +102,7 @@ impl Runner {
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
+<<<<<<< HEAD
         // 1. determine the blokli ips to exempt from the killswitch, which blocks DNS while up
         let _ = results_sender.send(progress(Progress::ResolveBlokliIps)).await;
         let blokli_url = self.worker_params.blokli_url();
@@ -120,6 +119,20 @@ impl Runner {
             .send(progress(Progress::GenerateWg(blokli_ips.clone())))
             .await;
         let wg = WireGuard::from_config(self.wg_config.clone()).await?;
+=======
+        // 1. the blokli address root pinned at startup; the killswitch must exempt exactly that one
+        let blokli_ip = self.worker_params.blokli_ip();
+
+        // 2. generate wg keys - or keep the previous ones so the exit returns the same address
+        let _ = results_sender.send(progress(Progress::GenerateWg)).await;
+        let wg = match &self.prev_conn.resume {
+            Some(resume) => {
+                tracing::info!(%resume, "resuming connection with the previous key");
+                resume.wireguard.clone()
+            }
+            None => WireGuard::from_config(self.wg_config.clone()).await?,
+        };
+>>>>>>> c160f46 (fix(routing): pick the WAN route via the blokli IP instead of 1.1.1.1 (release/hoprdv4) (#880))
         let public_key = wg.key_pair.public_key.clone();
 
         let _ = results_sender.send(progress(Progress::WgGenerated(wg.clone()))).await;
@@ -159,7 +172,7 @@ impl Runner {
         let mut peer_ips = gather_peer_ips(&self.hopr).await?;
         // blokli must be in the initial snapshot so it becomes part of the permanent
         // firewall floor and stays reachable for the duration of the connection.
-        peer_ips.extend(blokli_ips);
+        peer_ips.push(blokli_ip);
 
         // 7. set up the NepTUN data plane — root provisions the TUN device + routing
         //    and returns the resolved interface name; the worker then receives the

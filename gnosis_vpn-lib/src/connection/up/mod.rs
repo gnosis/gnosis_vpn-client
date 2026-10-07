@@ -4,7 +4,6 @@ use thiserror::Error;
 
 use std::collections::VecDeque;
 use std::fmt::{self, Display};
-use std::net;
 use std::time::{Duration, SystemTime};
 
 use crate::connection::destination::Destination;
@@ -32,8 +31,7 @@ pub enum SessionKind {
 
 #[derive(Clone, Debug)]
 pub enum Progress {
-    ResolveBlokliIps,
-    GenerateWg(Vec<net::Ipv4Addr>),
+    GenerateWg,
     WgGenerated(WireGuard),
     RegisterWg,
     OpenPing(Registration),
@@ -190,7 +188,6 @@ pub struct TunnelPing {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Phase {
     Init,
-    ResolvingBlokliIps,
     GeneratingWg,
     RegisterWg,
     OpeningPing,
@@ -280,8 +277,7 @@ impl Up {
     pub fn connect_progress(&mut self, evt: Progress) {
         let now = SystemTime::now();
         match evt {
-            Progress::ResolveBlokliIps => self.phase = (now, Phase::ResolvingBlokliIps),
-            Progress::GenerateWg(_) => self.phase = (now, Phase::GeneratingWg),
+            Progress::GenerateWg => self.phase = (now, Phase::GeneratingWg),
             Progress::WgGenerated(wg) => self.wireguard = Some(wg),
             Progress::RegisterWg => self.phase = (now, Phase::RegisterWg),
             Progress::OpenPing(reg) => {
@@ -335,7 +331,6 @@ impl Display for Phase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let phase_str = match self {
             Phase::Init => "Init",
-            Phase::ResolvingBlokliIps => "Resolving Blokli IPs",
             Phase::GeneratingWg => "Generating WireGuard keypairs",
             Phase::RegisterWg => "Registering WireGuard public key",
             Phase::OpeningPing => "Opening main connection",
@@ -362,8 +357,7 @@ impl Display for Event {
 impl Display for Progress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Progress::ResolveBlokliIps => write!(f, "Resolving Blokli IPs"),
-            Progress::GenerateWg(_) => write!(f, "Generating WireGuard keypairs"),
+            Progress::GenerateWg => write!(f, "Generating WireGuard keypairs"),
             Progress::WgGenerated(_) => write!(f, "WireGuard keypair generated"),
             Progress::RegisterWg => write!(f, "Registering WireGuard public key"),
             Progress::OpenPing(_) => write!(f, "Opening main connection"),

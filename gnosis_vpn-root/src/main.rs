@@ -1,3 +1,4 @@
+use backon::Retryable;
 use gnosis_vpn_lib::logging::LogReloadHandle;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use tokio::fs;
@@ -27,7 +28,7 @@ use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::worker_params::WorkerParams;
-use gnosis_vpn_lib::{dirs, logging, ping, socket, worker};
+use gnosis_vpn_lib::{dirs, hopr, logging, ping, remote_data, socket, worker};
 
 mod cli;
 mod device_monitor;
@@ -452,12 +453,11 @@ async fn keep_alive_timer(
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // ensure worker user exists
-    let mut worker_params = WorkerParams::from(&args);
     let input = worker::Input::new(
         args.worker_user.clone(),
         args.worker_binary.clone(),
         env!("CARGO_PKG_VERSION"),
-        worker_params.state_home(),
+        args.state_home.clone(),
     );
     let worker_user = worker::Worker::from_system(input).await.map_err(|error| {
         eprintln!("error determining worker user: {:?}", error);
@@ -470,7 +470,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // introduce ourself in the logs
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
-        state_home = %worker_params.state_home().display(),
+        state_home = %args.state_home.display(),
         "starting {}",
         env!("CARGO_PKG_NAME")
     );
@@ -494,9 +494,18 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // without tearing down its tunnel.
     routing::sweep::startup_sweep().await;
 
-    // Resolve the blokli host while DNS is still reachable - an enabled killswitch blocks DNS
-    // for the rest of the session, including for workers started after that point.
-    worker_params.resolve_blokli_ip().await;
+    // Once, while DNS still works (the killswitch blocks it later); without blokli nothing works, so exit and get restarted.
+    let blokli_url = hopr::blokli_url(args.hopr_blokli_url.clone());
+    let blokli_ip = (|| remote_data::resolve_blokli_ip(&blokli_url))
+        .retry(remote_data::backoff_expo_long_delay().with_max_times(5))
+        .notify(|error, delay| tracing::warn!(%error, ?delay, %blokli_url, "blokli host not resolvable - retrying"))
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %blokli_url, "cannot resolve blokli host - exiting");
+            exitcode::NOHOST
+        })?;
+    tracing::info!(%blokli_url, %blokli_ip, "resolved blokli host - pinning it for this session");
+    let worker_params = args.worker_params(blokli_ip);
 
     // Write root pidfile for the newsyslog service to send signals to
     write_pidfile(&args.pid_file).await?;
@@ -1286,11 +1295,6 @@ impl DaemonState {
                     .spawn(async move { (request_id, spawn_ping(options).await) });
                 Ok(())
             }
-            RequestToRoot::CacheBlokliIps { ips } => {
-                tracing::debug!(?ips, "caching blokli IPs for worker restart");
-                self.worker_params.set_cached_blokli_ips(ips);
-                Ok(())
-            }
             RequestToRoot::ProbeStopped => {
                 self.probe_ended().await;
                 Ok(())
@@ -1539,6 +1543,7 @@ impl DaemonState {
                 mtu,
                 dns,
                 peer_ips,
+                blokli_ip: self.worker_params.blokli_ip(),
                 reply: reply_tx,
             })
             .await;
@@ -1596,7 +1601,6 @@ impl DaemonState {
             WorkerCommand::Disconnect => {
                 tracing::debug!("clearing target destination from disconnect command");
                 self.target_dest_id = None;
-                self.worker_params.set_cached_blokli_ips(Vec::new());
                 self.disable_killswitch().await;
                 // A probe outlives the connection and keeps holding the countdown.
                 if !self.probing {
