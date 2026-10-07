@@ -32,11 +32,8 @@ futures-util = "~0.3.34"
 # commits -- mixing the two builds hoprnet twice and fails with `expected
 # hopr_lib::HoprSessionClientConfig, found HoprSessionClientConfig`. Keep both entries in the
 # same form.
-# INTEGRATION PIN (GNO-805): on the path-selection fix branch to match edgli's hopr-lib pin
-# (one hoprnet source). That branch is cut from release/4.0, so it carries the already-merged
-# redemption-balance fix #8485 plus the path fix #8489. Reverts to branch = "release/4.0" once
-# hoprnet#8489 merges.
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "fix/path/gno-805-extended-search-funding-rel40", features = [
+# Tracks release/4.0 to match edgli's transitive hopr-lib (one hoprnet source).
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "release/4.0", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
