@@ -5,12 +5,12 @@
 
 use gnosis_vpn_lib::balance::{BalanceRecommendation, Capacity, CapacityAllocations, FundingLevel, FundingStatus};
 use gnosis_vpn_lib::command::{
-    ActiveSession, BalanceResponse, ChannelBalance, ChannelOut, Command, ConnStats, ConnectResponse, ConnectedInfo,
-    ConnectingInfo, DestinationState, DisconnectResponse, DisconnectingInfo, FundingToolResponse, HoprInitStatus,
-    HoprStatus, Info, InfoResponse, NerdStatsConnection, NerdStatsResponse, ProbeResponse, ProbeView,
-    QuickProbeResponse, ReconnectingInfo, Response, RouteHealthView, RunMode, StartClientResponse, StatusResponse,
-    StopClientResponse, SurbBalancerSetpoint, SurbStats, TicketStats, TicketStatsStatus, TunnelStall, UnprobeResponse,
-    WorkerCommand,
+    ActiveSession, BalanceResponse, ChannelBalance, ChannelMaintenance, ChannelOut, Command, ConnStats,
+    ConnectResponse, ConnectedInfo, ConnectingInfo, DestinationState, DisconnectResponse, DisconnectingInfo,
+    FundingToolResponse, HoprInitStatus, HoprStatus, Info, InfoResponse, NerdStatsConnection, NerdStatsResponse,
+    ProbeResponse, ProbeView, QuickProbeResponse, ReconnectingInfo, Response, RouteHealthView, RunMode,
+    StartClientResponse, StatusResponse, StopClientResponse, SurbBalancerSetpoint, SurbStats, TicketStats,
+    TicketStatsStatus, TunnelStall, UnprobeResponse, WorkerCommand,
 };
 use gnosis_vpn_lib::connection::destination::{Address, Destination, HopRouting};
 use gnosis_vpn_lib::connection::{DownPhase, UpPhase};
@@ -30,6 +30,7 @@ fn assert_types_are_accessible() {
     let _: ReconnectingInfo;
     let _: ConnectedInfo;
     let _: TunnelStall;
+    let _: ChannelMaintenance;
     let _: DisconnectingInfo;
     let _: DestinationState;
     let _: RunMode;

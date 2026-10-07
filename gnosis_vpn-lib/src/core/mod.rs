@@ -26,6 +26,7 @@ use crate::route_health::RouteHealth;
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, log_output, ticket_stats, wireguard};
 
+mod channel_maintenance;
 pub(crate) mod runner;
 
 use runner::Results;
@@ -107,6 +108,7 @@ pub struct Core {
     strategy_handle: Option<AbortHandle>,
     /// Read handle to the strategy reactor's health, paired with `strategy_handle`.
     strategy_state: Option<edgli::StrategyStateHandle>,
+    channel_maintenance: channel_maintenance::Supervisor,
     route_healths: HashMap<String, RouteHealth>,
     /// The one long-lived probe session; connections register over it.
     probe: Option<Probe>,
@@ -238,6 +240,7 @@ impl Core {
             balances: None,
             strategy_handle: None,
             strategy_state: None,
+            channel_maintenance: channel_maintenance::Supervisor::default(),
             ongoing_disconnections: Vec::new(),
             pending_unregisters: Vec::new(),
             route_healths,
@@ -677,6 +680,7 @@ impl Core {
                     self.hopr = Some(Arc::new(hopr));
                     self.spawn_node_wxhopr_withdraw_runner(results_sender, Duration::ZERO);
                     self.try_start_reactor(results_sender).await;
+                    self.spawn_strategy_sample_runner(results_sender, Duration::ZERO);
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
@@ -996,6 +1000,12 @@ impl Core {
 
             Results::RetryReactor => {
                 self.try_start_reactor(results_sender).await;
+            }
+
+            Results::StrategySampleTick => {
+                let sample = self.strategy_state.as_ref().map(|h| h.state());
+                self.channel_maintenance.on_sample(sample, SystemTime::now());
+                self.spawn_strategy_sample_runner(results_sender, channel_maintenance::SAMPLE_INTERVAL);
             }
 
             Results::QuickProbe {
@@ -1937,7 +1947,11 @@ impl Core {
                     }
                     _ => None,
                 };
-                RunMode::running(self.hopr.as_ref().map(|h| h.status()), funding_status)
+                RunMode::running(
+                    self.hopr.as_ref().map(|h| h.status()),
+                    funding_status,
+                    self.channel_maintenance.health(),
+                )
             }
             Phase::ShuttingDown => RunMode::Shutdown,
         };
@@ -2153,6 +2167,19 @@ impl Core {
                 self.spawn_retry_reactor(results_sender, Duration::from_secs(10));
             }
         }
+    }
+
+    fn spawn_strategy_sample_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_on_shutdown.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    let _ = results_sender.send(Results::StrategySampleTick).await;
+                })
+                .await
+        });
     }
 
     fn spawn_retry_reactor(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
