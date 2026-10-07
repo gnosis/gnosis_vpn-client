@@ -740,7 +740,9 @@ mod tests {
             .expect("Failed must raise an advisory");
         let out = format_strategy_advisory(&advisory);
         assert!(out.contains("CRITICAL"), "{out}");
-        assert!(out.contains("Funding exhausted"), "{out}");
+        // Failed means a chain read was unavailable, not funding exhaustion.
+        assert!(out.contains("Channel maintenance stopped"), "{out}");
+        assert!(!out.contains("wxHOPR"), "{out}");
     }
 
     #[test]

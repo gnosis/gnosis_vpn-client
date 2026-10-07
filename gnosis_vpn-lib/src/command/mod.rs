@@ -136,8 +136,8 @@ impl StrategyAdvisory {
     /// channel-lifecycle strategy could not read required on-chain data (the channel
     /// list, funding inputs, or the peer-address map) and stopped, so channel
     /// maintenance is not running — a connectivity or node fault, not a funding one.
-    /// `Degraded` is a warning: a funding pass ran but fell short (an affordability
-    /// gate or missing peer data). `Running` and unknown raise nothing.
+    /// `Degraded` is a warning: a maintenance pass ran but fell short (an affordability
+    /// gate, or missing peer data on the close pass). `Running` and unknown raise nothing.
     pub fn from_strategy_state(state: Option<balance::StrategyState>) -> Option<Self> {
         match state? {
             balance::StrategyState::Failed => Some(StrategyAdvisory {
@@ -146,7 +146,7 @@ impl StrategyAdvisory {
             }),
             balance::StrategyState::Degraded => Some(StrategyAdvisory {
                 level: AdvisoryLevel::Warning,
-                message: "Channel funding degraded — add wxHOPR to your Safe to avoid losing connectivity.".to_string(),
+                message: "Channel maintenance degraded — a maintenance pass fell short. If your Safe is low, add wxHOPR; otherwise check the node's connectivity and logs.".to_string(),
             }),
             balance::StrategyState::Running => None,
         }
