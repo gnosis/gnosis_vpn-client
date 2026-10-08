@@ -149,8 +149,10 @@ impl Runner {
             configurator,
             metadata: session,
         } = open_spliced_wg_session(&self.hopr, &self.destination, &self.options, ping_surb, &results_sender).await?;
-        // Nobody closes the session until the pump owns it; an abort before then must not leak it.
-        let hopr_session = wg_tunnel::CloseOnDrop::new(hopr_session);
+        // Split now so the guard owns the write half from the open on: an abort before the pump must not leak the session.
+        let (read_half, write_half) = tokio::io::split(hopr_session);
+        let net_tx = wg_tunnel::SessionSender::new(wg_tunnel::CloseOnDrop::new(write_half));
+        let net_rx = wg_tunnel::SessionReceiver::new(read_half);
         // Retain the configurator on `Up` (not just used once below) so core can
         // reconfigure the SURB balancer later from live telemetry.
         let _ = results_sender
@@ -167,9 +169,6 @@ impl Runner {
         let allowed_ips = parse_allowed_ips(self.wg_config.allowed_ips.as_deref());
         let interface = request_setup_tunnel(&registration, &self.wg_config, peer_ips.clone(), &results_sender).await?;
         let (engine, tun_reader, tun_writer) = prepare_pump(&wg, &registration, allowed_ips).await?;
-        let (read_half, write_half) = tokio::io::split(hopr_session.disarm());
-        let net_tx = wg_tunnel::SessionSender::new(write_half);
-        let net_rx = wg_tunnel::SessionReceiver::new(read_half);
         self.spawn_pump_task(engine, net_tx, net_rx, (tun_writer, tun_reader), &results_sender);
 
         // 9. let tunnel traffic through the already active killswitch
@@ -423,7 +422,7 @@ impl Runner {
                     sample_tx,
                 ))
                 .await;
-            // Owned out here: cancellation drops `run`, and a dropped session never reaches the manager.
+            // Owned out here: cancellation drops `run`, and this awaited close goes through the guard, so its later drop is a no-op.
             // Bounded: a dead session can stall shutdown, and core waits on this task before reusing the TUN device.
             match time::timeout(wg_tunnel::SESSION_CLOSE_BUDGET, net_tx.close()).await {
                 Ok(Err(error)) => tracing::warn!(%error, "failed to close spliced wg session"),
