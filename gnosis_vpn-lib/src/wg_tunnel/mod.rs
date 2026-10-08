@@ -23,7 +23,8 @@ mod tunnel;
 use neptun::noise::errors::WireGuardError;
 
 pub use pump::{NetworkReceiver, NetworkSender, PumpExit, TunReceiver, TunSender, run};
-pub use session::{CloseOnDrop, SESSION_CLOSE_BUDGET, SessionReceiver, SessionSender};
+pub(crate) use session::CloseOnDrop;
+pub use session::{SESSION_CLOSE_BUDGET, SessionReceiver, SessionSender};
 pub(crate) use stats::HISTORY_CAPACITY;
 pub use stats::{TunnelStatsSample, WgTunnelStats};
 #[cfg(unix)]

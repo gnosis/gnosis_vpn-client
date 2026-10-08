@@ -58,7 +58,7 @@ pub const SESSION_CLOSE_BUDGET: Duration = Duration::from_secs(2);
 /// the writer. Moving a field out of `&mut self` needs something left behind, and there is no dummy
 /// `WriteHalf<HoprSession>`; the safe alternatives are this `Option` or an `unsafe` `ManuallyDrop::take`.
 /// It is `Some` for the guard's whole observable life and taken only in `Drop`.
-pub struct CloseOnDrop<T: AsyncWrite + Unpin + Send + 'static> {
+pub(crate) struct CloseOnDrop<T: AsyncWrite + Unpin + Send + 'static> {
     session: Option<T>,
     closed: bool,
 }
@@ -67,7 +67,7 @@ impl<T> CloseOnDrop<T>
 where
     T: AsyncWrite + Unpin + Send + 'static,
 {
-    pub fn new(session: T) -> Self {
+    pub(crate) fn new(session: T) -> Self {
         Self {
             session: Some(session),
             closed: false,
