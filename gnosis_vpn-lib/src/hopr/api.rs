@@ -470,12 +470,13 @@ impl Hopr {
             });
         };
 
-        // A relay the chain index cannot resolve is dropped rather than failing the walk.
+        // One unresolvable relay empties the chain rather than failing the walk or reporting a shortened chain.
         let to_chain_addresses = |relays: &[_]| -> Vec<Address> {
             relays
                 .iter()
-                .filter_map(|key| chain_api.packet_key_to_chain_key(key).ok().flatten())
-                .collect()
+                .map(|key| chain_api.packet_key_to_chain_key(key).ok().flatten())
+                .collect::<Option<Vec<_>>>()
+                .unwrap_or_default()
         };
         Ok(RouteWalk::Paths {
             walked_at: now,
