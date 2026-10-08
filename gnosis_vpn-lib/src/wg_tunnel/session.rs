@@ -47,8 +47,18 @@ use super::{NetworkReceiver, NetworkSender};
 pub const SESSION_CLOSE_BUDGET: Duration = Duration::from_secs(2);
 
 /// Owns a session's write half for its whole life and closes it exactly once: through `shutdown()` if the owner gets there, otherwise on drop.
+///
+/// Why a drop guard and not an explicit close on every path: `HoprSession` has no Drop impl, and core
+/// cancels the connect runner with a token-biased `run_until_cancelled`, which drops the runner future
+/// at whatever await it sits on. After the open and before the pump owns the session there is no code
+/// location left to call a close from, only `Drop`. The two error paths could close explicitly, but
+/// that would leave cancellation as a separately handled special case for the same resource.
+///
+/// Why the `Option`: `Drop` cannot await, so the bounded close is spawned, and a spawned task must own
+/// the writer. Moving a field out of `&mut self` needs something left behind, and there is no dummy
+/// `WriteHalf<HoprSession>`; the safe alternatives are this `Option` or an `unsafe` `ManuallyDrop::take`.
+/// It is `Some` for the guard's whole observable life and taken only in `Drop`.
 pub struct CloseOnDrop<T: AsyncWrite + Unpin + Send + 'static> {
-    // Taken only by `Drop`, which cannot await and so must move the session into a spawned close.
     session: Option<T>,
     closed: bool,
 }
