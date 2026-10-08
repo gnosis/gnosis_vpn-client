@@ -35,9 +35,91 @@
 //! and corrupt every packet. If a session is ever observed to desync wholesale, the
 //! pump's decapsulation-failure guard tears it down and reconnects (see `pump`).
 
+use std::pin::Pin;
+use std::task::{Context, Poll, ready};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::time;
 
 use super::{NetworkReceiver, NetworkSender};
+
+/// Bounds every close of a spliced session: a dead session must not stall teardown.
+pub const SESSION_CLOSE_BUDGET: Duration = Duration::from_secs(2);
+
+/// Owns a session's write half for its whole life and closes it exactly once: through `shutdown()` if the owner gets there, otherwise on drop.
+///
+/// Why a drop guard and not an explicit close on every path: `HoprSession` has no Drop impl, and core
+/// cancels the connect runner with a token-biased `run_until_cancelled`, which drops the runner future
+/// at whatever await it sits on. After the open and before the pump owns the session there is no code
+/// location left to call a close from, only `Drop`. The two error paths could close explicitly, but
+/// that would leave cancellation as a separately handled special case for the same resource.
+///
+/// Why the `Option`: `Drop` cannot await, so the bounded close is spawned, and a spawned task must own
+/// the writer. Moving a field out of `&mut self` needs something left behind, and there is no dummy
+/// `WriteHalf<HoprSession>`; the safe alternatives are this `Option` or an `unsafe` `ManuallyDrop::take`.
+/// It is `Some` for the guard's whole observable life and taken only in `Drop`.
+pub(crate) struct CloseOnDrop<T: AsyncWrite + Unpin + Send + 'static> {
+    session: Option<T>,
+    closed: bool,
+}
+
+impl<T> CloseOnDrop<T>
+where
+    T: AsyncWrite + Unpin + Send + 'static,
+{
+    pub(crate) fn new(session: T) -> Self {
+        Self {
+            session: Some(session),
+            closed: false,
+        }
+    }
+
+    fn inner(&mut self) -> Pin<&mut T> {
+        Pin::new(self.session.as_mut().expect("session is taken only by Drop"))
+    }
+}
+
+impl<T> AsyncWrite for CloseOnDrop<T>
+where
+    T: AsyncWrite + Unpin + Send + 'static,
+{
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+        self.inner().poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        self.inner().poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let result = ready!(self.inner().poll_shutdown(cx));
+        // A finished shutdown, failed or not, is not retried on drop.
+        self.closed = true;
+        Poll::Ready(result)
+    }
+}
+
+impl<T> Drop for CloseOnDrop<T>
+where
+    T: AsyncWrite + Unpin + Send + 'static,
+{
+    fn drop(&mut self) {
+        if self.closed {
+            return;
+        }
+        let Some(mut session) = self.session.take() else {
+            return;
+        };
+        // Drop cannot await; a spawned close covers both the error path and a cancelled connect.
+        tokio::spawn(async move {
+            match time::timeout(SESSION_CLOSE_BUDGET, session.shutdown()).await {
+                Ok(Err(error)) => tracing::warn!(%error, "failed to close abandoned wg session"),
+                Err(_) => tracing::warn!("closing abandoned wg session timed out"),
+                Ok(Ok(())) => tracing::debug!("closed abandoned wg session"),
+            }
+        });
+    }
+}
 
 /// Writes whole WireGuard datagrams to the write half of a session. Each `send`
 /// is one `write_all` + `flush`, so a datagram is never split across writes.
@@ -97,6 +179,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
 
     /// A single datagram written on one end of an in-memory duplex is received
@@ -143,6 +228,85 @@ mod tests {
         sender.close().await.unwrap();
 
         assert_eq!(receiver.recv(&mut [0u8; 64]).await.unwrap(), None);
+    }
+
+    /// The abort path: a dropped guard closes the session on its own.
+    #[tokio::test]
+    async fn dropping_the_guard_closes_the_session() {
+        let (client, server) = tokio::io::duplex(4096);
+        let (_c_r, c_w) = tokio::io::split(client);
+        let mut receiver = SessionReceiver::new(server);
+
+        drop(CloseOnDrop::new(c_w));
+
+        assert_eq!(receiver.recv(&mut [0u8; 64]).await.unwrap(), None);
+    }
+
+    /// The happy path: the guard is transparent to the pump's writes.
+    #[tokio::test]
+    async fn the_guard_passes_writes_through() {
+        let (client, server) = tokio::io::duplex(4096);
+        let (_c_r, c_w) = tokio::io::split(client);
+        let mut receiver = SessionReceiver::new(server);
+
+        let mut sender = SessionSender::new(CloseOnDrop::new(c_w));
+        sender.send(&[7u8; 8]).await.unwrap();
+
+        let mut buf = [0u8; 64];
+        let n = receiver.recv(&mut buf).await.unwrap().expect("a datagram");
+        assert_eq!(&buf[..n], &[7u8; 8]);
+    }
+
+    /// Counts shutdowns; a duplex cannot tell one close from two.
+    #[derive(Clone, Default)]
+    struct CountingWriter {
+        shutdowns: Arc<AtomicUsize>,
+    }
+
+    impl AsyncWrite for CountingWriter {
+        fn poll_write(self: Pin<&mut Self>, _: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            self.shutdowns.fetch_add(1, Ordering::SeqCst);
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// Lets the close spawned by `Drop` run on the test runtime.
+    async fn settle() {
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// The teardown path: the pump's explicit close is the one and only close.
+    #[tokio::test]
+    async fn an_explicit_close_is_not_repeated_on_drop() {
+        let writer = CountingWriter::default();
+        let mut sender = SessionSender::new(CloseOnDrop::new(writer.clone()));
+
+        sender.close().await.unwrap();
+        drop(sender);
+        settle().await;
+
+        assert_eq!(writer.shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    /// The abort path closes exactly once as well.
+    #[tokio::test]
+    async fn a_bare_drop_closes_exactly_once() {
+        let writer = CountingWriter::default();
+
+        drop(CloseOnDrop::new(writer.clone()));
+        settle().await;
+
+        assert_eq!(writer.shutdowns.load(Ordering::SeqCst), 1);
     }
 
     /// Back-to-back datagrams that are each read before the next is written keep
