@@ -44,10 +44,12 @@ pub enum RouteWalk {
         #[serde(with = "serde_utils::system_time")]
         walked_at: SystemTime,
     },
-    /// The selector accepted no path over this destination's hop count.
+    /// The selector accepted no path over this destination's hop count in at least one direction.
     NoPath {
         #[serde(with = "serde_utils::system_time")]
         walked_at: SystemTime,
+        forward_count: usize,
+        return_count: usize,
     },
     Paths {
         #[serde(with = "serde_utils::system_time")]
@@ -61,6 +63,12 @@ pub enum RouteWalk {
         best_relays: Vec<Address>,
         /// The best path's value in (0.0, 1.0]; higher is better.
         best_value: f64,
+        /// Paths `exit -> me`, also capped at `max_cached_paths`.
+        return_count: usize,
+        /// Relays of the best-valued return path, in path order from the exit.
+        #[serde(with = "serde_utils::addresses")]
+        return_best_relays: Vec<Address>,
+        return_best_value: f64,
     },
 }
 
@@ -312,15 +320,24 @@ impl Display for RouteWalk {
                     log_output::elapsed(walked_at)
                 )
             }
-            RouteWalk::NoPath { walked_at } => {
-                write!(f, "no path found - walked {} ago", log_output::elapsed(walked_at))
-            }
+            RouteWalk::NoPath {
+                walked_at,
+                forward_count,
+                return_count,
+            } => write!(
+                f,
+                "no path found (forward {forward_count}, return {return_count}) - walked {} ago",
+                log_output::elapsed(walked_at)
+            ),
             RouteWalk::Paths {
                 walked_at,
                 count,
                 distinct_first_relays,
                 best_relays,
                 best_value,
+                return_count,
+                return_best_relays,
+                return_best_value,
             } => {
                 let plural = if *count == 1 { "" } else { "s" };
                 write!(f, "{count} path{plural}, ")?;
@@ -328,21 +345,30 @@ impl Display for RouteWalk {
                 if best_relays.is_empty() {
                     write!(f, "direct")?;
                 } else {
-                    let via = best_relays
-                        .iter()
-                        .map(log_output::address)
-                        .collect::<Vec<_>>()
-                        .join(" -> ");
-                    write!(f, "{distinct_first_relays} distinct first relays, best via {via}")?;
+                    write!(
+                        f,
+                        "{distinct_first_relays} distinct first relays, best via {}",
+                        relay_chain(best_relays)
+                    )?;
+                }
+                write!(f, " (value {best_value:.3}); return {return_count}, ")?;
+                if return_best_relays.is_empty() {
+                    write!(f, "direct")?;
+                } else {
+                    write!(f, "best via {}", relay_chain(return_best_relays))?;
                 }
                 write!(
                     f,
-                    " (value {best_value:.3}) - walked {} ago",
+                    " (value {return_best_value:.3}) - walked {} ago",
                     log_output::elapsed(walked_at)
                 )
             }
         }
     }
+}
+
+fn relay_chain(relays: &[Address]) -> String {
+    relays.iter().map(log_output::address).collect::<Vec<_>>().join(" -> ")
 }
 
 impl Display for QuickProbeCheck {
@@ -441,6 +467,17 @@ mod tests {
             distinct_first_relays: 2,
             best_relays: vec![Address::from([2u8; 20])],
             best_value: 0.75,
+            return_count: 2,
+            return_best_relays: vec![Address::from([3u8; 20])],
+            return_best_value: 0.5,
+        }
+    }
+
+    fn no_path(forward_count: usize, return_count: usize) -> RouteWalk {
+        RouteWalk::NoPath {
+            walked_at: SystemTime::now(),
+            forward_count,
+            return_count,
         }
     }
 
@@ -521,12 +558,24 @@ mod tests {
         assert!(rh.last_error().is_none(), "a walk that ran clears the previous failure");
         assert!(matches!(rh.walk(), Some(RouteWalk::Paths { count: 3, .. })));
 
-        assert!(!rh.apply_walk(RouteWalk::NoPath { walked_at: now }));
+        assert!(!rh.apply_walk(no_path(0, 0)));
         assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
 
         assert!(!rh.apply_walk(RouteWalk::NotAnnounced { walked_at: now }));
         assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
         assert!(matches!(rh.walk(), Some(RouteWalk::NotAnnounced { .. })));
+    }
+
+    #[test]
+    fn a_missing_return_path_keeps_the_route_not_routable() {
+        let mut rh = RouteHealth::new(&destination(1), false, false);
+        assert!(rh.apply_walk(walk_with_paths(SystemTime::now())));
+        assert!(!rh.apply_walk(no_path(3, 0)));
+        assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
+        assert!(
+            rh.walk()
+                .is_some_and(|walk| walk.to_string().contains("(forward 3, return 0)"))
+        );
     }
 
     #[test]
