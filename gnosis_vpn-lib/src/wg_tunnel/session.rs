@@ -35,9 +35,52 @@
 //! and corrupt every packet. If a session is ever observed to desync wholesale, the
 //! pump's decapsulation-failure guard tears it down and reconnects (see `pump`).
 
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::time;
 
 use super::{NetworkReceiver, NetworkSender};
+
+/// Bounds every close of a spliced session: a dead session must not stall teardown.
+pub const SESSION_CLOSE_BUDGET: Duration = Duration::from_secs(2);
+
+/// Closes the session on drop unless disarmed: `HoprSession` has no Drop impl, so a bare drop leaks it.
+pub struct CloseOnDrop<T: AsyncWrite + Unpin + Send + 'static> {
+    session: Option<T>,
+}
+
+impl<T> CloseOnDrop<T>
+where
+    T: AsyncWrite + Unpin + Send + 'static,
+{
+    pub fn new(session: T) -> Self {
+        Self { session: Some(session) }
+    }
+
+    /// Hands the session back; closing it is the caller's job from here on.
+    pub fn disarm(mut self) -> T {
+        self.session.take().expect("session is only taken on disarm or drop")
+    }
+}
+
+impl<T> Drop for CloseOnDrop<T>
+where
+    T: AsyncWrite + Unpin + Send + 'static,
+{
+    fn drop(&mut self) {
+        let Some(mut session) = self.session.take() else {
+            return;
+        };
+        // Drop cannot await; a spawned close covers both the error path and a cancelled connect.
+        tokio::spawn(async move {
+            match time::timeout(SESSION_CLOSE_BUDGET, session.shutdown()).await {
+                Ok(Err(error)) => tracing::warn!(%error, "failed to close abandoned wg session"),
+                Err(_) => tracing::warn!("closing abandoned wg session timed out"),
+                Ok(Ok(())) => tracing::debug!("closed abandoned wg session"),
+            }
+        });
+    }
+}
 
 /// Writes whole WireGuard datagrams to the write half of a session. Each `send`
 /// is one `write_all` + `flush`, so a datagram is never split across writes.
@@ -143,6 +186,33 @@ mod tests {
         sender.close().await.unwrap();
 
         assert_eq!(receiver.recv(&mut [0u8; 64]).await.unwrap(), None);
+    }
+
+    /// The abort path: a guard dropped while armed closes the session on its own.
+    #[tokio::test]
+    async fn dropping_an_armed_guard_closes_the_session() {
+        let (client, server) = tokio::io::duplex(4096);
+        let (_c_r, c_w) = tokio::io::split(client);
+        let mut receiver = SessionReceiver::new(server);
+
+        drop(CloseOnDrop::new(c_w));
+
+        assert_eq!(receiver.recv(&mut [0u8; 64]).await.unwrap(), None);
+    }
+
+    /// The happy path: once disarmed, the guard leaves the session writable.
+    #[tokio::test]
+    async fn a_disarmed_guard_leaves_the_session_open() {
+        let (client, server) = tokio::io::duplex(4096);
+        let (_c_r, c_w) = tokio::io::split(client);
+        let mut receiver = SessionReceiver::new(server);
+
+        let mut sender = SessionSender::new(CloseOnDrop::new(c_w).disarm());
+        sender.send(&[7u8; 8]).await.unwrap();
+
+        let mut buf = [0u8; 64];
+        let n = receiver.recv(&mut buf).await.unwrap().expect("a datagram");
+        assert_eq!(&buf[..n], &[7u8; 8]);
     }
 
     /// Back-to-back datagrams that are each read before the next is written keep
