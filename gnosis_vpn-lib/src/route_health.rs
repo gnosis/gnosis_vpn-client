@@ -341,21 +341,22 @@ impl Display for RouteWalk {
             } => {
                 let plural = if *count == 1 { "" } else { "s" };
                 write!(f, "{count} path{plural}, ")?;
-                // A 0-hop route has no relays, so there is no diversity or "via" to report.
-                if best_relays.is_empty() {
+                // Only a 0-hop walk has no first relay; empty relays alone may just be unresolved.
+                let is_direct = *distinct_first_relays == 0;
+                if is_direct {
                     write!(f, "direct")?;
                 } else {
                     write!(
                         f,
-                        "{distinct_first_relays} distinct first relays, best via {}",
-                        relay_chain(best_relays)
+                        "{distinct_first_relays} distinct first relays, {}",
+                        best_via(best_relays)
                     )?;
                 }
                 write!(f, " (value {best_value:.3}); return {return_count}, ")?;
-                if return_best_relays.is_empty() {
+                if is_direct {
                     write!(f, "direct")?;
                 } else {
-                    write!(f, "best via {}", relay_chain(return_best_relays))?;
+                    write!(f, "{}", best_via(return_best_relays))?;
                 }
                 write!(
                     f,
@@ -367,8 +368,12 @@ impl Display for RouteWalk {
     }
 }
 
-fn relay_chain(relays: &[Address]) -> String {
-    relays.iter().map(log_output::address).collect::<Vec<_>>().join(" -> ")
+fn best_via(relays: &[Address]) -> String {
+    if relays.is_empty() {
+        return "unresolved relays".to_string();
+    }
+    let chain = relays.iter().map(log_output::address).collect::<Vec<_>>().join(" -> ");
+    format!("best via {chain}")
 }
 
 impl Display for QuickProbeCheck {
@@ -576,6 +581,37 @@ mod tests {
             rh.walk()
                 .is_some_and(|walk| walk.to_string().contains("(forward 3, return 0)"))
         );
+    }
+
+    #[test]
+    fn unresolved_relays_are_not_reported_as_direct() {
+        let unresolved = RouteWalk::Paths {
+            walked_at: SystemTime::now(),
+            count: 1,
+            distinct_first_relays: 1,
+            best_relays: Vec::new(),
+            best_value: 0.5,
+            return_count: 1,
+            return_best_relays: Vec::new(),
+            return_best_value: 0.5,
+        }
+        .to_string();
+        assert!(!unresolved.contains("direct"), "{unresolved}");
+        assert!(unresolved.contains("return 1, unresolved relays"), "{unresolved}");
+
+        let zero_hop = RouteWalk::Paths {
+            walked_at: SystemTime::now(),
+            count: 1,
+            distinct_first_relays: 0,
+            best_relays: Vec::new(),
+            best_value: 1.0,
+            return_count: 1,
+            return_best_relays: Vec::new(),
+            return_best_value: 1.0,
+        }
+        .to_string();
+        assert!(zero_hop.contains("1 path, direct"), "{zero_hop}");
+        assert!(zero_hop.contains("return 1, direct"), "{zero_hop}");
     }
 
     #[test]
