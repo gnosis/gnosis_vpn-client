@@ -359,17 +359,21 @@ impl Up {
         }
     }
 
-    /// Length of the inbound stall the newest samples are in: rx flat while tx grew, counted back from the latest sample.
+    /// Length of the inbound stall the newest samples are in; like the ping window, a single send keeps it running until rx grows.
     fn trailing_inbound_stall(&self) -> Duration {
-        let newest_first = self.wg_stats.iter().rev();
+        let samples: Vec<&TunnelStatsSample> = self.wg_stats.iter().collect();
         let mut stall = Duration::ZERO;
-        for (after, before) in newest_first.clone().zip(newest_first.skip(1)) {
+        let mut awaiting_rx = false;
+        for pair in samples.windows(2) {
+            let (before, after) = (pair[0], pair[1]);
             let rx_grew = after.rx_bytes > before.rx_bytes;
             let tx_grew = after.tx_bytes > before.tx_bytes;
-            if rx_grew || !tx_grew {
-                break;
-            }
-            stall += after.at.duration_since(before.at).unwrap_or(Duration::ZERO);
+            awaiting_rx = !rx_grew && (tx_grew || awaiting_rx);
+            stall = if awaiting_rx {
+                stall + after.at.duration_since(before.at).unwrap_or(Duration::ZERO)
+            } else {
+                Duration::ZERO
+            };
         }
         stall
     }
@@ -886,6 +890,34 @@ mod tunnel_ping_tests {
             });
         }
         assert_eq!(up.tunnel_ping_result(Ok(Duration::from_secs(8)), MAX_RTT), 1);
+    }
+
+    #[test]
+    fn single_send_then_silence_is_a_counter_stall() {
+        let mut up = up();
+        up.record_wg_stats(TunnelStatsSample {
+            at: UNIX_EPOCH,
+            tx_bytes: 500,
+            rx_bytes: 500,
+            ..Default::default()
+        });
+        let mut stall = Duration::ZERO;
+        for step in 1..=6u32 {
+            stall = up.record_wg_stats(TunnelStatsSample {
+                at: UNIX_EPOCH + SAMPLE_GAP * step,
+                tx_bytes: 600,
+                rx_bytes: 500,
+                ..Default::default()
+            });
+        }
+        assert!(stall >= COUNTER_STALL_RECONNECT);
+        let stall = up.record_wg_stats(TunnelStatsSample {
+            at: UNIX_EPOCH + SAMPLE_GAP * 7,
+            tx_bytes: 600,
+            rx_bytes: 700,
+            ..Default::default()
+        });
+        assert_eq!(stall, Duration::ZERO);
     }
 
     #[test]
