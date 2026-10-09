@@ -20,7 +20,11 @@ bytesize = "~2.7.0"
 cfg-if = "~1.0.4"
 clap = { version = "~4.6.7", features = ["derive", "env"] }
 clap_complete = "~4.6.11"
+<<<<<<< HEAD
 edgli = { git = "https://github.com/hoprnet/edge-client.git", branch = "release/4.1", features = [
+=======
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "4fbb5c8eb07133f22a8c94db05db846c43c365c2", features = [
+>>>>>>> 8845f5e (feat(pix): build against the Curvy deposit pool- #839 (#849))
   "blokli",
   "telemetry",
 ] }
@@ -54,7 +58,7 @@ rustix = { version = "~1.1.4", features = ["fs", "net", "pipe", "stdio"] }
 serde = { version = "~1.0.229", features = ["derive"] }
 serde-saphyr = "~1.2.0"
 serde_json = "~1.0.151"
-serde_with = "~3.23.0"
+serde_with = "~3.24.0"
 tempfile = "~3.27.0"
 thiserror = "~2.0.20"
 tikv-jemallocator = "~0.7.0"

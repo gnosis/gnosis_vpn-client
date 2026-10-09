@@ -1,11 +1,14 @@
-/// Config v6: identical to v5 except `Intermediates` is removed from
-/// `DestinationPath`. Only hop-count based routing is supported.
+/// Config v7: the current, canonical config schema. Older version modules (`v3`–`v6`) hold only
+/// their own historical dialect differences and forward-convert into this module's `Config`
+/// rather than duplicating the shared schema.
 ///
-/// Existing v4/v5 configs with `intermediates` must be migrated by replacing
-/// `path = { intermediates = [...] }` with `path = { hops = <count> }`.
+/// Two things are new relative to v6: `[destinations]` is optional — a config with none is valid,
+/// relying entirely on `gnosis_vpn-lib`'s exit-node discovery instead of static config — and each
+/// configured destination may carry its own `gnosis_vpn_server`/`wireguard_server`, overriding the
+/// global `[connection.bridge/wg].target` default for that destination when present.
 use bytesize::ByteSize;
 use edgli::hopr_lib::HopRouting;
-use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::api::types::primitive::prelude::{Address, HoprBalance};
 use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
 use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionCapability, SessionTarget};
 use human_bandwidth::re::bandwidth::Bandwidth;
@@ -19,23 +22,22 @@ use std::time::Duration;
 use std::vec::Vec;
 
 use crate::config;
-use crate::connection::{destination::Destination as ConnDestination, options};
+use crate::connection::destination::{
+    DEFAULT_HOPS, DefaultTargets, Destination as ConnDestination, DestinationSource, Destinations, Meta, Overrides,
+};
+use crate::connection::options;
 use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
+use crate::hopr::pix_config::PixConfig;
 use crate::hopr::strategy_config::StrategyConfig;
 use crate::ping;
 use crate::wireguard::Config as WireGuardConfig;
 
-<<<<<<< HEAD
-// Maximum supported hop count — used in both v5 and v6 conversion.
+// Maximum supported hop count.
 pub(super) const MAX_HOPS: u8 = 3;
 
-// ── Shared structs (used by both v5 and v6) ──────────────────────────────────
-=======
-pub(super) use super::v7::{BlokliConfig, Connection, DestinationPath, Strategy, WireGuard};
->>>>>>> 8845f5e (feat(pix): build against the Curvy deposit pool- #839 (#849))
+// ── Connection / session config ───────────────────────────────────────────────
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-<<<<<<< HEAD
 pub(super) struct Connection {
     #[serde(default, with = "humantime_serde::option")]
     pub(super) http_timeout: Option<Duration>,
@@ -43,6 +45,7 @@ pub(super) struct Connection {
     pub(super) wg: Option<ConnectionProtocol>,
     pub(super) ping: Option<PingOptions>,
     pub(super) surb_balancing: Option<SurbBalancingConfig>,
+    pub(super) pix: Option<PixOptionsConfig>,
     pub(super) health_check_intervals: Option<HealthCheckIntervalOptions>,
     pub(super) lan_lockdown: Option<bool>,
     pub(super) probe_local_addresses: Option<bool>,
@@ -50,15 +53,6 @@ pub(super) struct Connection {
     pub(super) path_planner_min_ack_rate: Option<f64>,
     #[serde(default)]
     pub(super) path_planner: Option<options::PathPlannerOptions>,
-=======
-pub struct Config {
-    pub version: u8,
-    pub(super) destinations: Option<HashMap<String, Destination>>,
-    pub(super) connection: Option<Connection>,
-    pub(super) wireguard: Option<WireGuard>,
-    pub(super) blokli: Option<BlokliConfig>,
-    pub(super) strategy: Option<Strategy>,
->>>>>>> 8845f5e (feat(pix): build against the Curvy deposit pool- #839 (#849))
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -75,7 +69,6 @@ pub(super) enum Capability {
     NoRateControl,
 }
 
-<<<<<<< HEAD
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct ConnectionProtocol {
     pub(super) capabilities: Option<Vec<Capability>>,
@@ -103,38 +96,49 @@ pub(super) struct HealthCheckIntervalOptions {
     pub(super) tunnel_ping: Option<Duration>,
     #[serde(default, deserialize_with = "validate_tunnel_ping_max_failures")]
     pub(super) tunnel_ping_max_failures: Option<u32>,
-    #[serde(default, with = "humantime_serde::option")]
-    pub(super) tunnel_ping_max_rtt: Option<Duration>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct SessionSurbConfig {
-    enabled: Option<bool>,
-    buffer: Option<ByteSize>,
+    pub(super) enabled: Option<bool>,
+    pub(super) buffer: Option<ByteSize>,
     #[serde(default, with = "human_bandwidth::serde")]
-    max_surb_upstream: Option<Bandwidth>,
-    always_max_out_surbs: Option<bool>,
+    pub(super) max_surb_upstream: Option<Bandwidth>,
+    pub(super) always_max_out_surbs: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct SurbRampConfig {
     #[serde(default, with = "humantime_serde::option")]
-    interval: Option<Duration>,
+    pub(super) interval: Option<Duration>,
     #[serde(default, with = "humantime_serde::option")]
-    duration: Option<Duration>,
+    pub(super) duration: Option<Duration>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct SurbBalancingConfig {
-    ping: Option<SessionSurbConfig>,
-    main: Option<SessionSurbConfig>,
-    bridge: Option<SessionSurbConfig>,
-    ramp: Option<SurbRampConfig>,
+    pub(super) ping: Option<SessionSurbConfig>,
+    pub(super) main: Option<SessionSurbConfig>,
+    pub(super) bridge: Option<SessionSurbConfig>,
+    pub(super) ramp: Option<SurbRampConfig>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct SessionPixConfig {
+    enabled: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct PixOptionsConfig {
+    ping_main: Option<SessionPixConfig>,
+    bridge: Option<SessionPixConfig>,
+    pub(super) dimensions: Option<options::PixDimensionOptions>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct WireGuard {
     pub(super) allowed_ips: Option<String>,
+    pub(super) force_private_key: Option<String>,
     pub(super) dns: Option<WireGuardDNS>,
 }
 
@@ -217,8 +221,6 @@ pub(super) fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
     flags
 }
 
-// ── Shared From impls ─────────────────────────────────────────────────────────
-
 impl Connection {
     // Bridge capabilities must never include retransmissions — those require additional SURBs.
     pub fn default_bridge_capabilities() -> Vec<Capability> {
@@ -232,18 +234,20 @@ impl Connection {
         vec![Capability::Segmentation, Capability::NoDelay]
     }
 
+    pub fn default_bridge_socket() -> SocketAddr {
+        SocketAddr::from(([172, 30, 0, 1], 8000))
+    }
+
     pub fn default_bridge_target() -> SessionTarget {
-        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-            [172, 30, 0, 1],
-            8000,
-        )))))
+        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(Self::default_bridge_socket())))
+    }
+
+    pub fn default_wg_socket() -> SocketAddr {
+        SocketAddr::from(([172, 30, 0, 1], 51820))
     }
 
     pub fn default_wg_target() -> SessionTarget {
-        SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
-            [172, 30, 0, 1],
-            51820,
-        )))))
+        SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(Self::default_wg_socket())))
     }
 
     pub fn default_http_timeout() -> Duration {
@@ -251,24 +255,10 @@ impl Connection {
     }
 }
 
-/// Zero intervals feed `time::sleep(0)` and hammer the exit; a zero RTT ceiling calls every reply slow.
-pub(super) fn reject_zero_intervals(intervals: &options::HealthCheckIntervals) -> Result<(), config::Error> {
-    let any_zero = [
-        intervals.version,
-        intervals.ping,
-        intervals.load,
-        intervals.tunnel_ping,
-        intervals.tunnel_ping_max_rtt,
-    ]
-    .iter()
-    .any(Duration::is_zero);
-    if any_zero {
-        return Err(config::Error::HealthCheckIntervalZero);
-    }
-    Ok(())
-}
-
-fn apply_session_surb(cfg: Option<SessionSurbConfig>, def: options::SessionSurbOptions) -> options::SessionSurbOptions {
+pub(super) fn apply_session_surb(
+    cfg: Option<SessionSurbConfig>,
+    def: options::SessionSurbOptions,
+) -> options::SessionSurbOptions {
     match cfg {
         None => def,
         Some(c) => {
@@ -280,6 +270,15 @@ fn apply_session_surb(cfg: Option<SessionSurbConfig>, def: options::SessionSurbO
                 always_max_out_surbs: c.always_max_out_surbs.unwrap_or(enabled),
             }
         }
+    }
+}
+
+fn apply_session_pix(cfg: Option<SessionPixConfig>, def: options::SessionPixOptions) -> options::SessionPixOptions {
+    match cfg {
+        None => def,
+        Some(c) => options::SessionPixOptions {
+            enabled: c.enabled.unwrap_or(def.enabled),
+        },
     }
 }
 
@@ -343,6 +342,18 @@ impl From<Option<Connection>> for options::Options {
                     .unwrap_or(def.ramp.duration),
             },
         };
+
+        let pix_cfg = connection.and_then(|c| c.pix.clone());
+        let def_pix = options::PixOptions::default();
+        let pix = options::PixOptions {
+            ping_main: apply_session_pix(pix_cfg.as_ref().and_then(|s| s.ping_main.clone()), def_pix.ping_main),
+            bridge: apply_session_pix(pix_cfg.as_ref().and_then(|s| s.bridge.clone()), def_pix.bridge),
+            dimensions: pix_cfg
+                .as_ref()
+                .and_then(|s| s.dimensions.clone())
+                .unwrap_or(def_pix.dimensions),
+        };
+
         let http_timeout = connection
             .and_then(|c| c.http_timeout)
             .unwrap_or(Connection::default_http_timeout());
@@ -360,7 +371,6 @@ impl From<Option<Connection>> for options::Options {
                 tunnel_ping_max_failures: h
                     .tunnel_ping_max_failures
                     .unwrap_or(def_intervals.tunnel_ping_max_failures),
-                tunnel_ping_max_rtt: h.tunnel_ping_max_rtt.unwrap_or(def_intervals.tunnel_ping_max_rtt),
             })
             .unwrap_or(def_intervals);
 
@@ -368,6 +378,7 @@ impl From<Option<Connection>> for options::Options {
             sessions,
             ping_options: ping_opts,
             surb_balancing,
+            pix,
             timeouts,
             health_check_intervals,
             lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
@@ -383,6 +394,7 @@ impl From<Option<Connection>> for options::Options {
 impl From<Option<WireGuard>> for WireGuardConfig {
     fn from(value: Option<WireGuard>) -> Self {
         let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
+        let force_private_key = value.as_ref().and_then(|wg| wg.force_private_key.clone());
         let dns = value
             .as_ref()
             .and_then(|wg| {
@@ -395,7 +407,7 @@ impl From<Option<WireGuard>> for WireGuardConfig {
                 })
             })
             .unwrap_or(Some(WireGuardDNS::default_server()));
-        WireGuardConfig::new(allowed_ips, dns)
+        WireGuardConfig::new(allowed_ips, force_private_key, dns)
     }
 }
 
@@ -421,10 +433,164 @@ impl From<Option<BlokliConfig>> for HoprBlokliConfig {
     }
 }
 
-// ── v6-specific items ─────────────────────────────────────────────────────────
+// ── Strategy config ────────────────────────────────────────────────────────────
 
-=======
->>>>>>> 8845f5e (feat(pix): build against the Curvy deposit pool- #839 (#849))
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct ChannelAllowlistConfig {
+    pub(super) enabled: bool,
+    #[serde_as(as = "Vec<DisplayFromStr>")]
+    pub(super) peers: Vec<Address>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct Strategy {
+    pub(super) min_open_channels: Option<usize>,
+    pub(super) target_open_channels: Option<usize>,
+    pub(super) channel_allowlist: Option<ChannelAllowlistConfig>,
+    #[serde(default, deserialize_with = "validate_channel_capacity")]
+    pub(super) channel_capacity: Option<ByteSize>,
+    pub(super) topup_capacity: Option<ByteSize>,
+    pub(super) lower_capacity_threshold: Option<ByteSize>,
+    pub(super) sizing_mode: Option<edgli::strategy::CapacitySizingMode>,
+}
+
+/// Rejects a capacity edgli cannot turn into a funding config.
+///
+/// It derives the safe balance gate by scaling the capacity up, so a value near
+/// `u64::MAX` overflows and fails every reactor start. That failure is retried on a
+/// timer with a generic message, so without this the config loads fine and the node
+/// silently never opens a channel — naming the key here turns it into a load error.
+fn validate_channel_capacity<'de, D>(deserializer: D) -> Result<Option<ByteSize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    /// Headroom edgli needs above the requested capacity to size the safe gate.
+    const MAX_SAFE_SCALING: u64 = 2;
+
+    match Option::<ByteSize>::deserialize(deserializer)? {
+        Some(v) if v.as_u64() > u64::MAX / MAX_SAFE_SCALING => Err(serde::de::Error::custom(format!(
+            "channel_capacity must not exceed {}",
+            ByteSize::b(u64::MAX / MAX_SAFE_SCALING)
+        ))),
+        other => Ok(other),
+    }
+}
+
+impl From<Option<Strategy>> for StrategyConfig {
+    fn from(v: Option<Strategy>) -> Self {
+        let def = StrategyConfig::default();
+        Self {
+            min_open_channels: v
+                .as_ref()
+                .and_then(|s| s.min_open_channels)
+                .unwrap_or(def.min_open_channels),
+            target_open_channels: v
+                .as_ref()
+                .and_then(|s| s.target_open_channels)
+                .unwrap_or(def.target_open_channels),
+            channel_allowlist: v
+                .as_ref()
+                .and_then(|s| s.channel_allowlist.as_ref())
+                .and_then(|c| c.enabled.then(|| c.peers.iter().cloned().collect())),
+            channel_capacity: v.as_ref().and_then(|s| s.channel_capacity),
+            topup_capacity: v.as_ref().and_then(|s| s.topup_capacity),
+            lower_capacity_threshold: v.as_ref().and_then(|s| s.lower_capacity_threshold),
+            sizing_mode: v.as_ref().and_then(|s| s.sizing_mode.clone()),
+        }
+    }
+}
+
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct PixStrategy {
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) price_per_byte: Option<HoprBalance>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) max_ssa_allocation: Option<HoprBalance>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) max_spend_per_window: Option<HoprBalance>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) spend_window: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) deposit_buffer_period: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) max_deposit_tracking_time: Option<Duration>,
+    pub(super) max_deposit_retries: Option<usize>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) min_safe_hopr_reserve: Option<HoprBalance>,
+    #[serde(default)]
+    pub(super) relayer_url: Option<url::Url>,
+}
+
+impl From<Option<PixStrategy>> for PixConfig {
+    fn from(v: Option<PixStrategy>) -> Self {
+        let def = PixConfig::default();
+        Self {
+            price_per_byte: v.as_ref().and_then(|p| p.price_per_byte).unwrap_or(def.price_per_byte),
+            max_ssa_allocation: v
+                .as_ref()
+                .and_then(|p| p.max_ssa_allocation)
+                .unwrap_or(def.max_ssa_allocation),
+            max_spend_per_window: v
+                .as_ref()
+                .and_then(|p| p.max_spend_per_window)
+                .unwrap_or(def.max_spend_per_window),
+            spend_window: v.as_ref().and_then(|p| p.spend_window).unwrap_or(def.spend_window),
+            deposit_buffer_period: v
+                .as_ref()
+                .and_then(|p| p.deposit_buffer_period)
+                .unwrap_or(def.deposit_buffer_period),
+            max_deposit_tracking_time: v
+                .as_ref()
+                .and_then(|p| p.max_deposit_tracking_time)
+                .unwrap_or(def.max_deposit_tracking_time),
+            max_deposit_retries: v.as_ref().and_then(|p| p.max_deposit_retries),
+            min_safe_hopr_reserve: v.as_ref().and_then(|p| p.min_safe_hopr_reserve),
+            relayer_url: v.and_then(|p| p.relayer_url).unwrap_or(def.relayer_url),
+        }
+    }
+}
+
+// ── Destinations ───────────────────────────────────────────────────────────────
+
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Config {
+    pub version: u8,
+    pub(super) destinations: Option<HashMap<String, Destination>>,
+    pub(super) connection: Option<Connection>,
+    pub(super) wireguard: Option<WireGuard>,
+    pub(super) blokli: Option<BlokliConfig>,
+    pub(super) strategy: Option<Strategy>,
+    pub(super) pix_strategy: Option<PixStrategy>,
+}
+
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct Destination {
+    #[serde_as(as = "DisplayFromStr")]
+    pub(super) address: Address,
+    pub(super) meta: Option<HashMap<String, String>>,
+    pub(super) path: Option<DestinationPath>,
+    pub(super) gnosis_vpn_server: Option<SocketAddr>,
+    pub(super) wireguard_server: Option<SocketAddr>,
+}
+
+/// Routing path — only hop-count routing is supported.
+///
+/// `Intermediates` is a v4/v5-only historical alias; those versions resolve it to a hop count
+/// while forward-converting into this module, so it never appears here.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) enum DestinationPath {
+    #[serde(alias = "hops", deserialize_with = "validate_hops")]
+    Hops(u8),
+}
+
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong = Vec::new();
     for (key, value) in table.iter() {
@@ -434,7 +600,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
                 for (k, v) in wg.iter() {
-                    if k == "allowed_ips" {
+                    if k == "allowed_ips" || k == "force_private_key" {
                         continue;
                     }
                     if k == "dns" {
@@ -468,7 +634,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             if let Some(connection) = value.as_table() {
                 for (k, v) in connection.iter() {
                     if k == "http_timeout"
-                        || k == "announced_peer_minimum_score"
                         || k == "lan_lockdown"
                         || k == "probe_local_addresses"
                         || k == "path_planner_min_ack_rate"
@@ -555,6 +720,39 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
+                    if k == "pix" {
+                        if let Some(pix) = v.as_table() {
+                            for (k2, v2) in pix.iter() {
+                                if k2 == "ping_main" || k2 == "bridge" {
+                                    if let Some(session) = v2.as_table() {
+                                        for (k3, _) in session.iter() {
+                                            if k3 == "enabled" {
+                                                continue;
+                                            }
+                                            wrong.push(format!("connection.pix.{k2}.{k3}"));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                if k2 == "dimensions" {
+                                    if let Some(dims) = v2.as_table() {
+                                        for (k3, _) in dims.iter() {
+                                            if k3 == "num_ssa_parts"
+                                                || k3 == "ssa_part_size"
+                                                || k3 == "additional_shares"
+                                            {
+                                                continue;
+                                            }
+                                            wrong.push(format!("connection.pix.{k2}.{k3}"));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                wrong.push(format!("connection.pix.{k2}"));
+                            }
+                        }
+                        continue;
+                    }
                     if k == "health_check_intervals" {
                         if let Some(hci) = v.as_table() {
                             for (k2, _) in hci.iter() {
@@ -563,7 +761,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                                     || k2 == "load"
                                     || k2 == "tunnel_ping"
                                     || k2 == "tunnel_ping_max_failures"
-                                    || k2 == "tunnel_ping_max_rtt"
                                 {
                                     continue;
                                 }
@@ -582,7 +779,12 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                 for (id, v) in destinations.iter() {
                     if let Some(dest) = v.as_table() {
                         for (k, _) in dest.iter() {
-                            if k == "address" || k == "meta" || k == "path" {
+                            if k == "address"
+                                || k == "meta"
+                                || k == "path"
+                                || k == "gnosis_vpn_server"
+                                || k == "wireguard_server"
+                            {
                                 continue;
                             }
                             wrong.push(format!("destinations.{id}.{k}"));
@@ -645,207 +847,161 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
+        if key == "pix_strategy" {
+            if let Some(pix) = value.as_table() {
+                for (k, _) in pix.iter() {
+                    if matches!(
+                        k.as_str(),
+                        "price_per_byte"
+                            | "max_ssa_allocation"
+                            | "max_spend_per_window"
+                            | "spend_window"
+                            | "deposit_buffer_period"
+                            | "max_deposit_tracking_time"
+                            | "max_deposit_retries"
+                            | "min_safe_hopr_reserve"
+                            | "relayer_url"
+                    ) {
+                        continue;
+                    }
+                    wrong.push(format!("pix_strategy.{k}"));
+                }
+            }
+            continue;
+        }
         wrong.push(key.clone());
     }
     wrong
-}
-
-#[serde_as]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct ChannelAllowlistConfig {
-    pub(super) enabled: bool,
-    #[serde_as(as = "Vec<DisplayFromStr>")]
-    pub(super) peers: Vec<Address>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct Strategy {
-    pub(super) min_open_channels: Option<usize>,
-    pub(super) target_open_channels: Option<usize>,
-    pub(super) channel_allowlist: Option<ChannelAllowlistConfig>,
-    #[serde(default, deserialize_with = "validate_channel_capacity")]
-    pub(super) channel_capacity: Option<ByteSize>,
-    pub(super) topup_capacity: Option<ByteSize>,
-    pub(super) lower_capacity_threshold: Option<ByteSize>,
-    pub(super) sizing_mode: Option<edgli::strategy::CapacitySizingMode>,
-}
-
-/// Rejects a capacity edgli cannot turn into a funding config.
-///
-/// It derives the safe balance gate by scaling the capacity up, so a value near
-/// `u64::MAX` overflows and fails every reactor start. That failure is retried on a
-/// timer with a generic message, so without this the config loads fine and the node
-/// silently never opens a channel — naming the key here turns it into a load error.
-fn validate_channel_capacity<'de, D>(deserializer: D) -> Result<Option<ByteSize>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    /// Headroom edgli needs above the requested capacity to size the safe gate.
-    const MAX_SAFE_SCALING: u64 = 2;
-
-    match Option::<ByteSize>::deserialize(deserializer)? {
-        Some(v) if v.as_u64() > u64::MAX / MAX_SAFE_SCALING => Err(serde::de::Error::custom(format!(
-            "channel_capacity must not exceed {}",
-            ByteSize::b(u64::MAX / MAX_SAFE_SCALING)
-        ))),
-        other => Ok(other),
-    }
-}
-
-impl From<Option<Strategy>> for StrategyConfig {
-    fn from(v: Option<Strategy>) -> Self {
-        let def = StrategyConfig::default();
-        Self {
-            min_open_channels: v
-                .as_ref()
-                .and_then(|s| s.min_open_channels)
-                .unwrap_or(def.min_open_channels),
-            target_open_channels: v
-                .as_ref()
-                .and_then(|s| s.target_open_channels)
-                .unwrap_or(def.target_open_channels),
-            channel_allowlist: v
-                .as_ref()
-                .and_then(|s| s.channel_allowlist.as_ref())
-                .and_then(|c| c.enabled.then(|| c.peers.iter().cloned().collect())),
-            channel_capacity: v.as_ref().and_then(|s| s.channel_capacity),
-            topup_capacity: v.as_ref().and_then(|s| s.topup_capacity),
-            lower_capacity_threshold: v.as_ref().and_then(|s| s.lower_capacity_threshold),
-            sizing_mode: v.as_ref().and_then(|s| s.sizing_mode.clone()),
-        }
-    }
-}
-
-#[serde_as]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Config {
-    pub version: u8,
-    pub(super) destinations: Option<HashMap<String, Destination>>,
-    pub(super) connection: Option<Connection>,
-    pub(super) wireguard: Option<WireGuard>,
-    pub(super) blokli: Option<BlokliConfig>,
-    pub(super) strategy: Option<Strategy>,
-}
-
-#[serde_as]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct Destination {
-    #[serde_as(as = "DisplayFromStr")]
-    pub(super) address: Address,
-    pub(super) meta: Option<HashMap<String, String>>,
-    pub(super) path: Option<DestinationPath>,
-}
-
-/// Routing path for v6 — only hop-count routing is supported.
-///
-/// `Intermediates` is intentionally absent; configs that previously used
-/// `path = { intermediates = [...] }` must be updated to
-/// `path = { hops = <count> }`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) enum DestinationPath {
-    #[serde(alias = "hops", deserialize_with = "validate_hops")]
-    Hops(u8),
 }
 
 impl TryFrom<Config> for config::Config {
     type Error = config::Error;
 
     fn try_from(value: Config) -> Result<Self, Self::Error> {
-<<<<<<< HEAD
+        let default_gnosis_vpn_server = value
+            .connection
+            .as_ref()
+            .and_then(|c| c.bridge.as_ref())
+            .and_then(|b| b.target)
+            .unwrap_or_else(Connection::default_bridge_socket);
+        let default_wireguard_server = value
+            .connection
+            .as_ref()
+            .and_then(|c| c.wg.as_ref())
+            .and_then(|w| w.target)
+            .unwrap_or_else(Connection::default_wg_socket);
         let connection: options::Options = value.connection.into();
         if connection.surb_balancing.ping.enabled != connection.surb_balancing.main.enabled {
             return Err(config::Error::SurbBalancingMismatch);
-=======
-        let destinations = value.destinations.map(|dests| {
-            dests
-                .into_iter()
-                .map(|(id, d)| {
-                    (
-                        id,
-                        super::v7::Destination {
-                            address: d.address,
-                            meta: d.meta,
-                            path: d.path,
-                            gnosis_vpn_server: None,
-                            wireguard_server: None,
-                        },
-                    )
-                })
-                .collect()
-        });
-
-        // Reported as unsupported by `wrong_keys`, so the shared struct must not apply it either.
-        let mut connection = value.connection;
-        if let Some(c) = connection.as_mut() {
-            c.pix = None;
->>>>>>> 8845f5e (feat(pix): build against the Curvy deposit pool- #839 (#849))
         }
         let ramp = connection.surb_balancing.ramp;
         if ramp.interval.is_zero() || ramp.duration.is_zero() {
             return Err(config::Error::SurbRampZero);
         }
-        reject_zero_intervals(&connection.health_check_intervals)?;
-        let destinations = convert_destinations(value.destinations)?;
+        // Zero feeds `time::sleep(0)` timers, which would hammer the exit back to back.
+        let intervals = &connection.health_check_intervals;
+        let any_interval_zero = [intervals.version, intervals.ping, intervals.load, intervals.tunnel_ping]
+            .iter()
+            .any(Duration::is_zero);
+        if any_interval_zero {
+            return Err(config::Error::HealthCheckIntervalZero);
+        }
+        let default_targets = DefaultTargets {
+            gnosis_vpn_server: default_gnosis_vpn_server,
+            wireguard_server: default_wireguard_server,
+        };
+        let destinations = convert_destinations(value.destinations, default_targets)?;
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
         let strategy = value.strategy.into();
+        let pix_strategy = value.pix_strategy.into();
         Ok(config::Config {
             connection,
-<<<<<<< HEAD
             destinations,
+            default_targets,
             wireguard,
             blokli,
             strategy,
-=======
-            wireguard: value.wireguard,
-            blokli: value.blokli,
-            strategy: value.strategy,
-            pix_strategy: None,
->>>>>>> 8845f5e (feat(pix): build against the Curvy deposit pool- #839 (#849))
+            pix_strategy,
         })
     }
 }
 
+/// The per-destination `Option`s survive as the pins; discovery fills in what they leave open.
 pub fn convert_destinations(
     value: Option<HashMap<String, Destination>>,
-) -> Result<HashMap<String, ConnDestination>, config::Error> {
-    let config_dests = value.ok_or(config::Error::NoDestinations)?;
-    if config_dests.is_empty() {
-        return Err(config::Error::NoDestinations);
-    }
+    defaults: DefaultTargets,
+) -> Result<Destinations, config::Error> {
+    let config_dests = value.unwrap_or_default();
 
-    let mut result = HashMap::new();
+    let mut result = Destinations::default();
     for (id, dest) in config_dests.iter() {
         let path = match dest.path {
             Some(DestinationPath::Hops(h)) => HopRouting::try_from(h as usize)?,
-            None => HopRouting::try_from(1)?,
+            None => HopRouting::try_from(DEFAULT_HOPS)?,
         };
 
-        let meta = dest.meta.clone().unwrap_or_default();
-        let dest = ConnDestination::new(id.to_string(), dest.address, path, meta);
-        result.insert(id.to_string(), dest);
+        let labels = dest.meta.clone().unwrap_or_default();
+        let meta = Meta::from_map(labels.clone());
+        let overrides = Overrides::from_config(labels, dest.gnosis_vpn_server, dest.wireguard_server);
+        let dest = ConnDestination::new(
+            id.to_string(),
+            dest.address,
+            path,
+            meta,
+            dest.gnosis_vpn_server.unwrap_or(defaults.gnosis_vpn_server),
+            dest.wireguard_server.unwrap_or(defaults.wireguard_server),
+            DestinationSource::Configured,
+        )
+        .with_overrides(overrides);
+        // Keyed by identity, the entry this displaces is the duplicate.
+        if let Some(other) = result.insert(dest) {
+            return Err(config::Error::DuplicateDestination {
+                first: other.connect_id,
+                second: id.to_string(),
+                address: other.address.to_checksum(),
+                hops: other.routing.hop_count(),
+            });
+        }
     }
     Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelAllowlistConfig, Config, Strategy, WireGuardConfig, convert_destinations, wrong_keys};
+    use super::{
+        ChannelAllowlistConfig, Config, Connection, DefaultTargets, DestinationSource, Strategy, WireGuardConfig,
+        convert_destinations, wrong_keys,
+    };
     use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
+    use crate::hopr::pix_config::PixConfig;
     use crate::hopr::strategy_config::StrategyConfig;
     use edgli::hopr_lib::HopRouting;
     use edgli::hopr_lib::api::types::primitive::prelude::Address;
+    use std::collections::HashMap;
+    use std::net::SocketAddr;
     use std::time::Duration;
 
     fn parse(toml: &str) -> Config {
         toml::from_str(toml).expect("valid TOML")
     }
 
+    fn convert_with_defaults(value: Option<HashMap<String, super::Destination>>) -> super::Destinations {
+        convert_destinations(
+            value,
+            DefaultTargets {
+                gnosis_vpn_server: Connection::default_bridge_socket(),
+                wireguard_server: Connection::default_wg_socket(),
+            },
+        )
+        .expect("should succeed")
+    }
+
     #[test]
     fn blokli_request_timeout_is_parsed() {
         let cfg = parse(
             r#####"
-version = 6
+version = 7
 
 [blokli]
 request_timeout = "45s"
@@ -856,24 +1012,10 @@ request_timeout = "45s"
     }
 
     #[test]
-    fn blokli_request_timeout_is_optional() {
-        let cfg = parse(
-            r#####"
-version = 6
-
-[blokli]
-sync_tolerance = 50
-"#####,
-        );
-        let blokli = cfg.blokli.expect("blokli section present");
-        assert_eq!(blokli.request_timeout, None);
-    }
-
-    #[test]
     fn absent_blokli_request_timeout_falls_back_to_the_default() {
         let cfg = parse(
             r#####"
-version = 6
+version = 7
 
 [blokli]
 sync_tolerance = 50
@@ -887,7 +1029,7 @@ sync_tolerance = 50
     fn configured_blokli_request_timeout_wins_over_the_default() {
         let cfg = parse(
             r#####"
-version = 6
+version = 7
 
 [blokli]
 request_timeout = "45s"
@@ -900,7 +1042,7 @@ request_timeout = "45s"
     #[test]
     fn blokli_request_timeout_is_a_supported_key() {
         let table = r#####"
-version = 6
+version = 7
 
 [blokli]
 connection_sync_timeout = "30s"
@@ -915,17 +1057,89 @@ nonsense = 1
     }
 
     #[test]
+    fn absent_destinations_table_converts_to_empty_map() {
+        let cfg = parse("version = 7\n");
+        let result = convert_with_defaults(cfg.destinations);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn empty_destinations_table_converts_to_empty_map() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations]
+"#####,
+        );
+        let result = convert_with_defaults(cfg.destinations);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn the_same_exit_at_the_same_path_under_two_ids_is_rejected() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { hops = 2 }
+
+[destinations.Frankfurt]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { hops = 2 }
+"#####,
+        );
+
+        let err = convert_destinations(
+            cfg.destinations,
+            DefaultTargets {
+                gnosis_vpn_server: Connection::default_bridge_socket(),
+                wireguard_server: Connection::default_wg_socket(),
+            },
+        )
+        .expect_err("a duplicate exit and path is rejected");
+
+        assert!(matches!(
+            err,
+            crate::config::Error::DuplicateDestination { hops: 2, .. }
+        ));
+    }
+
+    #[test]
+    fn the_same_exit_at_two_paths_is_two_destinations() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { hops = 1 }
+
+[destinations.GermanyLongRoute]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { hops = 3 }
+"#####,
+        );
+
+        let result = convert_with_defaults(cfg.destinations);
+
+        assert_eq!(2, result.len());
+    }
+
+    #[test]
     fn convert_destinations_hops_path_preserved() {
         let cfg = parse(
             r#####"
-version = 6
+version = 7
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 path = { hops = 2 }
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert_with_defaults(cfg.destinations);
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(2).unwrap());
     }
@@ -934,57 +1148,119 @@ path = { hops = 2 }
     fn convert_destinations_none_path_defaults_to_1_hop() {
         let cfg = parse(
             r#####"
-version = 6
+version = 7
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 "#####,
         );
-        let result = convert_destinations(cfg.destinations).expect("should succeed");
+        let result = convert_with_defaults(cfg.destinations);
         let d = result.values().next().unwrap();
         assert_eq!(d.routing, HopRouting::try_from(1).unwrap());
     }
 
     #[test]
-    fn convert_destinations_empty_map_errors() {
-        let result = convert_destinations(Some(std::collections::HashMap::new()));
-        assert!(result.is_err());
+    fn configured_destination_has_configured_source_and_default_targets_by_default() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result = convert_with_defaults(cfg.destinations);
+        let d = result.values().next().unwrap();
+        assert_eq!(d.source, DestinationSource::Configured);
+        assert_eq!(d.gnosis_vpn_server, Connection::default_bridge_socket());
+        assert_eq!(d.wireguard_server, Connection::default_wg_socket());
     }
 
     #[test]
-    fn convert_destinations_none_errors() {
-        let result = convert_destinations(None);
-        assert!(result.is_err());
+    fn configured_destination_target_overrides_win_over_the_default() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+gnosis_vpn_server = "172.30.0.1:8000"
+wireguard_server = "172.30.0.1:51820"
+"#####,
+        );
+        let result = convert_with_defaults(cfg.destinations);
+        let d = result.values().next().unwrap();
+        assert_eq!(d.gnosis_vpn_server, "172.30.0.1:8000".parse::<SocketAddr>().unwrap());
+        assert_eq!(d.wireguard_server, "172.30.0.1:51820".parse::<SocketAddr>().unwrap());
     }
 
     #[test]
-    fn intermediates_path_rejected_in_v6() {
-        // v6 does not support the deprecated `intermediates` key — deserialization
-        // must fail when it appears in a destination path.
+    fn destination_without_override_uses_the_configured_global_bridge_and_wg_target() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[connection.bridge]
+target = "10.0.0.5:9999"
+
+[connection.wg]
+target = "10.0.0.5:8888"
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let d = result.destinations.values().next().unwrap();
+        assert_eq!(d.gnosis_vpn_server, "10.0.0.5:9999".parse::<SocketAddr>().unwrap());
+        assert_eq!(d.wireguard_server, "10.0.0.5:8888".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn destinations_gnosis_vpn_server_is_a_supported_key() {
+        let table = r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+gnosis_vpn_server = "172.30.0.1:8000"
+wireguard_server = "172.30.0.1:51820"
+nonsense = 1
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), vec!["destinations.Germany.nonsense".to_string()]);
+    }
+
+    #[test]
+    fn intermediates_path_rejected() {
+        // `intermediates` is a v4/v5-only historical alias, already resolved to a hop count by
+        // the time a config reaches this module — v7 itself never accepts it.
         let result = toml::from_str::<Config>(
             r#####"
-version = 6
+version = 7
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 path = { intermediates = ["0xD88064F7023D5dA2Efa35eAD1602d5F5d86BB6BA"] }
 "#####,
         );
-        assert!(result.is_err(), "v6 must reject intermediates path");
+        assert!(result.is_err(), "v7 must reject intermediates path");
     }
 
     #[test]
     fn hops_validation_rejects_above_max() {
         let result = toml::from_str::<Config>(
             r#####"
-version = 6
+version = 7
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 path = { hops = 4 }
 "#####,
         );
-        assert!(result.is_err(), "v6 must reject hops > MAX_HOPS");
+        assert!(result.is_err(), "v7 must reject hops > MAX_HOPS");
     }
 
     #[test]
@@ -993,10 +1269,7 @@ path = { hops = 4 }
         // without a listening socket, so the key is flagged like any other
         // unknown key instead of being special-cased.
         let table: toml::Table = r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+version = 7
 
 [wireguard]
 listen_port = 51820
@@ -1008,36 +1281,10 @@ allowed_ips = "10.0.0.0/8"
     }
 
     #[test]
-    fn a_leftover_force_private_key_is_ignored_and_reported() {
-        let raw = r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-
-[wireguard]
-force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
-"#####;
-        let table: toml::Table = raw.parse().expect("valid TOML");
-        assert_eq!(
-            super::wrong_keys(&table),
-            vec!["wireguard.force_private_key".to_string()]
-        );
-        let result: crate::config::Config = parse(raw).try_into().expect("old configs keep loading");
-        assert_eq!(
-            result.wireguard,
-            WireGuardConfig::new(None, Some("1.1.1.1,8.8.8.8".to_string()))
-        );
-    }
-
-    #[test]
     fn wireguard_section_converts_to_config() {
         let cfg = parse(
             r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+version = 7
 
 [wireguard]
 allowed_ips = "10.0.0.0/8"
@@ -1047,20 +1294,17 @@ allowed_ips = "10.0.0.0/8"
         let converted: WireGuardConfig = Some(wg).into();
         assert_eq!(
             converted,
-            WireGuardConfig::new(Some("10.0.0.0/8".to_string()), Some("1.1.1.1,8.8.8.8".to_string()))
+            WireGuardConfig::new(
+                Some("10.0.0.0/8".to_string()),
+                None,
+                Some("1.1.1.1,8.8.8.8".to_string())
+            )
         );
     }
 
     #[test]
     fn probe_local_addresses_defaults_to_false() {
-        let cfg = parse(
-            r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-"#####,
-        );
+        let cfg = parse("version = 7\n");
         let result: crate::config::Config = cfg.try_into().expect("should succeed");
         assert!(!result.connection.probe_local_addresses);
     }
@@ -1069,10 +1313,7 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
     fn probe_local_addresses_reads_from_connection() {
         let cfg = parse(
             r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+version = 7
 
 [connection]
 probe_local_addresses = true
@@ -1084,14 +1325,7 @@ probe_local_addresses = true
 
     #[test]
     fn path_planner_min_ack_rate_defaults_to_point_one() {
-        let cfg = parse(
-            r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-"#####,
-        );
+        let cfg = parse("version = 7\n");
         let result: crate::config::Config = cfg.try_into().expect("should succeed");
         assert_eq!(result.connection.path_planner_min_ack_rate, 0.1);
     }
@@ -1100,10 +1334,7 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
     fn path_planner_min_ack_rate_reads_from_connection() {
         let cfg = parse(
             r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+version = 7
 
 [connection]
 path_planner_min_ack_rate = 0.5
@@ -1118,10 +1349,7 @@ path_planner_min_ack_rate = 0.5
         for bad in &[-0.1_f64, 1.1, 2.0, -1.0] {
             let toml = format!(
                 r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+version = 7
 
 [connection]
 path_planner_min_ack_rate = {bad}
@@ -1137,14 +1365,7 @@ path_planner_min_ack_rate = {bad}
 
     #[test]
     fn path_planner_defaults_to_empty_overrides() {
-        let cfg = parse(
-            r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-"#####,
-        );
+        let cfg = parse("version = 7\n");
         let result: crate::config::Config = cfg.try_into().expect("should succeed");
         assert_eq!(
             result.connection.path_planner,
@@ -1156,10 +1377,7 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
     fn path_planner_reads_overrides_from_connection() {
         let cfg = parse(
             r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+version = 7
 
 [connection.path_planner]
 min_paths_anonymity_floor = 4
@@ -1188,7 +1406,7 @@ capacity_reference = 20000000
         ] {
             let toml = format!(
                 r#####"
-version = 6
+version = 7
 
 [connection.path_planner]
 {line}
@@ -1200,9 +1418,93 @@ version = 6
     }
 
     #[test]
+    fn surb_ramp_defaults() {
+        let cfg = parse("version = 7");
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let ramp = result.connection.surb_balancing.ramp;
+        assert_eq!(ramp.interval, Duration::from_secs(1));
+        assert_eq!(ramp.duration, Duration::from_secs(20));
+    }
+
+    #[test]
+    fn surb_ramp_reads_from_connection() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[connection.surb_balancing.ramp]
+interval = "500ms"
+duration = "10s"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let ramp = result.connection.surb_balancing.ramp;
+        assert_eq!(ramp.interval, Duration::from_millis(500));
+        assert_eq!(ramp.duration, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn surb_ramp_rejects_zero() {
+        for line in &["interval = \"0s\"", "duration = \"0s\""] {
+            let cfg = parse(&format!(
+                r#####"
+version = 7
+
+[connection.surb_balancing.ramp]
+{line}
+"#####
+            ));
+            let result: Result<crate::config::Config, _> = cfg.try_into();
+            assert!(result.is_err(), "expected rejection for `{line}`");
+        }
+    }
+
+    #[test]
+    fn health_check_intervals_reject_zero() {
+        for line in &[
+            "version = \"0s\"",
+            "ping = \"0s\"",
+            "load = \"0s\"",
+            "tunnel_ping = \"0s\"",
+        ] {
+            let cfg = parse(&format!(
+                r#####"
+version = 7
+
+[connection.health_check_intervals]
+{line}
+"#####
+            ));
+            let result: Result<crate::config::Config, _> = cfg.try_into();
+            assert!(
+                matches!(result, Err(crate::config::Error::HealthCheckIntervalZero)),
+                "expected rejection for `{line}`"
+            );
+        }
+    }
+
+    #[test]
+    fn surb_ramp_unknown_key_is_flagged() {
+        let table = r#####"
+version = 7
+
+[connection.surb_balancing.ramp]
+interval = "1s"
+nonsense = 1
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["connection.surb_balancing.ramp.nonsense".to_string()]
+        );
+    }
+
+    #[test]
     fn path_planner_unknown_key_is_flagged() {
         let table = r#####"
-version = 6
+version = 7
 
 [connection.path_planner]
 min_paths_anonymity_floor = 4
@@ -1218,7 +1520,7 @@ nonsense = 1
     fn strategy_channel_capacity_is_parsed() {
         let cfg = parse(
             r#####"
-version = 6
+version = 7
 
 [strategy]
 channel_capacity = "1 GiB"
@@ -1233,11 +1535,9 @@ channel_capacity = "1 GiB"
 
     #[test]
     fn strategy_channel_capacity_rejects_a_value_that_overflows_the_safe_gate() {
-        // Without the bound this loads fine and then fails every reactor start on a
-        // 10s retry, with nothing naming the offending key.
         let err = toml::from_str::<Config>(
             r#####"
-version = 6
+version = 7
 
 [strategy]
 channel_capacity = "16 EiB"
@@ -1247,410 +1547,6 @@ channel_capacity = "16 EiB"
         assert!(
             err.to_string().contains("channel_capacity"),
             "error should name the key, got: {err}"
-        );
-    }
-
-    #[test]
-    fn strategy_channel_capacity_is_optional() {
-        let cfg = parse(
-            r#####"
-version = 6
-
-[strategy]
-target_open_channels = 8
-"#####,
-        );
-        let strategy = cfg.strategy.expect("strategy section present");
-        assert!(strategy.channel_capacity.is_none());
-
-        // Left unset so edgli applies its own sizing rather than a local value.
-        let converted: StrategyConfig = Some(strategy).into();
-        assert!(converted.channel_capacity.is_none());
-    }
-
-    #[test]
-    fn strategy_channel_capacity_is_a_known_key() {
-        // An unlisted key still loads, but `wrong_keys` makes the daemon log it as
-        // unsupported — a misleading warning for a key that is honoured.
-        let table = r#####"
-version = 6
-
-[strategy]
-channel_capacity = "1 GiB"
-"#####
-            .parse::<toml::Table>()
-            .expect("valid TOML");
-
-        assert_eq!(wrong_keys(&table), Vec::<String>::new());
-    }
-
-    #[test]
-    fn obsolete_min_safe_capacity_is_flagged() {
-        let table = r#####"
-version = 6
-
-[strategy]
-min_safe_capacity_required = "640 MiB"
-"#####
-            .parse::<toml::Table>()
-            .expect("valid TOML");
-
-        assert_eq!(
-            wrong_keys(&table),
-            vec!["strategy.min_safe_capacity_required".to_string()]
-        );
-    }
-
-    #[test]
-    fn strategy_new_capacity_fields_are_parsed() {
-        let cfg = parse(
-            r#####"
-version = 6
-
-[strategy]
-topup_capacity = "384 MiB"
-lower_capacity_threshold = "128 MiB"
-"#####,
-        );
-        let strategy = cfg.strategy.expect("strategy section present");
-        assert_eq!(strategy.topup_capacity, Some(bytesize::ByteSize::mib(384)));
-        assert_eq!(strategy.lower_capacity_threshold, Some(bytesize::ByteSize::mib(128)));
-
-        let converted: StrategyConfig = Some(strategy).into();
-        assert_eq!(converted.topup_capacity, Some(bytesize::ByteSize::mib(384)));
-        assert_eq!(converted.lower_capacity_threshold, Some(bytesize::ByteSize::mib(128)));
-    }
-
-    #[test]
-    fn strategy_new_capacity_fields_are_optional() {
-        let cfg = parse(
-            r#####"
-version = 6
-
-[strategy]
-channel_capacity = "1 GiB"
-"#####,
-        );
-        let strategy = cfg.strategy.expect("strategy section present");
-        assert!(strategy.topup_capacity.is_none());
-        assert!(strategy.lower_capacity_threshold.is_none());
-
-        let converted: StrategyConfig = Some(strategy).into();
-        assert!(converted.topup_capacity.is_none());
-        assert!(converted.lower_capacity_threshold.is_none());
-    }
-
-    #[test]
-    fn strategy_sizing_mode_deterministic_is_parsed() {
-        let cfg = parse(
-            r#####"
-version = 6
-
-[strategy]
-sizing_mode = "deterministic"
-"#####,
-        );
-        let strategy = cfg.strategy.expect("strategy section present");
-        assert_eq!(
-            strategy.sizing_mode,
-            Some(edgli::strategy::CapacitySizingMode::Deterministic)
-        );
-
-        let converted: StrategyConfig = Some(strategy).into();
-        assert_eq!(
-            converted.sizing_mode,
-            Some(edgli::strategy::CapacitySizingMode::Deterministic)
-        );
-    }
-
-    #[test]
-    fn strategy_sizing_mode_probabilistic_is_parsed() {
-        let cfg = parse(
-            r#####"
-version = 6
-
-[strategy.sizing_mode.probabilistic]
-success_probability = 0.95
-"#####,
-        );
-        let strategy = cfg.strategy.expect("strategy section present");
-        assert_eq!(
-            strategy.sizing_mode,
-            Some(edgli::strategy::CapacitySizingMode::Probabilistic {
-                success_probability: 0.95
-            })
-        );
-    }
-
-    #[test]
-    fn strategy_new_capacity_fields_are_known_keys() {
-        let table = r#####"
-version = 6
-
-[strategy]
-topup_capacity = "384 MiB"
-lower_capacity_threshold = "128 MiB"
-sizing_mode = "deterministic"
-"#####
-            .parse::<toml::Table>()
-            .expect("valid TOML");
-
-        assert_eq!(wrong_keys(&table), Vec::<String>::new());
-    }
-
-    #[test]
-    fn strategy_sizing_mode_probabilistic_typo_is_reported() {
-        let table = r#####"
-version = 6
-
-[strategy.sizing_mode.probabilistic]
-success_probabilty = 0.95
-"#####
-            .parse::<toml::Table>()
-            .expect("valid TOML");
-
-        assert_eq!(
-            wrong_keys(&table),
-            vec!["strategy.sizing_mode.probabilistic.success_probabilty".to_string()]
-        );
-    }
-
-    /// Pins that `wrong_keys` accepts every documented path-planner override.
-    #[test]
-    fn v6_file_still_accepts_the_path_planner_overrides() {
-        let table = r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-
-[connection.path_planner]
-min_paths_anonymity_floor = 4
-latency_halflife = "50ms"
-"#####
-            .parse::<toml::Table>()
-            .expect("valid TOML");
-
-        assert!(wrong_keys(&table).is_empty());
-    }
-
-<<<<<<< HEAD
-    #[test]
-    fn surb_ramp_defaults() {
-        let cfg = parse(
-            r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-"#####,
-        );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
-        let ramp = result.connection.surb_balancing.ramp;
-        assert_eq!(ramp.interval, Duration::from_secs(1));
-        assert_eq!(ramp.duration, Duration::from_secs(20));
-    }
-
-=======
-    /// `[connection]` is shared with v7, so a v6 file may carry the SURB ramp pacing too.
->>>>>>> 8845f5e (feat(pix): build against the Curvy deposit pool- #839 (#849))
-    #[test]
-    fn surb_ramp_reads_from_connection() {
-        let cfg = parse(
-            r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-
-[connection.surb_balancing.ramp]
-interval = "500ms"
-duration = "10s"
-"#####,
-        );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
-        let ramp = result.connection.surb_balancing.ramp;
-        assert_eq!(ramp.interval, Duration::from_millis(500));
-        assert_eq!(ramp.duration, Duration::from_secs(10));
-    }
-
-<<<<<<< HEAD
-    #[test]
-    fn surb_ramp_rejects_zero() {
-        for line in &["interval = \"0s\"", "duration = \"0s\""] {
-            let cfg = parse(&format!(
-                r#####"
-=======
-    /// Warned about, and dropped — not left to leak through the shared `[connection]` struct.
-    #[test]
-    fn pix_sections_are_not_supported_keys_in_v6() {
-        let toml = r#####"
->>>>>>> 8845f5e (feat(pix): build against the Curvy deposit pool- #839 (#849))
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-
-[connection.surb_balancing.ramp]
-{line}
-"#####
-            ));
-            let result: Result<crate::config::Config, _> = cfg.try_into();
-            assert!(result.is_err(), "expected rejection for `{line}`");
-        }
-    }
-
-    #[test]
-    fn surb_ramp_unknown_key_is_flagged() {
-        let table = r#####"
-version = 6
-
-[connection.surb_balancing.ramp]
-interval = "1s"
-nonsense = 1
-"#####
-            .parse::<toml::Table>()
-            .expect("valid TOML");
-
-<<<<<<< HEAD
-        assert_eq!(
-            wrong_keys(&table),
-            vec!["connection.surb_balancing.ramp.nonsense".to_string()]
-        );
-    }
-
-    #[test]
-    fn tunnel_ping_max_rtt_defaults_and_parses() {
-        let cfg = parse(&format!(
-            "version = 6\n\n{}",
-            r#####"[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-"#####
-        ));
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
-        assert_eq!(
-            result.connection.health_check_intervals.tunnel_ping_max_rtt,
-            Duration::from_secs(3)
-        );
-
-        let cfg = parse(
-            r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-
-[connection.health_check_intervals]
-tunnel_ping_max_rtt = "5s"
-"#####,
-        );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
-        assert_eq!(
-            result.connection.health_check_intervals.tunnel_ping_max_rtt,
-            Duration::from_secs(5)
-        );
-    }
-
-    #[test]
-    fn health_check_intervals_reject_zero() {
-        for line in &[
-            "version = \"0s\"",
-            "ping = \"0s\"",
-            "load = \"0s\"",
-            "tunnel_ping = \"0s\"",
-            "tunnel_ping_max_rtt = \"0s\"",
-        ] {
-            let cfg = parse(&format!(
-                r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-
-[connection.health_check_intervals]
-{line}
-"#####
-            ));
-            let result: Result<crate::config::Config, _> = cfg.try_into();
-            assert!(
-                matches!(result, Err(crate::config::Error::HealthCheckIntervalZero)),
-                "expected rejection for `{line}`"
-            );
-        }
-    }
-
-    #[test]
-    fn legacy_health_check_keys_are_reported_as_wrong() {
-        let table = r#####"
-version = 6
-
-[connection.health_check_intervals]
-ping = "10s"
-health_every_n_pings = 4
-version_every_n_pings = 20
-
-[connection.surb_balancing.health_check]
-enabled = false
-"#####
-            .parse::<toml::Table>()
-            .expect("valid TOML");
-
-        let wrong = wrong_keys(&table);
-        assert!(
-            wrong.contains(&"connection.health_check_intervals.health_every_n_pings".to_string()),
-            "{wrong:?}"
-        );
-        assert!(
-            wrong.contains(&"connection.health_check_intervals.version_every_n_pings".to_string()),
-            "{wrong:?}"
-        );
-        assert!(
-            wrong.contains(&"connection.surb_balancing.health_check".to_string()),
-            "{wrong:?}"
-        );
-    }
-
-    #[test]
-    fn strategy_sizing_mode_table_form_deterministic_is_known() {
-        let table = r#####"
-version = 6
-
-[strategy.sizing_mode]
-deterministic = {}
-"#####
-            .parse::<toml::Table>()
-            .expect("valid TOML");
-
-        assert_eq!(wrong_keys(&table), Vec::<String>::new());
-    }
-
-    #[test]
-    fn strategy_all_requested_capacity_fields_round_trip() {
-        // assumed_hops is absent on purpose -- it's a fixed protocol constant, not a config key.
-        let cfg = parse(
-            r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-
-[strategy]
-channel_capacity = "640 MiB"
-topup_capacity = "384 MiB"
-lower_capacity_threshold = "128 MiB"
-sizing_mode = "deterministic"
-"#####,
-        );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
-        assert_eq!(result.strategy.channel_capacity, Some(bytesize::ByteSize::mib(640)));
-        assert_eq!(result.strategy.topup_capacity, Some(bytesize::ByteSize::mib(384)));
-        assert_eq!(
-            result.strategy.lower_capacity_threshold,
-            Some(bytesize::ByteSize::mib(128))
-        );
-        assert_eq!(
-            result.strategy.sizing_mode,
-            Some(edgli::strategy::CapacitySizingMode::Deterministic)
         );
     }
 
@@ -1690,23 +1586,546 @@ sizing_mode = "deterministic"
         });
         let cfg: StrategyConfig = strategy.into();
         assert!(cfg.channel_allowlist.is_none());
-=======
+    }
+
+    #[test]
+    fn obsolete_min_safe_capacity_is_flagged() {
+        let table = r#####"
+version = 7
+
+[strategy]
+min_safe_capacity_required = "640 MiB"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["strategy.min_safe_capacity_required".to_string()]
+        );
+    }
+
+    #[test]
+    fn strategy_new_capacity_fields_are_parsed() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[strategy]
+topup_capacity = "384 MiB"
+lower_capacity_threshold = "128 MiB"
+"#####,
+        );
+        let strategy = cfg.strategy.expect("strategy section present");
+        assert_eq!(strategy.topup_capacity, Some(bytesize::ByteSize::mib(384)));
+        assert_eq!(strategy.lower_capacity_threshold, Some(bytesize::ByteSize::mib(128)));
+
+        let converted: StrategyConfig = Some(strategy).into();
+        assert_eq!(converted.topup_capacity, Some(bytesize::ByteSize::mib(384)));
+        assert_eq!(converted.lower_capacity_threshold, Some(bytesize::ByteSize::mib(128)));
+    }
+
+    #[test]
+    fn strategy_new_capacity_fields_are_optional() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[strategy]
+channel_capacity = "1 GiB"
+"#####,
+        );
+        let strategy = cfg.strategy.expect("strategy section present");
+        assert!(strategy.topup_capacity.is_none());
+        assert!(strategy.lower_capacity_threshold.is_none());
+
+        let converted: StrategyConfig = Some(strategy).into();
+        assert!(converted.topup_capacity.is_none());
+        assert!(converted.lower_capacity_threshold.is_none());
+    }
+
+    #[test]
+    fn strategy_sizing_mode_deterministic_is_parsed() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[strategy]
+sizing_mode = "deterministic"
+"#####,
+        );
+        let strategy = cfg.strategy.expect("strategy section present");
+        assert_eq!(
+            strategy.sizing_mode,
+            Some(edgli::strategy::CapacitySizingMode::Deterministic)
+        );
+
+        let converted: StrategyConfig = Some(strategy).into();
+        assert_eq!(
+            converted.sizing_mode,
+            Some(edgli::strategy::CapacitySizingMode::Deterministic)
+        );
+    }
+
+    #[test]
+    fn strategy_sizing_mode_probabilistic_is_parsed() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[strategy.sizing_mode.probabilistic]
+success_probability = 0.95
+"#####,
+        );
+        let strategy = cfg.strategy.expect("strategy section present");
+        assert_eq!(
+            strategy.sizing_mode,
+            Some(edgli::strategy::CapacitySizingMode::Probabilistic {
+                success_probability: 0.95
+            })
+        );
+    }
+
+    #[test]
+    fn strategy_new_capacity_fields_are_known_keys() {
+        let table = r#####"
+version = 7
+
+[strategy]
+topup_capacity = "384 MiB"
+lower_capacity_threshold = "128 MiB"
+sizing_mode = "deterministic"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn strategy_sizing_mode_probabilistic_typo_is_reported() {
+        let table = r#####"
+version = 7
+
+[strategy.sizing_mode.probabilistic]
+success_probabilty = 0.95
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["strategy.sizing_mode.probabilistic.success_probabilty".to_string()]
+        );
+    }
+
+    #[test]
+    fn strategy_sizing_mode_table_form_deterministic_is_known() {
+        let table = r#####"
+version = 7
+
+[strategy.sizing_mode]
+deterministic = {}
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn strategy_all_requested_capacity_fields_round_trip() {
+        // assumed_hops is absent on purpose -- it's a fixed protocol constant, not a config key.
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[strategy]
+channel_capacity = "640 MiB"
+topup_capacity = "384 MiB"
+lower_capacity_threshold = "128 MiB"
+sizing_mode = "deterministic"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(result.strategy.channel_capacity, Some(bytesize::ByteSize::mib(640)));
+        assert_eq!(result.strategy.topup_capacity, Some(bytesize::ByteSize::mib(384)));
+        assert_eq!(
+            result.strategy.lower_capacity_threshold,
+            Some(bytesize::ByteSize::mib(128))
+        );
+        assert_eq!(
+            result.strategy.sizing_mode,
+            Some(edgli::strategy::CapacitySizingMode::Deterministic)
+        );
+    }
+
+    #[test]
+    fn pix_strategy_is_always_registered() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(result.pix_strategy, PixConfig::default());
+    }
+
+    #[test]
+    fn pix_strategy_fields_are_parsed_and_override_the_default() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[pix_strategy]
+price_per_byte = "5 wxHOPR"
+max_ssa_allocation = "50 wxHOPR"
+max_spend_per_window = "5000 wxHOPR"
+spend_window = "2h"
+deposit_buffer_period = "250ms"
+max_deposit_tracking_time = "30s"
+max_deposit_retries = 5
+min_safe_hopr_reserve = "10 wxHOPR"
+relayer_url = "https://api.curvy.dev"
+"#####,
+        );
+        let pix_strategy = cfg.pix_strategy.expect("pix_strategy section present");
+        let converted: PixConfig = Some(pix_strategy).into();
+        assert_eq!(converted.max_spend_per_window, "5000 wxHOPR".parse().unwrap());
+        assert_eq!(converted.spend_window, Duration::from_secs(2 * 60 * 60));
+        assert_eq!(converted.deposit_buffer_period, Duration::from_millis(250));
+        assert_eq!(converted.max_deposit_tracking_time, Duration::from_secs(30));
+        assert_eq!(converted.max_deposit_retries, Some(5));
+        assert_eq!(converted.min_safe_hopr_reserve, Some("10 wxHOPR".parse().unwrap()));
+        assert_eq!(converted.relayer_url.as_str(), "https://api.curvy.dev/");
+    }
+
+    #[test]
+    fn pix_strategy_invalid_relayer_url_is_rejected() {
+        let result = toml::from_str::<Config>(
+            r#####"
+version = 7
+
+[pix_strategy]
+relayer_url = "not a url"
+"#####,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn pix_strategy_fields_are_optional_and_fall_back_to_defaults() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[pix_strategy]
+max_deposit_retries = 7
+"#####,
+        );
+        let pix_strategy = cfg.pix_strategy.expect("pix_strategy section present");
+        let converted: PixConfig = Some(pix_strategy).into();
+        let def = PixConfig::default();
+        assert_eq!(converted.max_deposit_retries, Some(7));
+        assert_eq!(converted.price_per_byte, def.price_per_byte);
+        assert_eq!(converted.max_ssa_allocation, def.max_ssa_allocation);
+        assert_eq!(converted.max_spend_per_window, def.max_spend_per_window);
+        assert_eq!(converted.spend_window, def.spend_window);
+        assert_eq!(converted.deposit_buffer_period, def.deposit_buffer_period);
+        assert_eq!(converted.max_deposit_tracking_time, def.max_deposit_tracking_time);
+        assert_eq!(converted.min_safe_hopr_reserve, def.min_safe_hopr_reserve);
+        assert_eq!(converted.relayer_url, def.relayer_url);
+    }
+
+    #[test]
+    fn pix_strategy_fields_are_known_keys() {
+        let table = r#####"
+version = 7
+
+[pix_strategy]
+price_per_byte = "5 wxHOPR"
+max_ssa_allocation = "50 wxHOPR"
+max_spend_per_window = "5000 wxHOPR"
+spend_window = "2h"
+deposit_buffer_period = "250ms"
+max_deposit_tracking_time = "30s"
+max_deposit_retries = 5
+min_safe_hopr_reserve = "10 wxHOPR"
+relayer_url = "https://api.curvy.box"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn pix_strategy_typo_is_reported() {
+        let table = r#####"
+version = 7
+
+[pix_strategy]
+pric_per_byte = "5 wxHOPR"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), vec!["pix_strategy.pric_per_byte".to_string()]);
+    }
+
+    #[test]
+    fn pix_defaults_to_enabled_for_ping_main_only() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert!(result.connection.pix.ping_main.enabled);
+        assert!(!result.connection.pix.bridge.enabled);
+    }
+
+    #[test]
+    fn pix_overrides_are_applied() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.pix.bridge]
+enabled = true
+
+[connection.pix.ping_main]
+enabled = false
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert!(result.connection.pix.bridge.enabled);
+        assert!(!result.connection.pix.ping_main.enabled);
+    }
+
+    #[test]
+    fn pix_fields_are_known_keys() {
+        let table = r#####"
+version = 7
+
+[connection.pix.bridge]
+enabled = false
+
+[connection.pix.ping_main]
+enabled = true
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn legacy_health_check_keys_are_reported_as_wrong() {
+        let table = r#####"
+version = 7
+
+[connection.health_check_intervals]
+ping = "10s"
+health_every_n_pings = 4
+version_every_n_pings = 20
+
+[connection.pix.health_check]
+enabled = false
+
+[connection.surb_balancing.health_check]
+enabled = false
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        let wrong = wrong_keys(&table);
+        assert!(
+            wrong.contains(&"connection.health_check_intervals.health_every_n_pings".to_string()),
+            "{wrong:?}"
+        );
+        assert!(
+            wrong.contains(&"connection.health_check_intervals.version_every_n_pings".to_string()),
+            "{wrong:?}"
+        );
+        assert!(wrong.contains(&"connection.pix.health_check".to_string()), "{wrong:?}");
+        assert!(
+            wrong.contains(&"connection.surb_balancing.health_check".to_string()),
+            "{wrong:?}"
+        );
+    }
+
+    #[test]
+    fn pix_dimensions_default_to_upstream() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(
+            result.connection.pix.dimensions,
+            crate::connection::options::PixDimensionOptions::default()
+        );
+    }
+
+    #[test]
+    fn pix_dimensions_are_applied() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
 [connection.pix.dimensions]
 num_ssa_parts     = 8
 ssa_part_size     = 2
 additional_shares = 2
-
-[pix_strategy]
-max_deposit_retries = 5
-"#####;
-        assert_eq!(
-            wrong_keys(&toml.parse::<toml::Table>().expect("valid TOML")),
-            vec!["connection.pix".to_string(), "pix_strategy".to_string()]
+"#####,
         );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(result.connection.pix.dimensions.num_ssa_parts, Some(8));
+        assert_eq!(result.connection.pix.dimensions.ssa_part_size, Some(2));
+        assert_eq!(result.connection.pix.dimensions.additional_shares, Some(2));
+        // Sibling toggles still use their defaults.
+        assert!(result.connection.pix.ping_main.enabled);
+    }
 
-        let result = runtime_config(parse(toml));
-        assert_eq!(result.connection.pix, crate::connection::options::PixOptions::default());
-        assert_eq!(result.pix_strategy, crate::hopr::pix_config::PixConfig::default());
->>>>>>> 8845f5e (feat(pix): build against the Curvy deposit pool- #839 (#849))
+    #[test]
+    fn pix_dimensions_are_known_keys() {
+        let table = r#####"
+version = 7
+
+[connection.pix.dimensions]
+num_ssa_parts     = 8
+ssa_part_size     = 2
+additional_shares = 2
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn pix_dimensions_typo_is_reported() {
+        let table = r#####"
+version = 7
+
+[connection.pix.dimensions]
+num_ssa_part = 8
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["connection.pix.dimensions.num_ssa_part".to_string()]
+        );
+    }
+
+    #[test]
+    fn pix_dimensions_reject_out_of_range() {
+        // Match hopr-lib's PIX bounds.
+        for bad in [
+            "num_ssa_parts = 7",
+            "num_ssa_parts = 16193",
+            "ssa_part_size = 1",
+            "ssa_part_size = 256",
+            "additional_shares = 256",
+        ] {
+            let toml = format!(
+                r#####"
+version = 7
+
+[connection.pix.dimensions]
+{bad}
+"#####
+            );
+            assert!(toml::from_str::<Config>(&toml).is_err(), "expected rejection for {bad}");
+        }
+    }
+
+    #[test]
+    fn pix_surplus_may_not_exceed_the_threshold() {
+        // Only explicit values can be compared here.
+        let toml = r#####"
+version = 7
+
+[connection.pix.dimensions]
+ssa_part_size     = 2
+additional_shares = 3
+"#####;
+        assert!(toml::from_str::<Config>(toml).is_err());
+
+        let ok = r#####"
+version = 7
+
+[connection.pix.dimensions]
+ssa_part_size     = 2
+additional_shares = 2
+"#####;
+        assert!(toml::from_str::<Config>(ok).is_ok());
+    }
+
+    #[test]
+    fn pix_typo_is_reported() {
+        let table = r#####"
+version = 7
+
+[connection.pix.bridge]
+enalbed = false
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), vec!["connection.pix.bridge.enalbed".to_string()]);
+    }
+
+    #[test]
+    fn pix_unknown_session_key_is_reported() {
+        let table = r#####"
+version = 7
+
+[connection.pix.main]
+enabled = true
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), vec!["connection.pix.main".to_string()]);
+    }
+
+    #[test]
+    fn announced_peer_minimum_score_is_no_longer_supported() {
+        let table = r#####"
+version = 7
+
+[connection]
+announced_peer_minimum_score = 0.1
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(
+            wrong_keys(&table),
+            vec!["connection.announced_peer_minimum_score".to_string()]
+        );
     }
 }

@@ -2162,8 +2162,21 @@ impl Core {
             return;
         }
         let Some(edgli) = self.hopr.as_ref() else { return };
+<<<<<<< HEAD
         match edgli.start_telemetry_reactor(self.config.strategy.clone().into()).await {
             Ok(reactor) => {
+=======
+        match edgli
+            .start_telemetry_reactor(
+                self.config.strategy.clone().into(),
+                self.config
+                    .pix_strategy
+                    .to_entry_config(self.worker_params.state_home()),
+            )
+            .await
+        {
+            Ok(strategy_process) => {
+>>>>>>> 8845f5e (feat(pix): build against the Curvy deposit pool- #839 (#849))
                 tracing::info!("started edge node telemetry reactor");
                 self.strategy_handle = Some(reactor.abort_handle);
                 self.strategy_state = Some(reactor.strategy_state);

@@ -252,7 +252,9 @@ pub(crate) enum SurbConfigError {
 #[derive(Clone, Debug)]
 pub(crate) struct SurbParams {
     pub(crate) management: Option<SurbBalancerConfig>,
-    pub(crate) always_max_out_surbs: bool,
+    /// hopr-lib's `max_surbs_per_data_packet`: `1` follows the balancer's target, anything above
+    /// bypasses that gate, and the value saturates at what the packet can carry.
+    pub(crate) max_surbs_per_data_packet: usize,
 }
 
 pub(crate) fn surb_config_for(opts: &SessionSurbOptions) -> Result<SurbParams, SurbConfigError> {
@@ -263,7 +265,10 @@ pub(crate) fn surb_config_for(opts: &SessionSurbOptions) -> Result<SurbParams, S
     };
     Ok(SurbParams {
         management,
-        always_max_out_surbs: opts.always_max_out_surbs,
+        // `always_max_out_surbs` predates hopr-lib's count: "max out" is every SURB that fits
+        // (`usize::MAX` saturates, as hopr-lib's own sessions use it), otherwise the one per
+        // packet the balancer's target allows.
+        max_surbs_per_data_packet: if opts.always_max_out_surbs { usize::MAX } else { 1 },
     })
 }
 

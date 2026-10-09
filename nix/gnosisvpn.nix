@@ -32,10 +32,17 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.4#0aebe247729574acc449f9debd62fc8d419dbf07" =
       "sha256-oxCxToa9dE2TslRNxvO19qZrOrf9qsUlB4u+ZNwzA28=";
+<<<<<<< HEAD
     "git+https://github.com/hoprnet/edge-client.git?branch=release/4.1#9808b1767f9c6ad97472797cf7bf63eb58eb7f15" =
       "sha256-R2c8v3nuKmjnTQvuJkZ1YwvQhKoCxgWjEAMefPPUWyM=";
     "git+https://github.com/hoprnet/hoprnet?branch=release/4.0#e89c5462d666e41b406f4da204b768a8bff493dd" =
       "sha256-WEhG11ff9OcncdfGlNw2o4wMbSCcsQiYBl/Vim5pp34=";
+=======
+    "git+https://github.com/hoprnet/edge-client.git?rev=4fbb5c8eb07133f22a8c94db05db846c43c365c2#4fbb5c8eb07133f22a8c94db05db846c43c365c2" =
+      "sha256-HtONuRmif6TUlNc71r57Plvc63yIE2Mr3YRP5dAButc=";
+    "git+https://github.com/hoprnet/hoprnet?branch=master#15094cb9914790f7e318bbb3f6f7c490c7f1cff4" =
+      "sha256-3TGjllSvsf+sDvhJM4+KSF0YKrbEy9dQwoBL7if6Gn8=";
+>>>>>>> 8845f5e (feat(pix): build against the Curvy deposit pool- #839 (#849))
   };
 
   builders = nixLib.mkRustBuilders {

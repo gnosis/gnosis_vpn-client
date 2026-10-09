@@ -447,7 +447,7 @@ async fn run_quick_probe(
     // No balancing: the session lives for two requests unless a probe adopts it.
     let surb = SurbParams {
         management: None,
-        always_max_out_surbs: false,
+        max_surbs_per_data_packet: 1,
     };
     tracing::debug!(%destination, "opening quick probe session");
     let session = match ProbeSession::open(hopr, destination, options, surb).await {
@@ -609,7 +609,7 @@ impl ProbeSession {
             capabilities: options.sessions.bridge.capabilities,
             forward_path: destination.routing,
             return_path: destination.routing,
-            always_max_out_surbs: surb.always_max_out_surbs,
+            max_surbs_per_data_packet: surb.max_surbs_per_data_packet,
             surb_management: surb.management,
             flow_control: Some(FlowControlConfig::robust()),
             ..Default::default()
