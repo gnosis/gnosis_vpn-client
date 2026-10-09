@@ -3678,8 +3678,13 @@ dependencies = [
 
 [[package]]
 name = "edgli"
+<<<<<<< HEAD
 version = "5.2.0"
 source = "git+https://github.com/hoprnet/edge-client.git?rev=4fbb5c8eb07133f22a8c94db05db846c43c365c2#4fbb5c8eb07133f22a8c94db05db846c43c365c2"
+=======
+version = "4.1.1"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=release%2F4.1#6da0aa35b3503983ca99f8426ef76494bb555ae0"
+>>>>>>> 57936b0 (feat: Bump edgli (#901))
 dependencies = [
  "anyhow",
  "async-signal",
@@ -5286,9 +5291,15 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport-p2p"
+<<<<<<< HEAD
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30deaabede896b2a6528fcb465e7058d944f5a4889b546741570d5d89a7f7e91"
+=======
+version = "0.9.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "137d1a99599c43b670b918b91d70e13c317e330b1f362e1036593633b28d56c1"
+>>>>>>> 57936b0 (feat: Bump edgli (#901))
 dependencies = [
  "async-broadcast",
  "async-trait",
