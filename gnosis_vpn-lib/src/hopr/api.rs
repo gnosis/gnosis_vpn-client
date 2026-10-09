@@ -436,52 +436,57 @@ impl Hopr {
                 distinct_first_relays: 0,
                 best_relays: Vec::new(),
                 best_value: 1.0,
+                return_count: 1,
+                return_best_relays: Vec::new(),
+                return_best_value: 1.0,
             });
         }
         let graph = self.edgli.graph();
+        let me = graph.identity();
         let length = NonZeroUsize::new(routing.hop_count() + 1).expect("hops + 1 is at least 1");
         let planner = &self.edgli.config().protocol.path_planner;
-        let selector = EdgeValueFn::forward(
-            length,
-            planner.edge_penalty,
-            planner.min_ack_rate,
-            graph.ticket_face_value(),
-        );
-        // One arbitrary survivor gives neither a path count nor a comparable value.
-        let paths = graph.simple_paths(
-            graph.identity(),
+        let ticket_face_value = graph.ticket_face_value();
+        // The planner plans each leg on its own (`exit -> me` with the returning selector); a session needs both.
+        // One arbitrary survivor per leg would give neither a path count nor a comparable value.
+        let forward = summarize_paths(graph.simple_paths(
+            me,
             &dest_key,
             length.get(),
             Some(planner.max_cached_paths),
-            selector,
-        );
-        let mut count = 0;
-        let mut first_relays = HashSet::new();
-        let mut best: Option<(Vec<_>, f64)> = None;
-        // The planner drops zero-valued paths, `simple_paths` does not; its node lists are the bare relays.
-        for (relays, _, value) in paths.into_iter().filter(|(_, _, value)| *value > 0.0) {
-            count += 1;
-            if let Some(first) = relays.first() {
-                first_relays.insert(*first);
-            }
-            if best.as_ref().is_none_or(|(_, best_value)| value > *best_value) {
-                best = Some((relays, value));
-            }
-        }
-        let Some((best_relays, best_value)) = best else {
-            return Ok(RouteWalk::NoPath { walked_at: now });
+            EdgeValueFn::forward(length, planner.edge_penalty, planner.min_ack_rate, ticket_face_value),
+        ));
+        let back = summarize_paths(graph.simple_paths(
+            &dest_key,
+            me,
+            length.get(),
+            Some(planner.max_cached_paths),
+            EdgeValueFn::returning(length, planner.edge_penalty, planner.min_ack_rate, ticket_face_value),
+        ));
+        let (Some(forward), Some(back)) = (&forward, &back) else {
+            return Ok(RouteWalk::NoPath {
+                walked_at: now,
+                forward_count: forward.as_ref().map_or(0, |f| f.count),
+                return_count: back.as_ref().map_or(0, |b| b.count),
+            });
         };
 
+        // One unresolvable relay empties the chain rather than failing the walk or reporting a shortened chain.
+        let to_chain_addresses = |relays: &[_]| -> Vec<Address> {
+            relays
+                .iter()
+                .map(|key| chain_api.packet_key_to_chain_key(key).ok().flatten())
+                .collect::<Option<Vec<_>>>()
+                .unwrap_or_default()
+        };
         Ok(RouteWalk::Paths {
             walked_at: now,
-            count,
-            distinct_first_relays: first_relays.len(),
-            // A relay the chain index cannot resolve is dropped rather than failing the walk.
-            best_relays: best_relays
-                .iter()
-                .filter_map(|key| chain_api.packet_key_to_chain_key(key).ok().flatten())
-                .collect(),
-            best_value,
+            count: forward.count,
+            distinct_first_relays: forward.distinct_first_relays,
+            best_relays: to_chain_addresses(&forward.best_relays),
+            best_value: forward.best_value,
+            return_count: back.count,
+            return_best_relays: to_chain_addresses(&back.best_relays),
+            return_best_value: back.best_value,
         })
     }
 
@@ -521,6 +526,38 @@ impl Hopr {
             process.value().abort_handle.abort();
         }
     }
+}
+
+/// One leg of a graph walk, reduced to what [`RouteWalk::Paths`] reports.
+struct PathSummary<K> {
+    count: usize,
+    distinct_first_relays: usize,
+    best_relays: Vec<K>,
+    best_value: f64,
+}
+
+/// None when no path has a positive value.
+fn summarize_paths<K: Copy + Eq + std::hash::Hash, P>(paths: Vec<(Vec<K>, P, f64)>) -> Option<PathSummary<K>> {
+    let mut count = 0;
+    let mut first_relays = HashSet::new();
+    let mut best: Option<(Vec<K>, f64)> = None;
+    // The planner drops zero-valued paths, `simple_paths` does not; its node lists are the bare relays.
+    for (relays, _, value) in paths.into_iter().filter(|(_, _, value)| *value > 0.0) {
+        count += 1;
+        if let Some(first) = relays.first() {
+            first_relays.insert(*first);
+        }
+        if best.as_ref().is_none_or(|(_, best_value)| value > *best_value) {
+            best = Some((relays, value));
+        }
+    }
+    let (best_relays, best_value) = best?;
+    Some(PathSummary {
+        count,
+        distinct_first_relays: first_relays.len(),
+        best_relays,
+        best_value,
+    })
 }
 
 /// Extract all unique IPv4 addresses from a list of multiaddrs.
