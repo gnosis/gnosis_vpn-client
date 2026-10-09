@@ -93,7 +93,7 @@ impl From<Option<Connection>> for super::v7::Connection {
                 conn.and_then(|c| c.buffer.clone()),
                 conn.and_then(|c| c.max_surb_upstream.clone()),
             )),
-            pix: None, // PIX is required from v6 on; legacy configs inherit the defaults, they do not opt out
+            pix: None, // PIX is v7 schema; legacy configs inherit the defaults, they do not opt out
             health_check_intervals: conn.and_then(|c| c.health_check_intervals.clone()),
             lan_lockdown: None,
             probe_local_addresses: None,
