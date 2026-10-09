@@ -521,6 +521,8 @@ pub(super) struct PixStrategy {
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(default)]
     pub(super) min_safe_hopr_reserve: Option<HoprBalance>,
+    #[serde(default)]
+    pub(super) relayer_url: Option<url::Url>,
 }
 
 impl From<Option<PixStrategy>> for PixConfig {
@@ -545,14 +547,9 @@ impl From<Option<PixStrategy>> for PixConfig {
                 .as_ref()
                 .and_then(|p| p.max_deposit_tracking_time)
                 .unwrap_or(def.max_deposit_tracking_time),
-            max_deposit_retries: v
-                .as_ref()
-                .and_then(|p| p.max_deposit_retries)
-                .unwrap_or(def.max_deposit_retries),
-            min_safe_hopr_reserve: v
-                .as_ref()
-                .and_then(|p| p.min_safe_hopr_reserve)
-                .unwrap_or(def.min_safe_hopr_reserve),
+            max_deposit_retries: v.as_ref().and_then(|p| p.max_deposit_retries),
+            min_safe_hopr_reserve: v.as_ref().and_then(|p| p.min_safe_hopr_reserve),
+            relayer_url: v.and_then(|p| p.relayer_url).unwrap_or(def.relayer_url),
         }
     }
 }
@@ -861,6 +858,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                             | "max_deposit_tracking_time"
                             | "max_deposit_retries"
                             | "min_safe_hopr_reserve"
+                            | "relayer_url"
                     ) {
                         continue;
                     }
@@ -1809,6 +1807,7 @@ deposit_buffer_period = "250ms"
 max_deposit_tracking_time = "30s"
 max_deposit_retries = 5
 min_safe_hopr_reserve = "10 wxHOPR"
+relayer_url = "https://api.curvy.dev"
 "#####,
         );
         let pix_strategy = cfg.pix_strategy.expect("pix_strategy section present");
@@ -1817,8 +1816,22 @@ min_safe_hopr_reserve = "10 wxHOPR"
         assert_eq!(converted.spend_window, Duration::from_secs(2 * 60 * 60));
         assert_eq!(converted.deposit_buffer_period, Duration::from_millis(250));
         assert_eq!(converted.max_deposit_tracking_time, Duration::from_secs(30));
-        assert_eq!(converted.max_deposit_retries, 5);
-        assert_eq!(converted.min_safe_hopr_reserve, "10 wxHOPR".parse().unwrap());
+        assert_eq!(converted.max_deposit_retries, Some(5));
+        assert_eq!(converted.min_safe_hopr_reserve, Some("10 wxHOPR".parse().unwrap()));
+        assert_eq!(converted.relayer_url.as_str(), "https://api.curvy.dev/");
+    }
+
+    #[test]
+    fn pix_strategy_invalid_relayer_url_is_rejected() {
+        let result = toml::from_str::<Config>(
+            r#####"
+version = 7
+
+[pix_strategy]
+relayer_url = "not a url"
+"#####,
+        );
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1834,7 +1847,7 @@ max_deposit_retries = 7
         let pix_strategy = cfg.pix_strategy.expect("pix_strategy section present");
         let converted: PixConfig = Some(pix_strategy).into();
         let def = PixConfig::default();
-        assert_eq!(converted.max_deposit_retries, 7);
+        assert_eq!(converted.max_deposit_retries, Some(7));
         assert_eq!(converted.price_per_byte, def.price_per_byte);
         assert_eq!(converted.max_ssa_allocation, def.max_ssa_allocation);
         assert_eq!(converted.max_spend_per_window, def.max_spend_per_window);
@@ -1842,6 +1855,7 @@ max_deposit_retries = 7
         assert_eq!(converted.deposit_buffer_period, def.deposit_buffer_period);
         assert_eq!(converted.max_deposit_tracking_time, def.max_deposit_tracking_time);
         assert_eq!(converted.min_safe_hopr_reserve, def.min_safe_hopr_reserve);
+        assert_eq!(converted.relayer_url, def.relayer_url);
     }
 
     #[test]
@@ -1858,6 +1872,7 @@ deposit_buffer_period = "250ms"
 max_deposit_tracking_time = "30s"
 max_deposit_retries = 5
 min_safe_hopr_reserve = "10 wxHOPR"
+relayer_url = "https://api.curvy.box"
 "#####
             .parse::<toml::Table>()
             .expect("valid TOML");
