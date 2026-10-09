@@ -2981,7 +2981,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "4.1.1"
-source = "git+https://github.com/hoprnet/edge-client.git?branch=release%2F4.1#9808b1767f9c6ad97472797cf7bf63eb58eb7f15"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=release%2F4.1#6da0aa35b3503983ca99f8426ef76494bb555ae0"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -4491,15 +4491,16 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport-p2p"
-version = "0.9.5"
+version = "0.9.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1e9a987efe3013cf7f3809d5f87aec29d5588a695a6af718dd406f5d0f5806b"
+checksum = "137d1a99599c43b670b918b91d70e13c317e330b1f362e1036593633b28d56c1"
 dependencies = [
  "async-broadcast",
  "async-trait",
  "backon",
  "dashmap",
  "futures",
+ "futures-timer",
  "hopr-api",
  "hopr-utilities",
  "libp2p",
