@@ -86,17 +86,37 @@ pub(super) struct PingOptions {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct HealthCheckIntervalOptions {
-    #[serde(default, with = "humantime_serde::option")]
+    #[serde(
+        default,
+        deserialize_with = "validate_nonzero_duration",
+        serialize_with = "humantime_serde::option::serialize"
+    )]
     pub(super) version: Option<Duration>,
-    #[serde(default, with = "humantime_serde::option")]
+    #[serde(
+        default,
+        deserialize_with = "validate_nonzero_duration",
+        serialize_with = "humantime_serde::option::serialize"
+    )]
     pub(super) ping: Option<Duration>,
-    #[serde(default, with = "humantime_serde::option")]
+    #[serde(
+        default,
+        deserialize_with = "validate_nonzero_duration",
+        serialize_with = "humantime_serde::option::serialize"
+    )]
     pub(super) load: Option<Duration>,
-    #[serde(default, with = "humantime_serde::option")]
+    #[serde(
+        default,
+        deserialize_with = "validate_nonzero_duration",
+        serialize_with = "humantime_serde::option::serialize"
+    )]
     pub(super) tunnel_ping: Option<Duration>,
     #[serde(default, deserialize_with = "validate_tunnel_ping_max_failures")]
     pub(super) tunnel_ping_max_failures: Option<u32>,
-    #[serde(default, with = "humantime_serde::option")]
+    #[serde(
+        default,
+        deserialize_with = "validate_nonzero_duration",
+        serialize_with = "humantime_serde::option::serialize"
+    )]
     pub(super) tunnel_ping_max_rtt: Option<Duration>,
 }
 
@@ -190,6 +210,20 @@ where
         Some(n) => u32::try_from(n)
             .map(Some)
             .map_err(|_| serde::de::Error::custom("tunnel_ping_max_failures is out of range")),
+    }
+}
+
+// Zero intervals feed `time::sleep(0)` and hammer the exit; a zero RTT ceiling calls every reply slow.
+fn validate_nonzero_duration<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<Duration> = humantime_serde::option::deserialize(deserializer)?;
+    match value {
+        Some(d) if d.is_zero() => Err(serde::de::Error::custom(
+            "health check intervals must be greater than zero",
+        )),
+        other => Ok(other),
     }
 }
 
@@ -900,20 +934,6 @@ impl TryFrom<Config> for config::Config {
         if ramp.interval.is_zero() || ramp.duration.is_zero() {
             return Err(config::Error::SurbRampZero);
         }
-        // Zero intervals feed `time::sleep(0)` and hammer the exit; a zero RTT ceiling calls every reply slow.
-        let intervals = &connection.health_check_intervals;
-        let any_interval_zero = [
-            intervals.version,
-            intervals.ping,
-            intervals.load,
-            intervals.tunnel_ping,
-            intervals.tunnel_ping_max_rtt,
-        ]
-        .iter()
-        .any(Duration::is_zero);
-        if any_interval_zero {
-            return Err(config::Error::HealthCheckIntervalZero);
-        }
         let default_targets = DefaultTargets {
             gnosis_vpn_server: default_gnosis_vpn_server,
             wireguard_server: default_wireguard_server,
@@ -1517,19 +1537,16 @@ tunnel_ping_max_rtt = "5s"
             "tunnel_ping = \"0s\"",
             "tunnel_ping_max_rtt = \"0s\"",
         ] {
-            let cfg = parse(&format!(
+            let toml = format!(
                 r#####"
 version = 7
 
 [connection.health_check_intervals]
 {line}
 "#####
-            ));
-            let result: Result<crate::config::Config, _> = cfg.try_into();
-            assert!(
-                matches!(result, Err(crate::config::Error::HealthCheckIntervalZero)),
-                "expected rejection for `{line}`"
             );
+            let result = toml::from_str::<Config>(&toml);
+            assert!(result.is_err(), "expected rejection for `{line}`");
         }
     }
 
