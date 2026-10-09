@@ -191,7 +191,7 @@ pub struct TunnelPing {
     counter_stall: Duration,
 }
 
-/// Inbound flat while outbound still grows for this long is a stalled path, whatever a late reply says.
+/// Inbound flat this long after outbound grew is a stalled path, whatever a late reply says.
 const INBOUND_STALL: Duration = Duration::from_secs(8);
 
 /// Stall runs past this are logged when they end: the false positives a lower trigger would have produced.
@@ -203,7 +203,7 @@ pub(crate) const COUNTER_STALL_RECONNECT: Duration = Duration::from_secs(20);
 /// What the WireGuard counters say about the inbound path over one ping's window.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Inbound {
-    /// rx flat while tx grew for at least `INBOUND_STALL`.
+    /// rx flat for at least `INBOUND_STALL` since tx grew.
     Stalled,
     /// rx grew between every pair of samples.
     Flowing,
@@ -334,13 +334,15 @@ impl Up {
         let mut longest_stall = Duration::ZERO;
         let mut current_stall = Duration::ZERO;
         let mut rx_grew_every_step = true;
+        let mut awaiting_rx = false;
         for pair in window.windows(2) {
             let (before, after) = (pair[0], pair[1]);
             let rx_grew = after.rx_bytes > before.rx_bytes;
             let tx_grew = after.tx_bytes > before.tx_bytes;
             rx_grew_every_step &= rx_grew;
-            let stalling = !rx_grew && tx_grew;
-            if stalling {
+            // A lone ping sends once and then waits, so the stall runs until rx answers.
+            awaiting_rx = !rx_grew && (tx_grew || awaiting_rx);
+            if awaiting_rx {
                 // Measured by timestamps: the pump's sampling cadence stretches under load.
                 current_stall += after.at.duration_since(before.at).unwrap_or(Duration::ZERO);
                 longest_stall = longest_stall.max(current_stall);
@@ -357,17 +359,21 @@ impl Up {
         }
     }
 
-    /// Length of the inbound stall the newest samples are in: rx flat while tx grew, counted back from the latest sample.
+    /// Length of the inbound stall the newest samples are in; like the ping window, a single send keeps it running until rx grows.
     fn trailing_inbound_stall(&self) -> Duration {
-        let newest_first = self.wg_stats.iter().rev();
+        let samples: Vec<&TunnelStatsSample> = self.wg_stats.iter().collect();
         let mut stall = Duration::ZERO;
-        for (after, before) in newest_first.clone().zip(newest_first.skip(1)) {
+        let mut awaiting_rx = false;
+        for pair in samples.windows(2) {
+            let (before, after) = (pair[0], pair[1]);
             let rx_grew = after.rx_bytes > before.rx_bytes;
             let tx_grew = after.tx_bytes > before.tx_bytes;
-            if rx_grew || !tx_grew {
-                break;
-            }
-            stall += after.at.duration_since(before.at).unwrap_or(Duration::ZERO);
+            awaiting_rx = !rx_grew && (tx_grew || awaiting_rx);
+            stall = if awaiting_rx {
+                stall + after.at.duration_since(before.at).unwrap_or(Duration::ZERO)
+            } else {
+                Duration::ZERO
+            };
         }
         stall
     }
@@ -869,6 +875,64 @@ mod tunnel_ping_tests {
         assert_eq!(up.tunnel_ping_result(TIMEOUT, MAX_RTT), 1);
         record_samples(&mut up, 0, false);
         assert_eq!(up.tunnel_ping_result(Ok(Duration::from_secs(8)), MAX_RTT), 1);
+    }
+
+    #[test]
+    fn single_send_then_silence_is_a_stall() {
+        let mut up = up();
+        let samples = [(0, 500, 500), (1, 600, 500), (2, 600, 500), (3, 600, 500)];
+        for (step, tx_bytes, rx_bytes) in samples {
+            up.record_wg_stats(TunnelStatsSample {
+                at: UNIX_EPOCH + SAMPLE_GAP * step,
+                tx_bytes,
+                rx_bytes,
+                ..Default::default()
+            });
+        }
+        assert_eq!(up.tunnel_ping_result(Ok(Duration::from_secs(8)), MAX_RTT), 1);
+    }
+
+    #[test]
+    fn single_send_then_silence_is_a_counter_stall() {
+        let mut up = up();
+        up.record_wg_stats(TunnelStatsSample {
+            at: UNIX_EPOCH,
+            tx_bytes: 500,
+            rx_bytes: 500,
+            ..Default::default()
+        });
+        let mut stall = Duration::ZERO;
+        for step in 1..=6u32 {
+            stall = up.record_wg_stats(TunnelStatsSample {
+                at: UNIX_EPOCH + SAMPLE_GAP * step,
+                tx_bytes: 600,
+                rx_bytes: 500,
+                ..Default::default()
+            });
+        }
+        assert!(stall >= COUNTER_STALL_RECONNECT);
+        let stall = up.record_wg_stats(TunnelStatsSample {
+            at: UNIX_EPOCH + SAMPLE_GAP * 7,
+            tx_bytes: 600,
+            rx_bytes: 700,
+            ..Default::default()
+        });
+        assert_eq!(stall, Duration::ZERO);
+    }
+
+    #[test]
+    fn rx_ends_a_single_send_stall() {
+        let mut up = up();
+        let samples = [(0, 500, 500), (1, 600, 500), (2, 600, 700), (3, 600, 700)];
+        for (step, tx_bytes, rx_bytes) in samples {
+            up.record_wg_stats(TunnelStatsSample {
+                at: UNIX_EPOCH + SAMPLE_GAP * step,
+                tx_bytes,
+                rx_bytes,
+                ..Default::default()
+            });
+        }
+        assert_eq!(up.inbound_over_ping_window(), Inbound::Unclear);
     }
 
     #[test]
