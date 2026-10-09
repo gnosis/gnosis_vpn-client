@@ -278,6 +278,9 @@ impl TryFrom<Config> for super::v7::Config {
         let mut connection = value.connection;
         if let Some(c) = connection.as_mut() {
             c.pix = None;
+            if let Some(h) = c.health_check_intervals.as_mut() {
+                h.tunnel_ping_max_rtt = None;
+            }
         }
 
         Ok(super::v7::Config {
@@ -475,5 +478,28 @@ max_deposit_retries = 5
         let result = runtime_config(parse(toml));
         assert_eq!(result.connection.pix, crate::connection::options::PixOptions::default());
         assert_eq!(result.pix_strategy, crate::hopr::pix_config::PixConfig::default());
+    }
+
+    #[test]
+    fn tunnel_ping_max_rtt_is_not_a_supported_key_in_v6() {
+        let toml = r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.health_check_intervals]
+tunnel_ping_max_rtt = "9s"
+"#####;
+        assert_eq!(
+            wrong_keys(&toml.parse::<toml::Table>().expect("valid TOML")),
+            vec!["connection.health_check_intervals.tunnel_ping_max_rtt".to_string()]
+        );
+
+        let result = runtime_config(parse(toml));
+        assert_eq!(
+            result.connection.health_check_intervals.tunnel_ping_max_rtt,
+            crate::connection::options::HealthCheckIntervals::default().tunnel_ping_max_rtt
+        );
     }
 }

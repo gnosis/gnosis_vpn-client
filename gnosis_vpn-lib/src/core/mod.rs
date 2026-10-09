@@ -890,7 +890,8 @@ impl Core {
 
             Results::TunnelPingResult { rtt } => {
                 if let Phase::Connected(mut conn) = self.phase.clone() {
-                    let failures = conn.tunnel_ping_result(rtt);
+                    let max_rtt = self.config.connection.health_check_intervals.tunnel_ping_max_rtt;
+                    let failures = conn.tunnel_ping_result(rtt, max_rtt);
                     self.phase = Phase::Connected(conn.clone());
                     let max = self.config.connection.health_check_intervals.tunnel_ping_max_failures;
                     if failures >= max {

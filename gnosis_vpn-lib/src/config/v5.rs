@@ -94,7 +94,13 @@ impl From<Option<Connection>> for super::v7::Connection {
                 conn.and_then(|c| c.max_surb_upstream.clone()),
             )),
             pix: None, // PIX is v7 schema; legacy configs inherit the defaults, they do not opt out
-            health_check_intervals: conn.and_then(|c| c.health_check_intervals.clone()),
+            // Reported as unsupported by `wrong_keys`, so the shared struct must not apply it either.
+            health_check_intervals: conn.and_then(|c| c.health_check_intervals.clone()).map(|h| {
+                HealthCheckIntervalOptions {
+                    tunnel_ping_max_rtt: None,
+                    ..h
+                }
+            }),
             lan_lockdown: None,
             probe_local_addresses: None,
             path_planner_min_ack_rate: None,
@@ -460,5 +466,29 @@ sync_tolerance = 90
         toml::from_str::<Config>(config)?;
 
         Ok(())
+    }
+
+    #[test]
+    fn tunnel_ping_max_rtt_is_not_a_supported_key_in_v5() {
+        let toml = r#####"
+version = 5
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+path = { hops = 2 }
+
+[connection.health_check_intervals]
+tunnel_ping_max_rtt = "9s"
+"#####;
+        assert_eq!(
+            super::wrong_keys(&toml.parse::<toml::Table>().expect("valid TOML")),
+            vec!["connection.health_check_intervals.tunnel_ping_max_rtt".to_string()]
+        );
+
+        let result = forward_convert(parse(toml));
+        assert_eq!(
+            result.connection.health_check_intervals.tunnel_ping_max_rtt,
+            crate::connection::options::HealthCheckIntervals::default().tunnel_ping_max_rtt
+        );
     }
 }
