@@ -4,6 +4,7 @@ use std::time::Duration;
 use edgli::hopr_lib::api::types::primitive::prelude::HoprBalance;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
+use url::Url;
 
 /// Operator-tunable parameters for the PIX exit-incentivization strategy; unset fields fall back to upstream defaults.
 #[serde_as]
@@ -48,6 +49,10 @@ pub struct PixConfig {
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(default)]
     pub min_safe_hopr_reserve: Option<HoprBalance>,
+
+    /// Curvy relayer that submits deposit proofs; clients hold no Curvy operator key, so they always go through it.
+    #[serde(default = "PixConfig::default_relayer_url")]
+    pub relayer_url: Url,
 }
 
 impl Default for PixConfig {
@@ -62,6 +67,7 @@ impl Default for PixConfig {
             max_deposit_tracking_time: Self::default_max_deposit_tracking_time(),
             max_deposit_retries: None, // Applies to pix-test pool only.
             min_safe_hopr_reserve: None,
+            relayer_url: Self::default_relayer_url(),
         }
     }
 }
@@ -88,12 +94,24 @@ impl PixConfig {
         edgli::strategy::PixEntryStrategy::default().deposit_buffer_period
     }
 
+    /// The relayer the exits submit through as well.
+    pub(crate) fn default_relayer_url() -> Url {
+        Url::parse("https://api.curvy.box").expect("default Curvy relayer URL is valid")
+    }
+
     fn default_max_deposit_tracking_time() -> Duration {
         edgli::strategy::PixEntryPool::default().max_deposit_tracking_time
     }
 
     /// The edgli form; which pool the knobs reach is edgli's call, deployment stays on `HOPRD_CURVY_*`.
     pub fn to_entry_config(&self, state_home: PathBuf) -> edgli::strategy::PixEntryConfig {
+        let mut pool = edgli::strategy::PixEntryPool::from_knobs(edgli::strategy::PixEntryPoolKnobs {
+            max_deposit_tracking_time: Some(self.max_deposit_tracking_time),
+            max_deposit_retries: self.max_deposit_retries,
+            min_safe_hopr_reserve: self.min_safe_hopr_reserve,
+        });
+        // edgli defaults to `Operator`, which needs a Curvy operator key clients never hold.
+        pool.submission = edgli::strategy::PixCurvySubmission::Relayer(self.relayer_url.clone());
         edgli::strategy::PixEntryConfig {
             strategy: edgli::strategy::PixEntryStrategy {
                 price_per_byte: self.price_per_byte,
@@ -102,11 +120,7 @@ impl PixConfig {
                 spend_window: self.spend_window,
                 deposit_buffer_period: self.deposit_buffer_period,
             },
-            pool: edgli::strategy::PixEntryPool::from_knobs(edgli::strategy::PixEntryPoolKnobs {
-                max_deposit_tracking_time: Some(self.max_deposit_tracking_time),
-                max_deposit_retries: self.max_deposit_retries,
-                min_safe_hopr_reserve: self.min_safe_hopr_reserve,
-            }),
+            pool,
             state_dir: Some(state_home),
         }
     }
@@ -128,11 +142,21 @@ mod tests {
         assert_eq!(parsed.deposit_buffer_period, def.deposit_buffer_period);
         assert_eq!(parsed.max_deposit_tracking_time, def.max_deposit_tracking_time);
         assert_eq!(parsed.min_safe_hopr_reserve, def.min_safe_hopr_reserve);
+        assert_eq!(parsed.relayer_url, def.relayer_url);
     }
 
     #[test]
     fn to_entry_config_keeps_pool_state_in_state_home() {
         let cfg = PixConfig::default().to_entry_config(PathBuf::from("/var/lib/gnosisvpn"));
         assert_eq!(cfg.state_dir, Some(PathBuf::from("/var/lib/gnosisvpn")));
+    }
+
+    #[test]
+    fn to_entry_config_submits_through_curvy_relayer() {
+        let cfg = PixConfig::default().to_entry_config(PathBuf::from("/var/lib/gnosisvpn"));
+        assert_eq!(
+            cfg.pool.submission,
+            edgli::strategy::PixCurvySubmission::Relayer(PixConfig::default_relayer_url())
+        );
     }
 }
