@@ -140,6 +140,17 @@ pub struct ConnectedInfo {
     /// Latest ICMP round trip through the tunnel.
     #[serde(with = "serde_utils::opt_duration_ms")]
     pub tunnel_ping_rtt: Option<Duration>,
+    /// Set while counted tunnel ping failures accumulate; cleared by the next healthy reply.
+    pub stall: Option<TunnelStall>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TunnelStall {
+    #[serde(with = "serde_utils::system_time")]
+    pub since: SystemTime,
+    pub failed_pings: u32,
+    /// Counted failures that trigger a reconnect (`tunnel_ping_max_failures`).
+    pub reconnect_at: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -868,6 +879,15 @@ impl Display for ConnectedInfo {
         if let Some(rtt) = self.tunnel_ping_rtt {
             write!(f, ", tunnel ping RTT {:.2} s", rtt.as_secs_f32())?;
         }
+        if let Some(stall) = &self.stall {
+            write!(
+                f,
+                ", stalled {} ({}/{})",
+                log_output::elapsed(&stall.since),
+                stall.failed_pings,
+                stall.reconnect_at
+            )?;
+        }
         Ok(())
     }
 }
@@ -1033,6 +1053,51 @@ mod tests {
             since: SystemTime::UNIX_EPOCH,
             phase,
         }
+    }
+
+    fn connected(stall: Option<TunnelStall>) -> ConnectedInfo {
+        ConnectedInfo {
+            destination_id: "test-destination".to_string(),
+            since: SystemTime::UNIX_EPOCH,
+            tunnel_ping_rtt: Some(Duration::from_millis(90)),
+            stall,
+        }
+    }
+
+    fn stall(failed_pings: u32) -> TunnelStall {
+        TunnelStall {
+            since: SystemTime::UNIX_EPOCH,
+            failed_pings,
+            reconnect_at: 3,
+        }
+    }
+
+    #[test]
+    fn connected_info_display_names_a_stall_only_while_pings_fail() {
+        let healthy = connected(None).to_string();
+        assert!(!healthy.contains("stalled"), "{healthy}");
+
+        let stalled = connected(Some(stall(2))).to_string();
+        assert!(stalled.contains(", stalled "), "{stalled}");
+        assert!(stalled.ends_with("(2/3)"), "{stalled}");
+    }
+
+    #[test]
+    fn connected_info_round_trips_the_stall_and_tolerates_its_absence() {
+        let json = serde_json::to_string(&connected(Some(stall(1)))).unwrap();
+        let back: ConnectedInfo = serde_json::from_str(&json).unwrap();
+        let back_stall = back.stall.expect("stall survives the round trip");
+        assert_eq!(back_stall.failed_pings, 1);
+        assert_eq!(back_stall.reconnect_at, 3);
+        assert_eq!(back_stall.since, SystemTime::UNIX_EPOCH);
+
+        let healthy_json = serde_json::to_string(&connected(None)).unwrap();
+        assert!(healthy_json.contains(r#""stall":null"#), "{healthy_json}");
+
+        // Older daemons omit the key entirely.
+        let legacy: ConnectedInfo =
+            serde_json::from_str(r#"{"destination_id":"x","since":0,"tunnel_ping_rtt":null}"#).unwrap();
+        assert!(legacy.stall.is_none());
     }
 
     #[test]

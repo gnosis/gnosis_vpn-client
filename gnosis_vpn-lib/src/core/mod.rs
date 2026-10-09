@@ -2067,6 +2067,11 @@ impl Core {
                 destination_id: conn.destination.connect_id.clone(),
                 since: conn.phase.0,
                 tunnel_ping_rtt: conn.tunnel_ping.rtt,
+                stall: conn.tunnel_ping.failing_since.map(|since| command::TunnelStall {
+                    since,
+                    failed_pings: conn.tunnel_ping.failures,
+                    reconnect_at: self.config.connection.health_check_intervals.tunnel_ping_max_failures,
+                }),
             }),
             _ => None,
         };

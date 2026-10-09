@@ -184,6 +184,8 @@ pub struct Up {
 pub struct TunnelPing {
     pub rtt: Option<Duration>,
     pub failures: u32,
+    /// When the current run of counted failures began; None while the path is healthy.
+    pub failing_since: Option<SystemTime>,
     pub last_error: Option<String>,
     /// WireGuard samples recorded since the previous ping result; they judge the next one.
     samples_since_result: usize,
@@ -276,6 +278,7 @@ impl Up {
             Ok(rtt) if rtt <= max_rtt => {
                 self.tunnel_ping.rtt = Some(rtt);
                 self.tunnel_ping.failures = 0;
+                self.tunnel_ping.failing_since = None;
                 self.tunnel_ping.last_error = None;
             }
             Ok(rtt) => {
@@ -283,7 +286,7 @@ impl Up {
                 self.tunnel_ping.last_error = None;
                 // A reply this late is a buffered drain; only a confirmed stall makes it a failure.
                 if inbound == Inbound::Stalled {
-                    self.tunnel_ping.failures += 1;
+                    self.count_ping_failure();
                     tracing::debug!(
                         ?rtt,
                         failures = self.tunnel_ping.failures,
@@ -302,11 +305,18 @@ impl Up {
                         "tunnel ping timeout excused - inbound flowing"
                     );
                 } else {
-                    self.tunnel_ping.failures += 1;
+                    self.count_ping_failure();
                 }
             }
         }
         self.tunnel_ping.failures
+    }
+
+    fn count_ping_failure(&mut self) {
+        self.tunnel_ping.failures += 1;
+        if self.tunnel_ping.failing_since.is_none() {
+            self.tunnel_ping.failing_since = Some(SystemTime::now());
+        }
     }
 
     /// Judges the samples since the previous ping result, with the one before them as baseline.
@@ -855,5 +865,27 @@ mod tunnel_ping_tests {
             ..last
         });
         assert_eq!(up.inbound_over_ping_window(), Inbound::Stalled);
+    }
+
+    #[test]
+    fn failing_since_marks_the_first_counted_failure_until_a_fast_reply() {
+        let mut up = up();
+        assert!(up.tunnel_ping.failing_since.is_none());
+        up.tunnel_ping_result(TIMEOUT, MAX_RTT);
+        let started = up
+            .tunnel_ping
+            .failing_since
+            .expect("first counted failure starts the stall");
+        up.tunnel_ping_result(TIMEOUT, MAX_RTT);
+        assert_eq!(up.tunnel_ping.failing_since, Some(started));
+        up.tunnel_ping_result(Ok(Duration::from_millis(100)), MAX_RTT);
+        assert!(up.tunnel_ping.failing_since.is_none());
+    }
+
+    #[test]
+    fn excused_results_do_not_start_a_stall() {
+        let mut up = up();
+        drive(&mut up, &[TIMEOUT, Ok(Duration::from_secs(8))], true);
+        assert!(up.tunnel_ping.failing_since.is_none());
     }
 }
