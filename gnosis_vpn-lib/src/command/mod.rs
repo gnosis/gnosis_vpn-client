@@ -148,6 +148,7 @@ pub struct TunnelStall {
     pub failed_pings: u32,
     /// Counted failures that trigger a reconnect (`tunnel_ping_max_failures`).
     pub reconnect_at: u32,
+<<<<<<< HEAD
 }
 
 /// Health of the channel maintenance the daemon runs for its own payment channels.
@@ -161,6 +162,8 @@ pub enum ChannelMaintenance {
         #[serde(with = "serde_utils::system_time")]
         since: SystemTime,
     },
+=======
+>>>>>>> 2894859 (feat(status): show a stalled tunnel while connected (#874))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
