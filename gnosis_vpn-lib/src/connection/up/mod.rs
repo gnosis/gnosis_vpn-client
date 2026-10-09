@@ -187,11 +187,19 @@ pub struct TunnelPing {
     pub last_error: Option<String>,
     /// WireGuard samples recorded since the previous ping result; they judge the next one.
     samples_since_result: usize,
+    /// How long inbound has been flat while outbound grew, as of the latest sample.
+    counter_stall: Duration,
 }
 
 /// Inbound flat while outbound still grows for this long is a stalled path, whatever a late reply says.
 const INBOUND_STALL: Duration = Duration::from_secs(8);
 
+<<<<<<< HEAD
+=======
+/// Stall runs past this are logged when they end: the false positives a lower trigger would have produced.
+const COUNTER_STALL_MARKER: Duration = Duration::from_secs(16);
+
+>>>>>>> 1ab877e (feat(connection): reconnect on a 20 s inbound counter stall, log runs past 16 s (#882))
 /// A counter stall this long is reconnected in place; ~12 h of field pings showed no self-healing gap between 16 s and 26 s.
 pub(crate) const COUNTER_STALL_RECONNECT: Duration = Duration::from_secs(20);
 
@@ -352,6 +360,7 @@ impl Up {
         }
     }
 
+<<<<<<< HEAD
     /// Length of the inbound stall the newest samples are in: rx flat while tx grew, counted back from the latest sample.
     fn trailing_inbound_stall(&self) -> Duration {
         let newest_first = self.wg_stats.iter().rev();
@@ -363,6 +372,23 @@ impl Up {
                 break;
             }
             stall += after.at.duration_since(before.at).unwrap_or(Duration::ZERO);
+=======
+    /// Length of the inbound stall the newest samples are in; like the ping window, a single send keeps it running until rx grows.
+    fn trailing_inbound_stall(&self) -> Duration {
+        let samples: Vec<&TunnelStatsSample> = self.wg_stats.iter().collect();
+        let mut stall = Duration::ZERO;
+        let mut awaiting_rx = false;
+        for pair in samples.windows(2) {
+            let (before, after) = (pair[0], pair[1]);
+            let rx_grew = after.rx_bytes > before.rx_bytes;
+            let tx_grew = after.tx_bytes > before.tx_bytes;
+            awaiting_rx = !rx_grew && (tx_grew || awaiting_rx);
+            stall = if awaiting_rx {
+                stall + after.at.duration_since(before.at).unwrap_or(Duration::ZERO)
+            } else {
+                Duration::ZERO
+            };
+>>>>>>> 1ab877e (feat(connection): reconnect on a 20 s inbound counter stall, log runs past 16 s (#882))
         }
         stall
     }
@@ -375,7 +401,17 @@ impl Up {
         self.wg_stats.push_back(sample);
         self.tunnel_ping.samples_since_result =
             (self.tunnel_ping.samples_since_result + 1).min(wg_tunnel::HISTORY_CAPACITY);
+<<<<<<< HEAD
         self.trailing_inbound_stall()
+=======
+        let stall = self.trailing_inbound_stall();
+        let ended = self.tunnel_ping.counter_stall;
+        if stall.is_zero() && ended >= INBOUND_STALL {
+            tracing::info!(run = ?ended, crossed_marker = ended >= COUNTER_STALL_MARKER, "inbound stall ended on its own");
+        }
+        self.tunnel_ping.counter_stall = stall;
+        stall
+>>>>>>> 1ab877e (feat(connection): reconnect on a 20 s inbound counter stall, log runs past 16 s (#882))
     }
 
     pub fn connect_progress(&mut self, evt: Progress) {
@@ -816,12 +852,24 @@ mod tunnel_ping_tests {
     #[test]
     fn counter_stall_counts_from_the_last_flowing_sample_and_resets() {
         let mut up = up();
+<<<<<<< HEAD
         assert_eq!(record_samples(&mut up, 2, true), Duration::ZERO);
         let stall = record_samples(&mut up, 4, false);
         assert_eq!(stall, SAMPLE_GAP * 4);
         assert!(stall < COUNTER_STALL_RECONNECT);
         assert!(record_samples(&mut up, 1, false) >= COUNTER_STALL_RECONNECT);
         assert_eq!(record_samples(&mut up, 1, true), Duration::ZERO);
+=======
+        record_samples(&mut up, 2, true);
+        assert_eq!(up.tunnel_ping.counter_stall, Duration::ZERO);
+        record_samples(&mut up, 4, false);
+        assert_eq!(up.tunnel_ping.counter_stall, SAMPLE_GAP * 4);
+        assert!(up.tunnel_ping.counter_stall < COUNTER_STALL_RECONNECT);
+        record_samples(&mut up, 1, false);
+        assert!(up.tunnel_ping.counter_stall >= COUNTER_STALL_RECONNECT);
+        record_samples(&mut up, 1, true);
+        assert_eq!(up.tunnel_ping.counter_stall, Duration::ZERO);
+>>>>>>> 1ab877e (feat(connection): reconnect on a 20 s inbound counter stall, log runs past 16 s (#882))
     }
 
     #[test]
@@ -856,6 +904,67 @@ mod tunnel_ping_tests {
     }
 
     #[test]
+<<<<<<< HEAD
+=======
+    fn single_send_then_silence_is_a_stall() {
+        let mut up = up();
+        let samples = [(0, 500, 500), (1, 600, 500), (2, 600, 500), (3, 600, 500)];
+        for (step, tx_bytes, rx_bytes) in samples {
+            up.record_wg_stats(TunnelStatsSample {
+                at: UNIX_EPOCH + SAMPLE_GAP * step,
+                tx_bytes,
+                rx_bytes,
+                ..Default::default()
+            });
+        }
+        assert_eq!(up.tunnel_ping_result(Ok(Duration::from_secs(8)), MAX_RTT), 1);
+    }
+
+    #[test]
+    fn single_send_then_silence_is_a_counter_stall() {
+        let mut up = up();
+        up.record_wg_stats(TunnelStatsSample {
+            at: UNIX_EPOCH,
+            tx_bytes: 500,
+            rx_bytes: 500,
+            ..Default::default()
+        });
+        let mut stall = Duration::ZERO;
+        for step in 1..=6u32 {
+            stall = up.record_wg_stats(TunnelStatsSample {
+                at: UNIX_EPOCH + SAMPLE_GAP * step,
+                tx_bytes: 600,
+                rx_bytes: 500,
+                ..Default::default()
+            });
+        }
+        assert!(stall >= COUNTER_STALL_RECONNECT);
+        let stall = up.record_wg_stats(TunnelStatsSample {
+            at: UNIX_EPOCH + SAMPLE_GAP * 7,
+            tx_bytes: 600,
+            rx_bytes: 700,
+            ..Default::default()
+        });
+        assert_eq!(stall, Duration::ZERO);
+    }
+
+    #[test]
+    fn rx_ends_a_single_send_stall() {
+        let mut up = up();
+        let samples = [(0, 500, 500), (1, 600, 500), (2, 600, 700), (3, 600, 700)];
+        for (step, tx_bytes, rx_bytes) in samples {
+            up.record_wg_stats(TunnelStatsSample {
+                at: UNIX_EPOCH + SAMPLE_GAP * step,
+                tx_bytes,
+                rx_bytes,
+                ..Default::default()
+            });
+        }
+        assert_eq!(up.inbound_over_ping_window(), Inbound::Unclear);
+    }
+
+    #[test]
+>>>>>>> 1ab877e (feat(connection): reconnect on a 20 s inbound counter stall, log runs past 16 s (#882))
     fn stall_is_measured_by_timestamps() {
         let mut up = up();
         // One flat gap of 4 s is not a stall; the same bytes 8 s apart are.
