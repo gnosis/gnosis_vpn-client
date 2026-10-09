@@ -12,6 +12,8 @@ pub enum Error {
     NoHost,
     #[error("Port not found or unknown in the provided URL")]
     UnknownPort,
+    #[error("Host has no IPv4 address")]
+    NoIpv4,
     #[error("IO error: {0}")]
     IO(#[from] io::Error),
 }
@@ -43,8 +45,13 @@ pub fn backoff_expo_short_delay() -> ExponentialBuilder {
         .with_jitter()
 }
 
+/// The one IPv4 address the whole session pins Blokli to (client, killswitch exemption, WAN probe).
+pub async fn resolve_blokli_ip(url: &url::Url) -> Result<Ipv4Addr, Error> {
+    resolve_ips(url).await?.first().copied().ok_or(Error::NoIpv4)
+}
+
 /// Resolves the IPv4 addresses for the host and port specified in the provided URL.
-pub async fn resolve_ips(url: &url::Url) -> Result<Vec<Ipv4Addr>, Error> {
+async fn resolve_ips(url: &url::Url) -> Result<Vec<Ipv4Addr>, Error> {
     let host = url.host_str().ok_or(Error::NoHost)?;
     let port = url.port_or_known_default().ok_or(Error::UnknownPort)?;
     let addr_str = format!("{}:{}", host, port);

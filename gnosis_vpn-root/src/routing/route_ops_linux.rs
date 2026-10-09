@@ -106,6 +106,8 @@ impl RouteOps for NetlinkRouteOps {
                 });
                 exclude_idx.is_none() || oif != exclude_idx
             })
+            // Host routes are pins (our own blokli bypass among them), never the WAN path.
+            .filter(|r| r.header.destination_prefix_length < 32)
             .filter(|r| {
                 let prefix_len = r.header.destination_prefix_length;
                 let prefix_addr = r
@@ -186,6 +188,8 @@ impl RouteOps for NetlinkRouteOps {
                     .iter()
                     .any(|a| matches!(a, RouteAttribute::Oif(idx) if *idx == device_idx))
             })
+            // Same host-route skip as above, so this re-check sees the route `setup()` snapshotted.
+            .filter(|r| r.header.destination_prefix_length < 32)
             .filter(|r| {
                 let prefix_len = r.header.destination_prefix_length;
                 let prefix_addr = r
@@ -270,7 +274,7 @@ mod tests {
 
     #[test]
     fn covers_default_route_matches_any_ip() {
-        assert!(covers(Ipv4Addr::new(0, 0, 0, 0), 0, Ipv4Addr::new(1, 1, 1, 1)));
+        assert!(covers(Ipv4Addr::new(0, 0, 0, 0), 0, Ipv4Addr::new(203, 0, 113, 1)));
         assert!(covers(Ipv4Addr::new(0, 0, 0, 0), 0, Ipv4Addr::new(192, 168, 0, 1)));
     }
 
@@ -302,7 +306,7 @@ mod tests {
     #[test]
     fn covers_vpn_split_halves() {
         // 0.0.0.0/1 covers the lower half of IPv4 space
-        assert!(covers(Ipv4Addr::new(0, 0, 0, 0), 1, Ipv4Addr::new(1, 1, 1, 1)));
+        assert!(covers(Ipv4Addr::new(0, 0, 0, 0), 1, Ipv4Addr::new(100, 64, 0, 1)));
         assert!(!covers(Ipv4Addr::new(0, 0, 0, 0), 1, Ipv4Addr::new(128, 0, 0, 1)));
         // 128.0.0.0/1 covers the upper half
         assert!(covers(Ipv4Addr::new(128, 0, 0, 0), 1, Ipv4Addr::new(200, 0, 0, 1)));
