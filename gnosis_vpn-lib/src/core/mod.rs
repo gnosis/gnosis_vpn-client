@@ -112,8 +112,8 @@ pub struct Core {
     /// The one long-lived probe session; connections register over it.
     probe: Option<Probe>,
     probe_generation: u64,
-    /// A previous connection's key a force-reconnect could not unregister yet, for the next connection runner.
-    stale_wg_public_key: Option<String>,
+    /// Key and exit of a connection we dropped ourselves; the next runner to that exit resumes it.
+    resume: Option<connection::up::Resume>,
     next_request_id: u64,
     // Maps a request_id to the oneshot sender waiting for root's response.
     // request_id is needed even though at most one request is in-flight at a time:
@@ -135,6 +135,7 @@ struct PendingUnregister {
 
 /// Server GC: client_handshake_timeout_s=300 plus a 180 s sweep - older entries are already collected.
 const PENDING_UNREGISTER_TTL: Duration = Duration::from_secs(8 * 60);
+const PUMP_STOP_BUDGET: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 enum Phase {
@@ -241,7 +242,7 @@ impl Core {
             route_healths,
             probe: None,
             probe_generation: 0,
-            stale_wg_public_key: None,
+            resume: None,
             next_request_id: 0,
             responders: HashMap::new(),
             // needed to keep working during enabled killswitch
@@ -407,6 +408,7 @@ impl Core {
                     WorkerCommand::Connect(token) => match self.config.destinations.resolve(&token).cloned() {
                         Ok(dest) => {
                             self.reconnecting_since = None;
+                            self.abandon_resume(results_sender).await;
                             let is_already_active = match &self.phase {
                                 Phase::Connected(conn) | Phase::Connecting(conn) => conn.destination.same_exit(&dest),
                                 _ => false,
@@ -452,6 +454,7 @@ impl Core {
                     WorkerCommand::Disconnect => {
                         self.target = None;
                         self.reconnecting_since = None;
+                        self.abandon_resume(results_sender).await;
                         self.cached_resolved_blokli_ips = Vec::new();
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
@@ -554,7 +557,7 @@ impl Core {
                         if let Some(conn) = active_conn {
                             tracing::info!(%conn, "force reconnect triggered by WAN change");
                             self.reconnecting_since = Some(SystemTime::now());
-                            self.force_reconnect(conn, results_sender).await;
+                            self.reconnect_in_place(conn, false, results_sender).await;
                         } else {
                             tracing::debug!(?self.phase, "force reconnect requested but not connected or connecting");
                         }
@@ -871,11 +874,11 @@ impl Core {
                 self.act_on_target(results_sender);
             }
 
-            Results::WgPumpExited { reason } => match self.phase.clone() {
+            Results::WgPumpExited { reason, device_lost } => match self.phase.clone() {
                 Phase::Connected(conn) => {
-                    tracing::warn!(%conn, %reason, "wg pump exited - reconnecting");
+                    tracing::warn!(%conn, %reason, device_lost, "wg pump exited - reconnecting");
                     self.reconnecting_since = Some(SystemTime::now());
-                    self.disconnect_from_connection(&conn, results_sender);
+                    self.reconnect_in_place(conn, !device_lost, results_sender).await;
                 }
                 phase => {
                     // During Connecting the runner's own tunnel ping verification
@@ -893,7 +896,7 @@ impl Core {
                     if failures >= max {
                         tracing::warn!(%conn, failures, "tunnel ping exceeded max failures - reconnecting");
                         self.reconnecting_since = Some(SystemTime::now());
-                        self.disconnect_from_connection(&conn, results_sender);
+                        self.reconnect_in_place(conn, true, results_sender).await;
                     }
                 }
             }
@@ -1005,14 +1008,14 @@ impl Core {
                 if !was_ready && is_ready {
                     self.act_on_target(results_sender);
                 }
-                // A connection still registering holds a bound_host that just died; restart the attempt.
+                // A connection still registering holds a bound_host that just died; restart in place so its key and device survive.
                 if reopening
                     && let Phase::Connecting(conn) = self.phase.clone()
                     && conn.destination.key() == key
                     && conn.registration.is_none()
                 {
                     tracing::warn!(%conn, "probe session broke during registration - restarting the attempt");
-                    self.disconnect_from_connection(&conn, results_sender);
+                    self.reconnect_in_place(conn, true, results_sender).await;
                 }
             }
 
@@ -1845,18 +1848,27 @@ impl Core {
         &mut self,
         destination: Destination,
         bridge_session: SessionClientMetadata,
-        prev_public_key: Option<String>,
         results_sender: &mpsc::Sender<Results>,
     ) {
+        // A user-initiated switch already abandoned it; this only guards the invariant.
+        let mut resume = self.resume.take();
+        if let Some(stale) = resume.take_if(|r| !r.destination.same_exit(&destination)) {
+            tracing::warn!(resume = %stale, %destination, "dropping a resume kept for another exit");
+            self.spawn_unregister_retry(&stale.into(), results_sender);
+        }
         self.retry_pending_unregisters(&destination, results_sender);
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_connection.clone();
-            let conn = connection::up::Up::new(destination.clone());
+            let mut conn = connection::up::Up::new(destination.clone());
+            // Seeded so a disconnect before the runner reports its key still unregisters and tears down.
+            if let Some(resume) = &resume {
+                conn.wireguard = Some(resume.wireguard.clone());
+            }
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
             let prev_conn = connection::up::runner::PreviousConnection {
                 blokli_ips: self.cached_resolved_blokli_ips.clone(),
-                wg_public_key: prev_public_key,
+                resume,
             };
             let spec = connection::up::runner::ConnectionSpec {
                 destination: conn.destination.clone(),
@@ -2151,8 +2163,7 @@ impl Core {
                     }
                     ConnectStep::Connect(bridge_session) => {
                         tracing::info!(destination = %dest, "establishing connection to new destination");
-                        let prev_public_key = self.stale_wg_public_key.take();
-                        self.spawn_connection_runner(dest.clone(), bridge_session, prev_public_key, results_sender);
+                        self.spawn_connection_runner(dest.clone(), bridge_session, results_sender);
                     }
                 }
             }
@@ -2189,50 +2200,55 @@ impl Core {
         }
     }
 
-    /// Reconnect without a full disconnect cycle — used for ForceReconnect (WAN change).
-    ///
-    /// Cancels the running connection, tears down the WireGuard tunnel, then immediately
-    /// spawns a new connection runner that carries the old public key so the new runner's
-    /// background bridge-cleanup task can unregister it.
-    async fn force_reconnect(&mut self, conn: connection::up::Up, results_sender: &mpsc::Sender<Results>) {
-        // The connection's own snapshot: the replacement runner unregisters prev_public_key here.
-        let destination = conn.destination.clone();
-        let prev_public_key = conn.wireguard.as_ref().map(|wg| wg.key_pair.public_key.clone());
-        let bridge_session = self
-            .probe
-            .as_ref()
-            .filter(|p| p.key() == destination.key())
-            .and_then(Probe::ready_session)
-            .cloned();
-
+    /// Every reconnect we trigger ourselves keeps key and registration; only the user rotates them.
+    async fn reconnect_in_place(
+        &mut self,
+        conn: connection::up::Up,
+        keep_device: bool,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
-        // The cancelled runner's pending root responders belong to a connection
-        // that no longer exists; clear them so stale entries do not outlive it,
-        // matching disconnect_from_connection.
         self.responders.clear();
-        wait_for_pump_stop(pump_tasks).await;
+        self.phase = Phase::HoprRunning;
+        // Discovery may have dropped this exit mid-connection; its tracker was kept only for the tunnel pings.
+        let configured = &self.config.destinations;
+        self.route_healths.retain(|key, _| configured.contains_key(key));
 
-        // this is a oneshot command and we do not wait for any result
-        let _ = self
+        // A pump still holding the TUN fd would compete with the next one for packets on a reused device.
+        let pump_stopped = wait_for_pump_stop(pump_tasks).await;
+        if !keep_device || !pump_stopped {
+            // Awaited so root sees it before the next runner's SetupTunnel.
+            let _ = self
+                .outgoing_sender
+                .send(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
+                .await;
+        }
+
+        match connection::up::Resume::try_from(&conn) {
+            Ok(resume) => {
+                tracing::info!(%resume, keep_device, "reconnecting in place");
+                self.resume = Some(resume);
+            }
+            Err(reason) => tracing::debug!(reason, "reconnecting with a fresh key"),
+        }
+        self.act_on_target(results_sender);
+    }
+
+    /// A user action rotates the key: the kept registration is removed at the exit and the device torn down.
+    async fn abandon_resume(&mut self, results_sender: &mpsc::Sender<Results>) {
+        let Some(resume) = self.resume.take() else { return };
+        tracing::info!(%resume, "explicit command replaces pending reconnect - new key");
+        // Awaited: after a disconnect no later SetupTunnel would replace the kept device.
+        if let Err(err) = self
             .outgoing_sender
             .send(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
-            .await;
-
-        self.phase = Phase::HoprRunning;
-
-        if let Some(bridge_session) = bridge_session {
-            self.spawn_connection_runner(destination, bridge_session, prev_public_key, results_sender);
-        } else {
-            // The probe is not ready (or on another exit); the next runner unregisters the old key.
-            tracing::warn!(
-                ?destination,
-                "force reconnect: probe session not ready - waiting for it"
-            );
-            self.stale_wg_public_key = prev_public_key;
-            self.act_on_target(results_sender);
+            .await
+        {
+            tracing::warn!(%err, "failed to request tunnel teardown for abandoned reconnect");
         }
+        self.spawn_unregister_retry(&resume.into(), results_sender);
     }
 
     fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
@@ -2285,10 +2301,6 @@ impl Core {
     }
 }
 
-/// Wait for the (already cancelled) NepTUN pump task to finish so the worker's
-/// TUN fd is closed before root tears down routing and drops its own fd. On
-/// Linux the TUN is multi-queue: re-provisioning while a stale fd lives would
-/// attach a second queue to the old device instead of creating a fresh one.
 /// Connecting and reconnecting views of the phase; between attempts a reconnect has no phase.
 fn connection_infos(
     phase: &Phase,
@@ -2334,11 +2346,17 @@ fn nerd_stats_telemetry(conn: &connection::up::Up, bridge: Option<&SessionClient
     }
 }
 
-async fn wait_for_pump_stop(pump_tasks: TaskTracker) {
+/// The worker's fd must close before root's: on Linux a stale fd turns the next TUN create into a second queue on the old device.
+async fn wait_for_pump_stop(pump_tasks: TaskTracker) -> bool {
     pump_tasks.close();
-    if time::timeout(Duration::from_secs(5), pump_tasks.wait()).await.is_err() {
-        tracing::warn!("wg pump did not stop within 5s - proceeding with tunnel teardown");
+    let stopped = time::timeout(PUMP_STOP_BUDGET, pump_tasks.wait()).await.is_ok();
+    if !stopped {
+        tracing::warn!(
+            ?PUMP_STOP_BUDGET,
+            "wg pump did not stop in time - proceeding with tunnel teardown"
+        );
     }
+    stopped
 }
 
 /// What connecting to a destination needs next, given its route and the one probe.
@@ -2467,6 +2485,165 @@ mod tests {
         let mut up = Up::new(destination(id));
         up.phase = (SystemTime::UNIX_EPOCH, phase);
         up
+    }
+
+    /// A freshly initialised core: new identity in a temp state home, no node, no target, root on `from_core`.
+    struct TestCore {
+        core: Core,
+        from_core: mpsc::Receiver<CoreToWorker>,
+        results: mpsc::Sender<Results>,
+        _state_home: tempfile::TempDir,
+    }
+
+    async fn fresh_core() -> TestCore {
+        let state_home = tempfile::tempdir().expect("temp dir");
+        // Service start creates this; the generated pass file lands in it.
+        let pass_dir = identity::pass_file(state_home.path().to_path_buf())
+            .parent()
+            .expect("pass file dir")
+            .to_path_buf();
+        tokio::fs::create_dir_all(pass_dir).await.expect("state home layout");
+        let path = state_home.path().join("config.toml");
+        tokio::fs::write(&path, "version = 7\n").await.expect("write config");
+        let config = crate::config::read(&path).await.expect("valid config");
+        let worker_params = crate::worker_params::WorkerParams::new(
+            None,
+            None,
+            crate::worker_params::ConfigFileMode::Manual(path),
+            crate::worker_params::AllowFlags::default(),
+            "https://blokli.invalid".parse().expect("valid url"),
+            state_home.path().to_path_buf(),
+        );
+        let (outgoing, from_core) = mpsc::channel(32);
+        let (core, _) = Core::init(config, worker_params, None, outgoing)
+            .await
+            .expect("core init");
+        let (results, _) = mpsc::channel(32);
+        TestCore {
+            core,
+            from_core,
+            results,
+            _state_home: state_home,
+        }
+    }
+
+    fn connected_with_key(id: &str) -> Up {
+        let mut up = attempt(id, UpPhase::ConnectionEstablished);
+        up.wireguard = Some(wireguard::WireGuard::new(
+            wireguard::Config::new(None, None),
+            wireguard::KeyPair {
+                priv_key: "priv".into(),
+                public_key: "pub".into(),
+            },
+        ));
+        up
+    }
+
+    fn teardown_requested(from_core: &mut mpsc::Receiver<CoreToWorker>) -> bool {
+        matches!(
+            from_core.try_recv(),
+            Ok(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
+        )
+    }
+
+    #[tokio::test]
+    async fn a_ping_failure_keeps_key_and_device() {
+        let TestCore {
+            mut core,
+            mut from_core,
+            results,
+            ..
+        } = fresh_core().await;
+        core.phase = Phase::Connected(connected_with_key("exit"));
+
+        core.reconnect_in_place(connected_with_key("exit"), true, &results)
+            .await;
+
+        assert!(!teardown_requested(&mut from_core));
+        assert!(matches!(core.phase, Phase::HoprRunning));
+        let resume = core.resume.as_ref().expect("key kept");
+        assert_eq!(resume.wireguard.key_pair.public_key, "pub");
+    }
+
+    #[tokio::test]
+    async fn a_wan_change_keeps_the_key_but_rebuilds_the_device() {
+        let TestCore {
+            mut core,
+            mut from_core,
+            results,
+            ..
+        } = fresh_core().await;
+
+        core.reconnect_in_place(connected_with_key("exit"), false, &results)
+            .await;
+
+        assert!(teardown_requested(&mut from_core));
+        assert_eq!(
+            core.resume.as_ref().map(|r| r.wireguard.key_pair.public_key.as_str()),
+            Some("pub")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pump_that_will_not_stop_forces_a_rebuild() {
+        let TestCore {
+            mut core,
+            mut from_core,
+            results,
+            ..
+        } = fresh_core().await;
+        let stuck = TaskTracker::new();
+        stuck.spawn(std::future::pending::<()>());
+        core.wg_pump_tasks = stuck;
+
+        core.reconnect_in_place(connected_with_key("exit"), true, &results)
+            .await;
+
+        assert!(teardown_requested(&mut from_core));
+        assert!(core.resume.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_connection_without_a_key_reconnects_fresh() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+
+        core.reconnect_in_place(attempt("exit", UpPhase::GeneratingWg), true, &results)
+            .await;
+
+        assert!(core.resume.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_user_action_abandons_the_resume_and_tears_down() {
+        let TestCore {
+            mut core,
+            mut from_core,
+            results,
+            ..
+        } = fresh_core().await;
+        core.resume = connection::up::Resume::try_from(&connected_with_key("exit")).ok();
+
+        core.abandon_resume(&results).await;
+
+        assert!(core.resume.is_none());
+        assert!(teardown_requested(&mut from_core));
+    }
+
+    #[test]
+    fn an_abandoned_resume_unregisters_its_key() {
+        let resume = connection::up::Resume::try_from(&connected_with_key("exit")).expect("resumable");
+        let down: connection::down::Down = resume.into();
+        assert_eq!(down.wg_public_key, "pub");
+        assert_eq!(down.destination.connect_id, destination("exit").connect_id);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pump_stop_reports_a_pump_that_ignores_cancellation() {
+        let stuck = TaskTracker::new();
+        stuck.spawn(std::future::pending::<()>());
+        assert!(!wait_for_pump_stop(stuck).await);
+
+        assert!(wait_for_pump_stop(TaskTracker::new()).await);
     }
 
     #[test]

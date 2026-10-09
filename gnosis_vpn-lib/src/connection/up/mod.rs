@@ -319,6 +319,33 @@ impl Up {
     }
 }
 
+/// What an automatic reconnect carries over; re-registering the same key returns the exit's existing peer and address.
+#[derive(Clone)]
+pub struct Resume {
+    pub destination: Destination,
+    pub wireguard: WireGuard,
+}
+
+impl TryFrom<&Up> for Resume {
+    type Error = &'static str;
+
+    fn try_from(up: &Up) -> Result<Self, Self::Error> {
+        let Some(wireguard) = up.wireguard.clone() else {
+            return Err("connection has no WireGuard key yet");
+        };
+        Ok(Self {
+            destination: up.destination.clone(),
+            wireguard,
+        })
+    }
+}
+
+impl Display for Resume {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Resume of {} ({})", self.destination, self.wireguard)
+    }
+}
+
 impl Display for Up {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -544,5 +571,45 @@ mod surb_ramp_tests {
             Some(target),
             "should converge within {budget} ticks"
         );
+    }
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+    use crate::connection::destination::{Address, DestinationSource, HopRouting, Meta};
+    use crate::wireguard::KeyPair;
+
+    fn up_with_key() -> Up {
+        let destination = Destination::new(
+            "exit".to_string(),
+            Address::from([7u8; 20]),
+            HopRouting::try_from(1).expect("conversion cannot fail"),
+            Meta::default(),
+            "172.30.0.1:8000".parse().expect("valid socket address"),
+            "172.30.0.1:51820".parse().expect("valid socket address"),
+            DestinationSource::Configured,
+        );
+        let mut up = Up::new(destination);
+        up.wireguard = Some(WireGuard::new(
+            wireguard::Config::new(None, None),
+            KeyPair {
+                priv_key: "priv".into(),
+                public_key: "pub".into(),
+            },
+        ));
+        up
+    }
+
+    #[test]
+    fn resume_needs_only_the_key() {
+        let mut up = up_with_key();
+        // Interrupted before the exit answered: the key is still reused.
+        assert!(up.registration.is_none());
+        let resume = Resume::try_from(&up).expect("resumable");
+        assert_eq!(resume.wireguard.key_pair.public_key, "pub");
+
+        up.wireguard = None;
+        assert!(Resume::try_from(&up).is_err());
     }
 }

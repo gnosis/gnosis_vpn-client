@@ -107,10 +107,11 @@ pub(crate) enum Results {
         wg_public_key: String,
         res: Result<(), connection::down::Error>,
     },
-    /// The NepTUN pump task terminated on its own (WG session expired, or an
-    /// endpoint closed/errored) rather than through connection cancellation.
+    /// The NepTUN pump task terminated on its own rather than through connection cancellation.
     WgPumpExited {
         reason: String,
+        /// The TUN fd is gone, so the device cannot be reused for the reconnect.
+        device_lost: bool,
     },
     TunnelPingResult {
         rtt: Result<Duration, String>,
@@ -770,7 +771,9 @@ impl Display for Results {
                 Ok(_) => write!(f, "DisconnectionResult ({}): Success", wg_public_key),
                 Err(err) => write!(f, "DisconnectionResult ({}): Error({})", wg_public_key, err),
             },
-            Results::WgPumpExited { reason } => write!(f, "WgPumpExited: {}", reason),
+            Results::WgPumpExited { reason, device_lost } => {
+                write!(f, "WgPumpExited: {} (device_lost={})", reason, device_lost)
+            }
             Results::TunnelPingResult { rtt } => match rtt {
                 Ok(d) => write!(f, "TunnelPingResult: {:.1}ms", d.as_secs_f64() * 1000.0),
                 Err(err) => write!(f, "TunnelPingResult: Error({})", err),

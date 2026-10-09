@@ -54,6 +54,17 @@ pub enum Event {
 /// Depending on how far a connection was already established,
 /// different steps for dismantling need to be taken.
 /// If no wg pubkey was generated, nothing needs to be done to rewind a connection attempt.
+/// A user action drops a kept reconnect: its key still has to leave the exit.
+impl From<connection::up::Resume> for Down {
+    fn from(resume: connection::up::Resume) -> Self {
+        Self {
+            destination: resume.destination,
+            phase: (SystemTime::now(), Phase::Disconnecting),
+            wg_public_key: resume.wireguard.key_pair.public_key,
+        }
+    }
+}
+
 impl TryFrom<&connection::up::Up> for Down {
     type Error = &'static str;
 

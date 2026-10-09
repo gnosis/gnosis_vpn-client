@@ -38,7 +38,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
                 for (k, v) in wg.iter() {
-                    if k == "allowed_ips" || k == "force_private_key" {
+                    if k == "allowed_ips" {
                         continue;
                     }
                     if k == "dns" {

@@ -55,7 +55,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "wireguard" {
             if let Some(wg) = value.as_table() {
                 for (k, _v) in wg.iter() {
-                    if k == "listen_port" || k == "allowed_ips" || k == "force_private_key" {
+                    if k == "listen_port" || k == "allowed_ips" {
                         continue;
                     }
                     wrong_keys.push(format!("wireguard.{k}"));
@@ -264,8 +264,6 @@ main = "2 MB"
 [wireguard]
 listen_port = 51820
 allowed_ips = "10.128.0.1/9"
-# use if you want to disable key rotation on every connection
-force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
 "#####;
         toml::from_str::<Config>(config)?;
         Ok(())
