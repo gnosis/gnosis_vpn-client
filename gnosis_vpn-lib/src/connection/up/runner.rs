@@ -28,9 +28,9 @@ use crate::{ping, remote_data, wg_tunnel};
 
 use super::{Error, Event, Progress, Resume, Setback};
 
-/// State carried over from a previous connection attempt.
 const SESSION_CLOSE_BUDGET: Duration = Duration::from_secs(2);
 
+/// State carried over from a previous connection attempt.
 pub(crate) struct PreviousConnection {
     /// WireGuard public key from the previous connection to unregister during bridge cleanup.
     pub resume: Option<Resume>,
@@ -260,7 +260,7 @@ async fn open_spliced_wg_session(
         capabilities: options.sessions.wg.capabilities,
         forward_path: destination.routing,
         return_path: destination.routing,
-        always_max_out_surbs: surb.always_max_out_surbs,
+        max_surbs_per_data_packet: surb.max_surbs_per_data_packet,
         surb_management: surb.management,
         // Robust tail-tolerance profile for the WireGuard data session.
         flow_control: Some(FlowControlConfig::robust()),
