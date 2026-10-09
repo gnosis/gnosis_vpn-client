@@ -64,7 +64,8 @@ pub enum WorkerToRoot {
 pub(crate) enum RunnerToRoot {
     KillswitchLockdown {
         peer_ips: Vec<Ipv4Addr>,
-        interface: String,
+        /// None arms the killswitch before the tunnel exists.
+        interface: Option<String>,
         resp: oneshot::Sender<Result<(), String>>,
     },
     /// Ask root to provision the TUN device and split-tunnel routing for the
@@ -96,7 +97,7 @@ pub enum RequestToRoot {
     KillswitchLockdown {
         request_id: u64,
         peer_ips: Vec<Ipv4Addr>,
-        interface: String,
+        interface: Option<String>,
     },
     SetupTunnel {
         request_id: u64,

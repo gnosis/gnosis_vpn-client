@@ -31,12 +31,12 @@ pub enum SessionKind {
 
 #[derive(Clone, Debug)]
 pub enum Progress {
+    PeerIps,
+    KillswitchLockdown,
     GenerateWg,
     WgGenerated(WireGuard),
     RegisterWg,
     OpenPing(Registration),
-    PeerIps,
-    KillswitchLockdown,
     StaticWgTunnel(SessionClientMetadata),
     /// Handle to adjust the active session's SURB balancer, retained on `Up`
     /// so `core` can reconfigure it from live telemetry, not just once here.
@@ -214,11 +214,11 @@ enum Inbound {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Phase {
     Init,
+    GatherPeerIps,
+    KillswitchLockdown,
     GeneratingWg,
     RegisterWg,
     OpeningPing,
-    GatherPeerIps,
-    KillswitchLockdown,
     EstablishWgTunnel,
     VerifyPing,
     AdjustToMain,
@@ -479,11 +479,11 @@ impl Display for Phase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let phase_str = match self {
             Phase::Init => "Init",
+            Phase::GatherPeerIps => "Retrieving peer IPs",
+            Phase::KillswitchLockdown => "Activating killswitch",
             Phase::GeneratingWg => "Generating WireGuard keypairs",
             Phase::RegisterWg => "Registering WireGuard public key",
             Phase::OpeningPing => "Opening main connection",
-            Phase::GatherPeerIps => "Retrieving peer IPs",
-            Phase::KillswitchLockdown => "Activating killswitch",
             Phase::EstablishWgTunnel => "Establishing WireGuard tunnel",
             Phase::VerifyPing => "Verifying established connection",
             Phase::AdjustToMain => "Upgrading for general traffic",

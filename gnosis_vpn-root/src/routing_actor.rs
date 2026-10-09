@@ -46,7 +46,7 @@ pub enum Msg {
     },
     SetAllowedIps {
         ips: Vec<IpAddr>,
-        interface: String,
+        interface: Option<String>,
         lan_lockdown: bool,
         reply: oneshot::Sender<Result<(), String>>,
     },
@@ -68,7 +68,8 @@ enum MonitorAction {
 const PEER_IP_HYSTERESIS_SECS: u64 = 300;
 
 struct AppliedPolicy {
-    interface: String,
+    /// None until the tunnel exists; the killswitch is armed before it.
+    interface: Option<String>,
     /// Static floor: blokli IPs + peers alive at initial connection.
     /// Never updated by peer refreshes; overwritten only when a new lockdown fires.
     ips: Vec<IpAddr>,
@@ -391,16 +392,16 @@ impl Actor {
             let combined = allowed_ips(&policy.ips, &self.active_bypass);
             if let Err(e) = self
                 .firewall
-                .reapply_policy(&policy.interface, &combined, policy.lan_lockdown)
+                .reapply_policy(policy.interface.as_deref(), &combined, policy.lan_lockdown)
             {
-                tracing::warn!(error = %e, interface = %policy.interface, "failed to refresh killswitch after peer allowlist update");
+                tracing::warn!(error = %e, interface = ?policy.interface, "failed to refresh killswitch after peer allowlist update");
             } else {
                 tracing::debug!(count = combined.len(), "killswitch peer allowlist refreshed");
             }
         }
     }
 
-    fn apply_policy(&mut self, interface: String, ips: Vec<IpAddr>, lan_lockdown: bool) -> Result<(), String> {
+    fn apply_policy(&mut self, interface: Option<String>, ips: Vec<IpAddr>, lan_lockdown: bool) -> Result<(), String> {
         let ips: Vec<IpAddr> = ips
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>()
@@ -413,10 +414,16 @@ impl Actor {
         routing::sweep::record_killswitch(recovery_state);
         // A reused device keeps active_bypass alive; the lockdown must not drop those peers.
         let combined = allowed_ips(&ips, &self.active_bypass);
-        let result = self
-            .firewall
-            .apply_policy(&interface, &combined, lan_lockdown)
-            .map_err(|e| e.to_string());
+        // Flushing PF states again would cut the HOPR flows opened while the killswitch was already up.
+        let is_first_arm = self.applied_policy.is_none();
+        let result = if is_first_arm {
+            self.firewall
+                .apply_policy(interface.as_deref(), &combined, lan_lockdown)
+        } else {
+            self.firewall
+                .reapply_policy(interface.as_deref(), &combined, lan_lockdown)
+        }
+        .map_err(|e| e.to_string());
         match result {
             Ok(()) => {
                 // Floor only; the expiring tier is re-added on every refresh.
@@ -442,7 +449,7 @@ impl Actor {
         let combined = allowed_ips(&policy.ips, &self.active_bypass);
         if let Err(error) = self
             .firewall
-            .reapply_policy(&policy.interface, &combined, policy.lan_lockdown)
+            .reapply_policy(policy.interface.as_deref(), &combined, policy.lan_lockdown)
         {
             tracing::warn!(?error, "failed to re-apply killswitch after network change");
         }
