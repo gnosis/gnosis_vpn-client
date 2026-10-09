@@ -187,10 +187,18 @@ pub struct TunnelPing {
     pub last_error: Option<String>,
     /// WireGuard samples recorded since the previous ping result; they judge the next one.
     samples_since_result: usize,
+    /// How long inbound has been flat while outbound grew, as of the latest sample.
+    counter_stall: Duration,
 }
 
 /// Inbound flat this long after outbound grew is a stalled path, whatever a late reply says.
 const INBOUND_STALL: Duration = Duration::from_secs(8);
+
+/// Stall runs past this are logged when they end: the false positives a lower trigger would have produced.
+const COUNTER_STALL_MARKER: Duration = Duration::from_secs(16);
+
+/// A counter stall this long is reconnected in place; ~12 h of field pings showed no self-healing gap between 16 s and 26 s.
+pub(crate) const COUNTER_STALL_RECONNECT: Duration = Duration::from_secs(20);
 
 /// What the WireGuard counters say about the inbound path over one ping's window.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -351,15 +359,40 @@ impl Up {
         }
     }
 
-    /// Record a new WireGuard telemetry sample, evicting the oldest once at
-    /// the retention bound.
-    pub fn record_wg_stats(&mut self, sample: TunnelStatsSample) {
+    /// Length of the inbound stall the newest samples are in; like the ping window, a single send keeps it running until rx grows.
+    fn trailing_inbound_stall(&self) -> Duration {
+        let samples: Vec<&TunnelStatsSample> = self.wg_stats.iter().collect();
+        let mut stall = Duration::ZERO;
+        let mut awaiting_rx = false;
+        for pair in samples.windows(2) {
+            let (before, after) = (pair[0], pair[1]);
+            let rx_grew = after.rx_bytes > before.rx_bytes;
+            let tx_grew = after.tx_bytes > before.tx_bytes;
+            awaiting_rx = !rx_grew && (tx_grew || awaiting_rx);
+            stall = if awaiting_rx {
+                stall + after.at.duration_since(before.at).unwrap_or(Duration::ZERO)
+            } else {
+                Duration::ZERO
+            };
+        }
+        stall
+    }
+
+    /// Records a WireGuard telemetry sample (evicting the oldest at the retention bound) and returns how long inbound has been stalled as of it.
+    pub fn record_wg_stats(&mut self, sample: TunnelStatsSample) -> Duration {
         if self.wg_stats.len() >= wg_tunnel::HISTORY_CAPACITY {
             self.wg_stats.pop_front();
         }
         self.wg_stats.push_back(sample);
         self.tunnel_ping.samples_since_result =
             (self.tunnel_ping.samples_since_result + 1).min(wg_tunnel::HISTORY_CAPACITY);
+        let stall = self.trailing_inbound_stall();
+        let ended = self.tunnel_ping.counter_stall;
+        if stall.is_zero() && ended >= INBOUND_STALL {
+            tracing::info!(run = ?ended, crossed_marker = ended >= COUNTER_STALL_MARKER, "inbound stall ended on its own");
+        }
+        self.tunnel_ping.counter_stall = stall;
+        stall
     }
 
     pub fn connect_progress(&mut self, evt: Progress) {
@@ -800,6 +833,34 @@ mod tunnel_ping_tests {
     }
 
     #[test]
+    fn counter_stall_counts_from_the_last_flowing_sample_and_resets() {
+        let mut up = up();
+        record_samples(&mut up, 2, true);
+        assert_eq!(up.tunnel_ping.counter_stall, Duration::ZERO);
+        record_samples(&mut up, 4, false);
+        assert_eq!(up.tunnel_ping.counter_stall, SAMPLE_GAP * 4);
+        assert!(up.tunnel_ping.counter_stall < COUNTER_STALL_RECONNECT);
+        record_samples(&mut up, 1, false);
+        assert!(up.tunnel_ping.counter_stall >= COUNTER_STALL_RECONNECT);
+        record_samples(&mut up, 1, true);
+        assert_eq!(up.tunnel_ping.counter_stall, Duration::ZERO);
+    }
+
+    #[test]
+    fn idle_tunnel_never_counts_as_a_counter_stall() {
+        let mut up = up();
+        for n in 1..=6u64 {
+            let stall = up.record_wg_stats(TunnelStatsSample {
+                at: UNIX_EPOCH + SAMPLE_GAP * n as u32,
+                tx_bytes: 500,
+                rx_bytes: 500,
+                ..Default::default()
+            });
+            assert_eq!(stall, Duration::ZERO);
+        }
+    }
+
+    #[test]
     fn idle_tunnel_is_neither_stalled_nor_flowing() {
         let mut up = up();
         for n in 1..=4u64 {
@@ -829,6 +890,34 @@ mod tunnel_ping_tests {
             });
         }
         assert_eq!(up.tunnel_ping_result(Ok(Duration::from_secs(8)), MAX_RTT), 1);
+    }
+
+    #[test]
+    fn single_send_then_silence_is_a_counter_stall() {
+        let mut up = up();
+        up.record_wg_stats(TunnelStatsSample {
+            at: UNIX_EPOCH,
+            tx_bytes: 500,
+            rx_bytes: 500,
+            ..Default::default()
+        });
+        let mut stall = Duration::ZERO;
+        for step in 1..=6u32 {
+            stall = up.record_wg_stats(TunnelStatsSample {
+                at: UNIX_EPOCH + SAMPLE_GAP * step,
+                tx_bytes: 600,
+                rx_bytes: 500,
+                ..Default::default()
+            });
+        }
+        assert!(stall >= COUNTER_STALL_RECONNECT);
+        let stall = up.record_wg_stats(TunnelStatsSample {
+            at: UNIX_EPOCH + SAMPLE_GAP * 7,
+            tx_bytes: 600,
+            rx_bytes: 700,
+            ..Default::default()
+        });
+        assert_eq!(stall, Duration::ZERO);
     }
 
     #[test]
