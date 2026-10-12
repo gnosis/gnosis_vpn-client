@@ -143,6 +143,7 @@
           checks = {
             inherit (gnosisvpnPackages)
               gnosis_vpn-clippy
+              gnosis_vpn-clippy-pix-test
               gnosis_vpn-docs
               gnosis_vpn-test
               gnosis_vpn-licenses
@@ -157,6 +158,7 @@
               binary-gnosis_vpn-dev
               binary-gnosis_vpn-x86_64-linux
               binary-gnosis_vpn-x86_64-linux-dev
+              binary-gnosis_vpn-pix-test-x86_64-linux
               binary-gnosis_vpn-aarch64-linux
               binary-gnosis_vpn-aarch64-linux-dev
               binary-gnosis_vpn-system_tests

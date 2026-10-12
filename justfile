@@ -21,6 +21,18 @@ docker-build: build
     cp -f result/bin/gnosis_vpn-root result/bin/gnosis_vpn-worker result/bin/gnosis_vpn-ctl docker/
     docker build --platform linux/x86_64 -t gnosis_vpn-client docker/
 
+# build static linux binary (x86_64) on the `pix-test` PIX deposit pool instead of Curvy; testing only
+build-pix-test:
+    nix build -L .#binary-gnosis_vpn-pix-test-x86_64-linux -o result-pix-test
+
+# build docker image (x86_64) on the `pix-test` PIX deposit pool; tagged gnosis_vpn-client:pix-test
+docker-build-pix-test: build-pix-test
+    #!/usr/bin/env bash
+    set -o errexit -o nounset -o pipefail
+
+    cp -f result-pix-test/bin/gnosis_vpn-root result-pix-test/bin/gnosis_vpn-worker result-pix-test/bin/gnosis_vpn-ctl docker/
+    docker build --platform linux/x86_64 -t gnosis_vpn-client:pix-test docker/
+
 # build docker image (ARM64)
 docker-build-arm64: build-arm64
     #!/usr/bin/env bash
