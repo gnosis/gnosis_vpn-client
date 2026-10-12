@@ -24,8 +24,8 @@ let
 
   # A hash lets crane fetchgit just that commit (cachix-substitutable) instead of fetching every ref (~10 min for hoprnet); keep in sync with Cargo.lock.
   outputHashes = {
-    "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.4#0aebe247729574acc449f9debd62fc8d419dbf07" =
-      "sha256-oxCxToa9dE2TslRNxvO19qZrOrf9qsUlB4u+ZNwzA28=";
+    "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.5#ed75813cebb00c2fbe1a7723764c12dd381818c3" =
+      "sha256-8Y0Z/AfC5mb0svBI9DjVYivBgNdvnfwoa8Ua+f2EIdI=";
     "git+https://github.com/hoprnet/edge-client.git?rev=4fbb5c8eb07133f22a8c94db05db846c43c365c2#4fbb5c8eb07133f22a8c94db05db846c43c365c2" =
       "sha256-HtONuRmif6TUlNc71r57Plvc63yIE2Mr3YRP5dAButc=";
     "git+https://github.com/hoprnet/hoprnet?branch=master#15094cb9914790f7e318bbb3f6f7c490c7f1cff4" =
