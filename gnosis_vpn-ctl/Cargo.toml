@@ -19,3 +19,8 @@ tokio.workspace          = true
 # Target-specific dependencies for memory allocators
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemallocator = { workspace = true }
+
+[features]
+default   = ["pix-curvy"]
+pix-curvy = ["gnosis_vpn-lib/pix-curvy"]
+pix-test  = ["gnosis_vpn-lib/pix-test"]

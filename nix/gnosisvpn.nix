@@ -196,6 +196,9 @@ let
         '';
     });
 
+  # Selects the `pix-test` deposit pool on every binary crate; `pix-curvy` is the default.
+  pixTestCargoArgs = "--no-default-features --features gnosis_vpn-root/pix-test,gnosis_vpn-worker/pix-test,gnosis_vpn-ctl/pix-test";
+
   mkGnosisvpnBuildArgs =
     {
       src,
@@ -270,6 +273,25 @@ in
         (mkGnosisvpnBuildArgs {
           src = sources.main;
           depsSrc = sources.deps;
+        })
+        // {
+          extraBuildInputs = mkLinuxStaticBuildInputs x86_64LinuxStaticPkgs;
+        }
+      )
+    )
+  );
+
+  # The same binaries on the `pix-test` PIX deposit pool (secp256k1, visible on-chain transfers)
+  # instead of the default `pix-curvy`. For testing against `pix-test` Exits only, e.g. a
+  # localcluster built with hoprd's `strategy-pix-test`; the curve is never negotiated, so neither
+  # pool's Exits accept the other's clients.
+  binary-gnosis_vpn-pix-test-x86_64-linux = withX86_64LinuxStaticEnv (
+    withTokioUnstable (
+      builders.x86_64-linux.callPackage nixLib.mkRustPackage (
+        (mkGnosisvpnBuildArgs {
+          src = sources.main;
+          depsSrc = sources.deps;
+          extraCargoArgs = pixTestCargoArgs;
         })
         // {
           extraBuildInputs = mkLinuxStaticBuildInputs x86_64LinuxStaticPkgs;
@@ -357,6 +379,21 @@ in
       (mkGnosisvpnBuildArgs {
         src = sources.main;
         depsSrc = sources.deps;
+      })
+      // {
+        runClippy = true;
+      }
+    )
+  );
+
+  # Lints the `pix-test` build, which nothing else compiles, so code that only builds on the
+  # Curvy pool fails here rather than in the next `pix-test` build.
+  gnosis_vpn-clippy-pix-test = withTokioUnstable (
+    builders.local.callPackage nixLib.mkRustPackage (
+      (mkGnosisvpnBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+        extraCargoArgs = pixTestCargoArgs;
       })
       // {
         runClippy = true;

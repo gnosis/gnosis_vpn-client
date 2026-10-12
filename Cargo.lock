@@ -5175,6 +5175,7 @@ dependencies = [
  "futures-concurrency",
  "futures-time",
  "hopr-api",
+ "hopr-chain-connector",
  "hopr-utilities",
  "humantime-serde",
  "lazy_static",
