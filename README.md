@@ -176,6 +176,12 @@ nix build -L .#binary-gnosis_vpn-x86_64-linux
 nix build -L .#binary-gnosis_vpn-aarch64-linux
 ```
 
+These settle PIX through the Curvy pool (`pix-curvy`, the default). For testing against Exits built
+with hoprd's `strategy-pix-test`, which settle to plain secp256k1 transfers, build the `pix-test`
+variant instead: `nix build -L .#binary-gnosis_vpn-pix-test-x86_64-linux` or
+`just docker-build-pix-test` (image `gnosis_vpn-client:pix-test`). The pool is fixed at build time
+and never negotiated, so an Exit refuses every PIX session from a client built for the other one.
+
 The resulting binaries are in `result/bin/`:
 
 ```
@@ -184,5 +190,5 @@ result/bin/:
 total 4752
 -r-xr-xr-x 1 root root  4863367 Jan  1  1970 gnosis_vpn-root
 -r-xr-xr-x 1 root root 14863367 Jan  1  1970 gnosis_vpn-worker
--r-xr-xr-x 1 root root  1740058 Jan  1  1970 gnosis_vpn-ctl
+-r-xr-xr-x 1 root root  1740059 Jan  1  1970 gnosis_vpn-ctl
 ```

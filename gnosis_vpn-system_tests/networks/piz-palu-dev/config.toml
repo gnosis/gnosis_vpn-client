@@ -1,6 +1,6 @@
 # piz-palu-dev system test client config; keep in sync with the gnosis_vpn installer's linux/resources/config-piz-palu-dev.toml
 
-version = 6
+version = 7
 
 [destinations.USA]
 address = "0x559dddedcfdf821303f7a9b566ac66d91a634da7"

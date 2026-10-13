@@ -37,3 +37,8 @@ rustix.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
+
+[features]
+default   = ["pix-curvy"]
+pix-curvy = ["gnosis_vpn-lib/pix-curvy"]
+pix-test  = ["gnosis_vpn-lib/pix-test"]

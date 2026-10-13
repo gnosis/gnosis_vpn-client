@@ -620,9 +620,15 @@ mod tests {
             txs_to_start: 3,
             xdai_fee_per_tx: Balance::<XDai>::from(100u64),
             xdai_fund_amount: Balance::<XDai>::from(5_000u64),
+            topup_headroom: Balance::<WxHOPR>::from(42u64),
         };
         let mirrored: BalanceRecommendation = rec.into();
         assert_eq!(mirrored.wxhopr, Balance::<WxHOPR>::from(10_800u64));
+        assert_eq!(
+            mirrored.topup_headroom,
+            Balance::<WxHOPR>::from(42u64),
+            "reported figures must survive the mirror, kept out of total wxhopr"
+        );
         assert_eq!(
             mirrored.xdai,
             Balance::<XDai>::from(5_000u64),

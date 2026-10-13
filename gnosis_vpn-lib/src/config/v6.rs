@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::config;
 
-pub(super) use super::v7::{BlokliConfig, Connection, DestinationPath, PixStrategy, Strategy, WireGuard};
+pub(super) use super::v7::{BlokliConfig, Connection, DestinationPath, Strategy, WireGuard};
 
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -18,7 +18,6 @@ pub struct Config {
     pub(super) wireguard: Option<WireGuard>,
     pub(super) blokli: Option<BlokliConfig>,
     pub(super) strategy: Option<Strategy>,
-    pub(super) pix_strategy: Option<PixStrategy>,
 }
 
 #[serde_as]
@@ -30,7 +29,6 @@ pub(super) struct Destination {
     pub(super) path: Option<DestinationPath>,
 }
 
-/// v6 rejects v7-only keys; shared `[connection]` keys stay supported, except the PIX dimensions.
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong = Vec::new();
     for (key, value) in table.iter() {
@@ -160,25 +158,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                         }
                         continue;
                     }
-                    if k == "pix" {
-                        if let Some(pix) = v.as_table() {
-                            for (k2, v2) in pix.iter() {
-                                if k2 == "ping_main" || k2 == "bridge" {
-                                    if let Some(session) = v2.as_table() {
-                                        for (k3, _) in session.iter() {
-                                            if k3 == "enabled" {
-                                                continue;
-                                            }
-                                            wrong.push(format!("connection.pix.{k2}.{k3}"));
-                                        }
-                                    }
-                                    continue;
-                                }
-                                wrong.push(format!("connection.pix.{k2}"));
-                            }
-                        }
-                        continue;
-                    }
                     if k == "health_check_intervals" {
                         if let Some(hci) = v.as_table() {
                             for (k2, _) in hci.iter() {
@@ -268,27 +247,6 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
-        if key == "pix_strategy" {
-            if let Some(pix) = value.as_table() {
-                for (k, _) in pix.iter() {
-                    if matches!(
-                        k.as_str(),
-                        "price_per_byte"
-                            | "max_ssa_allocation"
-                            | "max_spend_per_window"
-                            | "spend_window"
-                            | "deposit_buffer_period"
-                            | "max_deposit_tracking_time"
-                            | "max_deposit_retries"
-                            | "min_safe_hopr_reserve"
-                    ) {
-                        continue;
-                    }
-                    wrong.push(format!("pix_strategy.{k}"));
-                }
-            }
-            continue;
-        }
         wrong.push(key.clone());
     }
     wrong
@@ -316,10 +274,13 @@ impl TryFrom<Config> for super::v7::Config {
                 .collect()
         });
 
-        // Reported as unsupported by `wrong_keys`, so the shared struct must not apply them either.
+        // Reported as unsupported by `wrong_keys`, so the shared struct must not apply it either.
         let mut connection = value.connection;
-        if let Some(pix) = connection.as_mut().and_then(|c| c.pix.as_mut()) {
-            pix.dimensions = None;
+        if let Some(c) = connection.as_mut() {
+            c.pix = None;
+            if let Some(h) = c.health_check_intervals.as_mut() {
+                h.tunnel_ping_max_rtt = None;
+            }
         }
 
         Ok(super::v7::Config {
@@ -329,7 +290,7 @@ impl TryFrom<Config> for super::v7::Config {
             wireguard: value.wireguard,
             blokli: value.blokli,
             strategy: value.strategy,
-            pix_strategy: value.pix_strategy,
+            pix_strategy: None,
         })
     }
 }
@@ -470,30 +431,6 @@ latency_halflife = "50ms"
         assert!(wrong_keys(&table).is_empty());
     }
 
-    /// PIX is not backported, so the dimensions need `version = 7`: warned about and dropped here.
-    #[test]
-    fn pix_dimensions_are_not_a_supported_key_in_v6() {
-        let toml = r#####"
-version = 6
-
-[destinations.Germany]
-address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-
-[connection.pix.dimensions]
-num_ssa_parts     = 8
-ssa_part_size     = 2
-additional_shares = 2
-"#####;
-        let table = toml.parse::<toml::Table>().expect("valid TOML");
-        assert_eq!(wrong_keys(&table), vec!["connection.pix.dimensions".to_string()]);
-
-        let result = runtime_config(parse(toml));
-        assert_eq!(
-            result.connection.pix.dimensions,
-            crate::connection::options::PixDimensionOptions::default()
-        );
-    }
-
     /// `[connection]` is shared with v7, so a v6 file may carry the SURB ramp pacing too.
     #[test]
     fn v6_file_still_accepts_the_surb_ramp() {
@@ -513,9 +450,9 @@ duration = "10s"
         assert!(wrong_keys(&table).is_empty());
     }
 
-    /// PIX is v7 schema, tested there; this only pins that a v6 file may still carry it.
+    /// Warned about, and dropped — not left to leak through the shared `[connection]` struct.
     #[test]
-    fn v6_file_still_accepts_the_pix_sections() {
+    fn pix_sections_are_not_supported_keys_in_v6() {
         let toml = r#####"
 version = 6
 
@@ -525,16 +462,44 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 [connection.pix.bridge]
 enabled = true
 
+[connection.pix.dimensions]
+num_ssa_parts     = 8
+ssa_part_size     = 2
+additional_shares = 2
+
 [pix_strategy]
 max_deposit_retries = 5
 "#####;
         assert_eq!(
             wrong_keys(&toml.parse::<toml::Table>().expect("valid TOML")),
-            Vec::<String>::new()
+            vec!["connection.pix".to_string(), "pix_strategy".to_string()]
         );
 
         let result = runtime_config(parse(toml));
-        assert!(result.connection.pix.bridge.enabled);
-        assert_eq!(result.pix_strategy.max_deposit_retries, 5);
+        assert_eq!(result.connection.pix, crate::connection::options::PixOptions::default());
+        assert_eq!(result.pix_strategy, crate::hopr::pix_config::PixConfig::default());
+    }
+
+    #[test]
+    fn tunnel_ping_max_rtt_is_not_a_supported_key_in_v6() {
+        let toml = r#####"
+version = 6
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.health_check_intervals]
+tunnel_ping_max_rtt = "9s"
+"#####;
+        assert_eq!(
+            wrong_keys(&toml.parse::<toml::Table>().expect("valid TOML")),
+            vec!["connection.health_check_intervals.tunnel_ping_max_rtt".to_string()]
+        );
+
+        let result = runtime_config(parse(toml));
+        assert_eq!(
+            result.connection.health_check_intervals.tunnel_ping_max_rtt,
+            crate::connection::options::HealthCheckIntervals::default().tunnel_ping_max_rtt
+        );
     }
 }
