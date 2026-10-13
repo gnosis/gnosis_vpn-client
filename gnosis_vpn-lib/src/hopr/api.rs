@@ -6,10 +6,14 @@ use edgli::{
     hopr_lib::{
         HopRouting, HoprSessionClientConfig,
         api::{
-            chain::{AccountSelector, ChainKeyOperations, ChainReadAccountOperations},
+            chain::{AccountSelector, ChainKeyOperations, ChainPathResolver, ChainReadAccountOperations},
             graph::{NetworkGraphTraverse, NetworkGraphView, function::EdgeValueFn},
             node::HasChainApi,
-            types::{internal::channels::ChannelStatus, primitive::prelude::Address},
+            types::{
+                crypto::prelude::OffchainPublicKey,
+                internal::{NodeId, channels::ChannelStatus, path::ValidatedPath},
+                primitive::prelude::Address,
+            },
         },
         errors::HoprLibError,
         exports::{
@@ -391,6 +395,7 @@ impl Hopr {
     }
 
     /// Walks the graph for `dest` over `routing.hop_count()` hops with the path planner's own selector.
+    /// Blocks on chain lookups, so call it from a blocking thread inside the runtime.
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub fn walk_route(&self, dest: Address, routing: HopRouting) -> Result<RouteWalk, HoprError> {
         let chain_api = self.edgli.chain_api();
@@ -420,21 +425,54 @@ impl Hopr {
         let length = NonZeroUsize::new(routing.hop_count() + 1).expect("hops + 1 is at least 1");
         let planner = &self.edgli.config().protocol.path_planner;
         let ticket_face_value = graph.ticket_face_value();
+        // The planner drops candidates that fail chain validation (unresolvable key, loop, no open channel); so do we.
+        let resolver = ChainPathResolver::from(&chain_api);
+        let runtime = tokio::runtime::Handle::current();
+        let validate =
+            |src: &OffchainPublicKey, dest: &OffchainPublicKey, paths: Vec<(Vec<OffchainPublicKey>, _, f64)>| {
+                paths
+                    .into_iter()
+                    // The planner drops zero-valued paths, `simple_paths` does not; its node lists are the bare relays.
+                    .filter(|(_, _, value)| *value > 0.0)
+                    .filter_map(|(mut relays, _, value)| {
+                        relays.push(*dest);
+                        let validated = runtime.block_on(ValidatedPath::new(NodeId::Offchain(*src), relays, &resolver));
+                        let mut chain = match validated {
+                            Ok(validated) => validated.chain_path().to_vec(),
+                            Err(error) => {
+                                tracing::debug!(%error, "walked path failed validation");
+                                return None;
+                            }
+                        };
+                        // Relays only: drop the leg destination we appended.
+                        chain.pop();
+                        Some((chain, value))
+                    })
+                    .collect::<Vec<_>>()
+            };
         // The planner plans each leg on its own (`exit -> me` with the returning selector); a session needs both.
         // One arbitrary survivor per leg would give neither a path count nor a comparable value.
-        let forward = summarize_paths(graph.simple_paths(
+        let forward = summarize_paths(validate(
             me,
             &dest_key,
-            length.get(),
-            Some(planner.max_cached_paths),
-            EdgeValueFn::forward(length, planner.edge_penalty, planner.min_ack_rate, ticket_face_value),
+            graph.simple_paths(
+                me,
+                &dest_key,
+                length.get(),
+                Some(planner.max_cached_paths),
+                EdgeValueFn::forward(length, planner.edge_penalty, planner.min_ack_rate, ticket_face_value),
+            ),
         ));
-        let back = summarize_paths(graph.simple_paths(
+        let back = summarize_paths(validate(
             &dest_key,
             me,
-            length.get(),
-            Some(planner.max_cached_paths),
-            EdgeValueFn::returning(length, planner.edge_penalty, planner.min_ack_rate, ticket_face_value),
+            graph.simple_paths(
+                &dest_key,
+                me,
+                length.get(),
+                Some(planner.max_cached_paths),
+                EdgeValueFn::returning(length, planner.edge_penalty, planner.min_ack_rate, ticket_face_value),
+            ),
         ));
         let (Some(forward), Some(back)) = (&forward, &back) else {
             return Ok(RouteWalk::NoPath {
@@ -444,22 +482,14 @@ impl Hopr {
             });
         };
 
-        // One unresolvable relay empties the chain rather than failing the walk or reporting a shortened chain.
-        let to_chain_addresses = |relays: &[_]| -> Vec<Address> {
-            relays
-                .iter()
-                .map(|key| chain_api.packet_key_to_chain_key(key).ok().flatten())
-                .collect::<Option<Vec<_>>>()
-                .unwrap_or_default()
-        };
         Ok(RouteWalk::Paths {
             walked_at: now,
             count: forward.count,
             distinct_first_relays: forward.distinct_first_relays,
-            best_relays: to_chain_addresses(&forward.best_relays),
+            best_relays: forward.best_relays.clone(),
             best_value: forward.best_value,
             return_count: back.count,
-            return_best_relays: to_chain_addresses(&back.best_relays),
+            return_best_relays: back.best_relays.clone(),
             return_best_value: back.best_value,
         })
     }
@@ -503,20 +533,19 @@ impl Hopr {
 }
 
 /// One leg of a graph walk, reduced to what [`RouteWalk::Paths`] reports.
-struct PathSummary<K> {
+struct PathSummary {
     count: usize,
     distinct_first_relays: usize,
-    best_relays: Vec<K>,
+    best_relays: Vec<Address>,
     best_value: f64,
 }
 
-/// None when no path has a positive value.
-fn summarize_paths<K: Copy + Eq + std::hash::Hash, P>(paths: Vec<(Vec<K>, P, f64)>) -> Option<PathSummary<K>> {
+/// None when no path is left.
+fn summarize_paths(paths: Vec<(Vec<Address>, f64)>) -> Option<PathSummary> {
     let mut count = 0;
     let mut first_relays = HashSet::new();
-    let mut best: Option<(Vec<K>, f64)> = None;
-    // The planner drops zero-valued paths, `simple_paths` does not; its node lists are the bare relays.
-    for (relays, _, value) in paths.into_iter().filter(|(_, _, value)| *value > 0.0) {
+    let mut best: Option<(Vec<Address>, f64)> = None;
+    for (relays, value) in paths {
         count += 1;
         if let Some(first) = relays.first() {
             first_relays.insert(*first);
