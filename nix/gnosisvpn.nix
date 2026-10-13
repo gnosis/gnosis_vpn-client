@@ -32,10 +32,17 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.4#0aebe247729574acc449f9debd62fc8d419dbf07" =
       "sha256-oxCxToa9dE2TslRNxvO19qZrOrf9qsUlB4u+ZNwzA28=";
+<<<<<<< HEAD
     "git+https://github.com/hoprnet/edge-client.git?branch=release/4.1#9808b1767f9c6ad97472797cf7bf63eb58eb7f15" =
       "sha256-R2c8v3nuKmjnTQvuJkZ1YwvQhKoCxgWjEAMefPPUWyM=";
     "git+https://github.com/hoprnet/hoprnet?branch=release/4.0#e89c5462d666e41b406f4da204b768a8bff493dd" =
       "sha256-WEhG11ff9OcncdfGlNw2o4wMbSCcsQiYBl/Vim5pp34=";
+=======
+    "git+https://github.com/hoprnet/edge-client.git?rev=f7f38cb1333c3dc83b6dae88edc61d8ce473d480#f7f38cb1333c3dc83b6dae88edc61d8ce473d480" =
+      "sha256-LPNiBXDnwXMZBJY8cghIasehnX8vkEwx3TS51XA3pd4=";
+    "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157" =
+      "sha256-obKTF/PUNrkM74oFSwOxaUZMs7ty2KJOaFc0I2Mrgy4=";
+>>>>>>> c15c975 (chore(deps): follow edge-client onto hoprnet 1462e4a0 and hopr-strategy 5.4.0 (#907))
   };
 
   builders = nixLib.mkRustBuilders {
