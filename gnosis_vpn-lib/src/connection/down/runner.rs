@@ -120,7 +120,7 @@ async fn open_bridge_session(
         capabilities: options.sessions.bridge.capabilities,
         forward_path: down.destination.routing,
         return_path: down.destination.routing,
-        always_max_out_surbs: surb.always_max_out_surbs,
+        max_surbs_per_data_packet: surb.max_surbs_per_data_packet,
         surb_management: surb.management,
         // Robust tail-tolerance profile for the down-direction data session.
         flow_control: Some(FlowControlConfig::robust()),
