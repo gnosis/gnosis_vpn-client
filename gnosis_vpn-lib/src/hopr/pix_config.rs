@@ -51,6 +51,7 @@ pub struct PixConfig {
     pub min_safe_hopr_reserve: Option<HoprBalance>,
 
     /// Curvy relayer that submits deposit proofs; clients hold no Curvy operator key, so they always go through it.
+    /// Curvy pool only; the `pix-test` pool has no relayer.
     #[serde(default = "PixConfig::default_relayer_url")]
     pub relayer_url: Url,
 }
@@ -105,13 +106,17 @@ impl PixConfig {
 
     /// The edgli form; which pool the knobs reach is edgli's call, deployment stays on `HOPRD_CURVY_*`.
     pub fn to_entry_config(&self, state_home: PathBuf) -> edgli::strategy::PixEntryConfig {
-        let mut pool = edgli::strategy::PixEntryPool::from_knobs(edgli::strategy::PixEntryPoolKnobs {
+        let pool = edgli::strategy::PixEntryPool::from_knobs(edgli::strategy::PixEntryPoolKnobs {
             max_deposit_tracking_time: Some(self.max_deposit_tracking_time),
             max_deposit_retries: self.max_deposit_retries,
             min_safe_hopr_reserve: self.min_safe_hopr_reserve,
         });
         // edgli defaults to `Operator`, which needs a Curvy operator key clients never hold.
-        pool.submission = edgli::strategy::PixCurvySubmission::Relayer(self.relayer_url.clone());
+        #[cfg(feature = "pix-curvy")]
+        let pool = edgli::strategy::PixEntryPool {
+            submission: edgli::strategy::PixCurvySubmission::Relayer(self.relayer_url.clone()),
+            ..pool
+        };
         edgli::strategy::PixEntryConfig {
             strategy: edgli::strategy::PixEntryStrategy {
                 price_per_byte: self.price_per_byte,
@@ -151,6 +156,7 @@ mod tests {
         assert_eq!(cfg.state_dir, Some(PathBuf::from("/var/lib/gnosisvpn")));
     }
 
+    #[cfg(feature = "pix-curvy")]
     #[test]
     fn to_entry_config_submits_through_curvy_relayer() {
         let cfg = PixConfig::default().to_entry_config(PathBuf::from("/var/lib/gnosisvpn"));
