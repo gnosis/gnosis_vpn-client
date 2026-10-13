@@ -1263,7 +1263,7 @@ mod tests {
         let shown = RunMode::running(None, None, down).to_string();
         assert!(shown.contains("channel maintenance: unavailable"), "{shown}");
         let quiet = RunMode::running(None, None, ChannelMaintenance::Ok).to_string();
-        assert!(!quiet.contains("channels"), "{quiet}");
+        assert!(!quiet.contains("channel maintenance"), "{quiet}");
     }
 
     #[test]
