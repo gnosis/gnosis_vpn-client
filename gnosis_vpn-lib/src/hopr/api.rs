@@ -394,8 +394,7 @@ impl Hopr {
         Ok(peers)
     }
 
-    /// Walks the graph for `dest` over `routing.hop_count()` hops with the path planner's own selector.
-    /// Blocks on chain lookups, so call it from a blocking thread inside the runtime.
+    /// Walks the graph for `dest` with the path planner's own selector; blocks, so run it on a blocking thread.
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub fn walk_route(&self, dest: Address, routing: HopRouting) -> Result<RouteWalk, HoprError> {
         let chain_api = self.edgli.chain_api();
