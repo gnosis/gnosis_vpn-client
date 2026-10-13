@@ -7,7 +7,7 @@ use edgli::{
         HopRouting, HoprSessionClientConfig,
         api::{
             chain::{AccountSelector, ChainKeyOperations, ChainPathResolver, ChainReadAccountOperations},
-            graph::{NetworkGraphTraverse, NetworkGraphView, function::EdgeValueFn},
+            graph::NetworkGraphView,
             node::HasChainApi,
             types::{
                 crypto::prelude::OffchainPublicKey,
@@ -18,7 +18,10 @@ use edgli::{
         errors::HoprLibError,
         exports::{
             network::types::types::IpProtocol,
-            transport::{SESSION_MTU, SURB_SIZE, SessionTarget},
+            transport::{
+                SESSION_MTU, SURB_SIZE, SessionTarget,
+                path::{HoprGraphPathSelector, PathSelector},
+            },
         },
     },
 };
@@ -30,7 +33,6 @@ use hopr_utils_session::{
 use tracing::instrument;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::num::NonZeroUsize;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -421,58 +423,46 @@ impl Hopr {
         }
         let graph = self.edgli.graph();
         let me = graph.identity();
-        let length = NonZeroUsize::new(routing.hop_count() + 1).expect("hops + 1 is at least 1");
         let planner = &self.edgli.config().protocol.path_planner;
-        let ticket_face_value = graph.ticket_face_value();
+        // Built as hopr-lib builds it, so selection and pruning match the session planner's.
+        let selector = HoprGraphPathSelector::new(
+            *me,
+            graph.clone(),
+            planner.max_cached_paths,
+            planner.edge_penalty,
+            planner.min_ack_rate,
+            planner.min_paths_anonymity_floor,
+        );
         // The planner drops candidates that fail chain validation (unresolvable key, loop, no open channel); so do we.
         let resolver = ChainPathResolver::from(&chain_api);
         let runtime = tokio::runtime::Handle::current();
-        let validate =
-            |src: &OffchainPublicKey, dest: &OffchainPublicKey, paths: Vec<(Vec<OffchainPublicKey>, _, f64)>| {
-                paths
-                    .into_iter()
-                    // The planner drops zero-valued paths, `simple_paths` does not; its node lists are the bare relays.
-                    .filter(|(_, _, value)| *value > 0.0)
-                    .filter_map(|(mut relays, _, value)| {
-                        relays.push(*dest);
-                        let validated = runtime.block_on(ValidatedPath::new(NodeId::Offchain(*src), relays, &resolver));
-                        let mut chain = match validated {
-                            Ok(validated) => validated.chain_path().to_vec(),
-                            Err(error) => {
-                                tracing::debug!(%error, "walked path failed validation");
-                                return None;
-                            }
-                        };
-                        // Relays only: drop the leg destination we appended.
-                        chain.pop();
-                        Some((chain, value))
-                    })
-                    .collect::<Vec<_>>()
-            };
+        let plan_leg = |src: &OffchainPublicKey, dest: &OffchainPublicKey| {
+            // `select_path` errs only when it found nothing.
+            let candidates = selector
+                .select_path(*src, *dest, routing.hop_count())
+                .unwrap_or_default();
+            candidates
+                .into_iter()
+                .filter_map(|candidate| {
+                    let validated =
+                        runtime.block_on(ValidatedPath::new(NodeId::Offchain(*src), candidate.path, &resolver));
+                    let mut chain = match validated {
+                        Ok(validated) => validated.chain_path().to_vec(),
+                        Err(error) => {
+                            tracing::debug!(%error, "walked path failed validation");
+                            return None;
+                        }
+                    };
+                    // Relays only: the selector's paths end at the leg destination.
+                    chain.pop();
+                    Some((chain, candidate.cost))
+                })
+                .collect::<Vec<_>>()
+        };
         // The planner plans each leg on its own (`exit -> me` with the returning selector); a session needs both.
         // One arbitrary survivor per leg would give neither a path count nor a comparable value.
-        let forward = summarize_paths(validate(
-            me,
-            &dest_key,
-            graph.simple_paths(
-                me,
-                &dest_key,
-                length.get(),
-                Some(planner.max_cached_paths),
-                EdgeValueFn::forward(length, planner.edge_penalty, planner.min_ack_rate, ticket_face_value),
-            ),
-        ));
-        let back = summarize_paths(validate(
-            &dest_key,
-            me,
-            graph.simple_paths(
-                &dest_key,
-                me,
-                length.get(),
-                Some(planner.max_cached_paths),
-                EdgeValueFn::returning(length, planner.edge_penalty, planner.min_ack_rate, ticket_face_value),
-            ),
-        ));
+        let forward = summarize_paths(plan_leg(me, &dest_key));
+        let back = summarize_paths(plan_leg(&dest_key, me));
         let (Some(forward), Some(back)) = (&forward, &back) else {
             return Ok(RouteWalk::NoPath {
                 walked_at: now,

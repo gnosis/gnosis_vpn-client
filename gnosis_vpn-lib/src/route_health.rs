@@ -44,7 +44,7 @@ pub enum RouteWalk {
         #[serde(with = "serde_utils::system_time")]
         walked_at: SystemTime,
     },
-    /// The selector accepted no path over this destination's hop count in at least one direction.
+    /// No path survived the planner's selection and chain validation in at least one direction.
     NoPath {
         #[serde(with = "serde_utils::system_time")]
         walked_at: SystemTime,
