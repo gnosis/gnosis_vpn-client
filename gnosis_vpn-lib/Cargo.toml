@@ -52,6 +52,10 @@ objc2-foundation.workspace = true
 pfctl.workspace            = true
 
 [dev-dependencies]
+<<<<<<< HEAD
+=======
+insta              = "1.48.0"
+>>>>>>> acaff0a (chore(deps): update rust crates (minor) (main) (#905))
 tempfile.workspace = true
 tokio              = { workspace = true, features = ["test-util"] }
 
