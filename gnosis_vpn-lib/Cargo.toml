@@ -52,7 +52,7 @@ objc2-foundation.workspace = true
 pfctl.workspace            = true
 
 [dev-dependencies]
-insta              = "1"
+insta              = "1.48.0"
 tempfile.workspace = true
 tokio              = { workspace = true, features = ["test-util"] }
 
