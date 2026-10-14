@@ -93,8 +93,8 @@ where
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         let result = ready!(self.inner().poll_shutdown(cx));
-        // A finished shutdown, failed or not, is not retried on drop.
-        self.closed = true;
+        // A failed close never reached HOPR's on_close, so drop retries it.
+        self.closed = result.is_ok();
         Poll::Ready(result)
     }
 }
@@ -261,6 +261,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct CountingWriter {
         shutdowns: Arc<AtomicUsize>,
+        fail: bool,
     }
 
     impl AsyncWrite for CountingWriter {
@@ -274,6 +275,9 @@ mod tests {
 
         fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
             self.shutdowns.fetch_add(1, Ordering::SeqCst);
+            if self.fail {
+                return Poll::Ready(Err(std::io::ErrorKind::Other.into()));
+            }
             Poll::Ready(Ok(()))
         }
     }
@@ -296,6 +300,22 @@ mod tests {
         settle().await;
 
         assert_eq!(writer.shutdowns.load(Ordering::SeqCst), 1);
+    }
+
+    /// A failed explicit close leaves the session open, so drop tries again.
+    #[tokio::test]
+    async fn a_failed_close_is_retried_on_drop() {
+        let writer = CountingWriter {
+            fail: true,
+            ..Default::default()
+        };
+        let mut sender = SessionSender::new(CloseOnDrop::new(writer.clone()));
+
+        assert!(sender.close().await.is_err());
+        drop(sender);
+        settle().await;
+
+        assert_eq!(writer.shutdowns.load(Ordering::SeqCst), 2);
     }
 
     /// The abort path closes exactly once as well.
