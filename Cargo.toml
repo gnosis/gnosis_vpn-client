@@ -46,13 +46,8 @@ neptun = { git = "https://github.com/NordSecurity/neptun.git", tag = "v3.0.4" }
 nftnl = "~0.9.4"
 notify = "~8.2.0"
 pfctl = "~0.7.0"
-<<<<<<< HEAD
-ping = { version = "~0.9.0", features = ["tokio"] }
-rand = "~0.10.2"
-=======
 ping = { version = "~0.10.0", features = ["tokio"] }
-rand = "~0.10.3"
->>>>>>> acaff0a (chore(deps): update rust crates (minor) (main) (#905))
+rand = "~0.10.2"
 reqwest = { version = "~0.13.5", features = ["blocking", "json"] }
 rtnetlink = "~0.23.0"
 rustix = { version = "~1.1.4", features = ["fs", "net", "pipe", "stdio"] }
