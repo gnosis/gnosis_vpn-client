@@ -1,0 +1,5 @@
+---
+source: gnosis_vpn-lib/src/command/mod.rs
+expression: paths
+---
+{"found":"Paths","walked_at":1700000000000,"count":3,"distinct_first_relays":2,"best_relays":["0x0101010101010101010101010101010101010101"],"best_value":0.75,"return_count":2,"return_best_relays":["0x0202020202020202020202020202020202020202"],"return_best_value":0.5}

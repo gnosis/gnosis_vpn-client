@@ -153,6 +153,19 @@ pub struct TunnelStall {
     pub reconnect_at: u32,
 }
 
+/// Health of the channel maintenance the daemon runs for its own payment channels.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ChannelMaintenance {
+    #[default]
+    Ok,
+    /// Maintenance has been failing or restarting since `since`; channels drain unattended.
+    Unavailable {
+        #[serde(with = "serde_utils::system_time")]
+        since: SystemTime,
+    },
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DisconnectingInfo {
     pub destination_id: String,
@@ -200,6 +213,8 @@ pub enum RunMode {
     Running {
         hopr_status: Option<HoprStatus>,
         funding_status: Option<balance::FundingStatus>,
+        #[serde(default)]
+        channel_maintenance: ChannelMaintenance,
     },
     /// Shutting down edge client,
     Shutdown,
@@ -637,10 +652,15 @@ impl RunMode {
         }
     }
 
-    pub fn running(hopr_state: Option<HoprState>, funding_status: Option<balance::FundingStatus>) -> Self {
+    pub fn running(
+        hopr_state: Option<HoprState>,
+        funding_status: Option<balance::FundingStatus>,
+        channel_maintenance: ChannelMaintenance,
+    ) -> Self {
         RunMode::Running {
             hopr_status: hopr_state.map(|s| s.into()),
             funding_status,
+            channel_maintenance,
         }
     }
 }
@@ -822,6 +842,7 @@ impl Display for RunMode {
             RunMode::Running {
                 hopr_status,
                 funding_status,
+                channel_maintenance,
             } => {
                 match hopr_status {
                     Some(s) => write!(f, "Ready ({s})")?,
@@ -830,6 +851,9 @@ impl Display for RunMode {
                 match funding_status {
                     None => write!(f, " - waiting for funding calculations")?,
                     Some(status) => write!(f, " - traffic: {}, gas: {}", status.traffic, status.gas)?,
+                }
+                if let ChannelMaintenance::Unavailable { since } = channel_maintenance {
+                    write!(f, ", channel maintenance: unavailable {}", log_output::elapsed(since))?;
                 }
                 Ok(())
             }
@@ -1131,10 +1155,15 @@ mod tests {
         let walked_at = SystemTime::UNIX_EPOCH + Duration::from_millis(1_700_000_000_000);
 
         let not_announced = serde_json::to_string(&RouteWalk::NotAnnounced { walked_at }).unwrap();
-        assert_eq!(r#"{"found":"NotAnnounced","walked_at":1700000000000}"#, not_announced);
+        insta::assert_snapshot!("route_walk_not_announced", not_announced);
 
-        let no_path = serde_json::to_string(&RouteWalk::NoPath { walked_at }).unwrap();
-        assert_eq!(r#"{"found":"NoPath","walked_at":1700000000000}"#, no_path);
+        let no_path = serde_json::to_string(&RouteWalk::NoPath {
+            walked_at,
+            forward_count: 3,
+            return_count: 0,
+        })
+        .unwrap();
+        insta::assert_snapshot!("route_walk_no_path", no_path);
 
         let paths = serde_json::to_string(&RouteWalk::Paths {
             walked_at,
@@ -1142,15 +1171,12 @@ mod tests {
             distinct_first_relays: 2,
             best_relays: vec![address(1)],
             best_value: 0.75,
+            return_count: 2,
+            return_best_relays: vec![address(2)],
+            return_best_value: 0.5,
         })
         .unwrap();
-        assert_eq!(
-            format!(
-                r#"{{"found":"Paths","walked_at":1700000000000,"count":3,"distinct_first_relays":2,"best_relays":["{}"],"best_value":0.75}}"#,
-                address(1).to_checksum()
-            ),
-            paths
-        );
+        insta::assert_snapshot!("route_walk_paths", paths);
     }
 
     #[test]
@@ -1224,13 +1250,15 @@ mod tests {
     fn runmode_running_passes_through_hopr_status() -> anyhow::Result<()> {
         let hopr_state = Some(HoprState::Running);
 
-        match RunMode::running(hopr_state, None) {
+        match RunMode::running(hopr_state, None, ChannelMaintenance::Ok) {
             RunMode::Running {
                 hopr_status,
                 funding_status,
+                channel_maintenance,
             } => {
                 assert_eq!(hopr_status, Some(HoprStatus::Running));
                 assert!(funding_status.is_none());
+                assert_eq!(channel_maintenance, ChannelMaintenance::Ok);
             }
             other => panic!("unexpected run mode {other:?}"),
         }
@@ -1253,6 +1281,37 @@ mod tests {
 
         let not_connected = serde_json::to_string(&DisconnectResponse::not_connected()).unwrap();
         assert_eq!(r#"{"type":"NotConnected"}"#, not_connected);
+    }
+
+    #[test]
+    fn runmode_running_tolerates_a_missing_channel_maintenance() {
+        // Older daemons omit the key entirely.
+        let legacy: RunMode =
+            serde_json::from_str(r#"{"Running":{"hopr_status":null,"funding_status":null}}"#).unwrap();
+        match legacy {
+            RunMode::Running {
+                channel_maintenance, ..
+            } => assert_eq!(channel_maintenance, ChannelMaintenance::Ok),
+            other => panic!("unexpected run mode {other:?}"),
+        }
+    }
+
+    #[test]
+    fn channel_maintenance_serializes_tagged_and_displays_only_when_down() {
+        let down = ChannelMaintenance::Unavailable {
+            since: SystemTime::UNIX_EPOCH,
+        };
+        let json = serde_json::to_string(&down).unwrap();
+        assert_eq!(json, r#"{"type":"Unavailable","since":0}"#);
+        assert_eq!(
+            serde_json::to_string(&ChannelMaintenance::Ok).unwrap(),
+            r#"{"type":"Ok"}"#
+        );
+
+        let shown = RunMode::running(None, None, down).to_string();
+        assert!(shown.contains("channel maintenance: unavailable"), "{shown}");
+        let quiet = RunMode::running(None, None, ChannelMaintenance::Ok).to_string();
+        assert!(!quiet.contains("channel maintenance"), "{quiet}");
     }
 
     #[test]

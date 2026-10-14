@@ -329,16 +329,18 @@ fn format_probability(p: f64) -> String {
 }
 
 fn format_funding_status(status: &balance::FundingStatus) -> String {
-    let wxhopr_deficit = status
-        .wxhopr_deficit
-        .map(|d| format!(" (top up {d} recommended)"))
-        .unwrap_or_default();
+    // A deficit (not yet funded) takes precedence over the Safe's shortfall for the next top-up pass.
+    let wxhopr_note = match (status.wxhopr_deficit, status.refill_shortfall) {
+        (Some(deficit), _) => format!(" (top up {deficit} recommended)"),
+        (None, Some(shortfall)) => format!(" (top up {shortfall})"),
+        (None, None) => String::new(),
+    };
     let xdai_deficit = status
         .xdai_deficit
         .map(|d| format!(" (top up {d} recommended)"))
         .unwrap_or_default();
     format!(
-        "Traffic: {}{wxhopr_deficit}\nGas: {}{xdai_deficit}\n",
+        "Traffic: {}{wxhopr_note}\nGas: {}{xdai_deficit}\n",
         status.traffic, status.gas
     )
 }
@@ -653,4 +655,42 @@ fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
         }
     }
     str_resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use balance::{Balance, FundingLevel, FundingStatus, WxHOPR};
+
+    fn good() -> FundingStatus {
+        FundingStatus {
+            traffic: FundingLevel::Good,
+            gas: FundingLevel::Good,
+            wxhopr_deficit: None,
+            xdai_deficit: None,
+            refill_shortfall: None,
+        }
+    }
+
+    #[test]
+    fn renders_refill_shortfall_when_no_deficit() {
+        let status = FundingStatus {
+            refill_shortfall: Some(Balance::<WxHOPR>::from(5u64)),
+            ..good()
+        };
+        let out = format_funding_status(&status);
+        assert!(out.contains("top up"), "shortfall must render, not blank: {out}");
+        // a deficit would read "recommended"; a bare shortfall must not.
+        assert!(!out.contains("recommended"), "{out}");
+    }
+
+    #[test]
+    fn deficit_takes_precedence_over_refill_shortfall() {
+        let status = FundingStatus {
+            wxhopr_deficit: Some(Balance::<WxHOPR>::from(9u64)),
+            refill_shortfall: Some(Balance::<WxHOPR>::from(5u64)),
+            ..good()
+        };
+        assert!(format_funding_status(&status).contains("recommended"));
+    }
 }

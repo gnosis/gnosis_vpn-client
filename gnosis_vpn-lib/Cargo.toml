@@ -52,8 +52,17 @@ objc2-foundation.workspace = true
 pfctl.workspace            = true
 
 [dev-dependencies]
+insta              = "1"
 tempfile.workspace = true
 tokio              = { workspace = true, features = ["test-util"] }
+
+[features]
+default = ["pix-curvy"]
+# The PIX deposit pool, forwarded to edgli; exactly one, they are mutually exclusive there.
+# `pix-curvy` settles to anonymous Baby JubJub addresses through the Curvy pool and is what ships;
+# `pix-test` settles to visible secp256k1 addresses, for testing against a `pix-test` Exit.
+pix-curvy = ["edgli/pix-curvy"]
+pix-test  = ["edgli/pix-test"]
 
 [lib]
 doctest = false

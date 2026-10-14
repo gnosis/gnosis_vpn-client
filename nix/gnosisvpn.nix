@@ -26,10 +26,10 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.5#ed75813cebb00c2fbe1a7723764c12dd381818c3" =
       "sha256-8Y0Z/AfC5mb0svBI9DjVYivBgNdvnfwoa8Ua+f2EIdI=";
-    "git+https://github.com/hoprnet/edge-client.git?rev=4fbb5c8eb07133f22a8c94db05db846c43c365c2#4fbb5c8eb07133f22a8c94db05db846c43c365c2" =
-      "sha256-HtONuRmif6TUlNc71r57Plvc63yIE2Mr3YRP5dAButc=";
-    "git+https://github.com/hoprnet/hoprnet?branch=master#15094cb9914790f7e318bbb3f6f7c490c7f1cff4" =
-      "sha256-3TGjllSvsf+sDvhJM4+KSF0YKrbEy9dQwoBL7if6Gn8=";
+    "git+https://github.com/hoprnet/edge-client.git?rev=b6614471abb975959060e86df1b0c28ce8305d07#b6614471abb975959060e86df1b0c28ce8305d07" =
+      "sha256-24AXVrkfVqK9cakovizQxZuajzve8YCm6sc+JLTHgrE=";
+    "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157" =
+      "sha256-obKTF/PUNrkM74oFSwOxaUZMs7ty2KJOaFc0I2Mrgy4=";
   };
 
   builders = nixLib.mkRustBuilders {
@@ -196,6 +196,9 @@ let
         '';
     });
 
+  # Selects the `pix-test` deposit pool on every binary crate; `pix-curvy` is the default.
+  pixTestCargoArgs = "--no-default-features --features gnosis_vpn-root/pix-test,gnosis_vpn-worker/pix-test,gnosis_vpn-ctl/pix-test";
+
   mkGnosisvpnBuildArgs =
     {
       src,
@@ -270,6 +273,25 @@ in
         (mkGnosisvpnBuildArgs {
           src = sources.main;
           depsSrc = sources.deps;
+        })
+        // {
+          extraBuildInputs = mkLinuxStaticBuildInputs x86_64LinuxStaticPkgs;
+        }
+      )
+    )
+  );
+
+  # The same binaries on the `pix-test` PIX deposit pool (secp256k1, visible on-chain transfers)
+  # instead of the default `pix-curvy`. For testing against `pix-test` Exits only, e.g. a
+  # localcluster built with hoprd's `strategy-pix-test`; the curve is never negotiated, so neither
+  # pool's Exits accept the other's clients.
+  binary-gnosis_vpn-pix-test-x86_64-linux = withX86_64LinuxStaticEnv (
+    withTokioUnstable (
+      builders.x86_64-linux.callPackage nixLib.mkRustPackage (
+        (mkGnosisvpnBuildArgs {
+          src = sources.main;
+          depsSrc = sources.deps;
+          extraCargoArgs = pixTestCargoArgs;
         })
         // {
           extraBuildInputs = mkLinuxStaticBuildInputs x86_64LinuxStaticPkgs;
@@ -357,6 +379,21 @@ in
       (mkGnosisvpnBuildArgs {
         src = sources.main;
         depsSrc = sources.deps;
+      })
+      // {
+        runClippy = true;
+      }
+    )
+  );
+
+  # Lints the `pix-test` build, which nothing else compiles, so code that only builds on the
+  # Curvy pool fails here rather than in the next `pix-test` build.
+  gnosis_vpn-clippy-pix-test = withTokioUnstable (
+    builders.local.callPackage nixLib.mkRustPackage (
+      (mkGnosisvpnBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+        extraCargoArgs = pixTestCargoArgs;
       })
       // {
         runClippy = true;

@@ -6,19 +6,26 @@ use edgli::{
     hopr_lib::{
         HopRouting, HoprSessionClientConfig,
         api::{
-            chain::{AccountSelector, ChainKeyOperations, ChainReadAccountOperations},
-            graph::{NetworkGraphTraverse, NetworkGraphView, function::EdgeValueFn},
+            chain::{AccountSelector, ChainKeyOperations, ChainPathResolver, ChainReadAccountOperations},
+            graph::NetworkGraphView,
             node::HasChainApi,
-            types::{internal::channels::ChannelStatus, primitive::prelude::Address},
+            types::{
+                crypto::prelude::OffchainPublicKey,
+                internal::{NodeId, channels::ChannelStatus, path::ValidatedPath},
+                primitive::prelude::Address,
+            },
         },
         errors::HoprLibError,
         exports::{
             network::types::types::IpProtocol,
-            transport::{SESSION_MTU, SURB_SIZE, SessionTarget},
+            transport::{
+                SESSION_MTU, SURB_SIZE, SessionTarget,
+                path::{HoprGraphPathSelector, PathSelector},
+            },
         },
     },
 };
-use futures_util::{StreamExt, future::AbortHandle};
+use futures_util::StreamExt;
 use hopr_utils_session::{
     HopSessionFactory, ListenerId, ListenerJoinHandles, SessionFactory, SessionTargetSpec, create_tcp_client_binding,
     create_udp_client_binding,
@@ -26,7 +33,6 @@ use hopr_utils_session::{
 use tracing::instrument;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::num::NonZeroUsize;
 use std::{
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
@@ -363,12 +369,12 @@ impl Hopr {
             .map_err(|e| HoprError::ExitNodeWatch(e.to_string()))
     }
 
-    #[tracing::instrument(skip(self), level = "debug", ret)]
+    #[tracing::instrument(skip(self), level = "debug")]
     pub async fn start_telemetry_reactor(
         &self,
         sizing: edgli::strategy::IncentiveConfiguration,
         pix: edgli::strategy::PixEntryConfig,
-    ) -> Result<AbortHandle, HoprError> {
+    ) -> Result<edgli::ReactorHandle, HoprError> {
         let mut cfg = edgli::strategy::default_strategy_cfg(&sizing)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
         match cfg.strategies.first_mut() {
@@ -418,7 +424,7 @@ impl Hopr {
         Ok(peers)
     }
 
-    /// Walks the graph for `dest` over `routing.hop_count()` hops with the path planner's own selector.
+    /// Walks the graph for `dest` with the path planner's own selector; blocks, so run it on a blocking thread.
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub fn walk_route(&self, dest: Address, routing: HopRouting) -> Result<RouteWalk, HoprError> {
         let chain_api = self.edgli.chain_api();
@@ -438,52 +444,70 @@ impl Hopr {
                 distinct_first_relays: 0,
                 best_relays: Vec::new(),
                 best_value: 1.0,
+                return_count: 1,
+                return_best_relays: Vec::new(),
+                return_best_value: 1.0,
             });
         }
         let graph = self.edgli.graph();
-        let length = NonZeroUsize::new(routing.hop_count() + 1).expect("hops + 1 is at least 1");
+        let me = graph.identity();
         let planner = &self.edgli.config().protocol.path_planner;
-        let selector = EdgeValueFn::forward(
-            length,
+        // Built as hopr-lib builds it, so selection and pruning match the session planner's.
+        let selector = HoprGraphPathSelector::new(
+            *me,
+            graph.clone(),
+            planner.max_cached_paths,
             planner.edge_penalty,
             planner.min_ack_rate,
-            graph.ticket_face_value(),
+            planner.min_paths_anonymity_floor,
         );
-        // One arbitrary survivor gives neither a path count nor a comparable value.
-        let paths = graph.simple_paths(
-            graph.identity(),
-            &dest_key,
-            length.get(),
-            Some(planner.max_cached_paths),
-            selector,
-        );
-        let mut count = 0;
-        let mut first_relays = HashSet::new();
-        let mut best: Option<(Vec<_>, f64)> = None;
-        // The planner drops zero-valued paths, `simple_paths` does not; its node lists are the bare relays.
-        for (relays, _, value) in paths.into_iter().filter(|(_, _, value)| *value > 0.0) {
-            count += 1;
-            if let Some(first) = relays.first() {
-                first_relays.insert(*first);
-            }
-            if best.as_ref().is_none_or(|(_, best_value)| value > *best_value) {
-                best = Some((relays, value));
-            }
-        }
-        let Some((best_relays, best_value)) = best else {
-            return Ok(RouteWalk::NoPath { walked_at: now });
+        // The planner drops candidates that fail chain validation (unresolvable key, loop, no open channel); so do we.
+        let resolver = ChainPathResolver::from(&chain_api);
+        let runtime = tokio::runtime::Handle::current();
+        let plan_leg = |src: &OffchainPublicKey, dest: &OffchainPublicKey| {
+            // `select_path` errs only when it found nothing.
+            let candidates = selector
+                .select_path(*src, *dest, routing.hop_count())
+                .unwrap_or_default();
+            candidates
+                .into_iter()
+                .filter_map(|candidate| {
+                    let validated =
+                        runtime.block_on(ValidatedPath::new(NodeId::Offchain(*src), candidate.path, &resolver));
+                    let mut chain = match validated {
+                        Ok(validated) => validated.chain_path().to_vec(),
+                        Err(error) => {
+                            tracing::debug!(%error, "walked path failed validation");
+                            return None;
+                        }
+                    };
+                    // Relays only: the selector's paths end at the leg destination.
+                    chain.pop();
+                    Some((chain, candidate.cost))
+                })
+                .collect::<Vec<_>>()
+        };
+        // The planner plans each leg on its own (`exit -> me` with the returning selector); a session needs both.
+        // One arbitrary survivor per leg would give neither a path count nor a comparable value.
+        let forward = summarize_paths(plan_leg(me, &dest_key));
+        let back = summarize_paths(plan_leg(&dest_key, me));
+        let (Some(forward), Some(back)) = (&forward, &back) else {
+            return Ok(RouteWalk::NoPath {
+                walked_at: now,
+                forward_count: forward.as_ref().map_or(0, |f| f.count),
+                return_count: back.as_ref().map_or(0, |b| b.count),
+            });
         };
 
         Ok(RouteWalk::Paths {
             walked_at: now,
-            count,
-            distinct_first_relays: first_relays.len(),
-            // A relay the chain index cannot resolve is dropped rather than failing the walk.
-            best_relays: best_relays
-                .iter()
-                .filter_map(|key| chain_api.packet_key_to_chain_key(key).ok().flatten())
-                .collect(),
-            best_value,
+            count: forward.count,
+            distinct_first_relays: forward.distinct_first_relays,
+            best_relays: forward.best_relays.clone(),
+            best_value: forward.best_value,
+            return_count: back.count,
+            return_best_relays: back.best_relays.clone(),
+            return_best_value: back.best_value,
         })
     }
 
@@ -523,6 +547,37 @@ impl Hopr {
             process.value().abort_handle.abort();
         }
     }
+}
+
+/// One leg of a graph walk, reduced to what [`RouteWalk::Paths`] reports.
+struct PathSummary {
+    count: usize,
+    distinct_first_relays: usize,
+    best_relays: Vec<Address>,
+    best_value: f64,
+}
+
+/// None when no path is left.
+fn summarize_paths(paths: Vec<(Vec<Address>, f64)>) -> Option<PathSummary> {
+    let mut count = 0;
+    let mut first_relays = HashSet::new();
+    let mut best: Option<(Vec<Address>, f64)> = None;
+    for (relays, value) in paths {
+        count += 1;
+        if let Some(first) = relays.first() {
+            first_relays.insert(*first);
+        }
+        if best.as_ref().is_none_or(|(_, best_value)| value > *best_value) {
+            best = Some((relays, value));
+        }
+    }
+    let (best_relays, best_value) = best?;
+    Some(PathSummary {
+        count,
+        distinct_first_relays: first_relays.len(),
+        best_relays,
+        best_value,
+    })
 }
 
 /// Extract all unique IPv4 addresses from a list of multiaddrs.
