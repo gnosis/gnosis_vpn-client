@@ -71,16 +71,24 @@ async fn ping_using_cmd(opts: &Options) -> Result<Duration, Error> {
 }
 
 async fn ping_using_ping_crate(opts: &Options) -> Result<Duration, Error> {
-    let mut builder = ping::new(opts.address);
-    let mut ping = builder.timeout(opts.timeout).ttl(opts.ttl).seq_cnt(opts.seq_count);
     cfg_if::cfg_if! {
         if #[cfg(target_os = "linux")] {
-            ping = ping.socket_type(ping::RAW);
+            let socket_type = ping::SocketType::RAW;
         } else if #[cfg(target_os = "macos")] {
-            ping = ping.socket_type(ping::DGRAM);
+            let socket_type = ping::SocketType::DGRAM;
         }
     }
-    ping.send_async().await.map(|p| p.rtt).map_err(Error::from)
+    let mut pinger = ping::Pinger::builder().socket_type(socket_type).build_tokio()?;
+    // IP TTL is an 8-bit header field; system ping rejects larger values too
+    let ttl = u8::try_from(opts.ttl).unwrap_or(u8::MAX);
+    // send seq_count echoes and average like `ping -c N` does on the system path
+    let count = opts.seq_count.max(1);
+    let mut total = Duration::ZERO;
+    for _ in 0..count {
+        let request = ping::Request::new(opts.address).ttl(ttl);
+        total += pinger.ping(request, opts.timeout).await?.rtt;
+    }
+    Ok(total / u32::from(count))
 }
 
 pub fn parse_duration(duration: String) -> Result<Duration, Error> {
