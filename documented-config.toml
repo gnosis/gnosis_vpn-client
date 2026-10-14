@@ -35,9 +35,11 @@ version = 7
 # exit node address (where the connection should terminate)
 # address = "<exit node address>"
 # additional information about this exit node - any key is kept, and overrides the exit's own label
-# of the same name. `name`, location, flag and description are shown as labels in `gvpn-ctl status`;
-# `name` is left out when the id above already says the same thing
-# meta = { name = <title>, location = <location>, flag = <two-letter country code>, description = <free text> }
+# of the same name. `name` and `description` are shown as labels in `gvpn-ctl status`; `name` is left
+# out when the id above already says the same thing. An exit's country is not a label: it is derived
+# from the address the exit announces on-chain (see `geoip_db` below), so `location` and `flag` are
+# ignored wherever they are set.
+# meta = { name = <title>, description = <free text> }
 # session path: number of intermediate hops (0–3). Not an override: a discovered exit is always
 # reachable at 1 hop, so an entry at another path is an additional destination beside it. Two
 # entries for the same exit at the same path are rejected.
@@ -50,18 +52,21 @@ version = 7
 
 [destinations.Germany]
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
-meta    = { location = "Germany" }
 path    = { hops = 1 }
 
 [destinations.USA]
 address = "0xa5Ca174Ef94403d6162a969341a61baeA48F57F8"
-meta    = { location = "USA" }
 path    = { hops = 1 }
 
 [destinations.Spain]
 address = "0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254"
-meta    = { location = "Spain" }
 path    = { hops = 1 }
+
+# geoip_db - a country database in MMDB format with a `country_code` record field, as shipped by
+# the installer. Every destination's country is looked up here from the IPv4 address its exit
+# announces on-chain. Optional: leave it unset and no country is shown. When set, the file must
+# open at startup, or the service refuses to start.
+# geoip_db = "/usr/share/gnosisvpn/geoip.mmdb"
 
 ###
 ## connection section - adjust for more fine grained connection control

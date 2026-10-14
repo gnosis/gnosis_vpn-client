@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display};
 use std::net::SocketAddr;
 
+use crate::geoip::Geo;
 use crate::log_output;
 use crate::serde_utils;
 
@@ -57,8 +58,6 @@ fn sanitize_for_display(text: &str) -> String {
 pub struct Meta {
     /// The destination's title; for a discovered exit it is the only human-readable name there is.
     pub name: Option<String>,
-    pub location: Option<String>,
-    pub flag: Option<String>,
     pub description: Option<String>,
     /// Every unrecognized key, kept so nothing an operator publishes is lost.
     pub other: HashMap<String, String>,
@@ -67,10 +66,11 @@ pub struct Meta {
 impl Meta {
     /// The only place the recognized label names are known.
     pub fn from_map(mut labels: HashMap<String, String>) -> Self {
+        // The country is derived from the announced address; an operator's claim must never reach the app.
+        labels.remove("location");
+        labels.remove("flag");
         Self {
             name: labels.remove("name"),
-            location: labels.remove("location"),
-            flag: labels.remove("flag"),
             description: labels.remove("description"),
             other: labels,
         }
@@ -206,6 +206,8 @@ pub struct Destination {
     #[serde(rename = "id")]
     pub connect_id: String,
     pub meta: Meta,
+    /// Derived from the exit's announced address, never from its labels; none until a fetch resolved it.
+    pub geo: Option<Geo>,
     #[serde(with = "serde_utils::address")]
     pub address: Address,
     pub routing: HopRouting,
@@ -233,6 +235,7 @@ impl Destination {
             address,
             routing,
             meta,
+            geo: None,
             gnosis_vpn_server,
             wireguard_server,
             source,
@@ -327,14 +330,13 @@ impl Destination {
                 parts.push(format!("name: {shown}{mark}"));
             }
         }
-        for (key, value) in [
-            ("location", &self.meta.location),
-            ("flag", &self.meta.flag),
-            ("description", &self.meta.description),
-        ] {
-            let Some(value) = value else { continue };
-            let mark = if pinned(key) { CONFIG_VALUE } else { "" };
-            parts.push(format!("{key}: {}{mark}", sanitize_for_display(value)));
+        // Derived, so it is never configuration's value and never marked as one.
+        if let Some(geo) = &self.geo {
+            parts.push(format!("country: {}", geo.country_code));
+        }
+        if let Some(description) = &self.meta.description {
+            let mark = if pinned("description") { CONFIG_VALUE } else { "" };
+            parts.push(format!("description: {}{mark}", sanitize_for_display(description)));
         }
         // Targets are parsed socket addresses rather than operator text, so they need no sanitizing.
         for (key, value, configured) in [
@@ -420,6 +422,10 @@ impl Destinations {
 
     pub fn values(&self) -> impl Iterator<Item = &Destination> {
         self.by_exit.values()
+    }
+
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Destination> {
+        self.by_exit.values_mut()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&ExitKey, &Destination)> {
@@ -686,9 +692,9 @@ mod tests {
     fn a_pin_agreeing_with_the_exit_is_still_marked() {
         let addr = address(1);
         let mut config_labels = HashMap::new();
-        config_labels.insert("location".to_string(), "Germany".to_string());
+        config_labels.insert("description".to_string(), "fast".to_string());
         let mut info = exit_node(addr);
-        info.meta.insert("location".to_string(), "Germany".to_string());
+        info.meta.insert("description".to_string(), "fast".to_string());
 
         let dest = merged(
             pinned("dest-1", addr, config_labels, Some(info.gnosis_vpn_server), None),
@@ -697,7 +703,7 @@ mod tests {
         let rendered = dest.to_string();
 
         assert_eq!(dest.gnosis_vpn_server, info.gnosis_vpn_server);
-        assert!(rendered.contains("location: Germany (c)"));
+        assert!(rendered.contains("description: fast (c)"));
         assert!(rendered.contains(&format!("gnosis_vpn_server: {} (c)", info.gnosis_vpn_server)));
     }
 
@@ -705,32 +711,30 @@ mod tests {
     fn configuration_pins_labels_per_key() {
         let addr = address(1);
         let mut config_labels = HashMap::new();
-        config_labels.insert("flag".to_string(), "DE".to_string());
+        config_labels.insert("description".to_string(), "fast".to_string());
         config_labels.insert("operator".to_string(), "acme".to_string());
 
         let mut info = exit_node(addr);
         info.meta.insert("name".to_string(), "FRA-1".to_string());
-        info.meta.insert("location".to_string(), "France".to_string());
-        info.meta.insert("flag".to_string(), "FR".to_string());
+        info.meta.insert("description".to_string(), "slow".to_string());
         info.meta.insert("operator".to_string(), "globex".to_string());
 
         let dest = merged(pinned("dest-1", addr, config_labels, None, None), info);
 
-        assert_eq!(Some("DE"), dest.meta.flag.as_deref());
+        assert_eq!(Some("fast"), dest.meta.description.as_deref());
         assert_eq!(Some("acme"), dest.meta.other.get("operator").map(String::as_str));
         assert_eq!(Some("FRA-1"), dest.meta.name.as_deref());
-        assert_eq!(Some("France"), dest.meta.location.as_deref());
     }
 
     #[test]
     fn a_deregistered_exit_falls_back_to_configuration_and_the_defaults() {
         let addr = address(1);
         let mut config_labels = HashMap::new();
-        config_labels.insert("flag".to_string(), "DE".to_string());
+        config_labels.insert("description".to_string(), "fast".to_string());
         let mut destinations = Destinations::default();
         destinations.insert(pinned("dest-1", addr, config_labels, None, None));
         let mut info = exit_node(addr);
-        info.meta.insert("location".to_string(), "France".to_string());
+        info.meta.insert("name".to_string(), "FRA-1".to_string());
         let mut discovered = HashMap::new();
         discovered.insert(addr, info);
         destinations.merge_discovered(&discovered, defaults());
@@ -739,8 +743,8 @@ mod tests {
 
         let dest = &destinations.by_connect_id("dest-1").unwrap();
         assert_eq!(dest.source, DestinationSource::Configured);
-        assert_eq!(Some("DE"), dest.meta.flag.as_deref());
-        assert_eq!(None, dest.meta.location.as_deref());
+        assert_eq!(Some("fast"), dest.meta.description.as_deref());
+        assert_eq!(None, dest.meta.name.as_deref());
         assert_eq!(dest.gnosis_vpn_server, defaults().gnosis_vpn_server);
     }
 
@@ -798,15 +802,17 @@ mod tests {
     fn an_overridden_label_shows_the_configured_value_and_never_the_published_one() {
         let addr = address(1);
         let mut config_labels = HashMap::new();
-        config_labels.insert("location".to_string(), "Germany".to_string());
+        config_labels.insert("description".to_string(), "fast".to_string());
         let mut info = exit_node(addr);
-        info.meta
-            .insert("location".to_string(), format!("\u{1b}[2K\u{202e}{}", "x".repeat(200)));
+        info.meta.insert(
+            "description".to_string(),
+            format!("\u{1b}[2K\u{202e}{}", "x".repeat(200)),
+        );
 
         let dest = merged(pinned("dest-1", addr, config_labels, None, None), info);
         let rendered = dest.to_string();
 
-        assert!(rendered.contains("location: Germany (c)"));
+        assert!(rendered.contains("description: fast (c)"));
         assert!(!rendered.contains("xx"));
         assert!(!rendered.contains('\u{1b}'));
         assert!(!rendered.contains('\u{202e}'));
@@ -816,17 +822,17 @@ mod tests {
     fn only_configurations_own_labels_are_marked() {
         let addr = address(1);
         let mut config_labels = HashMap::new();
-        config_labels.insert("flag".to_string(), "DE".to_string());
+        config_labels.insert("description".to_string(), "fast".to_string());
         let mut info = exit_node(addr);
-        info.meta.insert("flag".to_string(), "FR".to_string());
-        info.meta.insert("location".to_string(), "France".to_string());
+        info.meta.insert("description".to_string(), "slow".to_string());
+        info.meta.insert("name".to_string(), "FRA-1".to_string());
 
         let dest = merged(pinned("dest-1", addr, config_labels, None, None), info);
         let rendered = dest.to_string();
 
-        assert!(rendered.contains("flag: DE (c)"));
-        assert!(rendered.contains("location: France,") || rendered.contains("location: France)"));
-        assert!(!rendered.contains("location: France (c)"));
+        assert!(rendered.contains("description: fast (c)"));
+        assert!(rendered.contains("name: FRA-1,"));
+        assert!(!rendered.contains("name: FRA-1 (c)"));
     }
 
     /// The connect id leads the line; the name says which value configuration chose.
@@ -884,13 +890,13 @@ mod tests {
     #[test]
     fn a_config_only_entry_marks_no_individual_value() {
         let mut config_labels = HashMap::new();
-        config_labels.insert("location".to_string(), "Germany".to_string());
+        config_labels.insert("description".to_string(), "fast".to_string());
         let bridge: SocketAddr = "192.168.0.1:8000".parse().unwrap();
 
         let dest = pinned("dest-1", address(1), config_labels, Some(bridge), None);
         let rendered = dest.to_string();
 
-        assert!(rendered.contains("location: Germany)"));
+        assert!(rendered.contains("description: fast)"));
         assert!(!rendered.contains("(c)"));
         assert!(!rendered.contains("gnosis_vpn_server:"));
     }
@@ -978,10 +984,8 @@ mod tests {
         let meta = Meta::from_map(labels);
 
         assert_eq!(Some("london-1".to_string()), meta.name);
-        assert_eq!(Some("London".to_string()), meta.location);
-        assert_eq!(Some("GB".to_string()), meta.flag);
         assert_eq!(Some("fast".to_string()), meta.description);
-        // Each key has exactly one home.
+        // Each key has exactly one home, and the whereabouts claims have none.
         assert_eq!(1, meta.other.len());
         assert_eq!(Some(&"acme".to_string()), meta.other.get("operator"));
     }
@@ -994,7 +998,7 @@ mod tests {
 
         let meta = Meta::from_map(labels);
 
-        assert_eq!(None, meta.location);
+        assert_eq!(None, meta.description);
         assert_eq!(2, meta.other.len());
     }
 
@@ -1022,14 +1026,14 @@ mod tests {
     }
 
     #[test]
-    fn display_renders_all_three_known_labels() {
+    fn display_renders_the_known_labels_and_the_derived_country() {
         let mut labels = HashMap::new();
         labels.insert("name".to_string(), "london-1".to_string());
         labels.insert("location".to_string(), "London".to_string());
         labels.insert("flag".to_string(), "GB".to_string());
         labels.insert("description".to_string(), "fast".to_string());
         labels.insert("operator".to_string(), "acme".to_string());
-        let dest = Destination::new(
+        let mut dest = Destination::new(
             "london-1".to_string(),
             address(1),
             HopRouting::try_from(1).unwrap(),
@@ -1038,10 +1042,17 @@ mod tests {
             "127.0.0.1:51820".parse().unwrap(),
             DestinationSource::Discovered,
         );
+        dest.geo = Some(Geo {
+            country_code: "GB".to_string(),
+            source: crate::geoip::GeoSource::AnnouncedIp,
+        });
 
         let rendered = dest.to_string();
 
-        assert!(rendered.contains("location: London, flag: GB, description: fast"));
+        assert!(rendered.contains("country: GB, description: fast"));
+        // The published whereabouts never surface, derived or not.
+        assert!(!rendered.contains("London"));
+        assert!(!rendered.contains("flag"));
         // The connect id is this name slugged, so repeating it among the labels would be noise.
         assert!(!rendered.contains("name: london-1"));
         // Unrecognized labels are kept but not displayed for now.
@@ -1331,7 +1342,7 @@ mod tests {
 
         assert_eq!(
             json,
-            r#"{"id":"dest-1","meta":{"name":null,"location":null,"flag":null,"description":null,"other":{}},"address":"0x0101010101010101010101010101010101010101","routing":1,"gnosis_vpn_server":"172.30.0.1:8000","wireguard_server":"172.30.0.1:51820","source":"Configured","overrides":{"configured_meta":{},"configured_gnosis_vpn_server":null,"configured_wireguard_server":null}}"#
+            r#"{"id":"dest-1","meta":{"name":null,"description":null,"other":{}},"geo":null,"address":"0x0101010101010101010101010101010101010101","routing":1,"gnosis_vpn_server":"172.30.0.1:8000","wireguard_server":"172.30.0.1:51820","source":"Configured","overrides":{"configured_meta":{},"configured_gnosis_vpn_server":null,"configured_wireguard_server":null}}"#
         );
     }
 
@@ -1349,7 +1360,7 @@ mod tests {
         assert!(base.same_exit(&unnamed));
 
         let mut relabelled = base.clone();
-        relabelled.meta.location = Some("Germany".to_string());
+        relabelled.meta.description = Some("fast".to_string());
         assert!(base.same_exit(&relabelled));
     }
 
@@ -1402,7 +1413,7 @@ mod tests {
     fn meta_display_strips_terminal_control_and_spoofing_characters() {
         let mut meta = HashMap::new();
         meta.insert(
-            "location".to_string(),
+            "description".to_string(),
             "Germany\u{1b}[2K\r\nSource: Configured\u{202e}".to_string(),
         );
         let dest = Destination::new(
@@ -1422,13 +1433,13 @@ mod tests {
         assert!(!rendered.contains('\n'));
         assert!(!rendered.contains('\u{202e}'));
         // Losing the ESC leaves the sequence body as inert literal text.
-        assert!(rendered.contains("location: Germany[2KSource: Configured"));
+        assert!(rendered.contains("description: Germany[2KSource: Configured"));
     }
 
     #[test]
     fn meta_display_elides_over_long_values() {
         let mut meta = HashMap::new();
-        meta.insert("location".to_string(), "x".repeat(200));
+        meta.insert("description".to_string(), "x".repeat(200));
         let dest = Destination::new(
             "d".to_string(),
             address(1),
@@ -1441,7 +1452,7 @@ mod tests {
 
         let rendered = dest.to_string();
 
-        assert!(rendered.contains(&format!("location: {}…", "x".repeat(META_FIELD_MAX_CHARS))));
+        assert!(rendered.contains(&format!("description: {}…", "x".repeat(META_FIELD_MAX_CHARS))));
         assert!(!rendered.contains(&"x".repeat(META_FIELD_MAX_CHARS + 1)));
     }
 
@@ -1449,7 +1460,7 @@ mod tests {
     #[test]
     fn the_origin_code_is_rendered_before_meta() {
         let mut meta = HashMap::new();
-        meta.insert("location".to_string(), "Germany".to_string());
+        meta.insert("description".to_string(), "fast".to_string());
         let dest = Destination::new(
             "d".to_string(),
             address(1),
@@ -1462,7 +1473,7 @@ mod tests {
 
         let rendered = dest.to_string();
 
-        assert!(rendered.find("[d]").unwrap() < rendered.find("location:").unwrap());
-        assert!(rendered.find("Route:").unwrap() < rendered.find("location:").unwrap());
+        assert!(rendered.find("[d]").unwrap() < rendered.find("description:").unwrap());
+        assert!(rendered.find("Route:").unwrap() < rendered.find("description:").unwrap());
     }
 }

@@ -229,12 +229,7 @@ impl ControlClient {
         lib::wait_for_condition("connection settlement", timeout, Duration::from_secs(5), || async {
             match self.status().await {
                 Ok(Some(status)) => {
-                    let location = status
-                        .destinations
-                        .iter()
-                        .find(|d| d.destination.connect_id == destination.connect_id)
-                        .and_then(|d| d.destination.meta.location.clone())
-                        .unwrap_or_else(|| "<unknown>".to_string());
+                    let dest_id = &destination.connect_id;
 
                     let is_connected = status
                         .connected
@@ -247,13 +242,13 @@ impl ControlClient {
                         .map(|c| &c.phase);
 
                     if is_connected {
-                        info!(?location, "connection established successfully");
+                        info!(%dest_id, "connection established successfully");
                         Ok(ConditionCheck::Ready(()))
                     } else if let Some(phase) = connecting_phase {
-                        warn!(?phase, ?location, "connection is being established");
+                        warn!(?phase, %dest_id, "connection is being established");
                         Ok(ConditionCheck::Pending)
                     } else {
-                        warn!(?location, "connection state is unknown");
+                        warn!(%dest_id, "connection state is unknown");
                         Ok(ConditionCheck::Pending)
                     }
                 }

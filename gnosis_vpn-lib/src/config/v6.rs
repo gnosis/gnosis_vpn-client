@@ -291,6 +291,7 @@ impl TryFrom<Config> for super::v7::Config {
             blokli: value.blokli,
             strategy: value.strategy,
             pix_strategy: None,
+            geoip_db: None,
         })
     }
 }

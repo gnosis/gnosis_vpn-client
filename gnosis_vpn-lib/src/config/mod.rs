@@ -2,7 +2,7 @@ use edgli::hopr_lib::api::types::primitive::errors::GeneralError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::fs;
 
 use crate::connection::{
@@ -33,6 +33,8 @@ pub struct Config {
     pub blokli: BlokliConfig,
     pub strategy: StrategyConfig,
     pub pix_strategy: PixConfig,
+    /// The country database the installer ships; none means destinations carry no country.
+    pub geoip_db: Option<PathBuf>,
 }
 
 #[derive(Debug, Error)]
