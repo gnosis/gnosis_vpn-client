@@ -33,7 +33,7 @@ pub struct Config {
     pub blokli: BlokliConfig,
     pub strategy: StrategyConfig,
     pub pix_strategy: PixConfig,
-    /// The country database the installer ships; none means destinations carry no country.
+    /// The country database the installer ships; the service refuses to start without one.
     pub geoip_db: Option<PathBuf>,
 }
 

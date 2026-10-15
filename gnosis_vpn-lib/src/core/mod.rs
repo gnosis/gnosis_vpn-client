@@ -68,12 +68,14 @@ pub enum Error {
     IncentiveOperationsCreation(String),
     #[error(transparent)]
     GeoIp(#[from] geoip::OpenError),
+    #[error("geoip_db is not set - the country database is required")]
+    GeoIpUnset,
 }
 
 pub struct Core {
     // config data
     config: Config,
-    geoip: Option<GeoIp>,
+    geoip: GeoIp,
 
     // static data
     worker_params: WorkerParams,
@@ -197,8 +199,8 @@ impl Core {
     ) -> Result<(Core, mpsc::Sender<WorkerToCore>), Error> {
         let keys = worker_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
-        // A configured database that does not open is a broken install, not a reason to run blind.
-        let geoip = config.geoip_db.as_deref().map(GeoIp::open).transpose()?;
+        // A missing or unopenable database is a broken install, not a reason to run blind.
+        let geoip = GeoIp::open(config.geoip_db.as_deref().ok_or(Error::GeoIpUnset)?)?;
         let cancel_on_shutdown = CancellationToken::new();
         let mut route_healths = HashMap::new();
         for (key, dest) in config.destinations.iter() {
@@ -264,10 +266,9 @@ impl Core {
         Ok((core, incoming_sender))
     }
 
-    /// Every destination's country from the announced addresses of its exit; none without a database.
+    /// Every destination's country from the announced addresses of its exit.
     fn refresh_geo(&mut self) {
-        let Some(geoip) = &self.geoip else { return };
-        self.config.destinations.refresh_geo(&self.announced_ipv4, geoip);
+        self.config.destinations.refresh_geo(&self.announced_ipv4, &self.geoip);
     }
 
     fn next_request_id(&mut self) -> u64 {
@@ -2560,7 +2561,9 @@ mod tests {
             .to_path_buf();
         tokio::fs::create_dir_all(pass_dir).await.expect("state home layout");
         let path = state_home.path().join("config.toml");
-        tokio::fs::write(&path, "version = 7\n").await.expect("write config");
+        let geoip_db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/geoip-country.mmdb");
+        let toml = format!("version = 7\ngeoip_db = {:?}\n", geoip_db);
+        tokio::fs::write(&path, toml).await.expect("write config");
         let config = crate::config::read(&path).await.expect("valid config");
         let worker_params = crate::worker_params::WorkerParams::new(
             None,

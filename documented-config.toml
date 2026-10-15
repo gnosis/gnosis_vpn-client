@@ -64,8 +64,7 @@ path    = { hops = 1 }
 
 # geoip_db - a country database in MMDB format with a `country_code` record field, as shipped by
 # the installer. Every destination's country is looked up here from the IPv4 address its exit
-# announces on-chain. Optional: leave it unset and no country is shown. When set, the file must
-# open at startup, or the service refuses to start.
+# announces on-chain. Required: the service refuses to start when it is unset or does not open.
 # geoip_db = "/usr/share/gnosisvpn/geoip.mmdb"
 
 ###
