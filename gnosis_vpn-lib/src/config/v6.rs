@@ -503,4 +503,21 @@ tunnel_ping_max_rtt = "9s"
             crate::connection::options::HealthCheckIntervals::default().tunnel_ping_max_rtt
         );
     }
+
+    #[test]
+    fn geoip_db_is_not_a_supported_key_in_v6() {
+        let toml = r#####"
+version = 6
+geoip_db = "/usr/share/gnosisvpn/geoip.mmdb"
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####;
+        assert_eq!(
+            wrong_keys(&toml.parse::<toml::Table>().expect("valid TOML")),
+            vec!["geoip_db".to_string()]
+        );
+
+        assert_eq!(None, runtime_config(parse(toml)).geoip_db);
+    }
 }
