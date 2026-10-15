@@ -1,0 +1,5 @@
+---
+source: gnosis_vpn-lib/src/command/mod.rs
+expression: no_path
+---
+{"found":"NoPath","walked_at":1700000000000,"forward_count":3,"return_count":0}

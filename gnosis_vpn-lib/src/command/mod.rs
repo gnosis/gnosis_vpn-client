@@ -1155,10 +1155,15 @@ mod tests {
         let walked_at = SystemTime::UNIX_EPOCH + Duration::from_millis(1_700_000_000_000);
 
         let not_announced = serde_json::to_string(&RouteWalk::NotAnnounced { walked_at }).unwrap();
-        assert_eq!(r#"{"found":"NotAnnounced","walked_at":1700000000000}"#, not_announced);
+        insta::assert_snapshot!("route_walk_not_announced", not_announced);
 
-        let no_path = serde_json::to_string(&RouteWalk::NoPath { walked_at }).unwrap();
-        assert_eq!(r#"{"found":"NoPath","walked_at":1700000000000}"#, no_path);
+        let no_path = serde_json::to_string(&RouteWalk::NoPath {
+            walked_at,
+            forward_count: 3,
+            return_count: 0,
+        })
+        .unwrap();
+        insta::assert_snapshot!("route_walk_no_path", no_path);
 
         let paths = serde_json::to_string(&RouteWalk::Paths {
             walked_at,
@@ -1166,15 +1171,12 @@ mod tests {
             distinct_first_relays: 2,
             best_relays: vec![address(1)],
             best_value: 0.75,
+            return_count: 2,
+            return_best_relays: vec![address(2)],
+            return_best_value: 0.5,
         })
         .unwrap();
-        assert_eq!(
-            format!(
-                r#"{{"found":"Paths","walked_at":1700000000000,"count":3,"distinct_first_relays":2,"best_relays":["{}"],"best_value":0.75}}"#,
-                address(1).to_checksum()
-            ),
-            paths
-        );
+        insta::assert_snapshot!("route_walk_paths", paths);
     }
 
     #[test]
