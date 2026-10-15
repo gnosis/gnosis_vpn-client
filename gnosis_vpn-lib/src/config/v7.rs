@@ -953,7 +953,7 @@ impl TryFrom<Config> for config::Config {
             blokli,
             strategy,
             pix_strategy,
-            geoip_db: value.geoip_db,
+            geoip_db: value.geoip_db.ok_or(config::Error::GeoIpDbUnset)?,
         })
     }
 }
@@ -1015,6 +1015,12 @@ mod tests {
 
     fn parse(toml: &str) -> Config {
         toml::from_str(toml).expect("valid TOML")
+    }
+
+    /// The key is required, and these tests are about other keys.
+    fn with_geoip_db(mut cfg: Config) -> Config {
+        cfg.geoip_db = Some(crate::geoip::DEFAULT_DB_PATH.into());
+        cfg
     }
 
     fn convert_with_defaults(value: Option<HashMap<String, super::Destination>>) -> super::Destinations {
@@ -1241,7 +1247,7 @@ target = "10.0.0.5:8888"
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 "#####,
         );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         let d = result.destinations.values().next().unwrap();
         assert_eq!(d.gnosis_vpn_server, "10.0.0.5:9999".parse::<SocketAddr>().unwrap());
         assert_eq!(d.wireguard_server, "10.0.0.5:8888".parse::<SocketAddr>().unwrap());
@@ -1325,7 +1331,7 @@ force_private_key = "QLWiv7VCpJl8DNc09NGp9QRpLjrdZ7vd990qub98V3Q="
             vec!["wireguard.force_private_key".to_string()]
         );
         let cfg: Config = toml::from_str(raw).expect("old configs keep loading");
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         assert_eq!(
             result.wireguard,
             WireGuardConfig::new(None, Some("1.1.1.1,8.8.8.8".to_string()))
@@ -1353,7 +1359,7 @@ allowed_ips = "10.0.0.0/8"
     #[test]
     fn probe_local_addresses_defaults_to_false() {
         let cfg = parse("version = 7\n");
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         assert!(!result.connection.probe_local_addresses);
     }
 
@@ -1367,14 +1373,14 @@ version = 7
 probe_local_addresses = true
 "#####,
         );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         assert!(result.connection.probe_local_addresses);
     }
 
     #[test]
     fn path_planner_min_ack_rate_defaults_to_point_one() {
         let cfg = parse("version = 7\n");
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         assert_eq!(result.connection.path_planner_min_ack_rate, 0.1);
     }
 
@@ -1388,7 +1394,7 @@ version = 7
 path_planner_min_ack_rate = 0.5
 "#####,
         );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         assert_eq!(result.connection.path_planner_min_ack_rate, 0.5);
     }
 
@@ -1414,7 +1420,7 @@ path_planner_min_ack_rate = {bad}
     #[test]
     fn path_planner_defaults_to_empty_overrides() {
         let cfg = parse("version = 7\n");
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         assert_eq!(
             result.connection.path_planner,
             crate::connection::options::PathPlannerOptions::default()
@@ -1434,7 +1440,7 @@ edge_penalty = 0.25
 capacity_reference = 20000000
 "#####,
         );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         let pp = &result.connection.path_planner;
         assert_eq!(pp.min_paths_anonymity_floor, Some(4));
         assert_eq!(pp.latency_halflife, Some(Duration::from_millis(50)));
@@ -1468,7 +1474,7 @@ version = 7
     #[test]
     fn surb_ramp_defaults() {
         let cfg = parse("version = 7");
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         let ramp = result.connection.surb_balancing.ramp;
         assert_eq!(ramp.interval, Duration::from_secs(1));
         assert_eq!(ramp.duration, Duration::from_secs(20));
@@ -1485,7 +1491,7 @@ interval = "500ms"
 duration = "10s"
 "#####,
         );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         let ramp = result.connection.surb_balancing.ramp;
         assert_eq!(ramp.interval, Duration::from_millis(500));
         assert_eq!(ramp.duration, Duration::from_secs(10));
@@ -1502,7 +1508,7 @@ version = 7
 {line}
 "#####
             ));
-            let result: Result<crate::config::Config, _> = cfg.try_into();
+            let result: Result<crate::config::Config, _> = with_geoip_db(cfg).try_into();
             assert!(result.is_err(), "expected rejection for `{line}`");
         }
     }
@@ -1510,7 +1516,7 @@ version = 7
     #[test]
     fn tunnel_ping_max_rtt_defaults_and_parses() {
         let cfg = parse("version = 7\n");
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         assert_eq!(
             result.connection.health_check_intervals.tunnel_ping_max_rtt,
             Duration::from_secs(3)
@@ -1524,7 +1530,7 @@ version = 7
 tunnel_ping_max_rtt = "5s"
 "#####,
         );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         assert_eq!(
             result.connection.health_check_intervals.tunnel_ping_max_rtt,
             Duration::from_secs(5)
@@ -1820,7 +1826,7 @@ lower_capacity_threshold = "128 MiB"
 sizing_mode = "deterministic"
 "#####,
         );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         assert_eq!(result.strategy.channel_capacity, Some(bytesize::ByteSize::mib(640)));
         assert_eq!(result.strategy.topup_capacity, Some(bytesize::ByteSize::mib(384)));
         assert_eq!(
@@ -1843,7 +1849,7 @@ version = 7
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 "#####,
         );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         assert_eq!(result.pix_strategy, PixConfig::default());
     }
 
@@ -1959,7 +1965,7 @@ version = 7
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 "#####,
         );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         assert!(result.connection.pix.ping_main.enabled);
         assert!(!result.connection.pix.bridge.enabled);
     }
@@ -1980,7 +1986,7 @@ enabled = true
 enabled = false
 "#####,
         );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         assert!(result.connection.pix.bridge.enabled);
         assert!(!result.connection.pix.ping_main.enabled);
     }
@@ -1998,17 +2004,20 @@ geoip_db = "/usr/share/gnosisvpn/geoip.mmdb"
     }
 
     #[test]
-    fn geoip_db_is_carried_into_the_config_and_absent_by_default() {
+    fn geoip_db_is_carried_into_the_config_and_required() {
         let with: crate::config::Config = parse("version = 7\ngeoip_db = \"/usr/share/gnosisvpn/geoip.mmdb\"\n")
             .try_into()
             .unwrap();
-        let without: crate::config::Config = parse("version = 7\n").try_into().unwrap();
+        let without: Result<crate::config::Config, _> = parse("version = 7\n").try_into();
 
         assert_eq!(
-            Some(std::path::PathBuf::from("/usr/share/gnosisvpn/geoip.mmdb")),
+            std::path::PathBuf::from("/usr/share/gnosisvpn/geoip.mmdb"),
             with.geoip_db
         );
-        assert_eq!(None, without.geoip_db);
+        assert!(
+            matches!(without, Err(crate::config::Error::GeoIpDbUnset)),
+            "{without:?}"
+        );
     }
 
     #[test]
@@ -2073,7 +2082,7 @@ version = 7
 address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 "#####,
         );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         assert_eq!(
             result.connection.pix.dimensions,
             crate::connection::options::PixDimensionOptions::default()
@@ -2095,7 +2104,7 @@ ssa_part_size     = 2
 additional_shares = 2
 "#####,
         );
-        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let result: crate::config::Config = with_geoip_db(cfg).try_into().expect("should succeed");
         assert_eq!(result.connection.pix.dimensions.num_ssa_parts, Some(8));
         assert_eq!(result.connection.pix.dimensions.ssa_part_size, Some(2));
         assert_eq!(result.connection.pix.dimensions.additional_shares, Some(2));

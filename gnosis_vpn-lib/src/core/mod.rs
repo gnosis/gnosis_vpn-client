@@ -68,8 +68,6 @@ pub enum Error {
     IncentiveOperationsCreation(String),
     #[error(transparent)]
     GeoIp(#[from] geoip::OpenError),
-    #[error("geoip_db is not set - the country database is required")]
-    GeoIpUnset,
 }
 
 pub struct Core {
@@ -199,8 +197,8 @@ impl Core {
     ) -> Result<(Core, mpsc::Sender<WorkerToCore>), Error> {
         let keys = worker_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
-        // A missing or unopenable database is a broken install, not a reason to run blind.
-        let geoip = GeoIp::open(config.geoip_db.as_deref().ok_or(Error::GeoIpUnset)?)?;
+        // A database that does not open is a broken install, not a reason to run blind.
+        let geoip = GeoIp::open(&config.geoip_db)?;
         let cancel_on_shutdown = CancellationToken::new();
         let mut route_healths = HashMap::new();
         for (key, dest) in config.destinations.iter() {

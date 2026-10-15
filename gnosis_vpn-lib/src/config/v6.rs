@@ -291,7 +291,7 @@ impl TryFrom<Config> for super::v7::Config {
             blokli: value.blokli,
             strategy: value.strategy,
             pix_strategy: None,
-            geoip_db: None,
+            geoip_db: Some(crate::geoip::DEFAULT_DB_PATH.into()),
         })
     }
 }
@@ -518,6 +518,9 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
             vec!["geoip_db".to_string()]
         );
 
-        assert_eq!(None, runtime_config(parse(toml)).geoip_db);
+        assert_eq!(
+            std::path::PathBuf::from(crate::geoip::DEFAULT_DB_PATH),
+            runtime_config(parse(toml)).geoip_db
+        );
     }
 }
