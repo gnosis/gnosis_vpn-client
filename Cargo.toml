@@ -20,7 +20,7 @@ bytesize = "~2.7.0"
 cfg-if = "~1.0.5"
 clap = { version = "~4.6.7", features = ["derive", "env"] }
 clap_complete = "~4.6.11"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "b6614471abb975959060e86df1b0c28ce8305d07", default-features = false, features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "994b83cf6b10c841e81f61cf38aab332a1c41acb", default-features = false, features = [
   # No PIX deposit pool here: edgli's `pix-test` and `pix-curvy` are mutually exclusive, and a
   # feature listed on a workspace dependency cannot be switched off by a member. Every crate
   # forwards one, `pix-curvy` by default; see the `pix-test` build in nix/gnosisvpn.nix.
@@ -64,6 +64,7 @@ tokio = { version = "~1.53.1", features = ["full"] }
 tokio-util = { version = "~0.7.19", features = ["rt"] }
 toml = "~1.1.6"
 tracing = { version = "~0.1.44", features = ["release_max_level_debug"] }
+tracing-appender = "~0.2.5"
 tracing-subscriber = "~0.3.23"
 url = { version = "~2.5.8", features = ["serde"] }
 uzers = "~0.12.2"
