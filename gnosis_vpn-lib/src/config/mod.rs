@@ -83,8 +83,7 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
     Ok(config)
 }
 
-/// Rejected here so a wrong path is reported next to the file that set it, not later by the worker.
-/// Only the path: the worker must open the file anyway, as a reader cannot ride along in the startup params.
+/// Path only, failing at load: the worker must open the file anyway, a reader cannot ride in the startup params.
 fn validate_geoip_db(path: &Path) -> Result<(), Error> {
     if path.is_file() {
         return Ok(());
