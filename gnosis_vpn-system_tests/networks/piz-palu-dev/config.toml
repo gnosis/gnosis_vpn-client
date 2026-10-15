@@ -1,6 +1,6 @@
 # piz-palu-dev system test client config; keep in sync with the gnosis_vpn installer's linux/resources/config-piz-palu-dev.toml
 
-version  = 7
+version = 7
 
 [pix_strategy]
 deposit_buffer_period     = "500ms"

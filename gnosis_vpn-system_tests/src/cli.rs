@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand};
+use std::path::PathBuf;
 use url::Url;
 
 #[derive(Debug, Parser)]
@@ -46,6 +47,10 @@ pub struct SharedArgs {
         default_value_t = false
     )]
     pub allow_experimental: bool,
+
+    /// Exits the network must discover, with their expected countries; discovery checks are skipped without it.
+    #[arg(long = "expectedExits", env = "SYSTEM_TEST_EXPECTED_EXITS", value_name = "PATH")]
+    pub expected_exits: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, Args)]
