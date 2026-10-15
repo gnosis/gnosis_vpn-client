@@ -340,7 +340,13 @@ fn discovered_exits(status: &StatusResponse, addresses: &[Address]) -> Vec<Optio
                 .destinations
                 .iter()
                 .map(|state| &state.destination)
-                .find(|dest| dest.address == *address && dest.source == DestinationSource::Discovered)
+                .find(|dest| {
+                    let from_discovery = matches!(
+                        dest.source,
+                        DestinationSource::Discovered | DestinationSource::ConfiguredAndDiscovered
+                    );
+                    dest.address == *address && from_discovery
+                })
                 .cloned()
         })
         .collect()
