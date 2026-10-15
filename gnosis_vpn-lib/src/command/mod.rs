@@ -99,6 +99,10 @@ pub enum Response {
     QuickProbe(QuickProbeResponse),
     WorkerOffline,
     WorkerRestarting,
+    /// Another local user owns the running worker; only `ping` and `info` stay open.
+    InUseByOtherUser,
+    /// `start-client` from uid 0: root runs the service, it never owns a worker.
+    RootCannotOwnWorker,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -229,12 +233,28 @@ pub struct InfoResponse {
     pub version: String,
     pub log_file: Option<PathBuf>,
     pub package_version: Option<String>,
+    /// The owner's daily-rolled worker logs; `None` for callers who are neither the owner nor root.
+    #[serde(default)]
+    pub worker_log_dir: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StartClientResponse {
     Started,
     AlreadyRunning,
+    /// Root could not bring a worker up for the caller; the service itself keeps running.
+    SpawnFailed {
+        reason: String,
+    },
+}
+
+/// The commands root answers itself; everything else is a [`WorkerCommand`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum RootCommand {
+    Ping,
+    Info,
+    StartClient(Duration),
+    StopClient,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1019,7 +1039,7 @@ impl Display for HoprInitStatus {
 }
 
 impl TryFrom<Command> for WorkerCommand {
-    type Error = ();
+    type Error = RootCommand;
 
     fn try_from(value: Command) -> Result<Self, Self::Error> {
         match value {
@@ -1034,8 +1054,10 @@ impl TryFrom<Command> for WorkerCommand {
             Command::Probe(dest) => Ok(WorkerCommand::Probe(dest)),
             Command::Unprobe => Ok(WorkerCommand::Unprobe),
             Command::QuickProbe(dest) => Ok(WorkerCommand::QuickProbe(dest)),
-            // Commands that are not relevant for the worker
-            Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient => Err(()),
+            Command::Info => Err(RootCommand::Info),
+            Command::Ping => Err(RootCommand::Ping),
+            Command::StartClient(keepalive) => Err(RootCommand::StartClient(keepalive)),
+            Command::StopClient => Err(RootCommand::StopClient),
         }
     }
 }

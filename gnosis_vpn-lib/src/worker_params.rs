@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::compat::SafeModule;
+use crate::dirs::{self, UserDirs};
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::{config, identity};
 
@@ -29,12 +30,13 @@ pub enum Error {
     UrlParse(#[from] url::ParseError),
     #[error("Blokli creation error: {0}")]
     BlokliCreation(String),
+    #[error("identity file without pass file in {dir}")]
+    PassFileMissing { dir: PathBuf },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerParams {
-    identity_file: Option<PathBuf>,
-    identity_pass: Option<String>,
+    identity: IdentityOverride,
     config_mode: ConfigFileMode,
     allow_insecure: bool,
     allow_experimental: bool,
@@ -42,13 +44,22 @@ pub struct WorkerParams {
     blokli_url: Url,
     /// Resolved once by root at startup; the killswitch blocks DNS for the rest of the session.
     blokli_ip: Ipv4Addr,
-    state_home: PathBuf,
+    user_dirs: UserDirs,
+    /// Blokli's `chainInfo.network`; it keys identity, safe cache and PIX state.
+    network: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConfigFileMode {
     Manual(PathBuf),
     Generated,
+}
+
+/// Pinned mode only: one identity for everyone instead of the per-user, per-network files.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct IdentityOverride {
+    pub file: Option<PathBuf>,
+    pub pass: Option<String>,
 }
 
 /// Opt-in behaviors that are otherwise off by default (testing/support use only).
@@ -61,47 +72,62 @@ pub struct AllowFlags {
 
 impl WorkerParams {
     pub fn new(
-        identity_file: Option<PathBuf>,
-        identity_pass: Option<String>,
+        identity: IdentityOverride,
         config_mode: ConfigFileMode,
         allow: AllowFlags,
         blokli_url: Url,
         blokli_ip: Ipv4Addr,
-        state_home: PathBuf,
+        user_dirs: UserDirs,
+        network: String,
     ) -> Self {
         Self {
-            identity_file,
-            identity_pass,
+            identity,
             config_mode,
             allow_insecure: allow.insecure,
             allow_experimental: allow.experimental,
             allow_funding_tool_rerun: allow.funding_tool_rerun,
             blokli_url,
             blokli_ip,
-            state_home,
+            user_dirs,
+            network,
         }
     }
 
+    /// The per-network state tree, created by the worker as itself before anything is written into it.
+    pub fn ensure_dirs(&self) -> std::io::Result<()> {
+        dirs::ensure_private_dir(&self.pix_state_dir())?;
+        dirs::ensure_private_dir(&self.network_cache_dir())
+    }
+
     pub async fn persist_identity_generation(&self) -> Result<HoprKeys, Error> {
-        let identity_file = match &self.identity_file {
+        let identity_file = match &self.identity.file {
             Some(path) => {
                 tracing::info!(?path, "Using provided HOPR identity file");
                 path.to_path_buf()
             }
-            None => identity::file(self.state_home()),
+            None => identity::file(&self.network_data_dir()),
         };
 
-        let identity_pass = match &self.identity_pass {
+        let identity_pass = match &self.identity.pass {
             Some(pass) => {
                 tracing::info!("Using provided HOPR identity pass");
                 pass.to_string()
             }
             None => {
-                let path = identity::pass_file(self.state_home());
+                let path = identity::pass_file(&self.network_data_dir());
                 match fs::read_to_string(&path).await {
                     Ok(p) => {
                         tracing::debug!(?path, "No HOPR identity pass provided - read from file instead");
                         Ok(p)
+                    }
+                    // A half-migrated dir: generating a pass now would leave the key undecryptable for good.
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound && identity_file.exists() => {
+                        let dir = self.network_data_dir();
+                        tracing::error!(
+                            ?dir,
+                            "identity file present but pass file missing - refusing to generate a new pass"
+                        );
+                        Err(Error::PassFileMissing { dir })
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                         tracing::debug!(
@@ -146,15 +172,15 @@ impl WorkerParams {
     }
 
     pub async fn calc_keys(&self) -> Result<HoprKeys, Error> {
-        let identity_file = match &self.identity_file {
+        let identity_file = match &self.identity.file {
             Some(path) => path.to_path_buf(),
-            None => identity::file(self.state_home()),
+            None => identity::file(&self.network_data_dir()),
         };
 
-        let identity_pass = match &self.identity_pass {
+        let identity_pass = match &self.identity.pass {
             Some(pass) => pass.to_string(),
             None => {
-                let path = identity::pass_file(self.state_home());
+                let path = identity::pass_file(&self.network_data_dir());
                 fs::read_to_string(&path).await.map_err(|e| {
                     tracing::error!(error = %e, ?path, "failed to read HOPR identity pass file");
                     Error::IOFile {
@@ -227,8 +253,22 @@ impl WorkerParams {
             .with_dns_override(BlokliDnsOverride::new(IpAddr::V4(self.blokli_ip), None))
     }
 
-    pub fn state_home(&self) -> PathBuf {
-        self.state_home.clone()
+    pub fn network(&self) -> &str {
+        &self.network
+    }
+
+    /// `<data>/networks/<network>/`: identity files and the PIX pool state.
+    pub fn network_data_dir(&self) -> PathBuf {
+        self.user_dirs.network_data(&self.network)
+    }
+
+    /// `<cache>/networks/<network>/`: the safe cache, re-queried from chain when missing.
+    pub fn network_cache_dir(&self) -> PathBuf {
+        self.user_dirs.network_cache(&self.network)
+    }
+
+    pub fn pix_state_dir(&self) -> PathBuf {
+        self.user_dirs.pix_state(&self.network)
     }
 }
 
@@ -268,13 +308,16 @@ mod tests {
 
     fn params(blokli_url: Url) -> WorkerParams {
         WorkerParams::new(
-            None,
-            None,
+            IdentityOverride::default(),
             ConfigFileMode::Generated,
             AllowFlags::default(),
             blokli_url,
             BLOKLI_IP,
-            PathBuf::from("/tmp/gnosisvpn"),
+            dirs::user_dirs(
+                std::path::Path::new("/home/alice"),
+                Some(std::path::Path::new("/tmp/gnosisvpn")),
+            ),
+            "jura-dev".to_string(),
         )
     }
 
@@ -314,5 +357,64 @@ mod tests {
         let restored: WorkerParams = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.blokli_ip(), BLOKLI_IP);
+        assert_eq!(restored.network(), "jura-dev");
+    }
+
+    #[test]
+    fn state_paths_are_keyed_by_network() {
+        let params = params(url("https://blokli.example.com/"));
+        assert_eq!(
+            params.network_data_dir(),
+            PathBuf::from("/tmp/gnosisvpn/networks/jura-dev")
+        );
+        assert_eq!(
+            params.network_cache_dir(),
+            PathBuf::from("/tmp/gnosisvpn/cache/networks/jura-dev")
+        );
+        assert_eq!(
+            params.pix_state_dir(),
+            PathBuf::from("/tmp/gnosisvpn/networks/jura-dev/pix")
+        );
+    }
+
+    fn params_in(tmp: &std::path::Path) -> WorkerParams {
+        WorkerParams::new(
+            IdentityOverride::default(),
+            ConfigFileMode::Generated,
+            AllowFlags::default(),
+            url("https://blokli.example.com/"),
+            BLOKLI_IP,
+            dirs::user_dirs(tmp, Some(tmp)),
+            "jura-dev".to_string(),
+        )
+    }
+
+    #[tokio::test]
+    async fn an_empty_network_dir_generates_a_fresh_identity_with_a_private_pass() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let params = params_in(tmp.path());
+        params.ensure_dirs().expect("dirs");
+
+        params.persist_identity_generation().await.expect("fresh identity");
+
+        let pass = identity::pass_file(&params.network_data_dir());
+        let mode = std::fs::metadata(&pass).expect("pass file").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert!(identity::file(&params.network_data_dir()).exists());
+    }
+
+    /// A migrated `.id` without its `.pass` must not be silently replaced by a key nobody can open.
+    #[tokio::test]
+    async fn an_identity_without_a_pass_file_is_an_error_not_a_regeneration() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let params = params_in(tmp.path());
+        params.ensure_dirs().expect("dirs");
+        std::fs::write(identity::file(&params.network_data_dir()), b"{}").expect("stale id");
+
+        let err = params.persist_identity_generation().await.expect_err("must refuse");
+
+        assert!(matches!(err, Error::PassFileMissing { .. }), "{err}");
+        assert!(!identity::pass_file(&params.network_data_dir()).exists());
     }
 }
