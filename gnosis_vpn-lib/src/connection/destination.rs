@@ -53,9 +53,6 @@ fn sanitize_for_display(text: &str) -> String {
     format!("{kept}…")
 }
 
-/// The country is derived from the announced address; an operator's claim must never reach the app.
-const OPERATOR_GEO_KEYS: [&str; 2] = ["location", "flag"];
-
 /// Operator-published labels: the keys we understand, plus everything else as published.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Meta {
@@ -69,9 +66,6 @@ pub struct Meta {
 impl Meta {
     /// The only place the recognized label names are known.
     pub fn from_map(mut labels: HashMap<String, String>) -> Self {
-        for key in OPERATOR_GEO_KEYS {
-            labels.remove(key);
-        }
         Self {
             name: labels.remove("name"),
             description: labels.remove("description"),
@@ -184,14 +178,10 @@ pub struct Overrides {
 
 impl Overrides {
     pub fn from_config(
-        mut meta: HashMap<String, String>,
+        meta: HashMap<String, String>,
         gnosis_vpn_server: Option<SocketAddr>,
         wireguard_server: Option<SocketAddr>,
     ) -> Self {
-        // The pins are serialized with the destination, so a dropped claim must not survive here either.
-        for key in OPERATOR_GEO_KEYS {
-            meta.remove(key);
-        }
         Self {
             configured_meta: meta,
             configured_gnosis_vpn_server: gnosis_vpn_server,
@@ -1001,9 +991,11 @@ mod tests {
 
         assert_eq!(Some("london-1".to_string()), meta.name);
         assert_eq!(Some("fast".to_string()), meta.description);
-        // Each key has exactly one home, and the whereabouts claims have none.
-        assert_eq!(1, meta.other.len());
+        // The country comes from geoip, so an operator's whereabouts are labels like any other.
+        assert_eq!(3, meta.other.len());
         assert_eq!(Some(&"acme".to_string()), meta.other.get("operator"));
+        assert_eq!(Some(&"London".to_string()), meta.other.get("location"));
+        assert_eq!(Some(&"GB".to_string()), meta.other.get("flag"));
     }
 
     #[test]
@@ -1066,7 +1058,7 @@ mod tests {
         let rendered = dest.to_string();
 
         assert!(rendered.contains("country: GB, description: fast"));
-        // The published whereabouts never surface, derived or not.
+        // The published whereabouts are unrecognized labels: kept, never shown.
         assert!(!rendered.contains("London"));
         assert!(!rendered.contains("flag"));
         // The connect id is this name slugged, so repeating it among the labels would be noise.
@@ -1491,25 +1483,6 @@ mod tests {
 
         assert!(rendered.find("[d]").unwrap() < rendered.find("description:").unwrap());
         assert!(rendered.find("Route:").unwrap() < rendered.find("description:").unwrap());
-    }
-
-    #[test]
-    fn configured_location_and_flag_never_reach_the_wire() {
-        let mut labels = HashMap::new();
-        labels.insert("name".to_string(), "london-1".to_string());
-        labels.insert("location".to_string(), "London".to_string());
-        labels.insert("flag".to_string(), "GB".to_string());
-        let dest = merged(
-            pinned("london-1", address(1), labels, None, None),
-            exit_node(address(1)),
-        );
-
-        let json = serde_json::to_string(&dest).unwrap();
-
-        assert!(json.contains("london-1"), "{json}");
-        assert!(!json.contains("London"), "{json}");
-        assert!(!json.contains("flag"), "{json}");
-        assert!(!json.contains("location"), "{json}");
     }
 
     fn geoip_fixture() -> GeoIp {

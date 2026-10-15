@@ -38,7 +38,7 @@ version = 7
 # of the same name. `name` and `description` are shown as labels in `gvpn-ctl status`; `name` is left
 # out when the id above already says the same thing. An exit's country is not a label: it is derived
 # from the address the exit announces on-chain (see `geoip_db` below), so `location` and `flag` are
-# ignored wherever they are set.
+# kept like any other key but never read.
 # meta = { name = <title>, description = <free text> }
 # session path: number of intermediate hops (0–3). Not an override: a discovered exit is always
 # reachable at 1 hop, so an entry at another path is an additional destination beside it. Two
