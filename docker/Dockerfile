@@ -6,8 +6,8 @@ RUN \
     apk add --no-cache --update wireguard-tools && \
     rm -rf /tmp/*
 
-# gnosis_vpn-root execs the worker under this uid/gid after an NSS lookup
-# (see gnosis_vpn-lib/src/worker.rs) — it must be a real user, not just a config value.
+# gnosis_vpn-root execs the worker as the pinned `--worker-user` after an NSS lookup
+# (see gnosis_vpn-lib/src/worker.rs) — it must be a real user with a home, not just a config value.
 RUN adduser -D -h /var/lib/gnosisvpn gnosisvpn
 
 WORKDIR /app

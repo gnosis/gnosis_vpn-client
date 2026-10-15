@@ -40,12 +40,52 @@ privileges and takes care of routing setup. It spawn the worker process
 control application (`gnosis_vpn-ctl`) is used to manage the client and its
 connections.
 
+## Multi-user model
+
+`gnosis_vpn-root` is the only privileged component; there is no service
+account. Whoever runs `gnosis_vpn-ctl start-client` gets a worker running as
+themselves, with state in their own per-user directories. The kernel reports the
+caller's uid on the control socket, so nothing is configured for this.
+
+- **One worker per machine.** While user A's worker runs (or is still shutting
+  down), every other user's `start-client`, `status`, `destinations`, `connect`,
+  … is answered with `InUseByOtherUser` (`gnosis_vpn-ctl` exits `NOPERM`).
+  `ping` and `info` stay open to everyone; `info` reports the worker log
+  directory only to the owner and root. The tunnel is machine-wide, so all local
+  traffic uses A's connection while it is up.
+- **Root reads and stops, never owns.** `sudo gnosis_vpn-ctl status` and
+  `stop-client` work on anyone's worker; `sudo gnosis_vpn-ctl start-client` is
+  refused with `RootCannotOwnWorker`.
+- **A failed spawn is a response, not an outage.** `start-client` answers
+  `SpawnFailed { reason }` (exit `UNAVAILABLE`) and the service stays up.
+- **Pinned mode** (`--worker-user <name>` / `GNOSISVPN_WORKER_USER`): every
+  caller acts as that user and there is no ownership gate. Docker, the system
+  tests and boot autostart use it. `--state-home`, `--hopr-identity-file`,
+  `--hopr-identity-pass` and `--client-autostart` are only accepted together
+  with `--worker-user`, because each would give all users one shared identity or
+  directory.
+
+### Per-user directories
+
+The network name comes from the Blokli `chainInfo.network` the service talks
+to; it is never configured. Per user and network:
+
+| Content                                          | Linux                                          | macOS                                                         |
+| ------------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------- |
+| identity `hopr.id`/`hopr.pass`, PIX state `pix/` | `~/.local/share/gnosisvpn/networks/<network>/` | `~/Library/Application Support/GnosisVPN/networks/<network>/` |
+| safe cache `hopr.safe`                           | `~/.cache/gnosisvpn/networks/<network>/`       | `~/Library/Caches/GnosisVPN/networks/<network>/`              |
+| worker logs `worker.log.YYYY-MM-DD`              | `~/.local/state/gnosisvpn/`                    | `~/Library/Logs/GnosisVPN/`                                   |
+
+With `--state-home <home>` (pinned mode only) the same layout sits under
+`<home>/`, `<home>/cache/` and `<home>/logs/`. An empty `networks/<network>/`
+means a fresh identity is generated; `hopr.pass` is `0600`, the directories are
+`0700`. The worker keeps seven daily log files; the root log
+(`--log-file`) is root-owned and rotated by logrotate/newsyslog via SIGHUP as
+before.
+
 ## Development setup
 
-1. Create an extra user on your system (e.g. `gnosisvpn`) with normal
-   privileges. This user will be used to run the worker process.
-
-2. _**Only for: Ubuntu 26.04 LTS**_ (TODO: remove once userspace wireguard is
+1. _**Only for: Ubuntu 26.04 LTS**_ (TODO: remove once userspace wireguard is
    merged)
 
 ```
@@ -57,42 +97,36 @@ EOF
 sudo apparmor_parser -r /etc/apparmor.d/wg-quick`
 ```
 
-3. Build binaries via: `cargo build` or `nix build .#gnosis_vpn-dev`.
+2. Build binaries via: `cargo build` or `nix build .#gnosis_vpn-dev`.
 
-4. Copy worker binary into user's home directory and make it owned by the user:
-
-```bash
-> sudo cp target/debug/gnosis_vpn-worker /home/gnosisvpn/
-# or from nix build:
-# sudo cp result/bin/gnosis_vpn-worker /home/gnosisvpn/
-> sudo chown gnosisvpn:gnosisvpn /home/gnosisvpn/gnosis_vpn-worker
-```
-
-5. Run the root binary with sudo and provide the path to the worker binary:
+3. Run the root binary with sudo and point it at the worker binary; the worker
+   binary must be executable by whoever runs `start-client`:
 
 ```bash
-> sudo RUST_LOG="debug" GNOSISVPN_HOME=/home/gnosisvpn ./target/debug/gnosis_vpn-root -c <config.toml> \
-    --hopr-blokli-url <hopr blokli url> --worker-binary /home/gnosisvpn/gnosis_vpn-worker
+> sudo RUST_LOG="debug" ./target/debug/gnosis_vpn-root -c <config.toml> \
+    --hopr-blokli-url <hopr blokli url> --worker-binary ./target/debug/gnosis_vpn-worker
 # or from nix build:
-> sudo RUST_LOG="debug" GNOSISVPN_HOME=/home/gnosisvpn ./result/bin/gnosis_vpn-root -c <config.toml> \
-    --hopr-blokli-url <hopr blokli url> --worker-binary /home/gnosisvpn/gnosis_vpn-worker
+> sudo RUST_LOG="debug" ./result/bin/gnosis_vpn-root -c <config.toml> \
+    --hopr-blokli-url <hopr blokli url> --worker-binary ./result/bin/gnosis_vpn-worker
 ```
 
-### Worker user configuration
+4. From your own shell: `gnosis_vpn-ctl start-client`. The worker runs as you,
+   with state under your home (see [Per-user directories](#per-user-directories)).
 
-There are three environment variables that control the worker process setup:
+To run as a dedicated user instead (what docker and the system tests do), create
+that user with a home directory and add `--worker-user <name>`; `--state-home`
+then relocates its state, e.g. `GNOSISVPN_HOME=/var/lib/gnosisvpn`.
 
-- `GNOSISVPN_HOME`: The home directory for the service. This is where state and
-  caching data will be stored. Defaults to `/var/lib/gnosisvpn` on Linux and
-  `/Libary/Application Support/gnosisvpn` on macOS.
+### Worker configuration
 
-- `GNOSISVPN_WORKER_USER`: The user with limited privileges that will run the
-  worker process. This user needs to have read and execute permissions for the
-  worker binary and write permissions for the `GNOSISVPN_HOME` directory.
-  Defaults to `gnosisvpn`.
+- `GNOSISVPN_WORKER_BINARY` / `--worker-binary`: the worker binary to spawn.
+  Defaults to `./gnosis_vpn-worker`.
 
-- `GNOSISVPN_WORKER_BINARY`: The path to the worker binary. The worker process
-  will be spawned with this binary.
+- `GNOSISVPN_WORKER_USER` / `--worker-user`: pin the worker to one user
+  (pinned mode, see above). Unset by default: the worker runs as the caller.
+
+- `GNOSISVPN_HOME` / `--state-home`: state directory override, pinned mode only.
+  Without it the per-user directories above apply.
 
 ## Testing
 

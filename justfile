@@ -116,7 +116,8 @@ system-tests test_binary="gnosis_vpn-system_tests":
     worker_user="gnosisvpn"
 
     worker_home="/var/lib/${worker_user}"
-    worker_config_dir="${worker_home}/.config"
+    # GNOSISVPN_HOME overrides the per-user layout, so the identity sits at <home>/networks/<network>/
+    worker_network_dir="${worker_home}/networks/${SYSTEM_TEST_NETWORK}"
     state_dir="/var/lib/${worker_user}"
     config_dir="/etc/${worker_user}"
     runtime_dir="/var/run/${worker_user}"
@@ -144,7 +145,7 @@ system-tests test_binary="gnosis_vpn-system_tests":
     fi
 
     # Create worker home directory
-    sudo mkdir -p "${worker_config_dir}" "${config_dir}" "${state_dir}" "${runtime_dir}"
+    sudo mkdir -p "${worker_network_dir}" "${config_dir}" "${state_dir}" "${runtime_dir}"
 
     # The country database the installer ships, at the path the network config names
     geoip_tmp="$(mktemp)"
@@ -152,9 +153,9 @@ system-tests test_binary="gnosis_vpn-system_tests":
     sudo install -D -m 0644 "${geoip_tmp}" /usr/share/gnosisvpn/geoip.mmdb
     rm -f "${geoip_tmp}"
 
-    # Moves the ID and password into the worker's config directory
-    printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.id" > /dev/null
-    printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.pass" > /dev/null
+    # Moves the ID and password into the worker's per-network directory
+    printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_network_dir}/hopr.id" > /dev/null
+    printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_network_dir}/hopr.pass" > /dev/null
 
     # Non-secret per-network data is checked in, so it is copied rather than piped from a secret
     sudo cp "${network_dir}/config.toml" "${config_dir}/config.toml"
