@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display};
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 
-use crate::geoip::Geo;
+use crate::geoip::{Geo, GeoIp};
 use crate::log_output;
 use crate::serde_utils;
 
@@ -53,6 +53,9 @@ fn sanitize_for_display(text: &str) -> String {
     format!("{kept}…")
 }
 
+/// The country is derived from the announced address; an operator's claim must never reach the app.
+const OPERATOR_GEO_KEYS: [&str; 2] = ["location", "flag"];
+
 /// Operator-published labels: the keys we understand, plus everything else as published.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Meta {
@@ -66,9 +69,9 @@ pub struct Meta {
 impl Meta {
     /// The only place the recognized label names are known.
     pub fn from_map(mut labels: HashMap<String, String>) -> Self {
-        // The country is derived from the announced address; an operator's claim must never reach the app.
-        labels.remove("location");
-        labels.remove("flag");
+        for key in OPERATOR_GEO_KEYS {
+            labels.remove(key);
+        }
         Self {
             name: labels.remove("name"),
             description: labels.remove("description"),
@@ -181,10 +184,14 @@ pub struct Overrides {
 
 impl Overrides {
     pub fn from_config(
-        meta: HashMap<String, String>,
+        mut meta: HashMap<String, String>,
         gnosis_vpn_server: Option<SocketAddr>,
         wireguard_server: Option<SocketAddr>,
     ) -> Self {
+        // The pins are serialized with the destination, so a dropped claim must not survive here either.
+        for key in OPERATOR_GEO_KEYS {
+            meta.remove(key);
+        }
         Self {
             configured_meta: meta,
             configured_gnosis_vpn_server: gnosis_vpn_server,
@@ -464,6 +471,15 @@ impl Destinations {
                 ids.sort_unstable();
                 Err(Unresolved::Ambiguous(ids))
             }
+        }
+    }
+
+    /// Every destination's country from its exit's announced addresses; an exit missing from the snapshot loses it.
+    pub fn refresh_geo(&mut self, announced_ipv4: &HashMap<Address, Vec<Ipv4Addr>>, geoip: &GeoIp) {
+        for dest in self.by_exit.values_mut() {
+            dest.geo = announced_ipv4
+                .get(&dest.address)
+                .and_then(|addrs| geoip.country_of(addrs));
         }
     }
 
@@ -1475,5 +1491,101 @@ mod tests {
 
         assert!(rendered.find("[d]").unwrap() < rendered.find("description:").unwrap());
         assert!(rendered.find("Route:").unwrap() < rendered.find("description:").unwrap());
+    }
+
+    #[test]
+    fn configured_location_and_flag_never_reach_the_wire() {
+        let mut labels = HashMap::new();
+        labels.insert("name".to_string(), "london-1".to_string());
+        labels.insert("location".to_string(), "London".to_string());
+        labels.insert("flag".to_string(), "GB".to_string());
+        let dest = merged(
+            pinned("london-1", address(1), labels, None, None),
+            exit_node(address(1)),
+        );
+
+        let json = serde_json::to_string(&dest).unwrap();
+
+        assert!(json.contains("london-1"), "{json}");
+        assert!(!json.contains("London"), "{json}");
+        assert!(!json.contains("flag"), "{json}");
+        assert!(!json.contains("location"), "{json}");
+    }
+
+    fn geoip_fixture() -> GeoIp {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/geoip-country.mmdb");
+        GeoIp::open(&path).expect("fixture opens")
+    }
+
+    fn country_of(destinations: &Destinations, addr: Address) -> Option<String> {
+        let dest = destinations
+            .values()
+            .find(|d| d.address == addr)
+            .expect("destination exists");
+        dest.geo.as_ref().map(|g| g.country_code.clone())
+    }
+
+    #[test]
+    fn refresh_geo_resolves_configured_and_discovered_exits_alike() {
+        let geoip = geoip_fixture();
+        let (sydney, omaha) = (address(1), address(2));
+        let mut destinations = Destinations::default();
+        destinations.insert(configured("sydney", sydney));
+        let mut discovered = HashMap::new();
+        discovered.insert(omaha, exit_node(omaha));
+        destinations.merge_discovered(&discovered, defaults());
+        let mut announced = HashMap::new();
+        announced.insert(sydney, vec!["185.9.1.9".parse().unwrap()]);
+        announced.insert(omaha, vec!["185.9.1.73".parse().unwrap()]);
+
+        destinations.refresh_geo(&announced, &geoip);
+
+        assert_eq!(Some("AU".to_string()), country_of(&destinations, sydney));
+        assert_eq!(Some("US".to_string()), country_of(&destinations, omaha));
+    }
+
+    #[test]
+    fn refresh_geo_clears_a_country_the_next_snapshot_no_longer_supports() {
+        let geoip = geoip_fixture();
+        let (disagreeing, unknown, gone) = (address(1), address(2), address(3));
+        let mut destinations = Destinations::default();
+        for (id, addr) in [("a", disagreeing), ("b", unknown), ("c", gone)] {
+            destinations.insert(configured(id, addr));
+        }
+        let first: HashMap<Address, Vec<Ipv4Addr>> = [disagreeing, unknown, gone]
+            .into_iter()
+            .map(|addr| (addr, vec!["185.9.1.9".parse().unwrap()]))
+            .collect();
+        destinations.refresh_geo(&first, &geoip);
+        assert_eq!(Some("AU".to_string()), country_of(&destinations, gone));
+
+        let mut second = HashMap::new();
+        second.insert(
+            disagreeing,
+            vec!["185.9.1.9".parse().unwrap(), "185.9.1.73".parse().unwrap()],
+        );
+        second.insert(unknown, vec!["8.8.8.8".parse().unwrap()]);
+        destinations.refresh_geo(&second, &geoip);
+
+        assert_eq!(None, country_of(&destinations, disagreeing));
+        assert_eq!(None, country_of(&destinations, unknown));
+        assert_eq!(None, country_of(&destinations, gone));
+    }
+
+    #[test]
+    fn an_exit_discovered_after_the_snapshot_resolves_on_the_next_refresh() {
+        let geoip = geoip_fixture();
+        let late = address(1);
+        let mut announced = HashMap::new();
+        announced.insert(late, vec!["185.9.1.105".parse().unwrap()]);
+        let mut destinations = Destinations::default();
+        destinations.refresh_geo(&announced, &geoip);
+        let mut discovered = HashMap::new();
+        discovered.insert(late, exit_node(late));
+
+        destinations.merge_discovered(&discovered, defaults());
+        destinations.refresh_geo(&announced, &geoip);
+
+        assert_eq!(Some("NL".to_string()), country_of(&destinations, late));
     }
 }

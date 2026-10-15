@@ -267,12 +267,7 @@ impl Core {
     /// Every destination's country from the announced addresses of its exit; none without a database.
     fn refresh_geo(&mut self) {
         let Some(geoip) = &self.geoip else { return };
-        for dest in self.config.destinations.values_mut() {
-            dest.geo = self
-                .announced_ipv4
-                .get(&dest.address)
-                .and_then(|addrs| geoip.country_of(addrs));
-        }
+        self.config.destinations.refresh_geo(&self.announced_ipv4, geoip);
     }
 
     fn next_request_id(&mut self) -> u64 {
