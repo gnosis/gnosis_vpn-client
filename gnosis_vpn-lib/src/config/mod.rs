@@ -33,7 +33,7 @@ pub struct Config {
     pub blokli: BlokliConfig,
     pub strategy: StrategyConfig,
     pub pix_strategy: PixConfig,
-    /// The country database the installer ships; a v7 file names it, older files get the platform default.
+    /// The country database, at the installer's location unless a v7 file points elsewhere.
     pub geoip_db: PathBuf,
 }
 
@@ -49,8 +49,6 @@ pub enum Error {
     TomlDeserialization(#[from] toml::de::Error),
     #[error("Unsupported config version: {0}")]
     VersionMismatch(u8),
-    #[error("geoip_db is required from config version 7 on")]
-    GeoIpDbUnset,
     #[error("geoip_db is not a file: {}", .0.display())]
     GeoIpDbNotFound(PathBuf),
     #[error("ping and main sessions must both have surb_balancing enabled or both disabled")]
@@ -173,11 +171,11 @@ mod tests {
         assert_eq!(fixture, config.geoip_db);
     }
 
-    #[tokio::test]
-    async fn a_v7_file_without_geoip_db_is_rejected() {
-        let result = read_file("version = 7\n").await;
+    #[test]
+    fn a_v7_file_without_geoip_db_falls_back_to_the_installer_path() {
+        let config = parse("version = 7\n").expect("valid config");
 
-        assert!(matches!(result, Err(Error::GeoIpDbUnset)), "{result:?}");
+        assert_eq!(PathBuf::from(crate::geoip::DEFAULT_DB_PATH), config.geoip_db);
     }
 
     #[tokio::test]

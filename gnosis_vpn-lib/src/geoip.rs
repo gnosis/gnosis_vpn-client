@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 
-/// Where the installer puts the database; a config older than v7 can name no other place.
+/// Where the installer puts the database; only a v7 config can point elsewhere.
 #[cfg(target_os = "linux")]
 pub const DEFAULT_DB_PATH: &str = "/usr/share/gnosisvpn/geoip.mmdb";
 #[cfg(target_os = "macos")]

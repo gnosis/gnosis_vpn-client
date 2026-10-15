@@ -139,6 +139,12 @@ system-tests test_binary="gnosis_vpn-system_tests":
     # Create worker home directory
     sudo mkdir -p "${worker_config_dir}" "${config_dir}" "${state_dir}" "${runtime_dir}"
 
+    # The country database the installer ships, at the path the network config names
+    geoip_tmp="$(mktemp)"
+    curl -fsSL -o "${geoip_tmp}" https://download.gnosisvpn.io/geoip/latest.mmdb
+    sudo install -D -m 0644 "${geoip_tmp}" /usr/share/gnosisvpn/geoip.mmdb
+    rm -f "${geoip_tmp}"
+
     # Moves the ID and password into the worker's config directory
     printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.id" > /dev/null
     printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.pass" > /dev/null

@@ -10,10 +10,10 @@ version = 7
 
 # geoip_db - a country database in MMDB format with a `country_code` record field, as shipped by
 # the installer. Every destination's country is looked up here from the IPv4 address its exit
-# announces on-chain. Required from version 7 on, and the file must exist or the config is rejected.
-# Older config versions cannot set it and use the installer's location: /usr/share/gnosisvpn/geoip.mmdb
-# on Linux, /usr/local/share/gnosisvpn/geoip.mmdb on macOS.
-geoip_db = "/usr/share/gnosisvpn/geoip.mmdb"
+# announces on-chain. Defaults to the installer's location, /usr/share/gnosisvpn/geoip.mmdb on
+# Linux and /usr/local/share/gnosisvpn/geoip.mmdb on macOS; set it to use another file. Whichever
+# applies must exist, or the config is rejected.
+# geoip_db = "/usr/share/gnosisvpn/geoip.mmdb"
 
 ###
 ## destinations section - configure available target destinations
