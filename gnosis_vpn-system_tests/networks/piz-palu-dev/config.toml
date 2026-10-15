@@ -1,16 +1,6 @@
 # piz-palu-dev system test client config; keep in sync with the gnosis_vpn installer's linux/resources/config-piz-palu-dev.toml
 
-geoip_db = "/usr/share/gnosisvpn/geoip.mmdb"
 version  = 7
-
-[destinations.USA]
-address = "0x559dddedcfdf821303f7a9b566ac66d91a634da7"
-
-[destinations.UK]
-address = "0xed789f9af8d37b67e84411de26579ac737e469da"
-
-[destinations.India]
-address = "0x0150f9f14d7d8709fb32743bd8c9921da5e411e8"
 
 [pix_strategy]
 deposit_buffer_period     = "500ms"
