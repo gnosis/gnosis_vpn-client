@@ -403,7 +403,11 @@ mod tests {
         let pass = identity::pass_file(&params.network_data_dir());
         let mode = std::fs::metadata(&pass).expect("pass file").permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
-        let dir_mode = std::fs::metadata(params.network_data_dir()).expect("data dir").permissions().mode() & 0o777;
+        let dir_mode = std::fs::metadata(params.network_data_dir())
+            .expect("data dir")
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(dir_mode, 0o700);
         assert!(identity::file(&params.network_data_dir()).exists());
     }
