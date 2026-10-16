@@ -1586,9 +1586,18 @@ impl DaemonState {
             .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
             // std clears the supplementary groups on the uid drop; only the primary gid remains.
             .uid(owner.uid)
-            .gid(owner.gid)
-            // An error after spawn drops the child; a survivor would break one-worker-per-machine.
-            .kill_on_drop(true);
+            .gid(owner.gid);
+
+        // Before spawn, so only the startup send can fail with a worker running, and that path kills it.
+        parent_socket.set_nonblocking(true).map_err(|err| {
+            tracing::error!(error = ?err, "unable to set non-blocking mode on parent socket");
+            format!("parent socket: {err}")
+        })?;
+
+        let parent_stream = TokioUnixStream::from_std(parent_socket).map_err(|err| {
+            tracing::error!(error = ?err, "unable to create unix stream from socket");
+            format!("parent stream: {err}")
+        })?;
 
         // Only when root itself logs to a file; otherwise both log to stdout.
         if self.cli.log_file.is_some() {
@@ -1602,16 +1611,6 @@ impl DaemonState {
             format!("spawn: {err}")
         })?;
 
-        parent_socket.set_nonblocking(true).map_err(|err| {
-            tracing::error!(error = ?err, "unable to set non-blocking mode on parent socket");
-            format!("parent socket: {err}")
-        })?;
-
-        let parent_stream = TokioUnixStream::from_std(parent_socket).map_err(|err| {
-            tracing::error!(error = ?err, "unable to create unix stream from socket");
-            format!("parent stream: {err}")
-        })?;
-
         // root <-> worker communication setup
         tracing::debug!("splitting unix stream into reader and writer halves");
         let (reader_half, writer_half) = io::split(parent_stream);
@@ -1623,7 +1622,7 @@ impl DaemonState {
         let worker_params = self
             .cli
             .worker_params(self.blokli_ip, &self.network, owner.dirs.clone());
-        send_to_worker(
+        let delivered = send_to_worker(
             RootToWorker::StartupParams {
                 config: Box::new(self.config.clone()),
                 worker_params: Box::new(worker_params),
@@ -1631,8 +1630,12 @@ impl DaemonState {
             },
             &mut socket_writer,
         )
-        .await
-        .map_err(|_| "startup params not delivered to the worker".to_string())?;
+        .await;
+        // No kill_on_drop: the listener drops the child on teardown, and the worker must get EOF, not SIGKILL.
+        if delivered.is_err() {
+            let _ = child.start_kill();
+            return Err("startup params not delivered to the worker".to_string());
+        }
 
         let cancel = CancellationToken::new();
         let owned_cancel = cancel.clone();
