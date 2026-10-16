@@ -95,6 +95,8 @@ impl WorkerParams {
 
     /// The per-network state tree, created by the worker as itself before anything is written into it.
     pub fn ensure_dirs(&self) -> std::io::Result<()> {
+        // The data dir first: created as a mere parent of pix/ it would get the umask mode, not 0o700.
+        dirs::ensure_private_dir(&self.network_data_dir())?;
         dirs::ensure_private_dir(&self.pix_state_dir())?;
         dirs::ensure_private_dir(&self.network_cache_dir())
     }
@@ -401,6 +403,8 @@ mod tests {
         let pass = identity::pass_file(&params.network_data_dir());
         let mode = std::fs::metadata(&pass).expect("pass file").permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+        let dir_mode = std::fs::metadata(params.network_data_dir()).expect("data dir").permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700);
         assert!(identity::file(&params.network_data_dir()).exists());
     }
 
