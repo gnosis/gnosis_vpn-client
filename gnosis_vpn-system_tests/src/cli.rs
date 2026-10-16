@@ -48,6 +48,15 @@ pub struct SharedArgs {
     )]
     pub allow_experimental: bool,
 
+    /// The user the worker runs as; root refuses to start a worker for root itself.
+    #[arg(
+        long = "workerUser",
+        env = "SYSTEM_TEST_WORKER_USER",
+        value_name = "NAME",
+        default_value = "gnosisvpn"
+    )]
+    pub worker_user: String,
+
     /// Exits the network must discover, with their expected countries; discovery checks are skipped without it.
     #[arg(long = "expectedExits", env = "SYSTEM_TEST_EXPECTED_EXITS", value_name = "PATH")]
     pub expected_exits: Option<PathBuf>,

@@ -79,6 +79,7 @@ system-tests test_binary="gnosis_vpn-system_tests":
     : "${SYSTEM_TEST_NETWORK:?SYSTEM_TEST_NETWORK must be set to run system tests (jura-dev|piz-palu-dev)}"
     : "${SYSTEM_TEST_WORKER_BINARY:?SYSTEM_TEST_WORKER_BINARY must be set to run system tests}"
     : "${SYSTEM_TEST_ROOT_BINARY:?SYSTEM_TEST_ROOT_BINARY must be set to run system tests}"
+    : "${SYSTEM_TEST_CTL_BINARY:?SYSTEM_TEST_CTL_BINARY must be set to run system tests}"
 
     networks_root="{{ justfile_directory() }}/gnosis_vpn-system_tests/networks"
 
@@ -116,12 +117,13 @@ system-tests test_binary="gnosis_vpn-system_tests":
     worker_user="gnosisvpn"
 
     worker_home="/var/lib/${worker_user}"
-    # GNOSISVPN_HOME overrides the per-user layout, so the identity sits at <home>/networks/<network>/
-    worker_network_dir="${worker_home}/networks/${SYSTEM_TEST_NETWORK}"
+    # The worker's per-user, per-network identity directory
+    worker_network_dir="${worker_home}/.local/share/gnosisvpn/networks/${SYSTEM_TEST_NETWORK}"
     state_dir="/var/lib/${worker_user}"
     config_dir="/etc/${worker_user}"
     runtime_dir="/var/run/${worker_user}"
     worker_binary="${worker_home}/gnosis_vpn-worker"
+    ctl_binary="${worker_home}/gnosis_vpn-ctl"
 
     # Create a system user and add it to a group with its own name, if it doesn't already exist
     if ! getent passwd "${worker_user}" >/dev/null 2>&1; then
@@ -160,12 +162,13 @@ system-tests test_binary="gnosis_vpn-system_tests":
     # Non-secret per-network data is checked in, so it is copied rather than piped from a secret
     sudo cp "${network_dir}/config.toml" "${config_dir}/config.toml"
 
-    # Copy the worker binary to the worker's home directory
-    sudo cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_home}"
+    # The worker user runs both, and may not reach the runner's workspace
+    sudo cp "${SYSTEM_TEST_WORKER_BINARY}" "${worker_binary}"
+    sudo cp "${SYSTEM_TEST_CTL_BINARY}" "${ctl_binary}"
 
-    # Set ownership and permissions for the worker binary and config directory
+    # Set ownership and permissions for the binaries and config directory
     sudo chown -R "${worker_user}:${worker_user}" "${worker_home}"
-    sudo chmod 0755 "${worker_binary}"
+    sudo chmod 0755 "${worker_binary}" "${ctl_binary}"
 
     # Run the test binary with the appropriate environment variables
-    sudo CARGO_BIN_EXE_GNOSIS_VPN_ROOT="${SYSTEM_TEST_ROOT_BINARY}" CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" GNOSISVPN_HOME="${worker_home}" GNOSISVPN_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" GNOSISVPN_FORCE_STATIC_ROUTING="true" RUST_LOG="debug" {{ test_binary }} --blokliUrl "${blokli_url}" --proxy "http://10.128.0.1:3128" "${expected_exits_args[@]}"
+    sudo CARGO_BIN_EXE_GNOSIS_VPN_ROOT="${SYSTEM_TEST_ROOT_BINARY}" CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" CARGO_BIN_EXE_GNOSIS_VPN_CTL="${ctl_binary}" SYSTEM_TEST_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" GNOSISVPN_FORCE_STATIC_ROUTING="true" RUST_LOG="debug" {{ test_binary }} --blokliUrl "${blokli_url}" --proxy "http://10.128.0.1:3128" "${expected_exits_args[@]}"

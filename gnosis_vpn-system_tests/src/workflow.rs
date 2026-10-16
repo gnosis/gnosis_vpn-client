@@ -47,7 +47,8 @@ pub struct SystemTestWorkflow {
 impl SystemTestWorkflow {
     pub async fn new(cli: Cli) -> Result<Self> {
         let (gnosis_bin_root, socket_path) = lib::prepare_configs().await?;
-        let client = ControlClient::new(socket_path.clone());
+        let ctl_binary = lib::find_binary("gnosis_vpn-ctl")?;
+        let client = ControlClient::new(socket_path.clone(), ctl_binary, &cli.shared.worker_user)?;
 
         let service = Service::spawn(&gnosis_bin_root, &cli.shared, &socket_path)?;
 

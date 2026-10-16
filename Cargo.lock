@@ -4527,11 +4527,13 @@ dependencies = [
  "rand 0.10.3",
  "reqwest",
  "serde",
+ "serde_json",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
  "url",
+ "uzers",
 ]
 
 [[package]]
