@@ -1134,9 +1134,12 @@ impl DaemonState {
                     .map(|s| s.trim().to_string());
                 // Another user's home path is not for everyone to see.
                 let caller_uid = self.caller_uid(peer_uid);
+                // Without a root log file the worker logs to stdout, so its log dir stays empty.
+                let worker_logs_to_file = self.cli.log_file.is_some();
                 let worker_log_dir = self
                     .worker_owner
                     .as_ref()
+                    .filter(|_| worker_logs_to_file)
                     .filter(|owner| caller_uid == 0 || owner.uid == caller_uid)
                     .map(|owner| owner.dirs.logs.clone());
                 let info = command::InfoResponse {
