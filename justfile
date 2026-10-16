@@ -41,7 +41,7 @@ docker-build-arm64: build-arm64
     cp -f result/bin/gnosis_vpn-root result/bin/gnosis_vpn-worker result/bin/gnosis_vpn-ctl docker/
     docker build --platform linux/arm64 -t gnosis_vpn-client:arm64 docker/
 
-# run docker container detached; CONFIG_DIR must hold client.toml (+ identity file if used, + the geoip db its geoip_db points at), GNOSISVPN_HOPR_BLOKLI_URL must be set
+# run docker container detached; CONFIG_DIR must hold client.toml (+ identity file if used, + the geoip db its geoip_db points at), GNOSISVPN_HOPR_BLOKLI_URL must be set, GNOSISVPN_NETWORK with an identity
 # see gnosis_vpn-testenv's client-start for a full example against a live cluster
 docker-run:
     #!/usr/bin/env bash
@@ -57,6 +57,7 @@ docker-run:
         --env GNOSISVPN_HOPR_BLOKLI_URL="${blokli_url}" \
         --env GNOSISVPN_HOPR_IDENTITY_FILE=${GNOSISVPN_HOPR_IDENTITY_FILE:-} \
         --env GNOSISVPN_HOPR_IDENTITY_PASS=${GNOSISVPN_HOPR_IDENTITY_PASS:-} \
+        --env GNOSISVPN_NETWORK=${GNOSISVPN_NETWORK:-} \
         --volume "${config_dir}:/config:ro" \
         --cap-add=NET_ADMIN \
         --add-host=host.docker.internal:host-gateway \
