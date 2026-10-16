@@ -41,7 +41,7 @@ docker-build-arm64: build-arm64
     cp -f result/bin/gnosis_vpn-root result/bin/gnosis_vpn-worker result/bin/gnosis_vpn-ctl docker/
     docker build --platform linux/arm64 -t gnosis_vpn-client:arm64 docker/
 
-# run docker container detached; CONFIG_DIR must hold client.toml (+ identity file if used), GNOSISVPN_HOPR_BLOKLI_URL must be set
+# run docker container detached; CONFIG_DIR must hold client.toml (+ identity file if used, + the geoip db its geoip_db points at), GNOSISVPN_HOPR_BLOKLI_URL must be set
 # see gnosis_vpn-testenv's client-start for a full example against a live cluster
 docker-run:
     #!/usr/bin/env bash
@@ -92,10 +92,17 @@ system-tests test_binary="gnosis_vpn-system_tests":
 
     blokli_url="${SYSTEM_TEST_BLOKLI_URL:-$(cat "${network_dir}/blokli-url")}"
 
+    # Discovery checks run only on networks that list the exits they must find
+    expected_exits_args=()
+    if [ -f "${network_dir}/expected-exits.toml" ]; then
+        expected_exits_args=(--expectedExits "${network_dir}/expected-exits.toml")
+    fi
+
     # Name the resolved target up front so a failed run does not need the secrets UI to explain itself
     echo "=== system test target ==="
     echo "  network:   ${SYSTEM_TEST_NETWORK}"
     echo "  blokli:    ${blokli_url}"
+    echo "  expected:  ${expected_exits_args[1]:-none}"
     grep -o '^\[destinations\.[^]]*\]' "${network_dir}/config.toml" | sed 's/^/  destination: /' || true
     # Hashing the encrypted keystore leaks nothing but pins which identity ran; a hash matching the other line means the secret ternary fell through
     echo "  identity:  sha256:$(printf %s "${SYSTEM_TEST_HOPRD_ID}" | sha256sum | cut -c1-12)"
@@ -139,6 +146,12 @@ system-tests test_binary="gnosis_vpn-system_tests":
     # Create worker home directory
     sudo mkdir -p "${worker_config_dir}" "${config_dir}" "${state_dir}" "${runtime_dir}"
 
+    # The country database the installer ships, at the path the network config names
+    geoip_tmp="$(mktemp)"
+    curl -fsSL -o "${geoip_tmp}" https://download.gnosisvpn.io/geoip/latest.mmdb
+    sudo install -D -m 0644 "${geoip_tmp}" /usr/share/gnosisvpn/geoip.mmdb
+    rm -f "${geoip_tmp}"
+
     # Moves the ID and password into the worker's config directory
     printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.id" > /dev/null
     printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_config_dir}/gnosisvpn-hopr.pass" > /dev/null
@@ -154,4 +167,4 @@ system-tests test_binary="gnosis_vpn-system_tests":
     sudo chmod 0755 "${worker_binary}"
 
     # Run the test binary with the appropriate environment variables
-    sudo CARGO_BIN_EXE_GNOSIS_VPN_ROOT="${SYSTEM_TEST_ROOT_BINARY}" CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" GNOSISVPN_HOME="${worker_home}" GNOSISVPN_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" GNOSISVPN_FORCE_STATIC_ROUTING="true" RUST_LOG="debug" {{ test_binary }} --blokliUrl "${blokli_url}" --proxy "http://10.128.0.1:3128"
+    sudo CARGO_BIN_EXE_GNOSIS_VPN_ROOT="${SYSTEM_TEST_ROOT_BINARY}" CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" GNOSISVPN_HOME="${worker_home}" GNOSISVPN_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" GNOSISVPN_FORCE_STATIC_ROUTING="true" RUST_LOG="debug" {{ test_binary }} --blokliUrl "${blokli_url}" --proxy "http://10.128.0.1:3128" "${expected_exits_args[@]}"

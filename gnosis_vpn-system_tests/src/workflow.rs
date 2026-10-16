@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use rand::seq::IndexedRandom;
-use std::time::Duration;
+use serde::Deserialize;
+use std::{path::Path, time::Duration};
 use tracing::{error, info};
 
 use crate::{
@@ -13,16 +14,29 @@ use crate::{
     },
     report::{ReportTable, RowStatus},
 };
-use gnosis_vpn_lib::connection::destination::Destination;
+use gnosis_vpn_lib::connection::destination::{Address, Destination};
 
 const SERVICE_TIMEOUT: Duration = Duration::from_secs(30);
 const SAFE_TIMEOUT: Duration = Duration::from_mins(1);
 const NODE_RUNNING_TIMEOUT: Duration = Duration::from_mins(30);
 const NODE_FUNDING_TIMEOUT: Duration = Duration::from_secs(30);
+const DISCOVERY_TIMEOUT: Duration = Duration::from_mins(5);
+const GEOLOCATION_TIMEOUT: Duration = Duration::from_mins(2);
 const READY_DESTINATIONS_TIMEOUT: Duration = Duration::from_mins(10);
 const CONNECTION_TIMEOUT: Duration = Duration::from_mins(10);
 const FINAL_CONNECTION_TIMEOUT: Duration = Duration::from_mins(10);
 const DISCONNECTION_TIMEOUT: Duration = Duration::from_secs(15);
+
+#[derive(Debug, Deserialize)]
+struct ExpectedExits {
+    exit: Vec<ExpectedExit>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExpectedExit {
+    address: String,
+    country: String,
+}
 
 pub struct SystemTestWorkflow {
     cli: Cli,
@@ -47,6 +61,11 @@ impl SystemTestWorkflow {
     pub async fn run(self) -> Result<()> {
         self.ensure_daemon_ready().await?;
 
+        match &self.cli.shared.expected_exits {
+            Some(path) => self.verify_exit_discovery(path).await?,
+            None => info!("no expected exits for this network, skipping discovery checks"),
+        }
+
         let readiness = self
             .client
             .wait_for_ready_destinations(READY_DESTINATIONS_TIMEOUT)
@@ -60,18 +79,10 @@ impl SystemTestWorkflow {
 
         let mut readiness_report = ReportTable::new("destination", &[]);
         for destination in readiness.ready() {
-            readiness_report.add_row(
-                destination.meta.location.clone().unwrap_or("<unknown>".to_string()),
-                RowStatus::Ready,
-                Vec::new(),
-            );
+            readiness_report.add_row(destination.connect_id.clone(), RowStatus::Ready, Vec::new());
         }
         for destination in readiness.not_ready() {
-            readiness_report.add_row(
-                destination.meta.location.clone().unwrap_or("<unknown>".to_string()),
-                RowStatus::NotReady,
-                Vec::new(),
-            );
+            readiness_report.add_row(destination.connect_id.clone(), RowStatus::NotReady, Vec::new());
         }
         info!("\n\n{}", readiness_report.render());
 
@@ -109,6 +120,61 @@ impl SystemTestWorkflow {
         Ok(())
     }
 
+    /// Every expected exit must be discovered from the registry and placed in its expected country.
+    async fn verify_exit_discovery(&self, path: &Path) -> Result<()> {
+        let content = std::fs::read_to_string(path)?;
+        let expected = toml::from_str::<ExpectedExits>(&content)?.exit;
+        let addresses = expected
+            .iter()
+            .map(|exit| exit.address.parse::<Address>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| anyhow!("invalid expected exit address in {}: {error}", path.display()))?;
+
+        let discovered = self
+            .client
+            .wait_for_discovered_exits(&addresses, DISCOVERY_TIMEOUT)
+            .await?;
+        let mut discovery_report = ReportTable::new("exit", &[]);
+        for (exit, destination) in expected.iter().zip(&discovered) {
+            let status = match destination {
+                Some(_) => RowStatus::Success,
+                None => RowStatus::Failure("not discovered".to_string()),
+            };
+            discovery_report.add_row(exit.address.clone(), status, Vec::new());
+        }
+        info!("\n\n{}", discovery_report.render());
+        let undiscovered = discovered.iter().filter(|dest| dest.is_none()).count();
+        if undiscovered > 0 {
+            return Err(anyhow!(
+                "{undiscovered} of {} expected exits not discovered",
+                expected.len()
+            ));
+        }
+
+        let countries = self
+            .client
+            .wait_for_exit_countries(&addresses, GEOLOCATION_TIMEOUT)
+            .await?;
+        let mut location_report = ReportTable::new("exit", &["expected", "resolved"]);
+        let mut mislocated = 0;
+        for (exit, country) in expected.iter().zip(&countries) {
+            let resolved = country.clone().unwrap_or_else(|| "-".to_string());
+            let status = if resolved == exit.country {
+                RowStatus::Success
+            } else {
+                mislocated += 1;
+                RowStatus::Failure("country mismatch".to_string())
+            };
+            location_report.add_row(exit.address.clone(), status, vec![exit.country.clone(), resolved]);
+        }
+        info!("\n\n{}", location_report.render());
+        if mislocated > 0 {
+            return Err(anyhow!("{mislocated} of {} expected exits mislocated", expected.len()));
+        }
+
+        Ok(())
+    }
+
     async fn verify_all_destinations(
         &self,
         destinations: &[Destination],
@@ -119,17 +185,13 @@ impl SystemTestWorkflow {
             match self.try_connect(destination, CONNECTION_TIMEOUT).await {
                 Ok(_) => {
                     info!(dest = %destination, "connection established");
-                    report.add_row(
-                        destination.meta.location.clone().unwrap_or("<unknown>".to_string()),
-                        RowStatus::Success,
-                        Vec::new(),
-                    );
+                    report.add_row(destination.connect_id.clone(), RowStatus::Success, Vec::new());
                     successful.push(destination.clone());
                 }
                 Err(error) => {
                     error!(dest = %destination, ?error, "failed to establish connection");
                     report.add_row(
-                        destination.meta.location.clone().unwrap_or("<unknown>".to_string()),
+                        destination.connect_id.clone(),
                         RowStatus::Failure(format!("{error:?}")),
                         Vec::new(),
                     );

@@ -8,6 +8,7 @@ pub mod connection;
 pub mod core;
 pub mod dirs;
 pub mod event;
+pub mod geoip;
 pub mod hopr;
 pub mod logging;
 pub mod ping;

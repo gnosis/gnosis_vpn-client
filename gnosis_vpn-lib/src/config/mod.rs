@@ -2,7 +2,7 @@ use edgli::hopr_lib::api::types::primitive::errors::GeneralError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::fs;
 
 use crate::connection::{
@@ -33,6 +33,8 @@ pub struct Config {
     pub blokli: BlokliConfig,
     pub strategy: StrategyConfig,
     pub pix_strategy: PixConfig,
+    /// The country database, at the installer's location unless a v7 file points elsewhere.
+    pub geoip_db: PathBuf,
 }
 
 #[derive(Debug, Error)]
@@ -47,6 +49,8 @@ pub enum Error {
     TomlDeserialization(#[from] toml::de::Error),
     #[error("Unsupported config version: {0}")]
     VersionMismatch(u8),
+    #[error("geoip_db is not a file: {}", .0.display())]
+    GeoIpDbNotFound(PathBuf),
     #[error("ping and main sessions must both have surb_balancing enabled or both disabled")]
     SurbBalancingMismatch,
     #[error("surb_balancing.ramp interval and duration must both be greater than zero")]
@@ -72,7 +76,20 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
             Error::IO(e)
         }
     })?;
+    let config = parse(&content)?;
+    validate_geoip_db(&config.geoip_db)?;
+    Ok(config)
+}
 
+/// Path only, failing at load: the worker must open the file anyway, a reader cannot ride in the startup params.
+fn validate_geoip_db(path: &Path) -> Result<(), Error> {
+    if path.is_file() {
+        return Ok(());
+    }
+    Err(Error::GeoIpDbNotFound(path.to_path_buf()))
+}
+
+pub fn parse(content: &str) -> Result<Config, Error> {
     let table = content.parse::<toml::Table>()?;
     let version = table
         .get("version")
@@ -81,7 +98,7 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
 
     match version {
         3 => {
-            let res = toml::from_str::<v3::Config>(&content)?;
+            let res = toml::from_str::<v3::Config>(content)?;
             let wrong_keys = v3::wrong_keys(&table);
             for key in wrong_keys.iter() {
                 tracing::warn!(%key, "ignoring unsupported key in configuration file");
@@ -90,7 +107,7 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
             res.try_into()
         }
         4 => {
-            let res = toml::from_str::<v4::Config>(&content)?;
+            let res = toml::from_str::<v4::Config>(content)?;
             let wrong_keys = v4::wrong_keys(&table);
             for key in wrong_keys.iter() {
                 tracing::warn!(%key, "ignoring unsupported key in configuration file");
@@ -99,7 +116,7 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
             res.try_into()
         }
         5 => {
-            let res = toml::from_str::<v5::Config>(&content)?;
+            let res = toml::from_str::<v5::Config>(content)?;
             let wrong_keys = v5::wrong_keys(&table);
             for key in wrong_keys.iter() {
                 tracing::warn!(%key, "ignoring unsupported key in configuration file");
@@ -108,7 +125,7 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
             res.try_into()
         }
         6 => {
-            let res = toml::from_str::<v6::Config>(&content)?;
+            let res = toml::from_str::<v6::Config>(content)?;
             let wrong_keys = v6::wrong_keys(&table);
             for key in wrong_keys.iter() {
                 tracing::warn!(%key, "ignoring unsupported key in configuration file");
@@ -117,7 +134,7 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
             res.try_into()
         }
         7 => {
-            let res = toml::from_str::<v7::Config>(&content)?;
+            let res = toml::from_str::<v7::Config>(content)?;
             let wrong_keys = v7::wrong_keys(&table);
             for key in wrong_keys.iter() {
                 tracing::warn!(%key, "ignoring unsupported key in configuration file");
@@ -133,11 +150,39 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    async fn read_config(contents: &str) -> Config {
+    fn read_config(contents: &str) -> Config {
+        parse(contents).expect("valid config")
+    }
+
+    async fn read_file(contents: &str) -> Result<Config, Error> {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("config.toml");
         fs::write(&path, contents).await.expect("write config");
-        read(&path).await.expect("valid config")
+        read(&path).await
+    }
+
+    #[tokio::test]
+    async fn a_v7_file_names_an_existing_geoip_database() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/geoip-country.mmdb");
+        let config = read_file(&format!("version = 7\ngeoip_db = {fixture:?}\n"))
+            .await
+            .expect("valid config");
+
+        assert_eq!(fixture, config.geoip_db);
+    }
+
+    #[test]
+    fn a_v7_file_without_geoip_db_falls_back_to_the_installer_path() {
+        let config = parse("version = 7\n").expect("valid config");
+
+        assert_eq!(PathBuf::from(crate::geoip::DEFAULT_DB_PATH), config.geoip_db);
+    }
+
+    #[tokio::test]
+    async fn a_geoip_db_path_that_is_not_a_file_is_rejected() {
+        let result = read_file("version = 7\ngeoip_db = \"/nonexistent/geoip.mmdb\"\n").await;
+
+        assert!(matches!(result, Err(Error::GeoIpDbNotFound(_))), "{result:?}");
     }
 
     fn with_blokli_section(blokli: &str) -> String {
@@ -154,14 +199,14 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 
     #[tokio::test]
     async fn blokli_request_timeout_is_read_from_the_config_file() {
-        let config = read_config(&with_blokli_section("[blokli]\nrequest_timeout = \"45s\"")).await;
+        let config = read_config(&with_blokli_section("[blokli]\nrequest_timeout = \"45s\""));
 
         assert_eq!(config.blokli.request_timeout, Duration::from_secs(45));
     }
 
     #[tokio::test]
     async fn an_absent_blokli_section_yields_the_default_request_timeout() {
-        let config = read_config(&with_blokli_section("")).await;
+        let config = read_config(&with_blokli_section(""));
 
         assert_eq!(config.blokli.request_timeout, BlokliConfig::default().request_timeout);
     }
@@ -179,8 +224,7 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 [blokli]
 request_timeout = "45s"
 "#,
-        )
-        .await;
+        );
 
         assert_eq!(config.blokli.request_timeout, Duration::from_secs(45));
     }

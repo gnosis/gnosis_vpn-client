@@ -18,6 +18,7 @@ use serde_with::{DisplayFromStr, serde_as};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::time::Duration;
 use std::vec::Vec;
 
@@ -603,6 +604,7 @@ pub struct Config {
     pub(super) blokli: Option<BlokliConfig>,
     pub(super) strategy: Option<Strategy>,
     pub(super) pix_strategy: Option<PixStrategy>,
+    pub(super) geoip_db: Option<PathBuf>,
 }
 
 #[serde_as]
@@ -629,7 +631,7 @@ pub(super) enum DestinationPath {
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong = Vec::new();
     for (key, value) in table.iter() {
-        if key == "version" {
+        if key == "version" || key == "geoip_db" {
             continue;
         }
         if key == "wireguard" {
@@ -951,6 +953,7 @@ impl TryFrom<Config> for config::Config {
             blokli,
             strategy,
             pix_strategy,
+            geoip_db: value.geoip_db.unwrap_or_else(|| crate::geoip::DEFAULT_DB_PATH.into()),
         })
     }
 }
@@ -1980,6 +1983,32 @@ enabled = false
         let result: crate::config::Config = cfg.try_into().expect("should succeed");
         assert!(result.connection.pix.bridge.enabled);
         assert!(!result.connection.pix.ping_main.enabled);
+    }
+
+    #[test]
+    fn geoip_db_is_a_known_key() {
+        let table = r#####"
+version = 7
+geoip_db = "/usr/share/gnosisvpn/geoip.mmdb"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), Vec::<String>::new());
+    }
+
+    #[test]
+    fn geoip_db_is_carried_into_the_config_and_defaults_to_the_installer_path() {
+        let with: crate::config::Config = parse("version = 7\ngeoip_db = \"/opt/geoip.mmdb\"\n")
+            .try_into()
+            .unwrap();
+        let without: crate::config::Config = parse("version = 7\n").try_into().unwrap();
+
+        assert_eq!(std::path::PathBuf::from("/opt/geoip.mmdb"), with.geoip_db);
+        assert_eq!(
+            std::path::PathBuf::from(crate::geoip::DEFAULT_DB_PATH),
+            without.geoip_db
+        );
     }
 
     #[test]

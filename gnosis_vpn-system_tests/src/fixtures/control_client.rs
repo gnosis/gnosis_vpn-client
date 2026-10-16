@@ -2,7 +2,7 @@ use gnosis_vpn_lib::command::{
     BalanceResponse, Command, ConnectResponse, DestinationState, DisconnectResponse, Response, RunMode,
     StartClientResponse, StatusResponse, StopClientResponse,
 };
-use gnosis_vpn_lib::connection::destination::Destination;
+use gnosis_vpn_lib::connection::destination::{Address, Destination, DestinationSource};
 use gnosis_vpn_lib::route_health::RouteHealthState;
 use gnosis_vpn_lib::socket::root::{Error as SocketError, process_cmd};
 use rand::seq::SliceRandom;
@@ -229,12 +229,7 @@ impl ControlClient {
         lib::wait_for_condition("connection settlement", timeout, Duration::from_secs(5), || async {
             match self.status().await {
                 Ok(Some(status)) => {
-                    let location = status
-                        .destinations
-                        .iter()
-                        .find(|d| d.destination.connect_id == destination.connect_id)
-                        .and_then(|d| d.destination.meta.location.clone())
-                        .unwrap_or_else(|| "<unknown>".to_string());
+                    let dest_id = &destination.connect_id;
 
                     let is_connected = status
                         .connected
@@ -247,13 +242,13 @@ impl ControlClient {
                         .map(|c| &c.phase);
 
                     if is_connected {
-                        info!(?location, "connection established successfully");
+                        info!(%dest_id, "connection established successfully");
                         Ok(ConditionCheck::Ready(()))
                     } else if let Some(phase) = connecting_phase {
-                        warn!(?phase, ?location, "connection is being established");
+                        warn!(?phase, %dest_id, "connection is being established");
                         Ok(ConditionCheck::Pending)
                     } else {
-                        warn!(?location, "connection state is unknown");
+                        warn!(%dest_id, "connection state is unknown");
                         Ok(ConditionCheck::Pending)
                     }
                 }
@@ -285,6 +280,76 @@ impl ControlClient {
         .await?;
         Ok(())
     }
+
+    /// Polls until every address is a discovered destination; on timeout returns the last snapshot, one entry per address.
+    pub async fn wait_for_discovered_exits(
+        &self,
+        addresses: &[Address],
+        timeout: Duration,
+    ) -> anyhow::Result<Vec<Option<Destination>>> {
+        lib::wait_for_condition("exit discovery", timeout, Duration::from_secs(10), || async {
+            let Ok(Some(status)) = self.status().await else {
+                return Ok(ConditionCheck::Pending);
+            };
+            let exits = discovered_exits(&status, addresses);
+            let missing = exits.iter().filter(|exit| exit.is_none()).count();
+            if missing == 0 {
+                return Ok(ConditionCheck::Ready(exits));
+            }
+            warn!(
+                missing,
+                expected = addresses.len(),
+                "waiting for exits to be discovered"
+            );
+            Ok(ConditionCheck::PendingWithValue(exits))
+        })
+        .await
+    }
+
+    /// Polls until every discovered address has a country; on timeout returns the last snapshot, one entry per address.
+    pub async fn wait_for_exit_countries(
+        &self,
+        addresses: &[Address],
+        timeout: Duration,
+    ) -> anyhow::Result<Vec<Option<String>>> {
+        lib::wait_for_condition("exit geolocation", timeout, Duration::from_secs(5), || async {
+            let Ok(Some(status)) = self.status().await else {
+                return Ok(ConditionCheck::Pending);
+            };
+            let countries = discovered_exits(&status, addresses)
+                .into_iter()
+                .map(|exit| exit.and_then(|dest| dest.geo).map(|geo| geo.country_code))
+                .collect::<Vec<_>>();
+            let unresolved = countries.iter().filter(|country| country.is_none()).count();
+            if unresolved == 0 {
+                return Ok(ConditionCheck::Ready(countries));
+            }
+            warn!(unresolved, expected = addresses.len(), "waiting for exit countries");
+            Ok(ConditionCheck::PendingWithValue(countries))
+        })
+        .await
+    }
+}
+
+/// The destination discovered at each address; a configured-only entry does not count.
+fn discovered_exits(status: &StatusResponse, addresses: &[Address]) -> Vec<Option<Destination>> {
+    addresses
+        .iter()
+        .map(|address| {
+            status
+                .destinations
+                .iter()
+                .map(|state| &state.destination)
+                .find(|dest| {
+                    let from_discovery = matches!(
+                        dest.source,
+                        DestinationSource::Discovered | DestinationSource::ConfiguredAndDiscovered
+                    );
+                    dest.address == *address && from_discovery
+                })
+                .cloned()
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]

@@ -44,6 +44,7 @@ let
     test = nixLib.mkTestSrc {
       inherit fs;
       root = ../.;
+      extraFiles = [ ../gnosis_vpn-lib/tests/fixtures/geoip-country.mmdb ];
     };
     deps = nixLib.mkDepsSrc {
       inherit fs;

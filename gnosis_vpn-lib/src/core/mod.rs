@@ -19,6 +19,7 @@ use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::{self, Address, Destination, Destinations, ExitKey, HopRouting};
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
+use crate::geoip::{self, GeoIp};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::probe::{self, Probe};
@@ -65,11 +66,14 @@ pub enum Error {
     HoprParams(#[from] worker_params::Error),
     #[error("IncentiveOperations creation error: {0}")]
     IncentiveOperationsCreation(String),
+    #[error(transparent)]
+    GeoIp(#[from] geoip::OpenError),
 }
 
 pub struct Core {
     // config data
     config: Config,
+    geoip: GeoIp,
 
     // static data
     worker_params: WorkerParams,
@@ -113,6 +117,8 @@ pub struct Core {
     strategy_state: Option<edgli::StrategyStateHandle>,
     channel_maintenance: channel_maintenance::Supervisor,
     route_healths: HashMap<ExitKey, RouteHealth>,
+    /// The last announced-peers snapshot, so an exit discovered between fetches gets its country at once.
+    announced_ipv4: HashMap<Address, Vec<net::Ipv4Addr>>,
     /// The one long-lived probe session; connections register over it.
     probe: Option<Probe>,
     probe_generation: u64,
@@ -191,6 +197,8 @@ impl Core {
     ) -> Result<(Core, mpsc::Sender<WorkerToCore>), Error> {
         let keys = worker_params.persist_identity_generation().await?;
         let node_address = keys.chain_key.public().to_address();
+        // A database that does not open is a broken install, not a reason to run blind.
+        let geoip = GeoIp::open(&config.geoip_db)?;
         let cancel_on_shutdown = CancellationToken::new();
         let mut route_healths = HashMap::new();
         for (key, dest) in config.destinations.iter() {
@@ -207,6 +215,7 @@ impl Core {
         let core = Core {
             // config data
             config,
+            geoip,
 
             // static data
             worker_params,
@@ -244,6 +253,7 @@ impl Core {
             ongoing_disconnections: Vec::new(),
             pending_unregisters: Vec::new(),
             route_healths,
+            announced_ipv4: HashMap::new(),
             probe: None,
             probe_generation: 0,
             resume: None,
@@ -252,6 +262,11 @@ impl Core {
             reconnecting_since: None,
         };
         Ok((core, incoming_sender))
+    }
+
+    /// Every destination's country from the announced addresses of its exit.
+    fn refresh_geo(&mut self) {
+        self.config.destinations.refresh_geo(&self.announced_ipv4, &self.geoip);
     }
 
     fn next_request_id(&mut self) -> u64 {
@@ -732,6 +747,11 @@ impl Core {
                     tracing::info!(num_announced = %announced.len(), "fetched announced peers");
                     let peer_ips: Vec<net::Ipv4Addr> =
                         announced.values().flat_map(|p| p.ipv4_addrs.iter().copied()).collect();
+                    self.announced_ipv4 = announced
+                        .iter()
+                        .map(|(address, peer)| (*address, peer.ipv4_addrs.clone()))
+                        .collect();
+                    self.refresh_geo();
                     let _ = self
                         .outgoing_sender
                         .send(CoreToWorker::RequestToRoot(RequestToRoot::UpdatePeerIps { peer_ips }))
@@ -1343,6 +1363,7 @@ impl Core {
         let before: HashSet<ExitKey> = self.route_healths.keys().copied().collect();
         let defaults = self.config.default_targets;
         self.config.destinations.merge_discovered(&nodes, defaults);
+        self.refresh_geo();
         let after: HashSet<ExitKey> = self.config.destinations.keys().copied().collect();
 
         let active = match &self.phase {
@@ -2538,7 +2559,9 @@ mod tests {
             .to_path_buf();
         tokio::fs::create_dir_all(pass_dir).await.expect("state home layout");
         let path = state_home.path().join("config.toml");
-        tokio::fs::write(&path, "version = 7\n").await.expect("write config");
+        let geoip_db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/geoip-country.mmdb");
+        let toml = format!("version = 7\ngeoip_db = {:?}\n", geoip_db);
+        tokio::fs::write(&path, toml).await.expect("write config");
         let config = crate::config::read(&path).await.expect("valid config");
         let worker_params = crate::worker_params::WorkerParams::new(
             None,
