@@ -131,6 +131,8 @@ struct WorkerChild {
     /// (see gnosis_vpn-root/tests/tun_fd_pass.rs). There is no consumption ack to
     /// close on, so it is held until the worker exits.
     _child_tun_socket: UnixStream,
+    /// SIGKILLs the worker; its exit is still reported through the exit channel.
+    kill: Option<oneshot::Sender<()>>,
 }
 
 #[derive(Debug)]
@@ -1198,10 +1200,17 @@ impl DaemonState {
     }
 
     async fn incoming_worker_line(&mut self, line: String) -> Result<(), exitcode::ExitCode> {
-        let cmd: WorkerToRoot = serde_json::from_str(&line).map_err(|err| {
-            tracing::error!(error = %err, "failed parsing incoming worker command");
-            exitcode::DATAERR
-        })?;
+        let cmd: WorkerToRoot = match serde_json::from_str(&line) {
+            Ok(cmd) => cmd,
+            Err(error) => {
+                // The worker runs as its user, who may write anything; that must not stop root for everyone.
+                tracing::error!(%error, "failed parsing incoming worker command - killing worker");
+                if let Some(kill) = self.worker_child.as_mut().and_then(|child| child.kill.take()) {
+                    let _ = kill.send(());
+                }
+                return Ok(());
+            }
+        };
         match cmd {
             WorkerToRoot::Response { id, resp } => self.incoming_worker_response(id, *resp).await,
             WorkerToRoot::RequestToRoot(request) => self.incoming_worker_request(request).await,
@@ -1585,9 +1594,18 @@ impl DaemonState {
         let owned_cancel = cancel.clone();
         let lines_sender = self.incoming_worker_channel.0.clone();
         let exit_sender = self.worker_exit_channel.0.clone();
+        let (kill, mut kill_requested) = oneshot::channel::<()>();
         tokio::spawn(async move {
+            // A completed oneshot must not be polled again; a dropped sender means teardown, so no kill.
+            let mut kill_settled = false;
             loop {
                 tokio::select! {
+                    requested = &mut kill_requested, if !kill_settled => {
+                        kill_settled = true;
+                        if requested.is_ok() {
+                            let _ = child.start_kill();
+                        }
+                    },
                     Ok(Some(line)) = socket_lines_reader.next_line() => {
                         let _ = lines_sender.send(line.clone()).await.map_err(|err| {
                             tracing::error!(error = ?err, "worker channel receiver dropped");
@@ -1616,6 +1634,7 @@ impl DaemonState {
             socket_writer,
             tun_fd_socket: parent_tun_socket,
             _child_tun_socket: child_tun_socket,
+            kill: Some(kill),
         });
         Ok(())
     }
