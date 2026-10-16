@@ -1421,28 +1421,23 @@ impl DaemonState {
         self.probing = false;
         // A dead worker's device must never be handed to its replacement as a reusable one.
         self.teardown_any_routing().await;
-        let init_failed = status.code() == Some(exitcode::CANTCREAT);
         match self.shutdown_ongoing {
-            // The user's dirs, identity or log file could not be set up; root stays up for the next caller.
-            Shutdown::None if init_failed => {
+            // A failed per-user init (CANTCREAT) or the owner killing its own worker; neither may take root down for everyone.
+            Shutdown::None if !status.success() => {
                 tracing::error!(
                     user = self.worker_owner.as_ref().map(|owner| owner.name.as_str()),
-                    "worker could not set up its per-user state - not restarting"
+                    status = ?status.code(),
+                    "worker process exited unexpectedly - not restarting"
                 );
                 self.forget_owner();
                 Ok(())
             }
             Shutdown::None => {
-                if status.success() {
-                    tracing::warn!(exit_code = ?status.code(), "worker process exited cleanly without shutdown signal - restarting");
-                    // Ids issued to the dead worker are never answered by its replacement.
-                    answer_pending(&mut self.pending_responses, Response::WorkerRestarting);
-                    self.respawn_or_forget().await;
-                    Ok(())
-                } else {
-                    tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
-                    Err(exitcode::TEMPFAIL)
-                }
+                tracing::warn!("worker process exited cleanly without shutdown signal - restarting");
+                // Ids issued to the dead worker are never answered by its replacement.
+                answer_pending(&mut self.pending_responses, Response::WorkerRestarting);
+                self.respawn_or_forget().await;
+                Ok(())
             }
             Shutdown::Worker => {
                 if status.success() {
@@ -1491,7 +1486,7 @@ impl DaemonState {
     fn forget_owner(&mut self) {
         self.worker_owner = None;
         self.target_dest_id = None;
-        // Only the init-failure path still has pending ids, and nothing restarts for them.
+        // Only the failed-exit path still has pending ids, and nothing restarts for them.
         answer_pending(&mut self.pending_responses, Response::WorkerOffline);
     }
 
