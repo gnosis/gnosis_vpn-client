@@ -53,7 +53,7 @@ caller's uid on the control socket, so nothing is configured for this.
   `ping` and `info` stay open to everyone; `info` reports the worker log
   directory only to the owner and root. The tunnel is machine-wide, so all local
   traffic uses A's connection while it is up.
-- **Root reads and stops, never owns.** `sudo gnosis_vpn-ctl status` and
+- **Root may use anyone's worker, never own one.** `sudo gnosis_vpn-ctl status` and
   `stop-client` work on anyone's worker; `sudo gnosis_vpn-ctl start-client` is
   refused with `RootCannotOwnWorker`.
 - **A failed spawn is a response, not an outage.** `start-client` answers

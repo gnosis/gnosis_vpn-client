@@ -1412,11 +1412,12 @@ impl DaemonState {
     }
 
     async fn incoming_worker_exit(&mut self, status: process::ExitStatus) -> Result<(), exitcode::ExitCode> {
+        // Gone first, so a drained SetupTunnel hits the "worker gone" arm instead of a dead socket.
+        self.worker_child = None;
         // Lines were sent before the exit but select! may pick the exit first; a late connect would leak the target to the next owner.
         while let Ok(line) = self.incoming_worker_channel.1.try_recv() {
             self.incoming_worker_line(line).await?;
         }
-        self.worker_child = None;
         self.probing = false;
         // A dead worker's device must never be handed to its replacement as a reusable one.
         self.teardown_any_routing().await;
@@ -1490,7 +1491,8 @@ impl DaemonState {
     fn forget_owner(&mut self) {
         self.worker_owner = None;
         self.target_dest_id = None;
-        answer_pending(&mut self.pending_responses, Response::WorkerRestarting);
+        // Only the init-failure path still has pending ids, and nothing restarts for them.
+        answer_pending(&mut self.pending_responses, Response::WorkerOffline);
     }
 
     /// Restart is a no-op while suspended, so a suspend whose answer died with the worker must not outlive it.
