@@ -3,10 +3,9 @@ use url::Url;
 
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::time::Duration;
 
-use gnosis_vpn_lib::dirs::{self, UserDirs};
-use gnosis_vpn_lib::worker_params::{self, IdentityOverride, WorkerParams};
+use gnosis_vpn_lib::dirs::UserDirs;
+use gnosis_vpn_lib::worker_params::{self, WorkerParams};
 use gnosis_vpn_lib::{config, hopr, logging, socket};
 
 use crate::{ENV_VAR_PID_FILE, worker};
@@ -33,10 +32,6 @@ pub struct Cli {
         )]
     pub config_path: PathBuf,
 
-    /// State directory override for the pinned worker user; without it every user keeps state under their own home
-    #[arg(long, env = dirs::ENV_VAR_STATE_HOME, requires = "worker_user")]
-    pub state_home: Option<PathBuf>,
-
     /// Log file path - provide if you want the service to manage the log file
     #[arg(
         long,
@@ -51,11 +46,6 @@ pub struct Cli {
     )]
     pub pid_file: Option<PathBuf>,
 
-    /// Pin the worker to this user: every caller acts as it and the ownership gate is off (docker, tests);
-    /// unset, the worker runs as whoever calls `start-client`
-    #[arg(long, env = worker::ENV_VAR_WORKER_USER)]
-    pub worker_user: Option<String>,
-
     /// Path to the worker binary
     #[arg(long, env = worker::ENV_VAR_WORKER_BINARY, default_value = worker::DEFAULT_WORKER_BINARY)]
     pub worker_binary: PathBuf,
@@ -63,14 +53,6 @@ pub struct Cli {
     /// Hopr edge client configuration path
     #[arg(long, env = hopr::ENV_VAR_CONFIG, default_value = None) ]
     pub hopr_config_path: Option<PathBuf>,
-
-    /// Hopr edge client identity path; one identity for everyone, so only with a pinned worker user
-    #[arg(long, env = hopr::ENV_VAR_ID_FILE, default_value = None, requires = "worker_user")]
-    pub hopr_identity_file: Option<PathBuf>,
-
-    /// Hopr edge client identity pass; only with a pinned worker user
-    #[arg(long, env = hopr::ENV_VAR_ID_PASS, default_value = None, requires = "worker_user")]
-    pub hopr_identity_pass: Option<String>,
 
     /// Hopr Blokli URL used for on chain queries
     #[arg(long, env = hopr::ENV_VAR_BLOKLI_URL)]
@@ -89,14 +71,6 @@ pub struct Cli {
     /// purposes)
     #[arg(long)]
     pub allow_funding_tool_rerun: bool,
-
-    /// Autostart client after service startup and shut it down after being idle for this duration.
-    /// The idle countdown is suspended while a VPN connection is active and resumes on disconnect.
-    /// Nobody asked for a worker at boot, so this needs a pinned worker user.
-    #[arg(long, env = worker::ENV_VAR_CLIENT_AUTOSTART, default_value = None,
-                value_parser = humantime::parse_duration, requires = "worker_user"
-        )]
-    pub client_autostart: Option<Duration>,
 }
 
 pub fn parse() -> Cli {
@@ -116,13 +90,7 @@ impl Cli {
             funding_tool_rerun: self.allow_funding_tool_rerun,
         };
 
-        let identity = IdentityOverride {
-            file: self.hopr_identity_file.clone(),
-            pass: self.hopr_identity_pass.clone(),
-        };
-
         WorkerParams::new(
-            identity,
             config_mode,
             allow,
             self.hopr_blokli_url.clone(),
@@ -156,29 +124,6 @@ mod tests {
         assert!(args.hopr_config_path.is_none());
 
         Ok(())
-    }
-
-    /// Each of these would hand every local user one shared identity or state dir.
-    #[test]
-    fn shared_state_flags_need_a_pinned_worker_user() {
-        for flag in [
-            ["--state-home", "/var/lib/gnosisvpn"],
-            ["--hopr-identity-file", "/etc/gnosisvpn/hopr.id"],
-            ["--hopr-identity-pass", "secret"],
-            ["--client-autostart", "10m"],
-        ] {
-            let mut args = base_args();
-            args.extend(flag);
-            assert!(
-                Cli::try_parse_from(args.clone()).is_err(),
-                "{flag:?} accepted without --worker-user"
-            );
-            args.extend(["--worker-user", "gnosisvpn"]);
-            assert!(
-                Cli::try_parse_from(args).is_ok(),
-                "{flag:?} rejected with --worker-user"
-            );
-        }
     }
 
     /// There is deliberately no fallback Blokli endpoint: a deployment must say which one it talks to.

@@ -58,12 +58,6 @@ caller's uid on the control socket, so nothing is configured for this.
   refused with `RootCannotOwnWorker`.
 - **A failed spawn is a response, not an outage.** `start-client` answers
   `SpawnFailed { reason }` (exit `UNAVAILABLE`) and the service stays up.
-- **Pinned mode** (`--worker-user <name>` / `GNOSISVPN_WORKER_USER`): every
-  caller acts as that user and there is no ownership gate. Docker, the system
-  tests and boot autostart use it. `--state-home`, `--hopr-identity-file`,
-  `--hopr-identity-pass` and `--client-autostart` are only accepted together
-  with `--worker-user`, because each would give all users one shared identity or
-  directory.
 
 ### Per-user directories
 
@@ -76,8 +70,7 @@ to; it is never configured. Per user and network:
 | safe cache `hopr.safe`                           | `~/.cache/gnosisvpn/networks/<network>/`       | `~/Library/Caches/GnosisVPN/networks/<network>/`              |
 | worker logs `worker.log.YYYY-MM-DD`              | `~/.local/state/gnosisvpn/`                    | `~/Library/Logs/GnosisVPN/`                                   |
 
-With `--state-home <home>` (pinned mode only) the same layout sits under
-`<home>/`, `<home>/cache/` and `<home>/logs/`. An empty `networks/<network>/`
+An empty `networks/<network>/`
 means a fresh identity is generated; `hopr.pass` is `0600`, the directories are
 `0700`. The worker keeps seven daily log files; the root log
 (`--log-file`) is root-owned and rotated by logrotate/newsyslog via SIGHUP as
@@ -110,23 +103,13 @@ sudo apparmor_parser -r /etc/apparmor.d/wg-quick`
     --hopr-blokli-url <hopr blokli url> --worker-binary ./result/bin/gnosis_vpn-worker
 ```
 
-4. From your own shell: `gnosis_vpn-ctl start-client`. The worker runs as you,
+4. From your own shell: `gnosis_vpn-ctl start-client 10m`. The worker runs as you,
    with state under your home (see [Per-user directories](#per-user-directories)).
-
-To run as a dedicated user instead (what docker and the system tests do), create
-that user with a home directory and add `--worker-user <name>`; `--state-home`
-then relocates its state, e.g. `GNOSISVPN_HOME=/var/lib/gnosisvpn`.
 
 ### Worker configuration
 
 - `GNOSISVPN_WORKER_BINARY` / `--worker-binary`: the worker binary to spawn.
   Defaults to `./gnosis_vpn-worker`.
-
-- `GNOSISVPN_WORKER_USER` / `--worker-user`: pin the worker to one user
-  (pinned mode, see above). Unset by default: the worker runs as the caller.
-
-- `GNOSISVPN_HOME` / `--state-home`: state directory override, pinned mode only.
-  Without it the per-user directories above apply.
 
 ## Testing
 
@@ -145,9 +128,8 @@ Verify integrity before installing - see [SECURITY.md](./SECURITY.md).
 
 ## Idle shutdown
 
-When `--client-autostart <duration>` (or `GNOSISVPN_CLIENT_AUTOSTART`) is set,
-the service starts the worker automatically on launch and shuts it down after
-the worker has been idle for the given duration.
+`gnosis_vpn-ctl start-client <duration>` shuts the worker down after it has been
+idle for the given duration.
 
 The idle countdown behaves as follows:
 
@@ -161,7 +143,7 @@ The idle countdown behaves as follows:
 Example — shut down the worker after 10 minutes of idle time:
 
 ```bash
-gnosis_vpn-root --client-autostart 10m ...
+gnosis_vpn-ctl start-client 10m
 ```
 
 ## General usage

@@ -13,8 +13,6 @@ use crate::shell_command_ext::{self, Logs, ShellCommandExt};
 pub enum Error {
     #[error("user {uid} not found")]
     UserNotFound { uid: u32 },
-    #[error("user {name} not found")]
-    UserNameNotFound { name: String },
     #[error("home directory {} of user {uid} is not a directory", home.display())]
     HomeMissing { uid: u32, home: PathBuf },
     #[error("worker binary {} not found", path.display())]
@@ -31,8 +29,6 @@ pub enum Error {
 
 pub const DEFAULT_WORKER_BINARY: &str = "./gnosis_vpn-worker";
 pub const ENV_VAR_WORKER_BINARY: &str = "GNOSISVPN_WORKER_BINARY";
-pub const ENV_VAR_WORKER_USER: &str = "GNOSISVPN_WORKER_USER";
-pub const ENV_VAR_CLIENT_AUTOSTART: &str = "GNOSISVPN_CLIENT_AUTOSTART";
 
 /// The probe runs inline in root's daemon loop, so a hanging binary must not hang the service.
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -49,18 +45,8 @@ pub struct WorkerOwner {
 }
 
 impl WorkerOwner {
-    pub fn from_uid(uid: u32, state_home_override: Option<&Path>) -> Result<Self, Error> {
+    pub fn from_uid(uid: u32) -> Result<Self, Error> {
         let user = uzers::get_user_by_uid(uid).ok_or(Error::UserNotFound { uid })?;
-        Self::from_user(&user, state_home_override)
-    }
-
-    pub fn from_name(name: &str, state_home_override: Option<&Path>) -> Result<Self, Error> {
-        let user = uzers::get_user_by_name(name).ok_or_else(|| Error::UserNameNotFound { name: name.to_string() })?;
-        Self::from_user(&user, state_home_override)
-    }
-
-    fn from_user(user: &uzers::User, state_home_override: Option<&Path>) -> Result<Self, Error> {
-        let uid = user.uid();
         let home = user.home_dir().to_path_buf();
         if !home.is_dir() {
             return Err(Error::HomeMissing { uid, home });
@@ -69,16 +55,9 @@ impl WorkerOwner {
             uid,
             gid: user.primary_group_id(),
             name: user.name().to_string_lossy().to_string(),
-            dirs: dirs::user_dirs(&home, state_home_override),
+            dirs: dirs::user_dirs(&home),
             home,
         })
-    }
-
-    /// Where the worker starts: the override when pinned, else the passwd home.
-    pub fn working_dir(&self, state_home_override: Option<&Path>) -> PathBuf {
-        state_home_override
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| self.home.clone())
     }
 }
 

@@ -13,11 +13,11 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use std::collections::HashMap;
-use std::fs::{DirBuilder, File};
+use std::fs::File;
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr};
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{self, Stdio};
@@ -65,8 +65,6 @@ fn try_acquire_daemon_lock_at(path: &Path) -> std::io::Result<File> {
 struct DaemonState {
     cli: cli::Cli,
     worker_binary: PathBuf,
-    /// `--worker-user`: every caller acts as this user and nobody is gated.
-    pinned_owner: Option<WorkerOwner>,
     /// Whose worker runs or is still shutting down; outlives `worker_child` until forgotten.
     worker_owner: Option<WorkerOwner>,
     /// Resolved once at startup; the killswitch blocks DNS for the rest of the session.
@@ -477,15 +475,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         eprintln!("error locating worker binary: {error}");
         exitcode::NOINPUT
     })?;
-    let pinned_owner = match &args.worker_user {
-        Some(name) => Some(
-            WorkerOwner::from_name(name, args.state_home.as_deref()).map_err(|error| {
-                eprintln!("error resolving pinned worker user: {error}");
-                exitcode::NOUSER
-            })?,
-        ),
-        None => None,
-    };
 
     // setup logging
     let reload_handle = setup_logging(&args.log_file)?;
@@ -493,7 +482,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // introduce ourself in the logs
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
-        pinned_worker_user = pinned_owner.as_ref().map(|owner| owner.name.as_str()),
         "starting {}",
         env!("CARGO_PKG_NAME")
     );
@@ -584,11 +572,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             exitcode::UNAVAILABLE
         })?;
 
-    let client_autostart = args.client_autostart;
     let mut state = DaemonState {
         cli: args,
         worker_binary,
-        pinned_owner,
         worker_owner: None,
         blokli_ip,
         network,
@@ -607,19 +593,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         keep_alive_instruction_sender,
         routing_actor_sender,
     };
-    // Autostart only exists in pinned mode (clap enforces it), where a failed spawn is a deployment error.
-    if let (Some(keepalive), Some(owner)) = (client_autostart, state.pinned_owner.clone()) {
-        tracing::debug!(?keepalive, "autostarting worker process");
-        state.worker_owner = Some(owner);
-        state.setup_worker().await.map_err(|reason| {
-            tracing::error!(%reason, "autostart failed - exiting");
-            exitcode::UNAVAILABLE
-        })?;
-        let _ = state
-            .keep_alive_instruction_sender
-            .send(KeepAliveInstruction::Ignite(keepalive))
-            .await;
-    }
     let res = state
         .daemon_loop(
             signal_receiver,
@@ -767,11 +740,8 @@ fn valid_network_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(safe_char)
 }
 
-/// Pinned mode has no gate; otherwise root reads and stops but never owns, and everyone else must be the owner.
-fn gate(pinned: bool, owner_uid: Option<u32>, cmd: &LibCommand, peer_uid: u32) -> Option<Response> {
-    if pinned {
-        return None;
-    }
+/// Root reads and stops but never owns; everyone else must be the owner.
+fn gate(owner_uid: Option<u32>, cmd: &LibCommand, peer_uid: u32) -> Option<Response> {
     if matches!(cmd, LibCommand::Ping | LibCommand::Info) {
         return None;
     }
@@ -968,7 +938,7 @@ impl DaemonState {
         let SocketCmd { cmd, resp, peer_uid } = socket_cmd;
         // Before any side effect: a refused connect must not touch the owner's idle countdown.
         let owner_uid = self.worker_owner.as_ref().map(|owner| owner.uid);
-        if let Some(refusal) = gate(self.pinned_owner.is_some(), owner_uid, &cmd, peer_uid) {
+        if let Some(refusal) = gate(owner_uid, &cmd, peer_uid) {
             tracing::debug!(?cmd, peer_uid, owner_uid, "refusing socket command");
             let _ = resp.send(refusal).map_err(|error| {
                 tracing::error!(?error, "socket command response channel closed");
@@ -1112,18 +1082,6 @@ impl DaemonState {
         })
     }
 
-    /// Who a socket command acts as: the pinned user when pinned, else the kernel-reported peer.
-    fn caller_uid(&self, peer_uid: u32) -> u32 {
-        self.pinned_owner.as_ref().map(|owner| owner.uid).unwrap_or(peer_uid)
-    }
-
-    fn resolve_owner(&self, peer_uid: u32) -> Result<WorkerOwner, worker::Error> {
-        match &self.pinned_owner {
-            Some(owner) => Ok(owner.clone()),
-            None => WorkerOwner::from_uid(peer_uid, None),
-        }
-    }
-
     async fn incoming_root_command(&mut self, cmd: RootCommand, peer_uid: u32) -> Result<Response, exitcode::ExitCode> {
         match cmd {
             RootCommand::Ping => Ok(Response::Pong),
@@ -1133,14 +1091,13 @@ impl DaemonState {
                     .ok()
                     .map(|s| s.trim().to_string());
                 // Another user's home path is not for everyone to see.
-                let caller_uid = self.caller_uid(peer_uid);
                 // Without a root log file the worker logs to stdout, so its log dir stays empty.
                 let worker_logs_to_file = self.cli.log_file.is_some();
                 let worker_log_dir = self
                     .worker_owner
                     .as_ref()
                     .filter(|_| worker_logs_to_file)
-                    .filter(|owner| caller_uid == 0 || owner.uid == caller_uid)
+                    .filter(|owner| peer_uid == 0 || owner.uid == peer_uid)
                     .map(|owner| owner.dirs.logs.clone());
                 let info = command::InfoResponse {
                     version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1160,7 +1117,7 @@ impl DaemonState {
                     Ok(Response::StartClient(command::StartClientResponse::AlreadyRunning))
                 }
                 (Shutdown::None, None) => {
-                    let owner = match self.resolve_owner(peer_uid) {
+                    let owner = match WorkerOwner::from_uid(peer_uid) {
                         Ok(owner) => owner,
                         Err(error) => {
                             tracing::warn!(%error, peer_uid, "cannot start a worker for this caller");
@@ -1556,25 +1513,12 @@ impl DaemonState {
             "created TUN fd passing socket (parent end)"
         );
 
-        // The override is the worker's cwd, so it must exist before spawn; only one pinned owner ever uses it.
-        if let Some(state_home) = self.cli.state_home.as_deref() {
-            DirBuilder::new()
-                .mode(0o700)
-                .recursive(true)
-                .create(state_home)
-                .and_then(|()| std::os::unix::fs::chown(state_home, Some(owner.uid), Some(owner.gid)))
-                .map_err(|err| {
-                    tracing::error!(error = ?err, path = %state_home.display(), "unable to prepare state home");
-                    format!("state home: {err}")
-                })?;
-        }
-
         let mut worker_command = TokioCommand::new(&self.worker_binary);
 
         // Root's environment stays (RUST_LOG, GNOSISVPN_CLIENT_SESSION_PORT_RANGE, HOPRD_CURVY_*);
         // only the identity of the user is overridden, for upstream crates that read it.
         worker_command
-            .current_dir(owner.working_dir(self.cli.state_home.as_deref()))
+            .current_dir(&owner.home)
             // The control channel arrives as the worker's stdin: spawn dup2s the fd
             // onto fd 0 in the child, so no fd number crosses the environment and
             // no CLOEXEC toggling is needed.
@@ -1915,18 +1859,12 @@ mod tests {
     const BOB: u32 = 1001;
 
     #[test]
-    fn pinned_mode_gates_nobody() {
-        assert!(gate(true, Some(ALICE), &LibCommand::Status, BOB).is_none());
-        assert!(gate(true, Some(ALICE), &LibCommand::StartClient(Duration::from_secs(1)), 0).is_none());
-    }
-
-    #[test]
     fn without_an_owner_everything_is_open_except_owning_as_root() {
-        assert!(gate(false, None, &LibCommand::Status, BOB).is_none());
-        assert!(gate(false, None, &LibCommand::StopClient, BOB).is_none());
-        assert!(gate(false, None, &LibCommand::StartClient(Duration::from_secs(1)), BOB).is_none());
+        assert!(gate(None, &LibCommand::Status, BOB).is_none());
+        assert!(gate(None, &LibCommand::StopClient, BOB).is_none());
+        assert!(gate(None, &LibCommand::StartClient(Duration::from_secs(1)), BOB).is_none());
         assert!(matches!(
-            gate(false, None, &LibCommand::StartClient(Duration::from_secs(1)), 0),
+            gate(None, &LibCommand::StartClient(Duration::from_secs(1)), 0),
             Some(Response::RootCannotOwnWorker)
         ));
     }
@@ -1941,21 +1879,21 @@ mod tests {
             LibCommand::StartClient(Duration::from_secs(1)),
         ] {
             assert!(
-                matches!(gate(false, Some(ALICE), &cmd, BOB), Some(Response::InUseByOtherUser)),
+                matches!(gate(Some(ALICE), &cmd, BOB), Some(Response::InUseByOtherUser)),
                 "{cmd:?}"
             );
-            assert!(gate(false, Some(ALICE), &cmd, ALICE).is_none(), "{cmd:?}");
+            assert!(gate(Some(ALICE), &cmd, ALICE).is_none(), "{cmd:?}");
         }
-        assert!(gate(false, Some(ALICE), &LibCommand::Ping, BOB).is_none());
-        assert!(gate(false, Some(ALICE), &LibCommand::Info, BOB).is_none());
+        assert!(gate(Some(ALICE), &LibCommand::Ping, BOB).is_none());
+        assert!(gate(Some(ALICE), &LibCommand::Info, BOB).is_none());
     }
 
     #[test]
     fn root_reads_and_stops_but_never_owns() {
-        assert!(gate(false, Some(ALICE), &LibCommand::Status, 0).is_none());
-        assert!(gate(false, Some(ALICE), &LibCommand::StopClient, 0).is_none());
+        assert!(gate(Some(ALICE), &LibCommand::Status, 0).is_none());
+        assert!(gate(Some(ALICE), &LibCommand::StopClient, 0).is_none());
         assert!(matches!(
-            gate(false, Some(ALICE), &LibCommand::StartClient(Duration::from_secs(1)), 0),
+            gate(Some(ALICE), &LibCommand::StartClient(Duration::from_secs(1)), 0),
             Some(Response::RootCannotOwnWorker)
         ));
     }

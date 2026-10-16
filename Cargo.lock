@@ -4501,7 +4501,6 @@ dependencies = [
  "exitcode",
  "futures",
  "gnosis_vpn-lib",
- "humantime",
  "libc",
  "neptun",
  "notify",
