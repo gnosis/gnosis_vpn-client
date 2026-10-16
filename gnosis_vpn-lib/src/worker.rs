@@ -96,7 +96,12 @@ pub fn resolve_binary(path: &Path) -> Result<PathBuf, Error> {
 /// Runs `<binary> --version` as the owner: one check for exec permission and version in a single step.
 pub async fn probe_version(binary: &Path, owner: &WorkerOwner, expected: &str) -> Result<(), Error> {
     let mut command = Command::new(binary);
-    command.arg("--version").uid(owner.uid).gid(owner.gid);
+    // A timed-out probe must not survive as an orphan.
+    command
+        .arg("--version")
+        .uid(owner.uid)
+        .gid(owner.gid)
+        .kill_on_drop(true);
     let output = time::timeout(VERSION_PROBE_TIMEOUT, command.run_stdout(Logs::Print))
         .await
         .map_err(|_| Error::ProbeTimeout(VERSION_PROBE_TIMEOUT))??;

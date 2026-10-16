@@ -13,11 +13,11 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{DirBuilder, File};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr};
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{self, Stdio};
@@ -1412,6 +1412,10 @@ impl DaemonState {
     }
 
     async fn incoming_worker_exit(&mut self, status: process::ExitStatus) -> Result<(), exitcode::ExitCode> {
+        // Lines were sent before the exit but select! may pick the exit first; a late connect would leak the target to the next owner.
+        while let Ok(line) = self.incoming_worker_channel.1.try_recv() {
+            self.incoming_worker_line(line).await?;
+        }
         self.worker_child = None;
         self.probing = false;
         // A dead worker's device must never be handed to its replacement as a reusable one.
@@ -1551,6 +1555,19 @@ impl DaemonState {
             fd = std::os::fd::AsRawFd::as_raw_fd(&parent_tun_socket),
             "created TUN fd passing socket (parent end)"
         );
+
+        // The override is the worker's cwd, so it must exist before spawn; only one pinned owner ever uses it.
+        if let Some(state_home) = self.cli.state_home.as_deref() {
+            DirBuilder::new()
+                .mode(0o700)
+                .recursive(true)
+                .create(state_home)
+                .and_then(|()| std::os::unix::fs::chown(state_home, Some(owner.uid), Some(owner.gid)))
+                .map_err(|err| {
+                    tracing::error!(error = ?err, path = %state_home.display(), "unable to prepare state home");
+                    format!("state home: {err}")
+                })?;
+        }
 
         let mut worker_command = TokioCommand::new(&self.worker_binary);
 
