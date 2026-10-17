@@ -136,7 +136,6 @@ pub async fn startup_sweep() {
 
 /// Reset the killswitch firewall by its fixed anchor/table name. Idempotent and safe
 /// to call when nothing is installed, so it runs unconditionally at every start.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn reset_leftover_killswitch(pf_was_enabled: Option<bool>) -> bool {
     match gnosis_vpn_lib::killswitch::Firewall::new() {
         Ok(mut firewall) => {
@@ -152,11 +151,6 @@ fn reset_leftover_killswitch(pf_was_enabled: Option<bool>) -> bool {
             false
         }
     }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn reset_leftover_killswitch(_pf_was_enabled: Option<bool>) -> bool {
-    true
 }
 
 /// Remove WAN-scoped bypass routes recorded by a previous root. Best-effort: a route
@@ -198,11 +192,6 @@ async fn remove_bypass_routes(routes: &[(String, String)]) -> Vec<(String, Strin
         }
     }
     failed
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-async fn remove_bypass_routes(_routes: &[(String, String)]) -> Vec<(String, String)> {
-    Vec::new()
 }
 
 /// Persist `state` at the first writable candidate path.
