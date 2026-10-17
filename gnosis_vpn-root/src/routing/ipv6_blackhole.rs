@@ -5,13 +5,10 @@
 //! router-provided default. Best-effort by design: a failure logs a warning and
 //! never fails the connection.
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use gnosis_vpn_lib::shell_command_ext::{Logs, ShellCommandExt};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use tokio::process::Command;
 
 /// The two /1 halves that together blackhole all of IPv6 space.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
 const BLACKHOLE_DESTINATIONS: [&str; 2] = ["::/1", "8000::/1"];
 
 /// Argv for `ip` to add one blackhole destination on Linux.
@@ -97,14 +94,6 @@ pub async fn remove() -> bool {
         }
     }
     removed
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub async fn add() {}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub async fn remove() -> bool {
-    true
 }
 
 #[cfg(test)]
