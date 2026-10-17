@@ -234,7 +234,6 @@ pub struct InfoResponse {
     pub log_file: Option<PathBuf>,
     pub package_version: Option<String>,
     /// The owner's daily-rolled worker logs; `None` for callers who are neither the owner nor root.
-    #[serde(default)]
     pub worker_log_dir: Option<PathBuf>,
 }
 
