@@ -1412,7 +1412,7 @@ impl Core {
     }
 
     async fn determine_next_phase_from_safe_disk_query(&mut self, results_sender: &mpsc::Sender<Results>) {
-        let res = hopr_config::read_safe(self.worker_params.state_home()).await;
+        let res = hopr_config::read_safe(&self.worker_params.network_cache_dir()).await;
         match res {
             Ok(safe_module) => {
                 tracing::debug!(?safe_module, "found existing safe module - starting hopr runner");
@@ -1497,13 +1497,13 @@ impl Core {
 
     fn spawn_store_safe(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_on_shutdown.clone();
-        let state_home = self.worker_params.state_home();
+        let network_cache_dir = self.worker_params.network_cache_dir();
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    runner::persist_safe(state_home, safe_module, results_sender).await;
+                    runner::persist_safe(network_cache_dir, safe_module, results_sender).await;
                 })
                 .await
         });
@@ -2313,7 +2313,7 @@ impl Core {
                 self.config.strategy.clone().into(),
                 self.config
                     .pix_strategy
-                    .to_entry_config(self.worker_params.state_home()),
+                    .to_entry_config(self.worker_params.pix_state_dir()),
             )
             .await
         {
@@ -2552,26 +2552,21 @@ mod tests {
 
     async fn fresh_core() -> TestCore {
         let state_home = tempfile::tempdir().expect("temp dir");
-        // Service start creates this; the generated pass file lands in it.
-        let pass_dir = identity::pass_file(state_home.path().to_path_buf())
-            .parent()
-            .expect("pass file dir")
-            .to_path_buf();
-        tokio::fs::create_dir_all(pass_dir).await.expect("state home layout");
         let path = state_home.path().join("config.toml");
         let geoip_db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/geoip-country.mmdb");
         let toml = format!("version = 7\ngeoip_db = {:?}\n", geoip_db);
         tokio::fs::write(&path, toml).await.expect("write config");
         let config = crate::config::read(&path).await.expect("valid config");
         let worker_params = crate::worker_params::WorkerParams::new(
-            None,
-            None,
             crate::worker_params::ConfigFileMode::Manual(path),
             crate::worker_params::AllowFlags::default(),
             "https://blokli.invalid".parse().expect("valid url"),
             net::Ipv4Addr::new(203, 0, 113, 7),
-            state_home.path().to_path_buf(),
+            crate::dirs::user_dirs(state_home.path(), None),
+            "test-net".to_string(),
         );
+        // The worker creates this before Core::init; the generated pass file lands in it.
+        worker_params.ensure_dirs().expect("state home layout");
         let (outgoing, from_core) = mpsc::channel(32);
         let (core, _) = Core::init(config, worker_params, None, outgoing)
             .await

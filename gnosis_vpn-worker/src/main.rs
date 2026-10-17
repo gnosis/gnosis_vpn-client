@@ -12,10 +12,10 @@ use std::os::unix::net::UnixStream;
 use std::process;
 use std::time::Duration;
 
-use gnosis_vpn_lib::core::Core;
+use gnosis_vpn_lib::core::{self, Core};
 use gnosis_vpn_lib::event::{CoreToWorker, ResponseFromRoot, RootToWorker, WorkerToCore, WorkerToRoot};
 use gnosis_vpn_lib::hopr::hopr_lib;
-use gnosis_vpn_lib::{command, config, logging, socket, worker_params};
+use gnosis_vpn_lib::{command, config, dirs, logging, socket, worker_params};
 
 mod cli;
 // Avoid musl's default allocator due to degraded performance
@@ -24,13 +24,7 @@ mod cli;
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-struct LoggingHandle {
-    reload_handle: logging::LogReloadHandle,
-    log_path: std::path::PathBuf,
-}
-
 struct State {
-    log_handle: Option<LoggingHandle>,
     core_task: JoinSet<()>,
     core_cancel: CancellationToken,
     root_socket_writer: BufWriter<WriteHalf<TokioUnixStream>>,
@@ -183,7 +177,7 @@ fn setup_tun_fd_socket(control_socket: &UnixStream) -> Result<(), exitcode::Exit
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Set up logging
-    let log_handle = setup_logging(&args.log_file)?;
+    setup_logging(&args.log_file)?;
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         "starting {}",
@@ -208,7 +202,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     let writer = BufWriter::new(writer_half);
 
     // enter main loop
-    let mut state = State::new(log_handle, writer);
+    let mut state = State::new(writer);
     let res = state.daemon_loop(socket_receiver).await;
 
     // cancel running tasks and run teardown logic
@@ -269,34 +263,35 @@ async fn main_inner() {
     }
 }
 
-fn setup_logging(log_file: &Option<std::path::PathBuf>) -> Result<Option<LoggingHandle>, exitcode::ExitCode> {
-    match log_file {
-        Some(log_path) => {
-            let fmt_layer = logging::use_file_fmt_layer(&log_path.to_string_lossy()).map_err(|err| {
-                eprintln!("Failed to open log layer for file {}: {}", log_path.display(), err);
-                exitcode::IOERR
-            })?;
-            let handle = logging::setup_log_file(fmt_layer).map_err(|err| {
-                eprintln!("Failed to open log file {}: {}", log_path.display(), err);
-                exitcode::IOERR
-            })?;
-            let lh = LoggingHandle {
-                reload_handle: handle,
-                log_path: log_path.clone(),
-            };
-            Ok(Some(lh))
-        }
-        None => {
-            logging::setup_stdout();
-            Ok(None)
-        }
-    }
+/// Root passes `<logs>/worker.log`; the worker owns that dir and rolls `worker.log.YYYY-MM-DD` itself.
+fn setup_logging(log_file: &Option<std::path::PathBuf>) -> Result<(), exitcode::ExitCode> {
+    let Some(log_path) = log_file else {
+        logging::setup_stdout();
+        return Ok(());
+    };
+    let (Some(log_dir), Some(prefix)) = (log_path.parent(), log_path.file_name()) else {
+        eprintln!("Log file path {} has no directory or file name", log_path.display());
+        return Err(exitcode::USAGE);
+    };
+    dirs::ensure_private_dir(log_dir).map_err(|err| {
+        eprintln!("Failed to create log directory {}: {}", log_dir.display(), err);
+        exitcode::CANTCREAT
+    })?;
+    let fmt_layer = logging::make_rolling_fmt_layer(log_dir, &prefix.to_string_lossy()).map_err(|err| {
+        eprintln!("Failed to open rolling log in {}: {}", log_dir.display(), err);
+        exitcode::CANTCREAT
+    })?;
+    // The reload handle only matters for root's SIGHUP rotation; the rolling appender needs none.
+    logging::setup_log_file(fmt_layer).map_err(|err| {
+        eprintln!("Failed to set up logging in {}: {}", log_dir.display(), err);
+        exitcode::CANTCREAT
+    })?;
+    Ok(())
 }
 
 impl State {
-    pub fn new(log_handle: Option<LoggingHandle>, root_socket_writer: BufWriter<WriteHalf<TokioUnixStream>>) -> Self {
+    pub fn new(root_socket_writer: BufWriter<WriteHalf<TokioUnixStream>>) -> Self {
         Self {
-            log_handle,
             core_task: JoinSet::new(),
             core_cancel: CancellationToken::new(),
             root_socket_writer,
@@ -311,7 +306,6 @@ impl State {
     ) -> IncomingResolution {
         match cmd {
             RootToWorker::Shutdown => self.cmd_shutdown().await,
-            RootToWorker::RotateLogs => self.cmd_rotate_logs().await,
             RootToWorker::StartupParams {
                 config,
                 worker_params,
@@ -347,29 +341,6 @@ impl State {
         }
     }
 
-    async fn cmd_rotate_logs(&self) -> IncomingResolution {
-        let log_handle = match &self.log_handle {
-            Some(handle) => handle,
-            None => {
-                tracing::warn!("received rotate logs command from root but no log file configured - ignoring");
-                return IncomingResolution::SustainLoop;
-            }
-        };
-        tracing::info!("received rotate logs command from root");
-        let res = logging::use_file_fmt_layer(&log_handle.log_path.to_string_lossy())
-            .map(|new_layer| log_handle.reload_handle.reload(new_layer));
-        match res {
-            Ok(_) => {
-                tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
-                IncomingResolution::SustainLoop
-            }
-            Err(e) => {
-                eprintln!("failed to reopen log file {:?}: {}", log_handle.log_path, e);
-                IncomingResolution::Shutdown(exitcode::IOERR)
-            }
-        }
-    }
-
     async fn cmd_startup_params(
         &mut self,
         config: config::Config,
@@ -383,6 +354,11 @@ impl State {
             return IncomingResolution::SustainLoop;
         }
         tracing::debug!(?config, ?worker_params, "received startup params from root");
+        // The per-network tree must exist before init writes the pass file into it.
+        if let Err(err) = worker_params.ensure_dirs() {
+            tracing::error!(error = %err, network = worker_params.network(), "failed to create per-user state directories");
+            return IncomingResolution::Shutdown(exitcode::CANTCREAT);
+        }
         let (sender, mut core_to_worker_receiver) = mpsc::channel(32);
         let res_core = Core::init(config, worker_params, target_dest_id, sender).await;
         match (res_core, worker_to_core_receiver_wrapper.take()) {
@@ -416,6 +392,11 @@ impl State {
             (Ok(_), None) => {
                 tracing::error!("failed to initialize core logic - exhausted worker-to-core channel");
                 IncomingResolution::Shutdown(exitcode::SOFTWARE)
+            }
+            // Identity trouble is an init failure root recovers from; anything else still takes it down.
+            (Err(err @ core::Error::HoprParams(_)), _) => {
+                tracing::error!(error = %err, "failed to load or generate the HOPR identity");
+                IncomingResolution::Shutdown(exitcode::CANTCREAT)
             }
             (Err(err), _) => {
                 tracing::error!(error = %err, "failed to initialize core logic");

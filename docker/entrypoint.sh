@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-state_home="${GNOSISVPN_HOME:-/var/lib/gnosisvpn}"
-mkdir -p "${state_home}"
-chown -R gnosisvpn:gnosisvpn "${state_home}"
+# A mounted identity arrives with the host's ownership; the worker runs as gnosisvpn
+chown -R gnosisvpn:gnosisvpn /var/lib/gnosisvpn
 
+# The worker runs as whoever starts it: `docker exec -u gnosisvpn gnosis_vpn-client gnosis_vpn-ctl start-client 10m`
 exec ./gnosis_vpn-root --worker-binary /app/gnosis_vpn-worker "$@"

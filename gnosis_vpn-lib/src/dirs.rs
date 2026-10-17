@@ -1,70 +1,131 @@
-use thiserror::Error;
+use serde::{Deserialize, Serialize};
 
 use std::fs::DirBuilder;
-use std::os::unix::fs::{self as unix_fs, DirBuilderExt};
-use std::path::PathBuf;
+use std::os::unix::fs::DirBuilderExt;
+use std::path::{Path, PathBuf};
+
+/// The per-user directories the worker keeps its state in; root computes them, the worker creates them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UserDirs {
+    pub data: PathBuf,
+    pub cache: PathBuf,
+    pub logs: PathBuf,
+}
 
 pub const ENV_VAR_STATE_HOME: &str = "GNOSISVPN_HOME";
 
+/// Pure function of home, override and platform; root never creates or chowns the override (symlink chown = root hole).
+pub fn user_dirs(home: &Path, state_home_override: Option<&Path>) -> UserDirs {
+    if let Some(root) = state_home_override {
+        return UserDirs {
+            data: root.to_path_buf(),
+            cache: root.join("cache"),
+            logs: root.join("logs"),
+        };
+    }
+    platform_user_dirs(home)
+}
+
 #[cfg(target_os = "linux")]
-pub const DEFAULT_STATE_HOME: &str = "/var/lib/gnosisvpn";
+fn platform_user_dirs(home: &Path) -> UserDirs {
+    UserDirs {
+        data: home.join(".local/share/gnosisvpn"),
+        cache: home.join(".cache/gnosisvpn"),
+        logs: home.join(".local/state/gnosisvpn"),
+    }
+}
+
 #[cfg(target_os = "macos")]
-pub const DEFAULT_STATE_HOME: &str = "/Library/Application Support/GnosisVPN";
-
-const CONFIG_DIRECTORY: &str = ".config";
-const CACHE_DIRECTORY: &str = ".cache";
-
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("Error ensuring home directory: {0}")]
-    HomeFolder(DirError),
-    #[error("Error ensuring cache directory: {0}")]
-    CacheFolder(DirError),
-    #[error("Error ensuring config directory: {0}")]
-    ConfigFolder(DirError),
+fn platform_user_dirs(home: &Path) -> UserDirs {
+    UserDirs {
+        data: home.join("Library/Application Support/GnosisVPN"),
+        cache: home.join("Library/Caches/GnosisVPN"),
+        logs: home.join("Library/Logs/GnosisVPN"),
+    }
 }
 
-#[derive(Debug, Error)]
-pub enum DirError {
-    #[error("Cannot create directory: {0}")]
-    Creation(String),
-    #[error("Cannot adjust ownership: {0}")]
-    Ownership(String),
+impl UserDirs {
+    /// Identity and PIX pool state of one network; an empty dir means a fresh identity.
+    pub fn network_data(&self, network: &str) -> PathBuf {
+        self.data.join("networks").join(network)
+    }
+
+    pub fn network_cache(&self, network: &str) -> PathBuf {
+        self.cache.join("networks").join(network)
+    }
+
+    pub fn pix_state(&self, network: &str) -> PathBuf {
+        self.network_data(network).join("pix")
+    }
 }
 
-// Sets up the required directories for the worker, ensuring they are owned by the worker user
-// tracing is not yet enabled so we cannot use it
-pub fn setup_home(home: PathBuf, uid: u32, gid: u32) -> Result<(), Error> {
-    ensure_dir(home.clone(), 0o755, uid, gid).map_err(Error::HomeFolder)?;
-    let cache_path = home.join(CACHE_DIRECTORY);
-    ensure_dir(cache_path, 0o700, uid, gid).map_err(Error::CacheFolder)?;
-    let config_path = home.join(CONFIG_DIRECTORY);
-    ensure_dir(config_path, 0o700, uid, gid).map_err(Error::ConfigFolder)?;
-    Ok(())
+/// Creates `path` private to the user; parents outside our own tree keep the umask mode.
+pub fn ensure_private_dir(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    DirBuilder::new().mode(0o700).recursive(true).create(path)
 }
 
-pub fn cache_dir(home: PathBuf, file: &str) -> PathBuf {
-    home.join(CACHE_DIRECTORY).join(file)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-pub fn config_dir(home: PathBuf, file: &str) -> PathBuf {
-    home.join(CONFIG_DIRECTORY).join(file)
-}
+    #[test]
+    fn override_puts_cache_and_logs_below_it() {
+        let dirs = user_dirs(Path::new("/home/alice"), Some(Path::new("/var/lib/gnosisvpn")));
+        assert_eq!(dirs.data, PathBuf::from("/var/lib/gnosisvpn"));
+        assert_eq!(dirs.cache, PathBuf::from("/var/lib/gnosisvpn/cache"));
+        assert_eq!(dirs.logs, PathBuf::from("/var/lib/gnosisvpn/logs"));
+    }
 
-// Ensures that the specified directory exists with the given permissions and ownership.
-pub fn ensure_dir(path: PathBuf, mode: u32, uid: u32, gid: u32) -> Result<(), DirError> {
-    DirBuilder::new()
-        .recursive(true)
-        .mode(mode)
-        .create(path.clone())
-        .map_err(|error| {
-            let msg = format!("Failed to create directory at {path}: {error:?}", path = path.display());
-            DirError::Creation(msg)
-        })?;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_follows_the_xdg_layout() {
+        let dirs = user_dirs(Path::new("/home/alice"), None);
+        assert_eq!(dirs.data, PathBuf::from("/home/alice/.local/share/gnosisvpn"));
+        assert_eq!(dirs.cache, PathBuf::from("/home/alice/.cache/gnosisvpn"));
+        assert_eq!(dirs.logs, PathBuf::from("/home/alice/.local/state/gnosisvpn"));
+    }
 
-    unix_fs::chown(path.clone(), Some(uid), Some(gid)).map_err(|error| {
-        let msg = format!("Failed to set ownership at {path}: {error:?}", path = path.display());
-        DirError::Ownership(msg)
-    })?;
-    Ok(())
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_follows_the_library_layout() {
+        let dirs = user_dirs(Path::new("/Users/alice"), None);
+        assert_eq!(
+            dirs.data,
+            PathBuf::from("/Users/alice/Library/Application Support/GnosisVPN")
+        );
+        assert_eq!(dirs.cache, PathBuf::from("/Users/alice/Library/Caches/GnosisVPN"));
+        assert_eq!(dirs.logs, PathBuf::from("/Users/alice/Library/Logs/GnosisVPN"));
+    }
+
+    #[test]
+    fn network_state_is_keyed_by_network_name() {
+        let dirs = user_dirs(Path::new("/home/alice"), Some(Path::new("/srv/gvpn")));
+        assert_eq!(
+            dirs.network_data("jura-dev"),
+            PathBuf::from("/srv/gvpn/networks/jura-dev")
+        );
+        assert_eq!(
+            dirs.network_cache("jura-dev"),
+            PathBuf::from("/srv/gvpn/cache/networks/jura-dev")
+        );
+        assert_eq!(
+            dirs.pix_state("jura-dev"),
+            PathBuf::from("/srv/gvpn/networks/jura-dev/pix")
+        );
+    }
+
+    #[test]
+    fn private_dir_is_created_with_mode_0700() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let path = tmp.path().join("outer").join("inner");
+        ensure_private_dir(&path).expect("create");
+        let mode = std::fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        // Creating it again is a no-op, not an error.
+        ensure_private_dir(&path).expect("idempotent");
+    }
 }

@@ -6,8 +6,7 @@ RUN \
     apk add --no-cache --update wireguard-tools && \
     rm -rf /tmp/*
 
-# gnosis_vpn-root execs the worker under this uid/gid after an NSS lookup
-# (see gnosis_vpn-lib/src/worker.rs) — it must be a real user, not just a config value.
+# The worker runs as whoever calls `start-client`, so ctl runs as this user (`docker exec -u gnosisvpn`), which needs a home.
 RUN adduser -D -h /var/lib/gnosisvpn gnosisvpn
 
 WORKDIR /app
