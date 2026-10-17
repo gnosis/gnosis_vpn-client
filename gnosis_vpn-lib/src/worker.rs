@@ -45,7 +45,7 @@ pub struct WorkerOwner {
 }
 
 impl WorkerOwner {
-    pub fn from_uid(uid: u32) -> Result<Self, Error> {
+    pub fn from_uid(uid: u32, state_home_override: Option<&Path>) -> Result<Self, Error> {
         let user = uzers::get_user_by_uid(uid).ok_or(Error::UserNotFound { uid })?;
         let home = user.home_dir().to_path_buf();
         if !home.is_dir() {
@@ -55,7 +55,7 @@ impl WorkerOwner {
             uid,
             gid: user.primary_group_id(),
             name: user.name().to_string_lossy().to_string(),
-            dirs: dirs::user_dirs(&home),
+            dirs: dirs::user_dirs(&home, state_home_override),
             home,
         })
     }

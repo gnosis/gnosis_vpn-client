@@ -351,7 +351,7 @@ mod tests {
             AllowFlags::default(),
             url("https://blokli.example.com/"),
             BLOKLI_IP,
-            dirs::user_dirs(tmp),
+            dirs::user_dirs(tmp, None),
             "jura-dev".to_string(),
         )
     }

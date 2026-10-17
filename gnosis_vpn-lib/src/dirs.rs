@@ -12,9 +12,22 @@ pub struct UserDirs {
     pub logs: PathBuf,
 }
 
-/// Pure function of the passwd home and the platform.
+pub const ENV_VAR_STATE_HOME: &str = "GNOSISVPN_HOME";
+
+/// Pure function of home, override and platform; root never creates or chowns the override (symlink chown = root hole).
+pub fn user_dirs(home: &Path, state_home_override: Option<&Path>) -> UserDirs {
+    if let Some(root) = state_home_override {
+        return UserDirs {
+            data: root.to_path_buf(),
+            cache: root.join("cache"),
+            logs: root.join("logs"),
+        };
+    }
+    platform_user_dirs(home)
+}
+
 #[cfg(target_os = "linux")]
-pub fn user_dirs(home: &Path) -> UserDirs {
+fn platform_user_dirs(home: &Path) -> UserDirs {
     UserDirs {
         data: home.join(".local/share/gnosisvpn"),
         cache: home.join(".cache/gnosisvpn"),
@@ -23,7 +36,7 @@ pub fn user_dirs(home: &Path) -> UserDirs {
 }
 
 #[cfg(target_os = "macos")]
-pub fn user_dirs(home: &Path) -> UserDirs {
+fn platform_user_dirs(home: &Path) -> UserDirs {
     UserDirs {
         data: home.join("Library/Application Support/GnosisVPN"),
         cache: home.join("Library/Caches/GnosisVPN"),
@@ -58,10 +71,18 @@ pub fn ensure_private_dir(path: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn override_puts_cache_and_logs_below_it() {
+        let dirs = user_dirs(Path::new("/home/alice"), Some(Path::new("/var/lib/gnosisvpn")));
+        assert_eq!(dirs.data, PathBuf::from("/var/lib/gnosisvpn"));
+        assert_eq!(dirs.cache, PathBuf::from("/var/lib/gnosisvpn/cache"));
+        assert_eq!(dirs.logs, PathBuf::from("/var/lib/gnosisvpn/logs"));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_follows_the_xdg_layout() {
-        let dirs = user_dirs(Path::new("/home/alice"));
+        let dirs = user_dirs(Path::new("/home/alice"), None);
         assert_eq!(dirs.data, PathBuf::from("/home/alice/.local/share/gnosisvpn"));
         assert_eq!(dirs.cache, PathBuf::from("/home/alice/.cache/gnosisvpn"));
         assert_eq!(dirs.logs, PathBuf::from("/home/alice/.local/state/gnosisvpn"));
@@ -70,7 +91,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_follows_the_library_layout() {
-        let dirs = user_dirs(Path::new("/Users/alice"));
+        let dirs = user_dirs(Path::new("/Users/alice"), None);
         assert_eq!(
             dirs.data,
             PathBuf::from("/Users/alice/Library/Application Support/GnosisVPN")
@@ -81,11 +102,7 @@ mod tests {
 
     #[test]
     fn network_state_is_keyed_by_network_name() {
-        let dirs = UserDirs {
-            data: PathBuf::from("/srv/gvpn"),
-            cache: PathBuf::from("/srv/gvpn/cache"),
-            logs: PathBuf::from("/srv/gvpn/logs"),
-        };
+        let dirs = user_dirs(Path::new("/home/alice"), Some(Path::new("/srv/gvpn")));
         assert_eq!(
             dirs.network_data("jura-dev"),
             PathBuf::from("/srv/gvpn/networks/jura-dev")

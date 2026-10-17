@@ -4,7 +4,7 @@ use url::Url;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
-use gnosis_vpn_lib::dirs::UserDirs;
+use gnosis_vpn_lib::dirs::{self, UserDirs};
 use gnosis_vpn_lib::worker_params::{self, WorkerParams};
 use gnosis_vpn_lib::{config, hopr, logging, socket};
 
@@ -31,6 +31,10 @@ pub struct Cli {
         default_value = config::DEFAULT_PATH,
         )]
     pub config_path: PathBuf,
+
+    /// State directory for every caller's worker instead of their own home; the calling user must be able to write it
+    #[arg(long, env = dirs::ENV_VAR_STATE_HOME)]
+    pub state_home: Option<PathBuf>,
 
     /// Log file path - provide if you want the service to manage the log file
     #[arg(

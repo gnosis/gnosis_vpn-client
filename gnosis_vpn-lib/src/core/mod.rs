@@ -2562,7 +2562,7 @@ mod tests {
             crate::worker_params::AllowFlags::default(),
             "https://blokli.invalid".parse().expect("valid url"),
             net::Ipv4Addr::new(203, 0, 113, 7),
-            crate::dirs::user_dirs(state_home.path()),
+            crate::dirs::user_dirs(state_home.path(), None),
             "test-net".to_string(),
         );
         // The worker creates this before Core::init; the generated pass file lands in it.

@@ -70,7 +70,9 @@ to; it is never configured. Per user and network:
 | safe cache `hopr.safe`                           | `~/.cache/gnosisvpn/networks/<network>/`       | `~/Library/Caches/GnosisVPN/networks/<network>/`              |
 | worker logs `worker.log.YYYY-MM-DD`              | `~/.local/state/gnosisvpn/`                    | `~/Library/Logs/GnosisVPN/`                                   |
 
-An empty `networks/<network>/`
+With `--state-home <dir>` the same layout sits under `<dir>/`, `<dir>/cache/`
+and `<dir>/logs/` for every caller; the calling user must be able to write to
+it, root neither creates nor chowns it. An empty `networks/<network>/`
 means a fresh identity is generated; `hopr.pass` is `0600`, the directories are
 `0700`. The worker keeps seven daily log files; the root log
 (`--log-file`) is root-owned and rotated by logrotate/newsyslog via SIGHUP as
@@ -110,6 +112,9 @@ sudo apparmor_parser -r /etc/apparmor.d/wg-quick`
 
 - `GNOSISVPN_WORKER_BINARY` / `--worker-binary`: the worker binary to spawn.
   Defaults to `./gnosis_vpn-worker`.
+
+- `GNOSISVPN_HOME` / `--state-home`: state directory override for every
+  caller's worker (see above). Without it the per-user directories apply.
 
 ## Testing
 
