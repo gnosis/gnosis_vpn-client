@@ -159,6 +159,37 @@ Check available params and env vars via:
 
 Diagnostic/ops scripts (connectivity smoke test, capacity/latency drain tour, WireGuard traffic sampling) live in [`scripts/`](scripts/README.md).
 
+## Docker
+
+`just docker-build` then `just docker-run`. The worker runs as the image's
+`gnosisvpn` user (home `/var/lib/gnosisvpn`):
+
+```bash
+docker exec -u gnosisvpn gnosis_vpn-client gnosis_vpn-ctl start-client 10m
+```
+
+To use an existing identity, mount a writable directory holding `hopr.id` and
+`hopr.pass` at `/var/lib/gnosisvpn/.local/share/gnosisvpn/networks/<network>/`
+(`just docker-run` does this for `IDENTITY_DIR` and `NETWORK`). `<network>` is
+what root logs at startup as `blokli network`.
+
+### Migrating a pre-GNO-958 volume
+
+The image does not migrate; native installs are migrated by the installer
+through the toolkit's `gnosis_vpn-migrate`. With the container stopped, inside
+the volume (formerly `/var/lib/gnosisvpn`):
+
+```bash
+net=.local/share/gnosisvpn/networks/<network>
+mkdir -p "$net/pix"
+mv .config/gnosisvpn-hopr.id "$net/hopr.id"
+mv .config/gnosisvpn-hopr.pass "$net/hopr.pass"
+mv curvy-pix.redb "$net/pix/curvy-pix.redb" # pending PIX deposits of that identity
+rm -f .config/gnosisvpn-hopr.safe           # cache, rebuilt on start
+chmod 0600 "$net/hopr.pass"
+chmod -R go-rwx .local
+```
+
 ## Branches
 
 `main` is the experimental line (hoprd v5); `release/hoprdv4` is the stable
