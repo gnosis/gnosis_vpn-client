@@ -256,6 +256,13 @@ pub enum RootCommand {
     StopClient,
 }
 
+/// Who answers a socket command.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CommandRoute {
+    Worker(WorkerCommand),
+    Root(RootCommand),
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StopClientResponse {
     Stopped,
@@ -1037,26 +1044,24 @@ impl Display for HoprInitStatus {
     }
 }
 
-impl TryFrom<Command> for WorkerCommand {
-    type Error = RootCommand;
-
-    fn try_from(value: Command) -> Result<Self, Self::Error> {
+impl From<Command> for CommandRoute {
+    fn from(value: Command) -> Self {
         match value {
-            Command::Status => Ok(WorkerCommand::Status),
-            Command::NerdStats => Ok(WorkerCommand::NerdStats),
-            Command::Connect(dest) => Ok(WorkerCommand::Connect(dest)),
-            Command::Disconnect => Ok(WorkerCommand::Disconnect),
-            Command::Balance => Ok(WorkerCommand::Balance),
-            Command::FundingTool(secret) => Ok(WorkerCommand::FundingTool(secret)),
-            Command::Telemetry => Ok(WorkerCommand::Telemetry),
-            Command::Destinations => Ok(WorkerCommand::Destinations),
-            Command::Probe(dest) => Ok(WorkerCommand::Probe(dest)),
-            Command::Unprobe => Ok(WorkerCommand::Unprobe),
-            Command::QuickProbe(dest) => Ok(WorkerCommand::QuickProbe(dest)),
-            Command::Info => Err(RootCommand::Info),
-            Command::Ping => Err(RootCommand::Ping),
-            Command::StartClient(keepalive) => Err(RootCommand::StartClient(keepalive)),
-            Command::StopClient => Err(RootCommand::StopClient),
+            Command::Status => CommandRoute::Worker(WorkerCommand::Status),
+            Command::NerdStats => CommandRoute::Worker(WorkerCommand::NerdStats),
+            Command::Connect(dest) => CommandRoute::Worker(WorkerCommand::Connect(dest)),
+            Command::Disconnect => CommandRoute::Worker(WorkerCommand::Disconnect),
+            Command::Balance => CommandRoute::Worker(WorkerCommand::Balance),
+            Command::FundingTool(secret) => CommandRoute::Worker(WorkerCommand::FundingTool(secret)),
+            Command::Telemetry => CommandRoute::Worker(WorkerCommand::Telemetry),
+            Command::Destinations => CommandRoute::Worker(WorkerCommand::Destinations),
+            Command::Probe(dest) => CommandRoute::Worker(WorkerCommand::Probe(dest)),
+            Command::Unprobe => CommandRoute::Worker(WorkerCommand::Unprobe),
+            Command::QuickProbe(dest) => CommandRoute::Worker(WorkerCommand::QuickProbe(dest)),
+            Command::Info => CommandRoute::Root(RootCommand::Info),
+            Command::Ping => CommandRoute::Root(RootCommand::Ping),
+            Command::StartClient(keepalive) => CommandRoute::Root(RootCommand::StartClient(keepalive)),
+            Command::StopClient => CommandRoute::Root(RootCommand::StopClient),
         }
     }
 }
@@ -1159,16 +1164,19 @@ mod tests {
     /// Shell completion for `connect` lists these, so it must reach the merged map, not the config.
     #[test]
     fn listing_destinations_is_routed_to_the_worker() {
-        assert_eq!(Ok(WorkerCommand::Destinations), Command::Destinations.try_into());
+        assert_eq!(
+            CommandRoute::Worker(WorkerCommand::Destinations),
+            Command::Destinations.into()
+        );
     }
 
     #[test]
     fn probe_commands_are_routed_to_the_worker() {
         assert_eq!(
-            Ok(WorkerCommand::Probe("exit".into())),
-            Command::Probe("exit".into()).try_into()
+            CommandRoute::Worker(WorkerCommand::Probe("exit".into())),
+            Command::Probe("exit".into()).into()
         );
-        assert_eq!(Ok(WorkerCommand::Unprobe), Command::Unprobe.try_into());
+        assert_eq!(CommandRoute::Worker(WorkerCommand::Unprobe), Command::Unprobe.into());
     }
 
     #[test]
@@ -1241,7 +1249,7 @@ mod tests {
             Command::StartClient(Duration::from_secs(1)),
             Command::StopClient,
         ] {
-            assert!(WorkerCommand::try_from(cmd).is_err());
+            assert!(matches!(CommandRoute::from(cmd), CommandRoute::Root(_)));
         }
     }
 

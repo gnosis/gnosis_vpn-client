@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Stdio};
 use std::time::Duration;
 
-use gnosis_vpn_lib::command::{self, Command as LibCommand, Response, RootCommand, WorkerCommand};
+use gnosis_vpn_lib::command::{self, Command as LibCommand, CommandRoute, Response, RootCommand, WorkerCommand};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
@@ -928,8 +928,8 @@ impl DaemonState {
             });
             return Ok(());
         }
-        match WorkerCommand::try_from(cmd) {
-            Ok(w_cmd) => {
+        match CommandRoute::from(cmd) {
+            CommandRoute::Worker(w_cmd) => {
                 self.handle_hybrid_cmd(&w_cmd).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
@@ -969,7 +969,7 @@ impl DaemonState {
                     Ok(())
                 }
             }
-            Err(root_cmd) => {
+            CommandRoute::Root(root_cmd) => {
                 let response = self.incoming_root_command(root_cmd, peer_uid).await?;
                 let _ = resp.send(response).map_err(|error| {
                     tracing::error!(?error, "socket command response channel closed");
