@@ -96,7 +96,7 @@ impl WorkerParams {
         let path = identity::pass_file(&self.network_data_dir());
         let identity_pass = match fs::read_to_string(&path).await {
             Ok(p) => {
-                tracing::debug!(?path, "No HOPR identity pass provided - read from file instead");
+                tracing::debug!(?path, "read identity pass from file");
                 Ok(p)
             }
             // A half-migrated dir: generating a pass now would leave the key undecryptable for good.
@@ -109,10 +109,7 @@ impl WorkerParams {
                 Err(Error::PassFileMissing { dir })
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                tracing::debug!(
-                    ?path,
-                    "No HOPR identity pass provided - generating new one and storing alongside identity file"
-                );
+                tracing::debug!(?path, "no identity pass file - generating one next to the identity");
                 let pw = identity::generate_pass();
                 let mut file = fs::OpenOptions::new()
                     .write(true)
