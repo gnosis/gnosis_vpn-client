@@ -23,7 +23,6 @@ use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::{SessionClientMetadata, SplicedWgSession};
 use crate::hopr::{Hopr, HoprError};
 use crate::wireguard::{self, WireGuard};
-use crate::worker_params::WorkerParams;
 use crate::{ping, remote_data, wg_tunnel};
 
 use super::{Error, Event, Progress, Resume, Setback};
@@ -60,7 +59,6 @@ pub(crate) struct Runner {
     options: Options,
     wg_config: wireguard::Config,
     bridge_session: SessionClientMetadata,
-    worker_params: WorkerParams,
     prev_conn: PreviousConnection,
     cancel: CancellationToken,
     pump_tasks: TaskTracker,
@@ -70,7 +68,6 @@ impl Runner {
     pub(crate) fn new(
         spec: ConnectionSpec,
         hopr: Arc<Hopr>,
-        worker_params: WorkerParams,
         prev_conn: PreviousConnection,
         pump_lifecycle: PumpLifecycle,
     ) -> Self {
@@ -90,7 +87,6 @@ impl Runner {
             options,
             wg_config,
             bridge_session,
-            worker_params,
             prev_conn,
             cancel,
             pump_tasks,
@@ -103,15 +99,11 @@ impl Runner {
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
-        // 1. the blokli address root pinned at startup; the killswitch must exempt exactly that one
-        let blokli_ip = self.worker_params.blokli_ip();
+        // 1. Blokli joins the floor on root's side, re-resolved there while DNS is still open
 
         // 2. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
-        let mut peer_ips = gather_peer_ips(&self.hopr).await?;
-        // blokli must be in the initial snapshot so it becomes part of the permanent
-        // firewall floor and stays reachable for the duration of the connection.
-        peer_ips.push(blokli_ip);
+        let peer_ips = gather_peer_ips(&self.hopr).await?;
 
         // 3. arm the killswitch first so leaks stop as the attempt starts; the tunnel is attached at step 9
         let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
