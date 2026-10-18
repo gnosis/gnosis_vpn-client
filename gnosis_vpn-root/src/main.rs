@@ -28,7 +28,7 @@ use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::worker::{self, WorkerOwner};
-use gnosis_vpn_lib::{logging, ping, remote_data, socket};
+use gnosis_vpn_lib::{dirs, logging, ping, remote_data, socket};
 
 mod cli;
 mod device_monitor;
@@ -490,7 +490,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     // This fixed lock guards global recovery and networking state. It must be held
     // before the startup sweep, including when an alternate socket path is used.
-    let lock_path = gnosis_vpn_lib::dirs::runtime_file(DAEMON_LOCK_FILE);
+    let lock_path = dirs::runtime_file(DAEMON_LOCK_FILE);
     let _daemon_lock = try_acquire_daemon_lock_at(&lock_path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::WouldBlock {
             tracing::error!("system service is already running - cannot start another instance");
