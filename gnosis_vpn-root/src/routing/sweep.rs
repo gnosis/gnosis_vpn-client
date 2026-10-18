@@ -60,7 +60,7 @@ impl TeardownState {
 
 /// Root-owned location for the teardown state file.
 fn candidate_paths() -> [PathBuf; 1] {
-    [PathBuf::from("/var/run/gnosisvpn/teardown-state.json")]
+    [gnosis_vpn_lib::dirs::runtime_file("teardown-state.json")]
 }
 
 /// Persist `state` so a crashed root can be swept at the next start. Best-effort:
@@ -428,7 +428,12 @@ mod tests {
     fn production_state_path_is_root_owned() {
         let paths = candidate_paths();
         assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0], PathBuf::from("/var/run/gnosisvpn/teardown-state.json"));
+        assert!(
+            paths[0].starts_with(gnosis_vpn_lib::dirs::RUNTIME_DIR),
+            "{:?}",
+            paths[0]
+        );
+        assert_eq!(paths[0].file_name().unwrap(), "teardown-state.json");
     }
 
     #[test]

@@ -43,7 +43,7 @@ mod routing_actor;
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
-const DAEMON_LOCK_PATH: &str = "/var/run/gnosisvpn/daemon.lock";
+const DAEMON_LOCK_FILE: &str = "daemon.lock";
 
 fn try_acquire_daemon_lock_at(path: &Path) -> std::io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -490,12 +490,13 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     // This fixed lock guards global recovery and networking state. It must be held
     // before the startup sweep, including when an alternate socket path is used.
-    let _daemon_lock = try_acquire_daemon_lock_at(Path::new(DAEMON_LOCK_PATH)).map_err(|error| {
+    let lock_path = gnosis_vpn_lib::dirs::runtime_file(DAEMON_LOCK_FILE);
+    let _daemon_lock = try_acquire_daemon_lock_at(&lock_path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::WouldBlock {
             tracing::error!("system service is already running - cannot start another instance");
             exitcode::TEMPFAIL
         } else {
-            tracing::error!(%error, path = DAEMON_LOCK_PATH, "failed to acquire daemon lock");
+            tracing::error!(%error, path = %lock_path.display(), "failed to acquire daemon lock");
             exitcode::IOERR
         }
     })?;

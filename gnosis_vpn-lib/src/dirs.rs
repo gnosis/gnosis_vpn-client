@@ -14,6 +14,16 @@ pub struct UserDirs {
 
 pub const ENV_VAR_STATE_HOME: &str = "GNOSISVPN_HOME";
 
+/// Root's runtime files (socket, lock, crash-recovery state): `/run` per FHS 3.0, `/var/run` on macOS which has no `/run`.
+#[cfg(target_os = "linux")]
+pub const RUNTIME_DIR: &str = "/run/gnosisvpn";
+#[cfg(target_os = "macos")]
+pub const RUNTIME_DIR: &str = "/var/run/gnosisvpn";
+
+pub fn runtime_file(name: &str) -> PathBuf {
+    Path::new(RUNTIME_DIR).join(name)
+}
+
 /// Pure function of home, override and platform; root never creates or chowns the override (symlink chown = root hole).
 pub fn user_dirs(home: &Path, state_home_override: Option<&Path>) -> UserDirs {
     if let Some(root) = state_home_override {

@@ -78,7 +78,9 @@ means a fresh identity is generated; `hopr.pass` is `0600`, the directories are
 (`--log-file`) is root-owned and rotated by logrotate/newsyslog via SIGHUP as
 before. A log file that cannot be opened never stops either process: it logs
 to stdout instead and says so on stderr, and a failed reopen after SIGHUP keeps
-the current file.
+the current file. Root's own runtime files (control socket, lock,
+crash-recovery state) live in `/run/gnosisvpn/` on Linux and under `/var/run/`
+on macOS.
 
 ## Development setup
 

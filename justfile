@@ -126,7 +126,7 @@ system-tests test_binary="gnosis_vpn-system_tests":
     worker_network_dir="${worker_home}/.local/share/gnosisvpn/networks/${SYSTEM_TEST_NETWORK}"
     state_dir="/var/lib/${worker_user}"
     config_dir="/etc/${worker_user}"
-    runtime_dir="/var/run/${worker_user}"
+    runtime_dir="/run/${worker_user}"
     worker_binary="${worker_home}/gnosis_vpn-worker"
     ctl_binary="${worker_home}/gnosis_vpn-ctl"
 
