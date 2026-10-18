@@ -479,7 +479,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     })?;
 
     // setup logging
-    let reload_handle = setup_logging(&args.log_file)?;
+    let reload_handle = setup_logging(args.log_file.as_deref());
 
     // introduce ourself in the logs
     tracing::info!(
@@ -761,32 +761,13 @@ fn gate(owner_uid: Option<u32>, cmd: &LibCommand, peer_uid: u32) -> Option<Respo
     Some(Response::InUseByOtherUser)
 }
 
-fn setup_logging(
-    log_file: &Option<std::path::PathBuf>,
-) -> Result<Option<logging::LogReloadHandle>, exitcode::ExitCode> {
-    match log_file {
-        Some(log_path) => {
-            if let Some(parent) = log_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|err| {
-                    eprintln!("Failed to create log directory {}: {}", parent.display(), err);
-                    exitcode::IOERR
-                })?;
-            }
-            let fmt_layer = logging::make_file_fmt_layer(&log_path.to_string_lossy()).map_err(|err| {
-                eprintln!("Failed to create log layer for file {}: {}", log_path.display(), err);
-                exitcode::IOERR
-            })?;
-            let handle = logging::setup_log_file(fmt_layer).map_err(|err| {
-                eprintln!("Failed to open log file {}: {}", log_path.display(), err);
-                exitcode::IOERR
-            })?;
-            Ok(Some(handle))
-        }
-        None => {
-            logging::setup_stdout();
-            Ok(None)
-        }
-    }
+/// An unopenable log file degrades to stdout; only a configured file yields a reload handle for SIGHUP.
+fn setup_logging(log_file: Option<&std::path::Path>) -> Option<logging::LogReloadHandle> {
+    let Some(log_path) = log_file else {
+        logging::setup_stdout();
+        return None;
+    };
+    logging::setup_file_or_stdout(log_path, logging::make_file_fmt_layer(log_path))
 }
 
 // On macOS newsyslog service needs the pid accessible via pidfile
@@ -916,18 +897,17 @@ impl DaemonState {
             // Root-only: the worker log lives in the owner's dir and rolls itself.
             SignalMessage::RotateLogs => {
                 if let (Some(handle), Some(path)) = (&self.reload_handle, &self.cli.log_file) {
-                    let res =
-                        logging::make_file_fmt_layer(&path.to_string_lossy()).map(|new_layer| handle.reload(new_layer));
-                    match res {
-                        Ok(_) => {
-                            tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
-                            Ok(())
+                    // A failed reopen keeps the current file descriptor; a log must never stop the service.
+                    match logging::make_file_fmt_layer(path).map(|new_layer| handle.reload(new_layer)) {
+                        Ok(Ok(())) => tracing::info!("reopened log file after SIGHUP"),
+                        Ok(Err(e)) => {
+                            tracing::error!(error = %e, "failed to swap the log layer after SIGHUP, keeping the current one")
                         }
                         Err(e) => {
-                            eprintln!("failed to reopen log file {:?}: {}", path, e);
-                            Err(exitcode::IOERR)
+                            tracing::error!(path = %path.display(), error = %e, "failed to reopen log file after SIGHUP, keeping the current one")
                         }
                     }
+                    Ok(())
                 } else {
                     tracing::debug!("no log file configured, skipping log reload on SIGHUP");
                     Ok(())

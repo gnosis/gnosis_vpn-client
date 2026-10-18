@@ -15,7 +15,7 @@ use std::time::Duration;
 use gnosis_vpn_lib::core::{self, Core};
 use gnosis_vpn_lib::event::{CoreToWorker, ResponseFromRoot, RootToWorker, WorkerToCore, WorkerToRoot};
 use gnosis_vpn_lib::hopr::hopr_lib;
-use gnosis_vpn_lib::{command, config, dirs, logging, socket, worker_params};
+use gnosis_vpn_lib::{command, config, logging, socket, worker_params};
 
 mod cli;
 // Avoid musl's default allocator due to degraded performance
@@ -177,7 +177,7 @@ fn setup_tun_fd_socket(control_socket: &UnixStream) -> Result<(), exitcode::Exit
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // Set up logging
-    setup_logging(&args.log_file)?;
+    setup_logging(args.log_file.as_deref());
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         "starting {}",
@@ -263,30 +263,13 @@ async fn main_inner() {
     }
 }
 
-/// Root passes `<logs>/worker.log`; the worker owns that dir and rolls `worker.log.YYYY-MM-DD` itself.
-fn setup_logging(log_file: &Option<std::path::PathBuf>) -> Result<(), exitcode::ExitCode> {
+/// Root passes `<logs>/worker.log`; an unwritable log dir degrades to stdout, which root relays.
+fn setup_logging(log_file: Option<&std::path::Path>) {
     let Some(log_path) = log_file else {
         logging::setup_stdout();
-        return Ok(());
+        return;
     };
-    let (Some(log_dir), Some(prefix)) = (log_path.parent(), log_path.file_name()) else {
-        eprintln!("Log file path {} has no directory or file name", log_path.display());
-        return Err(exitcode::USAGE);
-    };
-    dirs::ensure_private_dir(log_dir).map_err(|err| {
-        eprintln!("Failed to create log directory {}: {}", log_dir.display(), err);
-        exitcode::CANTCREAT
-    })?;
-    let fmt_layer = logging::make_rolling_fmt_layer(log_dir, &prefix.to_string_lossy()).map_err(|err| {
-        eprintln!("Failed to open rolling log in {}: {}", log_dir.display(), err);
-        exitcode::CANTCREAT
-    })?;
-    // The reload handle only matters for root's SIGHUP rotation; the rolling appender needs none.
-    logging::setup_log_file(fmt_layer).map_err(|err| {
-        eprintln!("Failed to set up logging in {}: {}", log_dir.display(), err);
-        exitcode::CANTCREAT
-    })?;
-    Ok(())
+    logging::setup_file_or_stdout(log_path, logging::make_rolling_fmt_layer(log_path));
 }
 
 impl State {

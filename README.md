@@ -76,7 +76,9 @@ it, root neither creates nor chowns it. An empty `networks/<network>/`
 means a fresh identity is generated; `hopr.pass` is `0600`, the directories are
 `0700`. The worker keeps seven daily log files; the root log
 (`--log-file`) is root-owned and rotated by logrotate/newsyslog via SIGHUP as
-before.
+before. A log file that cannot be opened never stops either process: it logs
+to stdout instead and says so on stderr, and a failed reopen after SIGHUP keeps
+the current file.
 
 ## Development setup
 
