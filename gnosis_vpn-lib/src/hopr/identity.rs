@@ -11,7 +11,7 @@ const ID_PASS: &str = "hopr.pass";
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("keypair error: {0}")]
-    KeyPair(#[source] anyhow::Error),
+    KeyPair(String),
     #[error(transparent)]
     IO(#[from] std::io::Error),
 }
@@ -22,7 +22,7 @@ pub fn from_path(file: PathBuf, pass: String) -> Result<HoprKeys, Error> {
         password: pass.as_str(),
         id_path: id_path.as_str(),
     };
-    HoprKeys::try_from(retrieval_mode).map_err(|e| Error::KeyPair(anyhow::anyhow!(e)))
+    HoprKeys::try_from(retrieval_mode).map_err(|e| Error::KeyPair(e.to_string()))
 }
 
 pub fn file(network_data_dir: &Path) -> PathBuf {
