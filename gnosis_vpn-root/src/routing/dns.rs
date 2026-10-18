@@ -33,7 +33,6 @@ pub struct Diversion {
     pub(super) resolv_conf: Option<resolv_conf::Managed>,
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Diversion {
     /// A mechanism reversed by command, with no file of ours to hand back.
     fn by_command(mechanism: Mechanism) -> Self {
@@ -57,11 +56,6 @@ pub async fn set(interface: &str, servers: &str) -> Option<Diversion> {
     return set_linux(interface, &list).await;
     #[cfg(target_os = "macos")]
     return set_macos(interface, &list).await;
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = (interface, list);
-        None
-    }
 }
 
 /// Restore the resolver configuration that was in effect before [`set`], scoped to
@@ -71,11 +65,6 @@ pub async fn restore(interface: &str, mechanism: Mechanism) -> bool {
     return restore_linux(interface, mechanism).await;
     #[cfg(target_os = "macos")]
     return restore_macos(interface, mechanism).await;
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = (interface, mechanism);
-        true
-    }
 }
 
 /// Split the comma-separated server list into validated IP address tokens, trimming

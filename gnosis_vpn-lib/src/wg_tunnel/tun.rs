@@ -32,7 +32,7 @@ use super::{TunReceiver, TunSender};
 /// macOS (`utun` address-family prefix).
 #[cfg(target_os = "macos")]
 pub const PLATFORM_TUN_HEADER_LEN: usize = 4;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 pub const PLATFORM_TUN_HEADER_LEN: usize = 0;
 
 /// BSD `AF_INET` (2) as a 4-byte big-endian `utun` header.
