@@ -55,6 +55,14 @@ pub enum Command {
     Unprobe,
     /// Start a short-lived check of one exit; its result appears in `status`
     QuickProbe(String),
+    /// List interfaces the daemon may capture traffic on
+    TrafficInterfaces,
+    /// Begin capturing on one interface, replacing any current capture
+    TrafficStart(crate::traffic::StartRequest),
+    /// Read aggregated traffic the consumer has not seen yet
+    TrafficRead(crate::traffic::ReadRequest),
+    /// End the capture session
+    TrafficStop(crate::traffic::StopRequest),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -94,6 +102,13 @@ pub enum Response {
     Probe(ProbeResponse),
     Unprobe(UnprobeResponse),
     QuickProbe(QuickProbeResponse),
+    /// Interface catalog for the traffic capture picker
+    TrafficInterfaces(Vec<crate::traffic::Interface>),
+    TrafficStart(Result<crate::traffic::StartResponse, String>),
+    TrafficRead(crate::traffic::ReadResponse),
+    TrafficStop(crate::traffic::StopResponse),
+    /// The calling process may not control traffic capture
+    TrafficDenied,
     WorkerOffline,
     WorkerRestarting,
 }
@@ -1001,9 +1016,15 @@ impl TryFrom<Command> for WorkerCommand {
             Command::Unprobe => Ok(WorkerCommand::Unprobe),
             Command::QuickProbe(dest) => Ok(WorkerCommand::QuickProbe(dest)),
             // Commands that are not relevant for the worker
-            Command::Info | Command::Ping | Command::StartClient(_) | Command::StopClient | Command::Destinations => {
-                Err(())
-            }
+            Command::Info
+            | Command::Ping
+            | Command::StartClient(_)
+            | Command::StopClient
+            | Command::Destinations
+            | Command::TrafficInterfaces
+            | Command::TrafficStart(_)
+            | Command::TrafficRead(_)
+            | Command::TrafficStop(_) => Err(()),
         }
     }
 }

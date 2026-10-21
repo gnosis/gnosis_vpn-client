@@ -35,6 +35,7 @@ mod device_monitor;
 mod network_info;
 mod routing;
 mod routing_actor;
+mod traffic;
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
@@ -90,6 +91,7 @@ struct DaemonState {
     // keepalive instructions from service to timer loop
     keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
     routing_actor_sender: mpsc::Sender<routing_actor::Msg>,
+    traffic: traffic::TrafficService,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -108,6 +110,8 @@ enum SignalMessage {
 struct SocketCmd {
     cmd: LibCommand,
     resp: oneshot::Sender<Response>,
+    /// The peer passed the credential check for privileged capture commands.
+    traffic_authorized: bool,
 }
 
 struct WorkerChild {
@@ -192,7 +196,16 @@ async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMes
 async fn incoming_on_root_socket(
     stream: TokioUnixStream,
     socket_cmd_sender: mpsc::Sender<SocketCmd>,
+    worker_uid: u32,
 ) -> Option<JoinHandle<()>> {
+    // Peer credentials come from the kernel, never from the request payload.
+    let traffic_authorized = match stream.peer_cred() {
+        Ok(cred) => traffic::peer_may_capture(cred.uid(), cred.gid(), worker_uid),
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot read socket peer credentials");
+            false
+        }
+    };
     let (socket_reader_half, socket_writer_half) = stream.into_split();
     let socket_reader = BufReader::new(socket_reader_half);
     let res_line = socket_reader.lines().next_line().await;
@@ -203,7 +216,11 @@ async fn incoming_on_root_socket(
                 Ok(cmd) => {
                     tracing::debug!(command = ?cmd, "received socket command");
                     let (resp_sender, resp_receiver) = oneshot::channel();
-                    let socket_cmd = SocketCmd { cmd, resp: resp_sender };
+                    let socket_cmd = SocketCmd {
+                        cmd,
+                        resp: resp_sender,
+                        traffic_authorized,
+                    };
                     if let Err(err) = socket_cmd_sender.send(socket_cmd).await {
                         tracing::error!(error = ?err, "failed to send socket command to main loop");
                         return None;
@@ -241,6 +258,7 @@ async fn incoming_on_root_socket(
 
 async fn socket_listener(
     socket_path: &Path,
+    worker_uid: u32,
 ) -> Result<(CancellationToken, mpsc::Receiver<SocketCmd>), exitcode::ExitCode> {
     // The daemon lock guarantees no other instance is running, so a leftover
     // socket file is always stale — remove it without pinging.
@@ -288,7 +306,9 @@ async fn socket_listener(
             tokio::select! {
                 Ok((stream, _addr)) = listener.accept() => {
                     ongoing.spawn(async move {
-                        if let Some(handle) = incoming_on_root_socket(stream, cloned_sender).await {
+                        if let Some(handle) =
+                            incoming_on_root_socket(stream, cloned_sender, worker_uid).await
+                        {
                             handle.await.ok();
                         }
                     });
@@ -529,7 +549,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     // set up system socket
     let socket_path = args.socket_path.clone();
-    let (cancel_socket_listener, socket_listener) = socket_listener(&args.socket_path).await?;
+    let (cancel_socket_listener, socket_listener) = socket_listener(&args.socket_path, worker_user.uid).await?;
 
     // set up config file watcher
     let (cancel_config_watcher, config_receiver) = config_watcher(config_path.clone()).await?;
@@ -565,6 +585,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         worker_user,
         keep_alive_instruction_sender,
         routing_actor_sender,
+        traffic: traffic::TrafficService::new(),
     };
     if let Some(keepalive) = args.client_autostart {
         tracing::debug!(?keepalive, "autostarting worker process");
@@ -897,7 +918,24 @@ impl DaemonState {
     }
 
     async fn incoming_socket_command(&mut self, socket_cmd: SocketCmd) -> Result<(), exitcode::ExitCode> {
-        let SocketCmd { cmd, resp } = socket_cmd;
+        let SocketCmd {
+            cmd,
+            resp,
+            traffic_authorized,
+        } = socket_cmd;
+        if traffic::is_traffic_command(&cmd) {
+            // Authorize before acting: an unauthorized peer must not start or stop capture.
+            let response = if traffic_authorized {
+                self.traffic.handle(cmd).await.unwrap_or(Response::TrafficDenied)
+            } else {
+                tracing::warn!("rejected traffic command from unauthorized socket peer");
+                Response::TrafficDenied
+            };
+            let _ = resp.send(response).map_err(|error| {
+                tracing::error!(?error, "socket command response channel closed");
+            });
+            return Ok(());
+        }
         match WorkerCommand::try_from(cmd.clone()) {
             Ok(w_cmd) => {
                 self.handle_hybrid_cmd(&w_cmd).await;
@@ -1126,6 +1164,13 @@ impl DaemonState {
                     Err(exitcode::TEMPFAIL)
                 }
             },
+
+            // Traffic commands are dispatched before this point; reaching it means
+            // the socket layer did not recognize them.
+            LibCommand::TrafficInterfaces
+            | LibCommand::TrafficStart(_)
+            | LibCommand::TrafficRead(_)
+            | LibCommand::TrafficStop(_) => Ok(Response::TrafficDenied),
         }
     }
 
@@ -1284,6 +1329,10 @@ impl DaemonState {
                 Ok(())
             }
             RequestToRoot::UpdatePeerIps { peer_ips } => {
+                // The same announced addresses the killswitch exempts are the ones
+                // traffic capture associates with the mixnet transport.
+                self.traffic
+                    .update_peer_addresses(peer_ips.iter().copied().map(IpAddr::V4).collect());
                 let _ = self
                     .routing_actor_sender
                     .send(routing_actor::Msg::UpdatePeerIps { peer_ips })
@@ -1296,6 +1345,8 @@ impl DaemonState {
     async fn incoming_worker_exit(&mut self, status: process::ExitStatus) -> Result<(), exitcode::ExitCode> {
         self.worker_child = None;
         self.probing = false;
+        // A dead worker's announced peers say nothing about the next one.
+        self.traffic.clear_peer_addresses();
         // A dead worker's device must never be handed to its replacement as a reusable one.
         self.teardown_any_routing().await;
         match self.shutdown_ongoing {
@@ -1496,6 +1547,8 @@ impl DaemonState {
 
     /// Remove routing and stop ping tasks
     async fn teardown(&mut self) {
+        self.traffic.shutdown();
+        self.traffic.clear_peer_addresses();
         self.cleanup_worker_resources().await;
         if let Some(ref mut child) = self.worker_child {
             child.cancel.cancel();
