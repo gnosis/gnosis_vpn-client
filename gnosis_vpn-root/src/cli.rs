@@ -150,4 +150,39 @@ mod tests {
 
         Ok(())
     }
+
+    /// The flag set `just run-local` passes to keep all run data in one directory.
+    #[test]
+    fn parses_the_local_run_arguments() -> anyhow::Result<()> {
+        let args = Cli::try_parse_from([
+            "gnosis_vpn",
+            "--config-path",
+            "/tmp/local/config.toml",
+            "--hopr-blokli-url",
+            "http://127.0.0.1:8080",
+            "--worker-binary",
+            "/tmp/local/gnosis_vpn-worker",
+            "--state-home",
+            "/tmp/local/state",
+            "--socket-path",
+            "/tmp/local/gnosisvpn.sock",
+            "--log-file",
+            "/tmp/local/gnosisvpn.log",
+            "--pid-file",
+            "/tmp/local/gnosisvpn.pid",
+        ])?;
+
+        assert_eq!(args.config_path, PathBuf::from("/tmp/local/config.toml"));
+        assert_eq!(args.state_home, PathBuf::from("/tmp/local/state"));
+        assert_eq!(args.socket_path, PathBuf::from("/tmp/local/gnosisvpn.sock"));
+        assert_eq!(args.log_file, Some(PathBuf::from("/tmp/local/gnosisvpn.log")));
+        assert_eq!(args.pid_file, Some(PathBuf::from("/tmp/local/gnosisvpn.pid")));
+        // The worker inherits the log file through this env var.
+        assert_eq!(
+            args.worker_params(Ipv4Addr::LOCALHOST).state_home(),
+            PathBuf::from("/tmp/local/state")
+        );
+
+        Ok(())
+    }
 }

@@ -1,9 +1,33 @@
 default:
     just --list
 
-# run root binary locally with a config file and Blokli URL
-run-local config_file blokli_url binary="./target/release/gnosis_vpn-root" worker_binary="./target/release/gnosis_vpn-worker" rust_log="info":
-    sudo RUST_LOG="{{ rust_log }}" "{{ binary }}" --config-path "{{ config_file }}" --hopr-blokli-url "{{ blokli_url }}" --worker-binary "{{ worker_binary }}"
+# Identity, cache, socket, log and pid file live under data_dir instead of the
+# installed service's global paths. The daemon lock and teardown state stay
+# global on purpose: they guard host-wide routing, DNS and killswitch state.
+# Run the root binary locally with a config file and Blokli URL
+run-local config_file blokli_url binary="./target/release/gnosis_vpn-root" worker_binary="./target/release/gnosis_vpn-worker" rust_log="info" data_dir="./.local/run":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    mkdir -p "{{ data_dir }}"
+    data_dir="$(cd "{{ data_dir }}" && pwd)"
+
+    echo "data dir: ${data_dir}"
+    echo "socket:   ${data_dir}/gnosisvpn.sock"
+    echo "ctl:      just ctl-local <command> data_dir={{ data_dir }}"
+
+    sudo RUST_LOG="{{ rust_log }}" "{{ binary }}" \
+        --config-path "{{ config_file }}" \
+        --hopr-blokli-url "{{ blokli_url }}" \
+        --worker-binary "{{ worker_binary }}" \
+        --state-home "${data_dir}/state" \
+        --socket-path "${data_dir}/gnosisvpn.sock" \
+        --log-file "${data_dir}/gnosisvpn.log" \
+        --pid-file "${data_dir}/gnosisvpn.pid"
+
+# control a service started with `just run-local`
+ctl-local command data_dir="./.local/run" ctl_binary="./target/release/gnosis_vpn-ctl":
+    "{{ ctl_binary }}" --socket-path "{{ data_dir }}/gnosisvpn.sock" {{ command }}
 
 # build static linux binary (x86_64)
 build:

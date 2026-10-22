@@ -31,3 +31,6 @@ gcp-sa-*.json
 # VsCode settings
 .vscode/*
 gnosisvpn-private-key.asc
+
+# local run data (just run-local)
+/.local/
