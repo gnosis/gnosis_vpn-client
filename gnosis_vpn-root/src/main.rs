@@ -45,6 +45,13 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
 const DAEMON_LOCK_PATH: &str = "/var/run/gnosisvpn/daemon.lock";
+/// Usable bytes of `sockaddr_un::sun_path`: 104 on macOS, 108 on Linux, minus
+/// the terminator. Binding fails with an opaque OS error above this.
+const MAX_SOCKET_PATH_LEN: usize = 103;
+
+fn socket_path_fits(socket_path: &Path) -> bool {
+    socket_path.as_os_str().len() <= MAX_SOCKET_PATH_LEN
+}
 
 fn try_acquire_daemon_lock_at(path: &Path) -> std::io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -260,6 +267,17 @@ async fn socket_listener(
     socket_path: &Path,
     worker_uid: u32,
 ) -> Result<(CancellationToken, mpsc::Receiver<SocketCmd>), exitcode::ExitCode> {
+    // Checked before binding so a too-deep path reports itself instead of a raw OS error.
+    if !socket_path_fits(socket_path) {
+        tracing::error!(
+            path = %socket_path.display(),
+            len = socket_path.as_os_str().len(),
+            limit = MAX_SOCKET_PATH_LEN,
+            "socket path is too long for a Unix socket - use a shorter --socket-path or state directory"
+        );
+        return Err(exitcode::USAGE);
+    }
+
     // The daemon lock guarantees no other instance is running, so a leftover
     // socket file is always stale — remove it without pinging.
     match socket_path.try_exists() {
@@ -1784,5 +1802,16 @@ mod tests {
         let _second = try_acquire_daemon_lock_at(&path)?;
         std::fs::remove_file(path)?;
         Ok(())
+    }
+
+    #[test]
+    fn socket_paths_over_the_unix_limit_are_rejected_before_binding() {
+        assert!(socket_path_fits(Path::new("/var/run/gnosisvpn.sock")));
+        assert!(socket_path_fits(Path::new(&"a".repeat(MAX_SOCKET_PATH_LEN))));
+        // A deep checkout plus a nested run directory is the case that fails in practice.
+        assert!(!socket_path_fits(Path::new(&format!(
+            "{}/gnosisvpn.sock",
+            "a".repeat(MAX_SOCKET_PATH_LEN)
+        ))));
     }
 }

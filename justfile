@@ -4,16 +4,28 @@ default:
 # Identity, cache, socket, log and pid file live under data_dir instead of the
 # installed service's global paths. The daemon lock and teardown state stay
 # global on purpose: they guard host-wide routing, DNS and killswitch state.
+# data_dir defaults to /tmp because Unix socket paths are limited to ~104 bytes
+# and a path inside a deep checkout does not fit.
 # Run the root binary locally with a config file and Blokli URL
-run-local config_file blokli_url binary="./target/release/gnosis_vpn-root" worker_binary="./target/release/gnosis_vpn-worker" rust_log="info" data_dir="./.local/run":
+run-local config_file blokli_url binary="./target/release/gnosis_vpn-root" worker_binary="./target/release/gnosis_vpn-worker" rust_log="info" data_dir="/tmp/gnosisvpn-local":
     #!/usr/bin/env bash
     set -euo pipefail
+    set -x
 
     mkdir -p "{{ data_dir }}"
     data_dir="$(cd "{{ data_dir }}" && pwd)"
+    socket="${data_dir}/gnosisvpn.sock"
+
+    # sun_path holds 104 bytes on macOS and 108 on Linux, terminator included.
+    if [ "${#socket}" -gt 103 ]; then
+        echo "ERROR: socket path is ${#socket} characters, over the 103-byte Unix socket limit:" >&2
+        echo "  ${socket}" >&2
+        echo "Use a shorter data_dir, e.g. data_dir=\"/tmp/gnosisvpn-local\"." >&2
+        exit 1
+    fi
 
     echo "data dir: ${data_dir}"
-    echo "socket:   ${data_dir}/gnosisvpn.sock"
+    echo "socket:   ${socket}"
     echo "ctl:      just ctl-local <command> data_dir={{ data_dir }}"
 
     sudo RUST_LOG="{{ rust_log }}" "{{ binary }}" \
@@ -21,12 +33,12 @@ run-local config_file blokli_url binary="./target/release/gnosis_vpn-root" worke
         --hopr-blokli-url "{{ blokli_url }}" \
         --worker-binary "{{ worker_binary }}" \
         --state-home "${data_dir}/state" \
-        --socket-path "${data_dir}/gnosisvpn.sock" \
+        --socket-path "${socket}" \
         --log-file "${data_dir}/gnosisvpn.log" \
         --pid-file "${data_dir}/gnosisvpn.pid"
 
 # control a service started with `just run-local`
-ctl-local command data_dir="./.local/run" ctl_binary="./target/release/gnosis_vpn-ctl":
+ctl-local command data_dir="/tmp/gnosisvpn-local" ctl_binary="./target/release/gnosis_vpn-ctl":
     "{{ ctl_binary }}" --socket-path "{{ data_dir }}/gnosisvpn.sock" {{ command }}
 
 # build static linux binary (x86_64)
