@@ -1,18 +1,7 @@
 use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use humantime::format_duration;
-use serde::ser::Serialize;
 
 use std::time::SystemTime;
-
-pub fn serialize<T>(v: &T) -> String
-where
-    T: ?Sized + Serialize,
-{
-    match serde_json::to_string(&v) {
-        Ok(s) => s,
-        Err(e) => format!("serialization error: {e}"),
-    }
-}
 
 pub fn elapsed(timestamp: &SystemTime) -> String {
     match timestamp.elapsed() {

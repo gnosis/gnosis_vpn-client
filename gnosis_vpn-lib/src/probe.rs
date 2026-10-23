@@ -2,16 +2,13 @@
 use edgli::FlowControlConfig;
 use edgli::hopr_lib::HoprSessionClientConfig;
 use rand::prelude::*;
-use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
-use std::fmt::{self, Display};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::command;
 use crate::connection::destination::{Destination, ExitKey};
 use crate::connection::options::{
     HealthCheckIntervals, Options, SessionPixOptions, SessionSurbOptions, SurbParams, surb_config_for,
@@ -21,7 +18,7 @@ use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
 
-pub use crate::gvpn_client::{Health, LoadAvg, Slots, Versions};
+pub use gnosis_vpn_ipc::{ApiVersion, ExitVersions, Health, LoadAvg, ProbeState, ProbeView, Slots};
 
 const REOPEN_AFTER_FAILURES: u32 = 3;
 /// Roughly 50 s over the backoff curve below; past that a waiting target is better off in a fresh worker.
@@ -52,12 +49,9 @@ pub(crate) fn jitter(base: Duration) -> Duration {
 }
 
 /// The single place mapping exit API versions to client modules; only v1 (`gvpn_client`) exists.
-pub(crate) fn select_api_version(server_versions: &[String]) -> Option<&'static str> {
-    const SUPPORTED: &[&str] = &["v1"];
-    SUPPORTED
-        .iter()
-        .copied()
-        .find(|&v| server_versions.iter().any(|sv| sv == v))
+pub(crate) fn select_api_version(offered: &[ApiVersion]) -> Option<ApiVersion> {
+    const SUPPORTED: &[ApiVersion] = &[gvpn_client::API];
+    SUPPORTED.iter().copied().filter(|v| offered.contains(v)).max()
 }
 
 /// hopr-lib fixes SURB balancing and PIX at open, so only an identically opened session can be adopted.
@@ -76,20 +70,6 @@ pub enum Check {
     Version,
     Ping,
     Load,
-}
-
-/// Wire type shown by the CLI, so variant names are user-visible.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "state")]
-pub enum ProbeState {
-    /// No session yet, or the last open attempt failed and a retry is pending.
-    Opening,
-    /// Session open, waiting for the first result of every check.
-    Checking,
-    /// Every check has succeeded at least once on this session.
-    Ready,
-    /// Too many consecutive failures; the session was closed and a new one is being opened.
-    Reopening,
 }
 
 #[derive(Debug)]
@@ -111,7 +91,7 @@ pub(crate) enum Event {
     },
     Version {
         checked_at: SystemTime,
-        versions: Versions,
+        versions: ExitVersions,
     },
     Ping {
         checked_at: SystemTime,
@@ -145,7 +125,7 @@ pub(crate) struct Probe {
     state: ProbeState,
     session: Option<SessionClientMetadata>,
     since: Option<SystemTime>,
-    versions: Option<Versions>,
+    versions: Option<ExitVersions>,
     ping_rtt: Option<Duration>,
     load: Option<Health>,
     checked_at: Option<SystemTime>,
@@ -298,17 +278,13 @@ impl Probe {
         }
     }
 
-    pub(crate) fn view(&self) -> command::ProbeView {
-        command::ProbeView {
-            destination_id: self.destination.connect_id.clone(),
+    pub(crate) fn view(&self) -> ProbeView {
+        ProbeView {
+            destination: self.destination.connect_id.as_str().into(),
             state: self.state.clone(),
             session_since: self.since,
             versions: self.versions.clone(),
-            api_version: self
-                .versions
-                .as_ref()
-                .and_then(|v| select_api_version(&v.versions))
-                .map(str::to_owned),
+            api_version: self.versions.as_ref().and_then(|v| select_api_version(&v.api)),
             ping_rtt: self.ping_rtt,
             load: self.load.clone(),
             checked_at: self.checked_at,
@@ -426,8 +402,8 @@ where
 /// What one quick probe found; `api_version` is None when the exit speaks nothing we support.
 #[derive(Debug, Clone)]
 pub(crate) struct QuickProbeOutcome {
-    pub(crate) versions: Versions,
-    pub(crate) api_version: Option<String>,
+    pub(crate) versions: ExitVersions,
+    pub(crate) api_version: Option<ApiVersion>,
     pub(crate) health: Health,
     /// Round-trip of the status request, so it carries the exit's status-generation time too.
     pub(crate) status_rtt: Duration,
@@ -485,7 +461,7 @@ async fn quick_checks(bound_host: std::net::SocketAddr) -> Result<QuickProbeOutc
         .map_err(|err| format!("health check failed: {err}"))?;
     let status_rtt = started.elapsed();
     Ok(QuickProbeOutcome {
-        api_version: select_api_version(&versions.versions).map(str::to_owned),
+        api_version: select_api_version(&versions.api),
         versions,
         health,
         status_rtt,
@@ -668,17 +644,6 @@ async fn close_probe_session(hopr: &Hopr, session: &SessionClientMetadata) {
     }
 }
 
-impl Display for ProbeState {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ProbeState::Opening => write!(f, "opening session"),
-            ProbeState::Checking => write!(f, "running initial checks"),
-            ProbeState::Ready => write!(f, "ready"),
-            ProbeState::Reopening => write!(f, "reopening session"),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,10 +679,10 @@ mod tests {
         }
     }
 
-    fn versions() -> Versions {
-        Versions {
-            versions: vec!["v1".to_string()],
-            latest: "v1".to_string(),
+    fn versions() -> ExitVersions {
+        ExitVersions {
+            api: vec![ApiVersion::new(1)],
+            server: None,
         }
     }
 
@@ -874,9 +839,9 @@ mod tests {
         let mut p = opened();
         p.apply(Event::Version {
             checked_at: now(),
-            versions: Versions {
-                versions: vec!["v99".to_string()],
-                latest: "v99".to_string(),
+            versions: ExitVersions {
+                api: vec![ApiVersion::new(99)],
+                server: None,
             },
         });
         assert_eq!(p.consecutive_failures, 0);
@@ -902,13 +867,13 @@ mod tests {
 
     #[test]
     fn select_api_version_finds_v1() {
-        assert_eq!(select_api_version(&["v1".to_string()]), Some("v1"));
+        assert_eq!(select_api_version(&[ApiVersion::new(1)]), Some(ApiVersion::new(1)));
     }
 
     #[test]
     fn select_api_version_returns_none_when_no_match() {
         assert_eq!(select_api_version(&[]), None);
-        assert_eq!(select_api_version(&["v2".to_string(), "v99".to_string()]), None);
+        assert_eq!(select_api_version(&[ApiVersion::new(2), ApiVersion::new(99)]), None);
     }
 
     #[test]
@@ -936,7 +901,7 @@ mod tests {
         assert_eq!(jitter(Duration::ZERO), Duration::ZERO);
     }
 
-    const VERSIONS_BODY: &str = r#"{"versions":["v1"],"latest":"v1"}"#;
+    const VERSIONS_BODY: &str = r#"{"versions":["v1"],"latest":"v1","server":"0.7.1"}"#;
     const HEALTH_BODY: &str = r#"{"slots":{"total":10,"available":7,"connected":3},"load_avg":{"one":0.5,"five":0.4,"fifteen":0.3,"nproc":4}}"#;
 
     /// One canned answer per connection, so `quick_checks` runs against the real HTTP client.
@@ -979,8 +944,8 @@ mod tests {
 
         let outcome = quick_checks(addr).await.expect("checks succeed");
 
-        assert_eq!(outcome.api_version.as_deref(), Some("v1"));
-        assert_eq!(outcome.versions.latest, "v1");
+        assert_eq!(outcome.api_version, Some(ApiVersion::new(1)));
+        assert_eq!(outcome.versions.server, Some(semver::Version::new(0, 7, 1)));
         assert_eq!(outcome.health.slots.available, 7);
         assert!(outcome.status_rtt > Duration::ZERO);
     }
@@ -992,7 +957,17 @@ mod tests {
         let outcome = quick_checks(addr).await.expect("checks succeed");
 
         assert_eq!(outcome.api_version, None);
-        assert_eq!(outcome.versions.versions, vec!["v2".to_string()]);
+        assert_eq!(outcome.versions.api, vec![ApiVersion::new(2)]);
+        assert_eq!(outcome.versions.server, None);
+    }
+
+    #[tokio::test]
+    async fn quick_checks_fail_on_an_unparseable_api_label() {
+        let addr = canned_exit(r#"{"versions":["1.0"],"latest":"1.0"}"#, "200 OK").await;
+
+        let error = quick_checks(addr).await.expect_err("a malformed label fails the check");
+
+        assert!(error.starts_with("versions check failed"), "unexpected error: {error}");
     }
 
     #[tokio::test]

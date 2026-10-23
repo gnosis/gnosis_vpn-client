@@ -8,6 +8,8 @@ use std::fmt::{self, Display};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
+use gnosis_vpn_ipc::{ApiVersion, ExitVersions, Health};
+
 use crate::remote_data;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -65,6 +67,10 @@ impl Input {
 }
 
 impl Registration {
+    pub fn ip(&self) -> Ipv4Addr {
+        self.ip
+    }
+
     pub fn address(&self) -> String {
         format!("{}/32", self.ip)
     }
@@ -78,34 +84,17 @@ impl Registration {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Versions {
-    pub versions: Vec<String>,
-    pub latest: String,
+/// The only exit API this client speaks; every route below lives under it.
+pub const API: ApiVersion = ApiVersion::new(1);
+
+/// What `/versions` publishes; `latest` is ignored, as no decision depends on it.
+#[derive(Deserialize)]
+struct PublishedVersions {
+    versions: Vec<ApiVersion>,
+    server: Option<semver::Version>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Health {
-    pub slots: Slots,
-    pub load_avg: LoadAvg,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Slots {
-    pub total: u32,
-    pub available: u32,
-    pub connected: u32,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct LoadAvg {
-    pub one: f32,
-    pub five: f32,
-    pub fifteen: f32,
-    pub nproc: u16,
-}
-
-pub async fn versions(client: &Client, socket_addr: SocketAddr, timeout: Duration) -> Result<Versions, Error> {
+pub async fn versions(client: &Client, socket_addr: SocketAddr, timeout: Duration) -> Result<ExitVersions, Error> {
     let headers = remote_data::json_headers();
     let url = Url::parse(
         format!(
@@ -124,18 +113,22 @@ pub async fn versions(client: &Client, socket_addr: SocketAddr, timeout: Duratio
         .await
         .map_err(connect_errors)?
         .error_for_status()?
-        .json::<Versions>()
+        .json::<PublishedVersions>()
         .await?;
 
-    Ok(resp)
+    Ok(ExitVersions {
+        api: resp.versions,
+        server: resp.server,
+    })
 }
 
 pub async fn ping(client: &Client, socket_addr: SocketAddr, timeout: Duration) -> Result<(), Error> {
     let url = Url::parse(
         format!(
-            "http://{host}:{port}/api/v1/ping",
+            "http://{host}:{port}{api}/ping",
             host = socket_addr.ip(),
-            port = socket_addr.port()
+            port = socket_addr.port(),
+            api = API.path()
         )
         .as_str(),
     )?;
@@ -155,9 +148,10 @@ pub async fn health(client: &Client, socket_addr: SocketAddr, timeout: Duration)
     let headers = remote_data::json_headers();
     let url = Url::parse(
         format!(
-            "http://{host}:{port}/api/v1/status",
+            "http://{host}:{port}{api}/status",
             host = socket_addr.ip(),
-            port = socket_addr.port()
+            port = socket_addr.port(),
+            api = API.path()
         )
         .as_str(),
     )?;
@@ -181,9 +175,10 @@ pub async fn register(client: &Client, input: &Input) -> Result<Registration, Er
     let headers = remote_data::json_headers();
     let url = Url::parse(
         format!(
-            "http://{host}:{port}/api/v1/clients/register",
+            "http://{host}:{port}{api}/clients/register",
             host = input.socket_addr.ip(),
-            port = input.socket_addr.port()
+            port = input.socket_addr.port(),
+            api = API.path()
         )
         .as_str(),
     )?;
@@ -211,9 +206,10 @@ pub async fn unregister(client: &Client, input: &Input) -> Result<(), Error> {
     let headers = remote_data::json_headers();
     let url = Url::parse(
         format!(
-            "http://{host}:{port}/api/v1/clients/unregister",
+            "http://{host}:{port}{api}/clients/unregister",
             host = input.socket_addr.ip(),
-            port = input.socket_addr.port()
+            port = input.socket_addr.port(),
+            api = API.path()
         )
         .as_str(),
     )?;
@@ -263,43 +259,6 @@ impl Display for Registration {
     }
 }
 
-impl Display for Slots {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // whatever is neither in use nor free is held by a registration still settling
-        let pending = self.total.saturating_sub(self.connected.saturating_add(self.available));
-        write!(f, "slots: {}", self.connected)?;
-        if pending > 0 {
-            write!(f, "({pending} pending)")?;
-        }
-        write!(f, " / {}", self.total)
-    }
-}
-
-impl Display for LoadAvg {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{:.2}/{n} (1 min), {:.2}/{n} (5 min), {:.2}/{n} (15 min)",
-            self.one,
-            self.five,
-            self.fifteen,
-            n = self.nproc
-        )
-    }
-}
-
-impl Display for Versions {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "latest: {}, supported: {}", self.latest, self.versions.join(", "))
-    }
-}
-
-impl Display for Health {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}, {}", self.load_avg, self.slots)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,26 +276,5 @@ mod tests {
         let printed = format!("{registration:?}");
         assert!(printed.contains("pub"));
         assert!(!printed.contains("secret-psk"), "{printed}");
-    }
-
-    fn slots(connected: u32, available: u32, total: u32) -> String {
-        Slots {
-            total,
-            available,
-            connected,
-        }
-        .to_string()
-    }
-
-    #[test]
-    fn slots_name_the_ones_a_registration_still_holds() {
-        assert_eq!("slots: 1 / 16", slots(1, 15, 16));
-        assert_eq!("slots: 1(5 pending) / 16", slots(1, 10, 16));
-    }
-
-    /// A server reporting more in use than it has must not panic the status output.
-    #[test]
-    fn slots_beyond_the_total_report_none_pending() {
-        assert_eq!("slots: 9 / 8", slots(9, 4, 8));
     }
 }

@@ -6,7 +6,9 @@ use tokio::sync::oneshot;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use crate::command::{Response, WorkerCommand};
+use gnosis_vpn_ipc::Response;
+
+use crate::command::WorkerCommand;
 use crate::config::Config;
 use crate::ping;
 use crate::worker_params::WorkerParams;
@@ -19,6 +21,8 @@ pub enum WorkerToCore {
         cmd: WorkerCommand,
         resp: oneshot::Sender<Response>,
     },
+    /// Root saw the network change; nobody waits for an answer.
+    ForceReconnect,
     Shutdown,
     /// Result of a request to root
     ResponseFromRoot(ResponseFromRoot),
@@ -46,6 +50,8 @@ pub enum RootToWorker {
     },
     /// Socket command received by root
     WorkerCommand { cmd: WorkerCommand, id: u64 },
+    /// The network changed; re-establish the connection, fire-and-forget
+    ForceReconnect,
     /// Result of a request to root
     ResponseFromRoot(ResponseFromRoot),
 }
@@ -165,7 +171,7 @@ mod tests {
             value,
             serde_json::json!({
                 "Response": {
-                    "resp": "Pong",
+                    "resp": {"type": "pong"},
                     "id": 42
                 }
             })

@@ -24,7 +24,8 @@ use std::vec::Vec;
 
 use crate::config;
 use crate::connection::destination::{
-    DEFAULT_HOPS, DefaultTargets, Destination as ConnDestination, DestinationSource, Destinations, Meta, Overrides,
+    DEFAULT_HOPS, DefaultTargets, Destination as ConnDestination, DestinationSource, Destinations, Meta,
+    configured_overrides,
 };
 use crate::connection::options;
 use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
@@ -973,8 +974,8 @@ pub fn convert_destinations(
         };
 
         let labels = dest.meta.clone().unwrap_or_default();
-        let meta = Meta::from_map(labels.clone());
-        let overrides = Overrides::from_config(labels, dest.gnosis_vpn_server, dest.wireguard_server);
+        let meta = Meta::from_labels(labels.clone());
+        let overrides = configured_overrides(labels, dest.gnosis_vpn_server, dest.wireguard_server);
         let dest = ConnDestination::new(
             id.to_string(),
             dest.address,

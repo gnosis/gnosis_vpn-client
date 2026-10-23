@@ -1,10 +1,8 @@
-use gnosis_vpn_lib::command::{
-    BalanceResponse, Command, ConnectResponse, DestinationState, DisconnectResponse, Response, RunMode,
-    StartClientResponse, StatusResponse, StopClientResponse,
+use gnosis_vpn_ipc::{
+    self as ipc, Address, Balances, CallError, ConnectResponse, Connection, Destination, DestinationId,
+    DestinationSource, DestinationStatus, DisconnectResponse, Request, Response, RouteHealthState, RunMode,
+    StartClientResponse, Status, StopClientResponse,
 };
-use gnosis_vpn_lib::connection::destination::{Address, Destination, DestinationSource};
-use gnosis_vpn_lib::route_health::RouteHealthState;
-use gnosis_vpn_lib::socket::root::{Error as SocketError, process_cmd};
 use rand::seq::SliceRandom;
 use std::{path::PathBuf, time::Duration};
 use tracing::{debug, error, info, warn};
@@ -22,16 +20,19 @@ impl ControlClient {
         Self { socket_path }
     }
 
-    /// Sends a raw command to the control socket and returns the daemon response.
-    pub async fn send(&self, cmd: &Command) -> anyhow::Result<Response> {
-        match process_cmd(self.socket_path.as_path(), cmd).await {
+    /// Sends a raw request to the control socket and returns the daemon response.
+    pub async fn send(&self, request: Request) -> anyhow::Result<Response> {
+        let socket_path = self.socket_path.clone();
+        let logged = request.clone();
+        let result = tokio::task::spawn_blocking(move || ipc::call(&socket_path, request)).await?;
+        match result {
             Ok(resp) => Ok(resp),
-            Err(SocketError::ServiceNotRunning) => {
-                error!(?cmd, "service not running when sending command");
-                Err(SocketError::ServiceNotRunning.into())
+            Err(CallError::ServiceNotRunning) => {
+                error!(request = ?logged, "service not running when sending request");
+                Err(CallError::ServiceNotRunning.into())
             }
             Err(error) => {
-                error!(%error, ?cmd, "error while sending command");
+                error!(%error, request = ?logged, "error while sending request");
                 Err(error.into())
             }
         }
@@ -39,7 +40,7 @@ impl ControlClient {
 
     /// Verifies the daemon responds to ping requests.
     pub async fn ping(&self) -> anyhow::Result<()> {
-        self.send(&Command::Ping).await.and_then(|result| {
+        self.send(Request::Ping).await.and_then(|result| {
             matches!(result, Response::Pong)
                 .then_some(())
                 .ok_or(anyhow::anyhow!("unexpected ping response {result:?}"))
@@ -47,27 +48,29 @@ impl ControlClient {
     }
 
     /// Fetches current daemon status information.
-    pub async fn status(&self) -> anyhow::Result<Option<StatusResponse>> {
-        match self.send(&Command::Status).await {
-            Ok(Response::Status(status)) => Ok(Some(status)),
+    pub async fn status(&self) -> anyhow::Result<Option<Status>> {
+        match self.send(Request::Status).await {
+            Ok(Response::Status(status)) => Ok(Some(*status)),
             Ok(resp) => Err(anyhow::anyhow!("unexpected status response {resp:?}")),
             Err(e) => Err(e),
         }
     }
 
     /// Retrieves the node and safe balances.
-    pub async fn balance(&self) -> anyhow::Result<BalanceResponse> {
-        match self.send(&Command::Balance).await {
-            Ok(Response::Balance(Ok(balance))) => Ok(balance),
-            Ok(Response::Balance(Err(msg))) => Err(anyhow::anyhow!("balance error: {msg}")),
+    pub async fn balance(&self) -> anyhow::Result<Balances> {
+        match self.send(Request::Balance).await {
+            Ok(Response::Balance(ipc::BalanceResponse::Available(balances))) => Ok(*balances),
+            Ok(Response::Balance(ipc::BalanceResponse::Unavailable { reason })) => {
+                Err(anyhow::anyhow!("balance error: {reason}"))
+            }
             Ok(resp) => Err(anyhow::anyhow!("unexpected balance response {resp:?}")),
             Err(e) => Err(e),
         }
     }
 
     /// Initiates a VPN connection to the provided destination.
-    pub async fn connect(&self, destination: String) -> anyhow::Result<ConnectResponse> {
-        match self.send(&Command::Connect(destination)).await {
+    pub async fn connect(&self, destination: DestinationId) -> anyhow::Result<ConnectResponse> {
+        match self.send(Request::Connect { destination }).await {
             Ok(Response::Connect(state)) => Ok(state),
             Ok(resp) => Err(anyhow::anyhow!("unexpected connect response {resp:?}")),
             Err(e) => Err(e),
@@ -76,7 +79,7 @@ impl ControlClient {
 
     /// Close the VPN connection.
     pub async fn disconnect(&self) -> anyhow::Result<DisconnectResponse> {
-        match self.send(&Command::Disconnect).await {
+        match self.send(Request::Disconnect).await {
             Ok(Response::Disconnect(state)) => Ok(state),
             Ok(resp) => Err(anyhow::anyhow!("unexpected disconnect response {resp:?}")),
             Err(e) => Err(e),
@@ -85,7 +88,12 @@ impl ControlClient {
 
     /// Start the client
     pub async fn start(&self) -> anyhow::Result<StartClientResponse> {
-        match self.send(&Command::StartClient(Duration::from_mins(10))).await {
+        match self
+            .send(Request::StartClient {
+                timeout: Duration::from_mins(10),
+            })
+            .await
+        {
             Ok(Response::StartClient(state)) => Ok(state),
             Ok(resp) => Err(anyhow::anyhow!("unexpected start response {resp:?}")),
             Err(e) => Err(e),
@@ -94,7 +102,7 @@ impl ControlClient {
 
     /// Stop the client
     pub async fn stop(&self) -> anyhow::Result<StopClientResponse> {
-        match self.send(&Command::StopClient).await {
+        match self.send(Request::StopClient).await {
             Ok(Response::StopClient(state)) => Ok(state),
             Ok(resp) => Err(anyhow::anyhow!("unexpected stop response {resp:?}")),
             Err(e) => Err(e),
@@ -146,7 +154,7 @@ impl ControlClient {
     pub async fn wait_for_node_funding(&self, timeout: Duration) -> anyhow::Result<()> {
         lib::wait_for_condition("node funds", timeout, Duration::from_secs(5), || async {
             match self.balance().await {
-                Ok(BalanceResponse { node, safe, .. }) => {
+                Ok(Balances { node, safe, .. }) => {
                     if node.is_zero() || safe.is_zero() {
                         debug!("node or safe have zero funds");
                         Ok(ConditionCheck::Pending)
@@ -229,17 +237,13 @@ impl ControlClient {
         lib::wait_for_condition("connection settlement", timeout, Duration::from_secs(5), || async {
             match self.status().await {
                 Ok(Some(status)) => {
-                    let dest_id = &destination.connect_id;
-
-                    let is_connected = status
-                        .connected
-                        .as_ref()
-                        .is_some_and(|c| c.destination_id == destination.connect_id);
-                    let connecting_phase = status
-                        .connecting
-                        .as_ref()
-                        .filter(|c| c.destination_id == destination.connect_id)
-                        .map(|c| &c.phase);
+                    let dest_id = &destination.id;
+                    let is_ours = status.connection.destination() == Some(dest_id);
+                    let is_connected = is_ours && matches!(status.connection, Connection::Connected { .. });
+                    let connecting_phase = match &status.connection {
+                        Connection::Connecting { phase, .. } if is_ours => Some(phase),
+                        _ => None,
+                    };
 
                     if is_connected {
                         info!(%dest_id, "connection established successfully");
@@ -318,7 +322,7 @@ impl ControlClient {
             };
             let countries = discovered_exits(&status, addresses)
                 .into_iter()
-                .map(|exit| exit.and_then(|dest| dest.geo).map(|geo| geo.country_code))
+                .map(|exit| exit.and_then(|dest| dest.geo).map(|geo| geo.country.to_string()))
                 .collect::<Vec<_>>();
             let unresolved = countries.iter().filter(|country| country.is_none()).count();
             if unresolved == 0 {
@@ -332,7 +336,7 @@ impl ControlClient {
 }
 
 /// The destination discovered at each address; a configured-only entry does not count.
-fn discovered_exits(status: &StatusResponse, addresses: &[Address]) -> Vec<Option<Destination>> {
+fn discovered_exits(status: &Status, addresses: &[Address]) -> Vec<Option<Destination>> {
     addresses
         .iter()
         .map(|address| {
@@ -359,7 +363,7 @@ pub struct DestinationReadiness {
 }
 
 impl DestinationReadiness {
-    fn from_states(states: Vec<DestinationState>) -> Self {
+    fn from_states(states: Vec<DestinationStatus>) -> Self {
         let mut ready = Vec::new();
         let mut not_ready = Vec::new();
 

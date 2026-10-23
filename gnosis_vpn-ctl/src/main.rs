@@ -1,12 +1,9 @@
 use bytesize::ByteSize;
 use exitcode::{self, ExitCode};
+use gnosis_vpn_ipc::{self as ipc, CallError, Request, Response, ServiceError};
 
 use std::process;
 use std::time::Duration;
-
-use gnosis_vpn_lib::balance;
-use gnosis_vpn_lib::command::{self, Command, Response};
-use gnosis_vpn_lib::socket;
 
 mod cli;
 
@@ -18,8 +15,7 @@ use cli::OutputFormat;
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let args = cli::parse();
     let format = args.output.unwrap_or(OutputFormat::Plain);
 
@@ -28,11 +24,19 @@ async fn main() {
         process::exit(exitcode::OK);
     }
 
-    let cmd: Command = args.command.into();
-    let resp = match socket::root::process_cmd(&args.socket_path, &cmd).await {
+    let request: Request = args.command.into();
+    let resp = match ipc::call(&args.socket_path, request.clone()) {
         Ok(resp) => resp,
+        Err(CallError::Service(error)) => {
+            match format {
+                OutputFormat::Json => json_print(&error),
+                OutputFormat::Yaml => yaml_print(&error),
+                OutputFormat::Plain => eprintln!("{}", service_error_text(&error)),
+            };
+            process::exit(service_error_exitcode(&error));
+        }
         Err(e) => {
-            eprintln!("Error processing {cmd}: {e}");
+            eprintln!("Error processing {request:?}: {e}");
             process::exit(exitcode::UNAVAILABLE);
         }
     };
@@ -47,99 +51,120 @@ async fn main() {
     process::exit(exit);
 }
 
-fn json_print(resp: &Response) {
-    match serde_json::to_string_pretty(resp) {
+fn json_print<T: serde::Serialize>(value: &T) {
+    match serde_json::to_string_pretty(value) {
         Ok(s) => println!("{s}"),
         Err(e) => eprintln!("Error serializing response to JSON: {e}"),
     }
 }
 
-fn yaml_print(resp: &Response) {
-    match serde_saphyr::to_string(resp) {
+fn yaml_print<T: serde::Serialize>(value: &T) {
+    match serde_saphyr::to_string(value) {
         Ok(s) => print!("{s}"),
         Err(e) => eprintln!("Error serializing response to YAML: {e}"),
     }
 }
 
+fn service_error_text(error: &ServiceError) -> String {
+    match error {
+        ServiceError::WorkerOffline => {
+            "Worker client is currently offline - use command `start-client` to start it".to_string()
+        }
+        ServiceError::WorkerRestarting => "Worker client is restarting - try again shortly".to_string(),
+        ServiceError::ProtocolMismatch { .. } | ServiceError::InvalidRequest { .. } => {
+            format!("Service refused the request: {error}")
+        }
+    }
+}
+
+fn service_error_exitcode(error: &ServiceError) -> ExitCode {
+    match error {
+        ServiceError::WorkerOffline => exitcode::UNAVAILABLE,
+        ServiceError::WorkerRestarting => exitcode::TEMPFAIL,
+        ServiceError::ProtocolMismatch { .. } => exitcode::PROTOCOL,
+        ServiceError::InvalidRequest { .. } => exitcode::SOFTWARE,
+    }
+}
+
 fn pretty_print(resp: &Response) {
     match resp {
-        Response::Connect(command::ConnectResponse::AlreadyConnected { destination: dest }) => {
+        Response::Connect(ipc::ConnectResponse::AlreadyConnected { destination: dest }) => {
             println!("Already connected to {dest}");
         }
-        Response::Connect(command::ConnectResponse::Connecting { destination: dest }) => {
+        Response::Connect(ipc::ConnectResponse::Connecting { destination: dest }) => {
             println!("Connecting to {dest}");
         }
-        Response::Connect(command::ConnectResponse::WaitingToConnect {
+        Response::Connect(ipc::ConnectResponse::WaitingToConnect {
             destination: dest,
             route_health,
         }) => {
             println!("Waiting to connect to {dest} once possible: {route_health}")
         }
-        Response::Connect(command::ConnectResponse::UnableToConnect {
+        Response::Connect(ipc::ConnectResponse::UnableToConnect {
             destination: dest,
             route_health,
         }) => {
             eprintln!("Unable to connect to {dest}: {route_health}");
         }
-        Response::Connect(command::ConnectResponse::DestinationNotFound) => {
+        Response::Connect(ipc::ConnectResponse::DestinationNotFound) => {
             eprintln!("Destination not found");
         }
-        Response::Connect(command::ConnectResponse::DestinationAmbiguous { connect_ids: ids }) => {
+        Response::Connect(ipc::ConnectResponse::DestinationAmbiguous { candidates: ids }) => {
             eprintln!(
                 "That exit is reachable by several paths - connect to one of: {}",
-                ids.join(", ")
+                ipc::join(ids)
             );
         }
-        Response::Disconnect(command::DisconnectResponse::Disconnecting { destination: dest }) => {
+        Response::Disconnect(ipc::DisconnectResponse::Disconnecting { destination: dest }) => {
             println!("Disconnecting from {dest}");
         }
-        Response::Disconnect(command::DisconnectResponse::NotConnected) => {
+        Response::Disconnect(ipc::DisconnectResponse::NotConnected) => {
             eprintln!("Currently not connected to any destination");
         }
-        Response::Probe(command::ProbeResponse::Probing { destination: dest }) => {
+        Response::Probe(ipc::ProbeResponse::Probing { destination: dest }) => {
             println!("Probing {dest}");
         }
-        Response::Probe(command::ProbeResponse::Replaced {
+        Response::Probe(ipc::ProbeResponse::Replaced {
             destination: dest,
             previous,
         }) => {
             println!("Probing {dest} (closed probe of {previous})");
         }
-        Response::Probe(command::ProbeResponse::AlreadyProbing { destination: dest }) => {
+        Response::Probe(ipc::ProbeResponse::AlreadyProbing { destination: dest }) => {
             println!("Already probing {dest}");
         }
-        Response::Probe(command::ProbeResponse::InUse { destination: dest }) => {
+        Response::Probe(ipc::ProbeResponse::InUse { destination: dest }) => {
             eprintln!("Probe of {dest} is still in use by a connection - retry once connected");
         }
-        Response::Probe(command::ProbeResponse::UnableToProbe {
+        Response::Probe(ipc::ProbeResponse::UnableToProbe {
             destination: dest,
             route_health,
         }) => {
             eprintln!("Unable to probe {dest}: {route_health}");
         }
-        Response::Probe(command::ProbeResponse::NotReady) => {
+        Response::Probe(ipc::ProbeResponse::NotReady) => {
             eprintln!("Edge client not running yet - try again later");
         }
-        Response::Probe(command::ProbeResponse::DestinationNotFound) => {
+        Response::Probe(ipc::ProbeResponse::DestinationNotFound) => {
             eprintln!("Destination not found");
         }
-        Response::Probe(command::ProbeResponse::DestinationAmbiguous { connect_ids: ids }) => {
+        Response::Probe(ipc::ProbeResponse::DestinationAmbiguous { candidates: ids }) => {
             eprintln!(
                 "That exit is reachable by several paths - probe one of: {}",
-                ids.join(", ")
+                ipc::join(ids)
             );
         }
-        Response::Unprobe(command::UnprobeResponse::Closing { destination: dest }) => {
+        Response::Unprobe(ipc::UnprobeResponse::Closing { destination: dest }) => {
             println!("Closing probe of {dest}");
         }
-        Response::Unprobe(command::UnprobeResponse::InUse { destination: dest }) => {
+        Response::Unprobe(ipc::UnprobeResponse::InUse { destination: dest }) => {
             eprintln!("Probe of {dest} is still in use by a connection - retry once connected");
         }
-        Response::Unprobe(command::UnprobeResponse::NotProbing) => {
+        Response::Unprobe(ipc::UnprobeResponse::NotProbing) => {
             eprintln!("Currently not probing any destination");
         }
         Response::QuickProbe(
-            res @ (command::QuickProbeResponse::Checking { .. } | command::QuickProbeResponse::AlreadyChecking { .. }),
+            res @ (ipc::QuickProbeResponse::Checking { .. } | ipc::QuickProbeResponse::AlreadyChecking { .. }),
         ) => {
             println!("{res}");
         }
@@ -152,33 +177,24 @@ fn pretty_print(resp: &Response) {
         Response::Telemetry(None) => {
             println!("No telemetry information available.");
         }
-        Response::Status(command::StatusResponse {
-            run_mode,
-            destinations,
-            target_destination,
-            connecting,
-            reconnecting,
-            connected,
-            disconnecting,
-            probe,
-        }) => {
+        Response::Status(status) => {
+            let ipc::Status {
+                run_mode,
+                destinations,
+                target,
+                connection,
+                disconnecting,
+                probe,
+            } = status.as_ref();
             let mut str_resp = format!("{run_mode}\n");
-            if let Some(id) = target_destination {
-                let is_active = connecting.as_ref().is_some_and(|c| c.destination_id == *id)
-                    || reconnecting.as_ref().is_some_and(|c| c.destination_id == *id)
-                    || connected.as_ref().is_some_and(|c| c.destination_id == *id);
+            if let Some(id) = target {
+                let is_active = connection.destination() == Some(id);
                 if !is_active {
                     str_resp.push_str(&format!("---\nWaiting to connect to {id}\n"));
                 }
             }
-            if let Some(info) = connecting {
-                str_resp.push_str(&format!("---\n{info}\n"));
-            }
-            if let Some(info) = reconnecting {
-                str_resp.push_str(&format!("---\n{info}\n"));
-            }
-            if let Some(info) = connected {
-                str_resp.push_str(&format!("---\n{info}\n"));
+            if *connection != ipc::Connection::Disconnected {
+                str_resp.push_str(&format!("---\n{connection}\n"));
             }
             for info in disconnecting {
                 str_resp.push_str(&format!("---\n{info}\n"));
@@ -190,60 +206,51 @@ fn pretty_print(resp: &Response) {
                 str_resp.push_str("---\nDestinations - [c] configured, [d] discovered, (c) value from config\n");
             }
             for dest_state in destinations {
-                str_resp.push_str(&format!("---\n{}\n", dest_state.destination));
+                let dest = &dest_state.destination;
+                str_resp.push_str(&format!("---\n{dest}\n"));
                 if let Some(rh) = &dest_state.route_health {
-                    str_resp.push_str(&format!("{} Route health: {}\n", dest_state.destination.connect_id, rh));
+                    str_resp.push_str(&format!("{} Route health: {}\n", dest.id, rh));
                     if let Some(walk) = &rh.walk {
-                        str_resp.push_str(&format!("{} Route walk: {}\n", dest_state.destination.connect_id, walk));
+                        str_resp.push_str(&format!("{} Route walk: {}\n", dest.id, walk));
                     }
                     if let Some(quick) = &rh.quick_probe {
-                        str_resp.push_str(&format!(
-                            "{} Quick check: {}\n",
-                            dest_state.destination.connect_id, quick
-                        ));
+                        str_resp.push_str(&format!("{} Quick check: {}\n", dest.id, quick));
                     }
                 }
             }
             println!("{str_resp}");
         }
-        Response::Balance(Ok(command::BalanceResponse {
-            node,
-            safe,
-            channels_out,
-            info,
-            capacity_allocations,
-            ideal_balance: _,
-            funding_status,
-        })) => {
+        Response::Balance(ipc::BalanceResponse::Available(balances)) => {
+            let ipc::Balances {
+                node,
+                safe,
+                channels_out,
+                info,
+                capacity_allocations,
+                ideal_balance: _,
+                funding_status,
+            } = balances.as_ref();
             let mut str_resp = String::new();
             str_resp.push_str(&format!(
                 "Node Address: {}\nSafe Address: {}\n",
-                info.node_address.to_checksum(),
-                info.safe_address.to_checksum()
+                info.node_address, info.safe_address
             ));
-            let safe_sci = balance::wxhopr_scientific(*safe)
-                .map(|s| format!(" ({s})"))
-                .unwrap_or_default();
+            let safe_sci = ipc::scientific_suffix(safe);
             str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\n"));
             let allocations = capacity_allocations.as_ref();
             if let Some(nc) = allocations.map(|a| a.node).filter(|c| !c.stake.is_zero()) {
-                let sci = balance::wxhopr_scientific(nc.stake)
-                    .map(|s| format!(" ({s})"))
-                    .unwrap_or_default();
                 str_resp.push_str(&format!(
-                    "Node wxHOPR (not yet in Safe): {}{sci}{}\n",
+                    "Node wxHOPR (not yet in Safe): {}{}{}\n",
                     nc.stake,
+                    ipc::scientific_suffix(&nc.stake),
                     format_capacity(Some(&nc))
                 ));
             }
             if channels_out.is_empty() {
                 str_resp.push_str("---\nNo outgoing channels.\n");
             } else {
-                let sci = balance::wxhopr_scientific(*safe)
-                    .map(|s| format!(" ({s})"))
-                    .unwrap_or_default();
                 let safe_cap = allocations.map(|a| &a.safe);
-                str_resp.push_str(&format!("Safe: {safe}{sci}{}\n", format_capacity(safe_cap)));
+                str_resp.push_str(&format!("Safe: {safe}{safe_sci}{}\n", format_capacity(safe_cap)));
                 for ch in channels_out {
                     let ch_cap = allocations.and_then(|a| a.peer_allocations.get(&ch.address));
                     str_resp.push_str(&format!("{ch}{}\n", format_capacity(ch_cap)));
@@ -255,8 +262,8 @@ fn pretty_print(resp: &Response) {
             }
             println!("{str_resp}");
         }
-        Response::Balance(Err(msg)) => {
-            eprintln!("Balance error: {msg}");
+        Response::Balance(ipc::BalanceResponse::Unavailable { reason }) => {
+            eprintln!("Balance error: {reason}");
         }
         Response::Pong => {
             println!("Pong");
@@ -264,19 +271,19 @@ fn pretty_print(resp: &Response) {
         Response::NerdStats(nerd_stats) => {
             print_nerd_stats(nerd_stats);
         }
-        Response::FundingTool(command::FundingToolResponse::WrongPhase) => {
+        Response::FundingTool(ipc::FundingToolResponse::WrongPhase) => {
             eprintln!("Already past potential funding phase - no longer possible to fund");
         }
-        Response::FundingTool(command::FundingToolResponse::Started) => {
+        Response::FundingTool(ipc::FundingToolResponse::Started) => {
             println!("Started funding");
         }
-        Response::FundingTool(command::FundingToolResponse::InProgress) => {
+        Response::FundingTool(ipc::FundingToolResponse::InProgress) => {
             println!("Funding in progress");
         }
-        Response::FundingTool(command::FundingToolResponse::Done) => {
+        Response::FundingTool(ipc::FundingToolResponse::Done) => {
             println!("Funding complete");
         }
-        Response::FundingTool(command::FundingToolResponse::Cooldown(remaining)) => {
+        Response::FundingTool(ipc::FundingToolResponse::Cooldown { remaining }) => {
             println!(
                 "Funding tool already ran successfully, still in cooldown - try again in {}",
                 humantime::format_duration(Duration::from_secs(remaining.as_secs()))
@@ -293,16 +300,16 @@ fn pretty_print(resp: &Response) {
                     .unwrap_or_default(),
             );
         }
-        Response::StartClient(command::StartClientResponse::Started) => {
+        Response::StartClient(ipc::StartClientResponse::Started) => {
             println!("Worker client started");
         }
-        Response::StartClient(command::StartClientResponse::AlreadyRunning) => {
+        Response::StartClient(ipc::StartClientResponse::AlreadyRunning) => {
             eprintln!("Worker client already running");
         }
-        Response::StopClient(command::StopClientResponse::Stopped) => {
+        Response::StopClient(ipc::StopClientResponse::Stopped) => {
             println!("Worker client stopped");
         }
-        Response::StopClient(command::StopClientResponse::NotRunning) => {
+        Response::StopClient(ipc::StopClientResponse::NotRunning) => {
             eprintln!("Worker client not running");
         }
         Response::Destinations(ids) => {
@@ -310,15 +317,6 @@ fn pretty_print(resp: &Response) {
                 println!("{id}");
             }
         }
-        Response::WorkerOffline => {
-            eprintln!("Worker client is currently offline - use command `start-client` to start it");
-        }
-        Response::WorkerRestarting => {
-            eprintln!("Worker client is restarting - try again shortly");
-        }
-        // Internal response sent by the root process to itself when a WAN interface change
-        // triggers a HOPR session reconnect. Never issued in response to a ctl command.
-        Response::ForceReconnectAcknowledged => {}
     }
 }
 
@@ -328,7 +326,7 @@ fn format_probability(p: f64) -> String {
     trimmed.trim_end_matches('.').to_string()
 }
 
-fn format_funding_status(status: &balance::FundingStatus) -> String {
+fn format_funding_status(status: &ipc::FundingStatus) -> String {
     // A deficit (not yet funded) takes precedence over the Safe's shortfall for the next top-up pass.
     let wxhopr_note = match (status.wxhopr_deficit, status.refill_shortfall) {
         (Some(deficit), _) => format!(" (top up {deficit} recommended)"),
@@ -345,7 +343,7 @@ fn format_funding_status(status: &balance::FundingStatus) -> String {
     )
 }
 
-fn format_capacity(capacity: Option<&balance::Capacity>) -> String {
+fn format_capacity(capacity: Option<&ipc::Capacity>) -> String {
     match capacity {
         None => String::new(),
         Some(c) => format!(
@@ -370,66 +368,66 @@ fn human_msgs(msgs: u64) -> String {
 
 fn determine_exitcode(resp: &Response) -> ExitCode {
     match resp {
-        Response::Connect(command::ConnectResponse::AlreadyConnected { .. }) => exitcode::OK,
-        Response::Connect(command::ConnectResponse::Connecting { .. }) => exitcode::OK,
-        Response::Connect(command::ConnectResponse::DestinationNotFound) => exitcode::UNAVAILABLE,
-        Response::Connect(command::ConnectResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
-        Response::Connect(command::ConnectResponse::WaitingToConnect { .. }) => exitcode::OK,
-        Response::Connect(command::ConnectResponse::UnableToConnect { .. }) => exitcode::UNAVAILABLE,
-        Response::Disconnect(command::DisconnectResponse::Disconnecting { .. }) => exitcode::OK,
-        Response::Disconnect(command::DisconnectResponse::NotConnected) => exitcode::PROTOCOL,
-        Response::Probe(command::ProbeResponse::Probing { .. }) => exitcode::OK,
-        Response::Probe(command::ProbeResponse::Replaced { .. }) => exitcode::OK,
-        Response::Probe(command::ProbeResponse::AlreadyProbing { .. }) => exitcode::OK,
-        Response::Probe(command::ProbeResponse::InUse { .. }) => exitcode::UNAVAILABLE,
-        Response::Probe(command::ProbeResponse::UnableToProbe { .. }) => exitcode::UNAVAILABLE,
-        Response::Probe(command::ProbeResponse::NotReady) => exitcode::UNAVAILABLE,
-        Response::Probe(command::ProbeResponse::DestinationNotFound) => exitcode::UNAVAILABLE,
-        Response::Probe(command::ProbeResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
-        Response::QuickProbe(command::QuickProbeResponse::Checking { .. }) => exitcode::OK,
-        Response::QuickProbe(command::QuickProbeResponse::AlreadyChecking { .. }) => exitcode::OK,
-        Response::QuickProbe(command::QuickProbeResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
+        Response::Connect(ipc::ConnectResponse::AlreadyConnected { .. }) => exitcode::OK,
+        Response::Connect(ipc::ConnectResponse::Connecting { .. }) => exitcode::OK,
+        Response::Connect(ipc::ConnectResponse::DestinationNotFound) => exitcode::UNAVAILABLE,
+        Response::Connect(ipc::ConnectResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
+        Response::Connect(ipc::ConnectResponse::WaitingToConnect { .. }) => exitcode::OK,
+        Response::Connect(ipc::ConnectResponse::UnableToConnect { .. }) => exitcode::UNAVAILABLE,
+        Response::Disconnect(ipc::DisconnectResponse::Disconnecting { .. }) => exitcode::OK,
+        Response::Disconnect(ipc::DisconnectResponse::NotConnected) => exitcode::PROTOCOL,
+        Response::Probe(ipc::ProbeResponse::Probing { .. }) => exitcode::OK,
+        Response::Probe(ipc::ProbeResponse::Replaced { .. }) => exitcode::OK,
+        Response::Probe(ipc::ProbeResponse::AlreadyProbing { .. }) => exitcode::OK,
+        Response::Probe(ipc::ProbeResponse::InUse { .. }) => exitcode::UNAVAILABLE,
+        Response::Probe(ipc::ProbeResponse::UnableToProbe { .. }) => exitcode::UNAVAILABLE,
+        Response::Probe(ipc::ProbeResponse::NotReady) => exitcode::UNAVAILABLE,
+        Response::Probe(ipc::ProbeResponse::DestinationNotFound) => exitcode::UNAVAILABLE,
+        Response::Probe(ipc::ProbeResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
+        Response::QuickProbe(ipc::QuickProbeResponse::Checking { .. }) => exitcode::OK,
+        Response::QuickProbe(ipc::QuickProbeResponse::AlreadyChecking { .. }) => exitcode::OK,
+        Response::QuickProbe(ipc::QuickProbeResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
         Response::QuickProbe(..) => exitcode::UNAVAILABLE,
-        Response::Unprobe(command::UnprobeResponse::Closing { .. }) => exitcode::OK,
-        Response::Unprobe(command::UnprobeResponse::InUse { .. }) => exitcode::PROTOCOL,
-        Response::Unprobe(command::UnprobeResponse::NotProbing) => exitcode::PROTOCOL,
+        Response::Unprobe(ipc::UnprobeResponse::Closing { .. }) => exitcode::OK,
+        Response::Unprobe(ipc::UnprobeResponse::InUse { .. }) => exitcode::PROTOCOL,
+        Response::Unprobe(ipc::UnprobeResponse::NotProbing) => exitcode::PROTOCOL,
         Response::Status(..) => exitcode::OK,
-        Response::Balance(Ok(..)) => exitcode::OK,
-        Response::Balance(Err(..)) => exitcode::SOFTWARE,
+        Response::Balance(ipc::BalanceResponse::Available(..)) => exitcode::OK,
+        Response::Balance(ipc::BalanceResponse::Unavailable { .. }) => exitcode::SOFTWARE,
         Response::Pong => exitcode::OK,
         Response::Telemetry(Some(_)) => exitcode::OK,
         Response::Telemetry(None) => exitcode::UNAVAILABLE,
-        Response::NerdStats(stats) => match &stats.connection {
-            command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Available(_)) => exitcode::OK,
-            command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Waiting) => exitcode::UNAVAILABLE,
-            command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Error(_)) => exitcode::SOFTWARE,
-            command::NerdStatsConnection::Connecting(..) => exitcode::OK,
-            command::NerdStatsConnection::Connected(..) => exitcode::OK,
+        Response::NerdStats(stats) => match stats.as_ref() {
+            ipc::NerdStats::NoInfo {
+                tickets: ipc::TicketStatsStatus::Available(_),
+            } => exitcode::OK,
+            ipc::NerdStats::NoInfo {
+                tickets: ipc::TicketStatsStatus::Waiting,
+            } => exitcode::UNAVAILABLE,
+            ipc::NerdStats::NoInfo {
+                tickets: ipc::TicketStatsStatus::Error { .. },
+            } => exitcode::SOFTWARE,
+            ipc::NerdStats::Connecting { .. } => exitcode::OK,
+            ipc::NerdStats::Connected { .. } => exitcode::OK,
         },
-        Response::FundingTool(command::FundingToolResponse::WrongPhase) => exitcode::UNAVAILABLE,
-        Response::FundingTool(command::FundingToolResponse::Started) => exitcode::OK,
-        Response::FundingTool(command::FundingToolResponse::InProgress) => exitcode::OK,
-        Response::FundingTool(command::FundingToolResponse::Done) => exitcode::OK,
-        Response::FundingTool(command::FundingToolResponse::Cooldown(..)) => exitcode::UNAVAILABLE,
+        Response::FundingTool(ipc::FundingToolResponse::WrongPhase) => exitcode::UNAVAILABLE,
+        Response::FundingTool(ipc::FundingToolResponse::Started) => exitcode::OK,
+        Response::FundingTool(ipc::FundingToolResponse::InProgress) => exitcode::OK,
+        Response::FundingTool(ipc::FundingToolResponse::Done) => exitcode::OK,
+        Response::FundingTool(ipc::FundingToolResponse::Cooldown { .. }) => exitcode::UNAVAILABLE,
         Response::Info(..) => exitcode::OK,
-        Response::StartClient(command::StartClientResponse::Started) => exitcode::OK,
-        Response::StartClient(command::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,
-        Response::StopClient(command::StopClientResponse::Stopped) => exitcode::OK,
-        Response::StopClient(command::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
+        Response::StartClient(ipc::StartClientResponse::Started) => exitcode::OK,
+        Response::StartClient(ipc::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,
+        Response::StopClient(ipc::StopClientResponse::Stopped) => exitcode::OK,
+        Response::StopClient(ipc::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
         Response::Destinations(..) => exitcode::OK,
-        Response::WorkerOffline => exitcode::UNAVAILABLE,
-        Response::WorkerRestarting => exitcode::TEMPFAIL,
-        // Internal response — see pretty_print for explanation
-        Response::ForceReconnectAcknowledged => exitcode::PROTOCOL,
     }
 }
 
-fn print_ticket_stats_status(status: &command::TicketStatsStatus) {
+fn print_ticket_stats_status(status: &ipc::TicketStatsStatus) {
     match status {
-        command::TicketStatsStatus::Available(ts) => {
-            let sci = balance::wxhopr_scientific(ts.ticket_price)
-                .map(|s| format!(" ({s})"))
-                .unwrap_or_default();
+        ipc::TicketStatsStatus::Available(ts) => {
+            let sci = ipc::scientific_suffix(&ts.ticket_price);
             println!(
                 "Ticket Price: {}{}\nWinning Probability: {}",
                 ts.ticket_price,
@@ -437,46 +435,52 @@ fn print_ticket_stats_status(status: &command::TicketStatsStatus) {
                 format_probability(ts.winning_probability)
             )
         }
-        command::TicketStatsStatus::Waiting => {
+        ipc::TicketStatsStatus::Waiting => {
             println!("waiting for incentive operations to become available")
         }
-        command::TicketStatsStatus::Error(e) => eprintln!("Error fetching ticket stats: {e}"),
+        ipc::TicketStatsStatus::Error { message } => eprintln!("Error fetching ticket stats: {message}"),
     }
 }
 
-fn print_nerd_stats(nerd_stats: &command::NerdStatsResponse) {
-    match &nerd_stats.connection {
-        command::NerdStatsConnection::NoInfo(ts_status) => {
-            print_ticket_stats_status(ts_status);
+fn print_nerd_stats(nerd_stats: &ipc::NerdStats) {
+    match nerd_stats {
+        ipc::NerdStats::NoInfo { tickets } => {
+            print_ticket_stats_status(tickets);
             println!("(connect to a destination to see more stats)");
         }
-        command::NerdStatsConnection::Connecting(ts_status, conn) => {
-            print_ticket_stats_status(ts_status);
+        ipc::NerdStats::Connecting { tickets, conn } => {
+            print_ticket_stats_status(tickets);
             println!("---");
             print_connecting_stats(conn);
         }
-        command::NerdStatsConnection::Connected(ts_status, conn) => {
-            print_ticket_stats_status(ts_status);
+        ipc::NerdStats::Connected { tickets, conn } => {
+            print_ticket_stats_status(tickets);
             println!("---");
             print_connected_stats(conn);
         }
     }
 }
 
-fn print_connecting_stats(stats: &command::ConnStats) {
+fn print_connecting_stats(stats: &ipc::ConnStats) {
     let mut str_resp = print_conn_stats_routing(stats, "-CONNECTING-");
     str_resp.push_str("---\n");
     str_resp.push_str(
         format!(
             "WireGuard Public Key: {}\n",
-            stats.wg_pubkey.clone().unwrap_or("--pending generation--".to_string())
+            stats
+                .wg_pubkey
+                .map(|k| k.to_string())
+                .unwrap_or("--pending generation--".to_string())
         )
         .as_str(),
     );
     str_resp.push_str(
         format!(
             "Assigned WireGuard IP: {}\n",
-            stats.wg_ip.clone().unwrap_or("--pending registration--".to_string())
+            stats
+                .wg_ip
+                .map(|ip| format!("{ip}/32"))
+                .unwrap_or("--pending registration--".to_string())
         )
         .as_str(),
     );
@@ -492,7 +496,7 @@ fn print_connecting_stats(stats: &command::ConnStats) {
             "---\nExit WireGuard Public Key: {}\n",
             stats
                 .wg_server_pubkey
-                .clone()
+                .map(|k| k.to_string())
                 .unwrap_or("--pending registration--".to_string())
         )
         .as_str(),
@@ -502,14 +506,14 @@ fn print_connecting_stats(stats: &command::ConnStats) {
     println!("{str_resp}");
 }
 
-fn print_connected_stats(stats: &command::ConnStats) {
+fn print_connected_stats(stats: &ipc::ConnStats) {
     let mut str_resp = print_conn_stats_routing(stats, "-o-");
     str_resp.push_str("---\n");
     if let Some(ref wg_pubkey) = stats.wg_pubkey {
         str_resp.push_str(format!("WireGuard Public Key: {}\n", wg_pubkey).as_str());
     }
     if let Some(ref ip) = stats.wg_ip {
-        str_resp.push_str(format!("Assigned WireGuard IP: {ip}\n").as_str());
+        str_resp.push_str(format!("Assigned WireGuard IP: {ip}/32\n").as_str());
     }
     if let Some(ref session) = stats.bridge_session {
         str_resp.push_str(&print_session(session));
@@ -534,7 +538,7 @@ fn format_handshake_age(d: Duration) -> String {
 /// recorded one. `rtt`/handshake age are labeled "as of last handshake", not
 /// "current" - WireGuard only updates them on a handshake, which recurs every
 /// ~120s on an active tunnel, so they can be meaningfully stale.
-fn print_wg_tunnel_stats(stats: &command::ConnStats) -> String {
+fn print_wg_tunnel_stats(stats: &ipc::ConnStats) -> String {
     let Some(current) = stats.wg_stats.as_ref().and_then(|s| s.current.as_ref()) else {
         return String::new();
     };
@@ -554,7 +558,7 @@ fn print_wg_tunnel_stats(stats: &command::ConnStats) -> String {
 }
 
 /// Render SURB balancer insights, if any session has them; gauges can be stale on idle tunnels.
-fn print_surb_stats(stats: &command::ConnStats) -> String {
+fn print_surb_stats(stats: &ipc::ConnStats) -> String {
     let mut lines = String::new();
     if let (Some(session), Some(surb)) = (&stats.bridge_session, &stats.bridge_surb) {
         lines.push_str(&print_session_surb(session_label(session), surb));
@@ -564,7 +568,7 @@ fn print_surb_stats(stats: &command::ConnStats) -> String {
     }
     let has_setpoint = stats.surb_setpoint_applied.is_some() || stats.surb_setpoint_target.is_some();
     if has_setpoint {
-        let fmt = |sp: Option<command::SurbBalancerSetpoint>| {
+        let fmt = |sp: Option<ipc::SurbBalancerSetpoint>| {
             sp.map(|s| format!("{} @ {}/s", s.target_surb_buffer_size, s.max_surbs_per_sec))
                 .unwrap_or("--".to_string())
         };
@@ -580,7 +584,7 @@ fn print_surb_stats(stats: &command::ConnStats) -> String {
     format!("---\n{lines}")
 }
 
-fn print_session_surb(label: &str, surb: &command::SurbStats) -> String {
+fn print_session_surb(label: &str, surb: &ipc::SurbStats) -> String {
     let fmt = |v: Option<u64>| v.map(|v| v.to_string()).unwrap_or("--".to_string());
     let rate = surb
         .rate_per_sec
@@ -595,72 +599,47 @@ fn print_session_surb(label: &str, surb: &command::SurbStats) -> String {
     )
 }
 
-fn session_label(session: &command::ActiveSession) -> &'static str {
-    use command::ActiveSession;
-    match session {
-        ActiveSession::Bridge { .. } => "Bridge",
-        ActiveSession::Ping { .. } => "Ping",
-        ActiveSession::Main { .. } => "Main",
+fn session_label(session: &ipc::ActiveSession) -> &'static str {
+    match session.kind {
+        ipc::SessionKind::Bridge => "Bridge",
+        ipc::SessionKind::Ping => "Ping",
+        ipc::SessionKind::Main => "Main",
     }
 }
 
-fn print_session(session: &command::ActiveSession) -> String {
-    use command::ActiveSession;
-    match session {
-        ActiveSession::Bridge { bound_host, id } => {
-            format!("Bridge Session entry: {bound_host}\nBridge Session ID: {id}\n")
-        }
-        ActiveSession::Ping { bound_host, id } => {
-            format!("Ping Session entry: {bound_host}\nPing Session ID: {id}\n")
-        }
-        ActiveSession::Main { bound_host, id } => {
-            format!("Main Session entry: {bound_host}\nMain Session ID: {id}\n")
-        }
-    }
+fn print_session(session: &ipc::ActiveSession) -> String {
+    let label = session_label(session);
+    format!(
+        "{label} Session entry: {}\n{label} Session ID: {}\n",
+        session.bound_host, session.id
+    )
 }
 
-fn print_session_or_pending(session: &Option<command::ActiveSession>, pending: &str) -> String {
+fn print_session_or_pending(session: &Option<ipc::ActiveSession>, pending: &str) -> String {
     session
         .as_ref()
         .map(print_session)
         .unwrap_or_else(|| format!("Session entry: {pending}\nSession ID: {pending}\n"))
 }
 
-fn print_conn_stats_routing(stats: &command::ConnStats, title: &str) -> String {
-    let mut str_resp = String::new();
-    match stats.destination.routing.hop_count() {
-        0 => {
-            str_resp.push_str(&format!(
-                "{node_addr}(me) -{title}-DIRECTLY--> {addr}({exit})\n",
-                node_addr = stats.node_address.to_checksum(),
-                addr = stats.destination.address.to_checksum(),
-                exit = stats.destination.connect_id,
-            ));
-        }
-        1 => {
-            str_resp.push_str(&format!(
-                "{node_addr}(me) -{title}-VIA--1HOP--> {addr}({exit})\n",
-                node_addr = stats.node_address.to_checksum(),
-                addr = stats.destination.address.to_checksum(),
-                exit = stats.destination.connect_id,
-            ));
-        }
-        nr => {
-            str_resp.push_str(&format!(
-                "{node_addr}(me) -{title}-VIA--{nr}HOPS--> {addr}({exit})\n",
-                node_addr = stats.node_address.to_checksum(),
-                addr = stats.destination.address.to_checksum(),
-                exit = stats.destination.connect_id,
-            ));
-        }
-    }
-    str_resp
+fn print_conn_stats_routing(stats: &ipc::ConnStats, title: &str) -> String {
+    let route = match stats.destination.hops.count() {
+        0 => "DIRECTLY".to_string(),
+        1 => "VIA--1HOP".to_string(),
+        nr => format!("VIA--{nr}HOPS"),
+    };
+    format!(
+        "{node_addr}(me) -{title}-{route}--> {addr}({exit})\n",
+        node_addr = stats.node_address,
+        addr = stats.destination.address,
+        exit = stats.destination.id,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use balance::{Balance, FundingLevel, FundingStatus, WxHOPR};
+    use ipc::{Balance, FundingLevel, FundingStatus};
 
     fn good() -> FundingStatus {
         FundingStatus {
@@ -675,7 +654,7 @@ mod tests {
     #[test]
     fn renders_refill_shortfall_when_no_deficit() {
         let status = FundingStatus {
-            refill_shortfall: Some(Balance::<WxHOPR>::from(5u64)),
+            refill_shortfall: Some(Balance::from_wei(5)),
             ..good()
         };
         let out = format_funding_status(&status);
@@ -687,8 +666,8 @@ mod tests {
     #[test]
     fn deficit_takes_precedence_over_refill_shortfall() {
         let status = FundingStatus {
-            wxhopr_deficit: Some(Balance::<WxHOPR>::from(9u64)),
-            refill_shortfall: Some(Balance::<WxHOPR>::from(5u64)),
+            wxhopr_deficit: Some(Balance::from_wei(9)),
+            refill_shortfall: Some(Balance::from_wei(5)),
             ..good()
         };
         assert!(format_funding_status(&status).contains("recommended"));

@@ -13,7 +13,9 @@ use std::net;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use crate::command::{self, Response, RunMode, WorkerCommand};
+use gnosis_vpn_ipc::{self as ipc, Response, RunMode};
+
+use crate::command::{self, WorkerCommand};
 use crate::compat::SafeModule;
 use crate::config::{self, Config};
 use crate::connection;
@@ -25,7 +27,7 @@ use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::probe::{self, Probe};
 use crate::route_health::RouteHealth;
 use crate::worker_params::{self, WorkerParams};
-use crate::{balance, log_output, ticket_stats, wireguard};
+use crate::{balance, log_output, wire, wireguard};
 
 mod channel_maintenance;
 pub(crate) mod runner;
@@ -381,6 +383,22 @@ impl Core {
                 true
             }
 
+            WorkerToCore::ForceReconnect => {
+                let active_conn = match self.phase.clone() {
+                    Phase::Connected(conn) => Some(conn),
+                    Phase::Connecting(conn) => Some(conn),
+                    _ => None,
+                };
+                if let Some(conn) = active_conn {
+                    tracing::info!(%conn, "force reconnect triggered by WAN change");
+                    self.reconnecting_since = Some(SystemTime::now());
+                    self.reconnect_in_place(conn, false, results_sender).await;
+                } else {
+                    tracing::debug!(?self.phase, "force reconnect requested but not connected or connecting");
+                }
+                true
+            }
+
             WorkerToCore::WorkerCommand { cmd, resp } => {
                 // Status is polled frequently; keep it at trace to avoid log spam.
                 if matches!(&cmd, WorkerCommand::Status) {
@@ -392,19 +410,19 @@ impl Core {
                     WorkerCommand::NerdStats => {
                         tracing::debug!("incoming nerd stats request");
                         let Some(ops) = self.incentive_operations.clone() else {
-                            let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
-                                connection: command::NerdStatsConnection::NoInfo(command::TicketStatsStatus::Waiting),
-                            }));
+                            let _ = resp.send(Response::NerdStats(Box::new(ipc::NerdStats::NoInfo {
+                                tickets: ipc::TicketStatsStatus::Waiting,
+                            })));
                             return true;
                         };
                         let sender = results_sender.clone();
                         tokio::spawn(async move {
                             let ticket_stats_status = match ops.ticket_stats().await {
-                                Ok(ts) => command::TicketStatsStatus::Available(ticket_stats::TicketStats {
-                                    ticket_price: ts.ticket_price,
+                                Ok(ts) => ipc::TicketStatsStatus::Available(ipc::TicketStats {
+                                    ticket_price: wire::wxhopr(ts.ticket_price),
                                     winning_probability: ts.winning_probability.into(),
                                 }),
-                                Err(e) => command::TicketStatsStatus::Error(e.to_string()),
+                                Err(e) => ipc::TicketStatsStatus::Error { message: e.to_string() },
                             };
                             let _ = sender
                                 .send(Results::NerdStatsTicketStats {
@@ -416,58 +434,72 @@ impl Core {
                     }
 
                     WorkerCommand::Status => {
-                        let _ = resp.send(Response::status(self.build_status()));
+                        let _ = resp.send(Response::Status(Box::new(self.build_status())));
                     }
 
                     WorkerCommand::Destinations => {
-                        let _ = resp.send(Response::Destinations(self.config.destinations.connect_ids()));
+                        let ids = self
+                            .config
+                            .destinations
+                            .connect_ids()
+                            .into_iter()
+                            .map(Into::into)
+                            .collect();
+                        let _ = resp.send(Response::Destinations(ids));
                     }
 
-                    WorkerCommand::Connect(token) => match self.config.destinations.resolve(&token).cloned() {
-                        Ok(dest) => {
-                            self.reconnecting_since = None;
-                            self.abandon_resume(results_sender).await;
-                            let is_already_active = match &self.phase {
-                                Phase::Connected(conn) | Phase::Connecting(conn) => conn.destination.same_exit(&dest),
-                                _ => false,
-                            };
-                            if is_already_active {
-                                let _ = resp.send(Response::connect(command::ConnectResponse::already_connected(
-                                    dest.clone(),
-                                )));
-                            } else if let Some(rh) = self.route_healths.get(&dest.key()) {
-                                if rh.is_unrecoverable() {
-                                    let _ = resp.send(Response::connect(command::ConnectResponse::unable(
-                                        dest.clone(),
-                                        rh.state().clone(),
-                                    )));
-                                } else if rh.is_routable() {
-                                    // Opening the probe is part of connecting; act_on_target sequences it.
-                                    let _ = resp
-                                        .send(Response::connect(command::ConnectResponse::connecting(dest.clone())));
-                                    self.target = Some(dest.connect_id.clone());
-                                    self.act_on_target(results_sender);
+                    WorkerCommand::Connect { destination: token } => {
+                        match self.config.destinations.resolve(token.as_str()).cloned() {
+                            Ok(dest) => {
+                                self.reconnecting_since = None;
+                                self.abandon_resume(results_sender).await;
+                                let is_already_active = match &self.phase {
+                                    Phase::Connected(conn) | Phase::Connecting(conn) => {
+                                        conn.destination.same_exit(&dest)
+                                    }
+                                    _ => false,
+                                };
+                                if is_already_active {
+                                    let _ = resp.send(Response::Connect(ipc::ConnectResponse::AlreadyConnected {
+                                        destination: command::destination(&dest),
+                                    }));
+                                } else if let Some(rh) = self.route_healths.get(&dest.key()) {
+                                    if rh.is_unrecoverable() {
+                                        let _ = resp.send(Response::Connect(ipc::ConnectResponse::UnableToConnect {
+                                            destination: command::destination(&dest),
+                                            route_health: rh.state().clone(),
+                                        }));
+                                    } else if rh.is_routable() {
+                                        // Opening the probe is part of connecting; act_on_target sequences it.
+                                        let _ = resp.send(Response::Connect(ipc::ConnectResponse::Connecting {
+                                            destination: command::destination(&dest),
+                                        }));
+                                        self.target = Some(dest.connect_id.clone());
+                                        self.act_on_target(results_sender);
+                                    } else {
+                                        let _ = resp.send(Response::Connect(ipc::ConnectResponse::WaitingToConnect {
+                                            destination: command::destination(&dest),
+                                            route_health: rh.state().clone(),
+                                        }));
+                                        self.target = Some(dest.connect_id.clone());
+                                    }
                                 } else {
-                                    let _ = resp.send(Response::connect(command::ConnectResponse::waiting(
-                                        dest.clone(),
-                                        rh.state().clone(),
-                                    )));
-                                    self.target = Some(dest.connect_id.clone());
+                                    tracing::warn!(key = %dest.key(), "no route health found for destination - this should not happen");
+                                    let _ = resp.send(Response::Connect(ipc::ConnectResponse::DestinationNotFound));
                                 }
-                            } else {
-                                tracing::warn!(key = %dest.key(), "no route health found for destination - this should not happen");
-                                let _ = resp.send(Response::connect(command::ConnectResponse::destination_not_found()));
+                            }
+                            Err(destination::Unresolved::Ambiguous(ids)) => {
+                                tracing::info!(%token, ?ids, "connect names one exit reached by several paths");
+                                let _ = resp.send(Response::Connect(ipc::ConnectResponse::DestinationAmbiguous {
+                                    candidates: ids.into_iter().map(Into::into).collect(),
+                                }));
+                            }
+                            Err(destination::Unresolved::NotFound) => {
+                                tracing::info!(%token, "cannot connect to destination - not known");
+                                let _ = resp.send(Response::Connect(ipc::ConnectResponse::DestinationNotFound));
                             }
                         }
-                        Err(destination::Unresolved::Ambiguous(ids)) => {
-                            tracing::info!(%token, ?ids, "connect names one exit reached by several paths");
-                            let _ = resp.send(Response::connect(command::ConnectResponse::ambiguous(ids)));
-                        }
-                        Err(destination::Unresolved::NotFound) => {
-                            tracing::info!(%token, "cannot connect to destination - not known");
-                            let _ = resp.send(Response::connect(command::ConnectResponse::destination_not_found()));
-                        }
-                    },
+                    }
 
                     WorkerCommand::Disconnect => {
                         self.target = None;
@@ -476,55 +508,60 @@ impl Core {
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
                                 tracing::info!(current = %conn.destination, "disconnecting");
-                                let _ = resp.send(Response::disconnect(command::DisconnectResponse::new(
-                                    conn.destination.clone(),
-                                )));
+                                let _ = resp.send(Response::Disconnect(ipc::DisconnectResponse::Disconnecting {
+                                    destination: command::destination(&conn.destination),
+                                }));
                             }
                             _ => {
                                 tracing::debug!("no active connection to disconnect");
-                                let _ = resp.send(Response::disconnect(command::DisconnectResponse::not_connected()));
+                                let _ = resp.send(Response::Disconnect(ipc::DisconnectResponse::NotConnected));
                             }
                         }
                         self.act_on_target(results_sender);
                     }
 
-                    WorkerCommand::Probe(token) => {
-                        let response = match self.config.destinations.resolve(&token).cloned() {
+                    WorkerCommand::Probe { destination: token } => {
+                        let response = match self.config.destinations.resolve(token.as_str()).cloned() {
                             Ok(dest) => self.probe_destination(dest, results_sender),
-                            Err(destination::Unresolved::Ambiguous(ids)) => {
-                                command::ProbeResponse::DestinationAmbiguous { connect_ids: ids }
-                            }
-                            Err(destination::Unresolved::NotFound) => command::ProbeResponse::DestinationNotFound,
+                            Err(destination::Unresolved::Ambiguous(ids)) => ipc::ProbeResponse::DestinationAmbiguous {
+                                candidates: ids.into_iter().map(Into::into).collect(),
+                            },
+                            Err(destination::Unresolved::NotFound) => ipc::ProbeResponse::DestinationNotFound,
                         };
                         let _ = resp.send(Response::Probe(response));
                     }
 
-                    WorkerCommand::QuickProbe(token) => match self.config.destinations.resolve(&token).cloned() {
-                        Ok(dest) => self.spawn_quick_probe(dest, resp, results_sender),
-                        Err(destination::Unresolved::Ambiguous(ids)) => {
-                            let _ = resp.send(Response::QuickProbe(
-                                command::QuickProbeResponse::DestinationAmbiguous { connect_ids: ids },
-                            ));
+                    WorkerCommand::QuickProbe { destination: token } => {
+                        match self.config.destinations.resolve(token.as_str()).cloned() {
+                            Ok(dest) => self.spawn_quick_probe(dest, resp, results_sender),
+                            Err(destination::Unresolved::Ambiguous(ids)) => {
+                                let _ =
+                                    resp.send(Response::QuickProbe(ipc::QuickProbeResponse::DestinationAmbiguous {
+                                        candidates: ids.into_iter().map(Into::into).collect(),
+                                    }));
+                            }
+                            Err(destination::Unresolved::NotFound) => {
+                                let _ = resp.send(Response::QuickProbe(ipc::QuickProbeResponse::DestinationNotFound));
+                            }
                         }
-                        Err(destination::Unresolved::NotFound) => {
-                            let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::DestinationNotFound));
-                        }
-                    },
+                    }
 
                     WorkerCommand::Unprobe => {
                         let response = match self.probe.as_ref() {
                             None => {
                                 self.root_probe_hold = false;
-                                command::UnprobeResponse::NotProbing
+                                ipc::UnprobeResponse::NotProbing
                             }
-                            Some(p) if self.probe_in_use(p.destination()) => {
-                                command::UnprobeResponse::in_use(p.destination().clone())
-                            }
+                            Some(p) if self.probe_in_use(p.destination()) => ipc::UnprobeResponse::InUse {
+                                destination: command::destination(p.destination()),
+                            },
                             Some(p) => {
                                 let destination = p.destination().clone();
                                 self.stop_probe();
                                 self.root_probe_hold = false;
-                                command::UnprobeResponse::closing(destination)
+                                ipc::UnprobeResponse::Closing {
+                                    destination: command::destination(&destination),
+                                }
                             }
                         };
                         let _ = resp.send(Response::Unprobe(response));
@@ -543,16 +580,18 @@ impl Core {
                                         )),
                                         _ => None,
                                     };
-                                Ok(command::BalanceResponse::build(
+                                ipc::BalanceResponse::Available(Box::new(command::balances(
                                     &hopr.info(),
                                     balances,
                                     &self.config.destinations,
                                     self.capacity_allocations.as_ref(),
                                     self.ideal_balance_recommendation,
                                     funding_status,
-                                ))
+                                )))
                             }
-                            _ => Err("balance data not yet available".to_string()),
+                            _ => ipc::BalanceResponse::Unavailable {
+                                reason: "balance data not yet available".to_string(),
+                            },
                         };
                         let _ = resp.send(Response::Balance(result));
                     }
@@ -568,23 +607,7 @@ impl Core {
                         let _ = resp.send(Response::Telemetry(res));
                     }
 
-                    WorkerCommand::ForceReconnect => {
-                        let active_conn = match self.phase.clone() {
-                            Phase::Connected(conn) => Some(conn),
-                            Phase::Connecting(conn) => Some(conn),
-                            _ => None,
-                        };
-                        if let Some(conn) = active_conn {
-                            tracing::info!(%conn, "force reconnect triggered by WAN change");
-                            self.reconnecting_since = Some(SystemTime::now());
-                            self.reconnect_in_place(conn, false, results_sender).await;
-                        } else {
-                            tracing::debug!(?self.phase, "force reconnect requested but not connected or connecting");
-                        }
-                        let _ = resp.send(Response::ForceReconnectAcknowledged);
-                    }
-
-                    WorkerCommand::FundingTool(secret) => {
+                    WorkerCommand::FundingTool { secret } => {
                         let in_presafe_phase = matches!(self.phase, Phase::CheckingSafe { .. });
                         let rerun_allowed = self.worker_params.allow_funding_tool_rerun();
                         // cooldown only gates reruns; without the flag, a completed run stays Done forever
@@ -592,25 +615,25 @@ impl Core {
                             rerun_allowed.then(|| self.funding_tool.cooldown_remaining()).flatten();
 
                         let response = if !(in_presafe_phase || rerun_allowed) {
-                            command::FundingToolResponse::WrongPhase
+                            ipc::FundingToolResponse::WrongPhase
                         } else if let Some(remaining) = cooldown_remaining {
-                            command::FundingToolResponse::Cooldown(remaining)
+                            ipc::FundingToolResponse::Cooldown { remaining }
                         } else {
                             match &self.funding_tool {
-                                balance::FundingTool::InProgress => command::FundingToolResponse::InProgress,
+                                balance::FundingTool::InProgress => ipc::FundingToolResponse::InProgress,
                                 balance::FundingTool::CompletedSuccess(_) if !rerun_allowed => {
-                                    command::FundingToolResponse::Done
+                                    ipc::FundingToolResponse::Done
                                 }
                                 balance::FundingTool::NotStarted
                                 | balance::FundingTool::CompletedError(_)
                                 | balance::FundingTool::CompletedSuccess(_) => {
                                     self.funding_tool = balance::FundingTool::InProgress;
-                                    self.spawn_funding_runner(secret, results_sender);
-                                    command::FundingToolResponse::Started
+                                    self.spawn_funding_runner(secret.expose().to_string(), results_sender);
+                                    ipc::FundingToolResponse::Started
                                 }
                             }
                         };
-                        let _ = resp.send(Response::funding_tool(response));
+                        let _ = resp.send(Response::FundingTool(response));
                     }
                 }
                 true
@@ -1026,7 +1049,7 @@ impl Core {
                 if let probe::Event::Version { versions, .. } = &event
                     && let Some(rh) = self.route_healths.get_mut(&key)
                 {
-                    rh.apply_api_versions(&versions.versions);
+                    rh.apply_api_versions(&versions.api);
                 }
                 probe.apply(event);
                 let is_ready = probe.ready_session().is_some();
@@ -1088,25 +1111,25 @@ impl Core {
                 Phase::Connecting(conn) => {
                     let bridge = self.probe_session_for(conn);
                     let telemetry = nerd_stats_telemetry(conn, bridge);
-                    let conn_stats =
-                        command::ConnStats::from_conn(conn, self.node_address, telemetry.as_deref(), bridge);
-                    let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
-                        connection: command::NerdStatsConnection::Connecting(ticket_stats_status, conn_stats),
-                    }));
+                    let conn = command::conn_stats(conn, self.node_address, telemetry.as_deref(), bridge);
+                    let _ = resp.send(Response::NerdStats(Box::new(ipc::NerdStats::Connecting {
+                        tickets: ticket_stats_status,
+                        conn,
+                    })));
                 }
                 Phase::Connected(conn) => {
                     let bridge = self.probe_session_for(conn);
                     let telemetry = nerd_stats_telemetry(conn, bridge);
-                    let conn_stats =
-                        command::ConnStats::from_conn(conn, self.node_address, telemetry.as_deref(), bridge);
-                    let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
-                        connection: command::NerdStatsConnection::Connected(ticket_stats_status, conn_stats),
-                    }));
+                    let conn = command::conn_stats(conn, self.node_address, telemetry.as_deref(), bridge);
+                    let _ = resp.send(Response::NerdStats(Box::new(ipc::NerdStats::Connected {
+                        tickets: ticket_stats_status,
+                        conn,
+                    })));
                 }
                 _ => {
-                    let _ = resp.send(Response::nerd_stats(command::NerdStatsResponse {
-                        connection: command::NerdStatsConnection::NoInfo(ticket_stats_status),
-                    }));
+                    let _ = resp.send(Response::NerdStats(Box::new(ipc::NerdStats::NoInfo {
+                        tickets: ticket_stats_status,
+                    })));
                 }
             },
         };
@@ -1688,19 +1711,15 @@ impl Core {
     }
 
     /// Answers `probe <id>`: refuses a latched route, keeps an existing probe of the same exit, else (re)starts.
-    fn probe_destination(
-        &mut self,
-        dest: Destination,
-        results_sender: &mpsc::Sender<Results>,
-    ) -> command::ProbeResponse {
+    fn probe_destination(&mut self, dest: Destination, results_sender: &mpsc::Sender<Results>) -> ipc::ProbeResponse {
         if self.hopr.is_none() {
-            return command::ProbeResponse::NotReady;
+            return ipc::ProbeResponse::NotReady;
         }
         if let Some(rh) = self.route_healths.get(&dest.key())
             && rh.is_not_allowed()
         {
-            return command::ProbeResponse::UnableToProbe {
-                destination: dest,
+            return ipc::ProbeResponse::UnableToProbe {
+                destination: command::destination(&dest),
                 route_health: rh.state().clone(),
             };
         }
@@ -1708,7 +1727,9 @@ impl Core {
         if let Some(probe) = self.probe.as_mut().filter(|p| p.key() == dest.key()) {
             probe.mark_requested();
             self.root_probe_hold = true;
-            return command::ProbeResponse::AlreadyProbing { destination: dest };
+            return ipc::ProbeResponse::AlreadyProbing {
+                destination: command::destination(&dest),
+            };
         }
         if let Some(in_use) = self
             .probe
@@ -1716,17 +1737,19 @@ impl Core {
             .map(Probe::destination)
             .filter(|probed| self.probe_in_use(probed))
         {
-            return command::ProbeResponse::InUse {
-                destination: Box::new(in_use.clone()),
+            return ipc::ProbeResponse::InUse {
+                destination: command::destination(in_use),
             };
         }
         self.root_probe_hold = true;
         match self.start_probe(&dest, true, results_sender) {
-            Some(previous) => command::ProbeResponse::Replaced {
-                destination: dest,
-                previous: Box::new(previous),
+            Some(previous) => ipc::ProbeResponse::Replaced {
+                destination: command::destination(&dest),
+                previous: command::destination(&previous),
             },
-            None => command::ProbeResponse::Probing { destination: dest },
+            None => ipc::ProbeResponse::Probing {
+                destination: command::destination(&dest),
+            },
         }
     }
 
@@ -1738,33 +1761,38 @@ impl Core {
         results_sender: &mpsc::Sender<Results>,
     ) {
         let Some(hopr) = self.hopr.clone() else {
-            let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::NotReady));
+            let _ = resp.send(Response::QuickProbe(ipc::QuickProbeResponse::NotReady));
             return;
         };
         let Some(route_health) = self.route_healths.get_mut(&dest.key()) else {
             tracing::warn!(key = %dest.key(), "no route health found for destination - this should not happen");
-            let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::DestinationNotFound));
+            let _ = resp.send(Response::QuickProbe(ipc::QuickProbeResponse::DestinationNotFound));
             return;
         };
         if !route_health.is_routable() && !route_health.is_incompatible_api() {
             let state = route_health.state().clone();
-            let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::unable(dest, state)));
+            let _ = resp.send(Response::QuickProbe(ipc::QuickProbeResponse::UnableToProbe {
+                destination: command::destination(&dest),
+                route_health: state,
+            }));
             return;
         }
         // The long-lived probe already reports on this exit; a second session would only add load.
         if self.probe.as_ref().is_some_and(|p| p.key() == dest.key()) {
-            let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::already_probing(dest)));
+            let _ = resp.send(Response::QuickProbe(ipc::QuickProbeResponse::AlreadyProbing {
+                destination: command::destination(&dest),
+            }));
             return;
         }
         if !route_health.start_quick_probe(SystemTime::now()) {
-            let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::already_checking(
-                dest,
-            )));
+            let _ = resp.send(Response::QuickProbe(ipc::QuickProbeResponse::AlreadyChecking {
+                destination: command::destination(&dest),
+            }));
             return;
         }
-        let _ = resp.send(Response::QuickProbe(command::QuickProbeResponse::checking(
-            dest.clone(),
-        )));
+        let _ = resp.send(Response::QuickProbe(ipc::QuickProbeResponse::Checking {
+            destination: command::destination(&dest),
+        }));
 
         let options = self.config.connection.clone();
         let cancel = self.cancel_on_shutdown.clone();
@@ -2027,7 +2055,7 @@ impl Core {
     }
 
     /// Snapshot of everything `Command::Status` reports.
-    fn build_status(&self) -> command::StatusResponse {
+    fn build_status(&self) -> ipc::Status {
         let runmode = match self.phase.clone() {
             Phase::Initial { last_error } => RunMode::Init { last_error },
             Phase::CheckingSafe {
@@ -2056,7 +2084,7 @@ impl Core {
                     balance::FundingTool::CompletedError(error) => Some(format!("Funding tool error: {error}")),
                 };
                 let error = if errors.is_empty() { None } else { Some(errors) };
-                RunMode::preparing_safe(
+                command::preparing_safe(
                     self.node_address,
                     &balance,
                     funding_tool,
@@ -2067,12 +2095,12 @@ impl Core {
             Phase::DeployingSafe {
                 node_balance: _,
                 query_safe: _,
-            } => RunMode::deploying_safe(self.node_address),
+            } => command::deploying_safe(self.node_address),
             Phase::Starting {
                 edgli_init_state,
                 last_error,
-            } => RunMode::warmup(edgli_init_state, None, last_error),
-            Phase::HoprSyncing => RunMode::warmup(None, self.hopr.as_ref().map(|h| h.status()), None),
+            } => command::warmup(edgli_init_state, None, last_error),
+            Phase::HoprSyncing => command::warmup(None, self.hopr.as_ref().map(|h| h.status()), None),
             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
                 let funding_status = match (
                     &self.ideal_balance_recommendation,
@@ -2087,7 +2115,7 @@ impl Core {
                     )),
                     _ => None,
                 };
-                RunMode::running(
+                command::running(
                     self.hopr.as_ref().map(|h| h.status()),
                     funding_status,
                     self.channel_maintenance.health(),
@@ -2096,25 +2124,18 @@ impl Core {
             Phase::ShuttingDown => RunMode::Shutdown,
         };
 
-        let (connecting, reconnecting) = connection_infos(&self.phase, self.reconnecting_since, self.target.as_deref());
-        let connected = match &self.phase {
-            Phase::Connected(conn) => Some(command::ConnectedInfo {
-                destination_id: conn.destination.connect_id.clone(),
-                since: conn.phase.0,
-                tunnel_ping_rtt: conn.tunnel_ping.rtt,
-                stall: conn.tunnel_ping.failing_since.map(|since| command::TunnelStall {
-                    since,
-                    failed_pings: conn.tunnel_ping.failures,
-                    reconnect_at: self.config.connection.health_check_intervals.tunnel_ping_max_failures,
-                }),
-            }),
-            _ => None,
-        };
+        let reconnect_at = self.config.connection.health_check_intervals.tunnel_ping_max_failures;
+        let connection = connection_view(
+            &self.phase,
+            self.reconnecting_since,
+            self.target.as_deref(),
+            reconnect_at,
+        );
         let disconnecting = self
             .ongoing_disconnections
             .iter()
-            .map(|d| command::DisconnectingInfo {
-                destination_id: d.destination.connect_id.clone(),
+            .map(|d| ipc::Disconnecting {
+                destination: d.destination.connect_id.as_str().into(),
                 since: d.phase.0,
                 phase: d.phase.1.clone(),
             })
@@ -2123,18 +2144,16 @@ impl Core {
         vals.sort_unstable_by(|a, b| a.connect_id.cmp(&b.connect_id));
         let destinations = vals
             .into_iter()
-            .map(|v| command::DestinationState {
-                destination: v.clone(),
-                route_health: self.route_healths.get(&v.key()).map(command::RouteHealthView::from),
+            .map(|v| ipc::DestinationStatus {
+                destination: v.into(),
+                route_health: self.route_healths.get(&v.key()).map(RouteHealth::view),
             })
             .collect();
-        command::StatusResponse {
+        ipc::Status {
             run_mode: runmode,
             destinations,
-            target_destination: self.target.clone(),
-            connecting,
-            reconnecting,
-            connected,
+            target: self.target.as_deref().map(Into::into),
+            connection,
             disconnecting,
             probe: self.probe.as_ref().map(Probe::view),
         }
@@ -2356,35 +2375,46 @@ impl Core {
     }
 }
 
-/// Connecting and reconnecting views of the phase; between attempts a reconnect has no phase.
-fn connection_infos(
+/// The one connection the phase describes; between attempts a reconnect has no phase.
+fn connection_view(
     phase: &Phase,
     reconnecting_since: Option<SystemTime>,
     target_dest_id: Option<&str>,
-) -> (Option<command::ConnectingInfo>, Option<command::ReconnectingInfo>) {
-    let reconnecting = reconnecting_since.and_then(|since| {
-        let (destination_id, phase) = match phase {
-            Phase::Connecting(conn) => (conn.destination.connect_id.clone(), Some(conn.phase.1.clone())),
+    reconnect_at: u32,
+) -> ipc::Connection {
+    if let Some(since) = reconnecting_since {
+        let reconnecting = match phase {
+            Phase::Connecting(conn) => Some((conn.destination.connect_id.as_str(), Some(conn.phase.1.clone()))),
             // Waiting on route health: the target is the only record of where we are headed.
-            Phase::HoprRunning => (target_dest_id?.to_string(), None),
-            _ => return None,
+            Phase::HoprRunning => target_dest_id.map(|id| (id, None)),
+            _ => None,
         };
-        Some(command::ReconnectingInfo {
-            destination_id,
-            since,
-            phase,
-        })
-    });
-    // A reconnect supersedes the plain connecting view of the same attempt.
-    let connecting = match (&reconnecting, phase) {
-        (None, Phase::Connecting(conn)) => Some(command::ConnectingInfo {
-            destination_id: conn.destination.connect_id.clone(),
+        if let Some((destination, phase)) = reconnecting {
+            return ipc::Connection::Reconnecting {
+                destination: destination.into(),
+                since,
+                phase,
+            };
+        }
+    }
+    match phase {
+        Phase::Connecting(conn) => ipc::Connection::Connecting {
+            destination: conn.destination.connect_id.as_str().into(),
             since: conn.phase.0,
             phase: conn.phase.1.clone(),
-        }),
-        _ => None,
-    };
-    (connecting, reconnecting)
+        },
+        Phase::Connected(conn) => ipc::Connection::Connected {
+            destination: conn.destination.connect_id.as_str().into(),
+            since: conn.phase.0,
+            tunnel_ping_rtt: conn.tunnel_ping.rtt,
+            stall: conn.tunnel_ping.failing_since.map(|since| ipc::TunnelStall {
+                since,
+                failed_pings: conn.tunnel_ping.failures,
+                reconnect_at,
+            }),
+        },
+        _ => ipc::Connection::Disconnected,
+    }
 }
 
 /// Best-effort SURB telemetry for nerd stats; the expensive scrape is skipped when no session uses it.
@@ -2874,67 +2904,79 @@ mod tests {
         assert!(keys.is_empty());
     }
 
+    fn view(phase: &Phase, reconnecting_since: Option<SystemTime>, target: Option<&str>) -> ipc::Connection {
+        connection_view(phase, reconnecting_since, target, 3)
+    }
+
     #[test]
     fn waiting_on_route_health_reports_a_reconnect_without_a_phase() {
         let since = SystemTime::UNIX_EPOCH;
-        let (connecting, reconnecting) = connection_infos(&Phase::HoprRunning, Some(since), Some("exit"));
-        assert!(connecting.is_none());
-        let info = reconnecting.expect("the reconnect intent must be reported");
-        assert_eq!(info.destination_id, "exit");
-        assert_eq!(info.since, since);
-        assert!(info.phase.is_none());
+        assert_eq!(
+            view(&Phase::HoprRunning, Some(since), Some("exit")),
+            ipc::Connection::Reconnecting {
+                destination: "exit".into(),
+                since,
+                phase: None,
+            }
+        );
     }
 
     #[test]
     fn a_first_connect_waiting_on_route_health_is_not_a_reconnect() {
-        let (connecting, reconnecting) = connection_infos(&Phase::HoprRunning, None, Some("exit"));
-        assert!(connecting.is_none());
-        assert!(reconnecting.is_none());
+        assert_eq!(
+            view(&Phase::HoprRunning, None, Some("exit")),
+            ipc::Connection::Disconnected
+        );
     }
 
     // After a worker restart the target can name a discovered exit the config has never seen.
     #[test]
     fn a_target_not_yet_published_by_discovery_is_still_reported() {
-        let since = SystemTime::UNIX_EPOCH;
-        let (connecting, reconnecting) = connection_infos(&Phase::HoprRunning, Some(since), Some("0xdiscovered"));
-        assert!(connecting.is_none());
-        let info = reconnecting.expect("the reconnect intent must survive an unresolved target");
-        assert_eq!(info.destination_id, "0xdiscovered");
+        let connection = view(&Phase::HoprRunning, Some(SystemTime::UNIX_EPOCH), Some("0xdiscovered"));
+        assert!(matches!(connection, ipc::Connection::Reconnecting { .. }));
+        assert_eq!(connection.destination(), Some(&"0xdiscovered".into()));
     }
 
     #[test]
     fn a_cleared_target_reports_nothing() {
-        let (connecting, reconnecting) = connection_infos(&Phase::HoprRunning, Some(SystemTime::UNIX_EPOCH), None);
-        assert!(connecting.is_none());
-        assert!(reconnecting.is_none());
+        assert_eq!(
+            view(&Phase::HoprRunning, Some(SystemTime::UNIX_EPOCH), None),
+            ipc::Connection::Disconnected
+        );
     }
 
     #[test]
     fn an_attempt_in_flight_reports_its_phase() {
         let phase = Phase::Connecting(attempt("exit", UpPhase::VerifyPing));
-        let (connecting, reconnecting) = connection_infos(&phase, Some(SystemTime::UNIX_EPOCH), Some("exit"));
-        assert!(connecting.is_none());
-        let info = reconnecting.expect("the reconnect must be reported");
-        assert_eq!(info.destination_id, "exit");
-        assert_eq!(info.phase, Some(UpPhase::VerifyPing));
+        assert_eq!(
+            view(&phase, Some(SystemTime::UNIX_EPOCH), Some("exit")),
+            ipc::Connection::Reconnecting {
+                destination: "exit".into(),
+                since: SystemTime::UNIX_EPOCH,
+                phase: Some(UpPhase::VerifyPing),
+            }
+        );
     }
 
-    // Guards the system tests, which poll `connecting` to follow a fresh connection.
+    // Guards the system tests, which poll for `connecting` to follow a fresh connection.
     #[test]
     fn a_fresh_connection_still_reports_connecting() {
         let phase = Phase::Connecting(attempt("exit", UpPhase::VerifyPing));
-        let (connecting, reconnecting) = connection_infos(&phase, None, None);
-        assert!(reconnecting.is_none());
-        let info = connecting.expect("connecting must be reported");
-        assert_eq!(info.destination_id, "exit");
-        assert_eq!(info.phase, UpPhase::VerifyPing);
+        let connection = view(&phase, None, None);
+        assert!(
+            matches!(connection, ipc::Connection::Connecting { ref phase, .. } if *phase == UpPhase::VerifyPing),
+            "{connection:?}"
+        );
+        assert_eq!(connection.destination(), Some(&"exit".into()));
     }
 
     #[test]
     fn a_live_connection_never_reports_a_reconnect() {
         let phase = Phase::Connected(attempt("exit", UpPhase::ConnectionEstablished));
-        let (connecting, reconnecting) = connection_infos(&phase, Some(SystemTime::UNIX_EPOCH), Some("exit"));
-        assert!(connecting.is_none());
-        assert!(reconnecting.is_none());
+        let connection = view(&phase, Some(SystemTime::UNIX_EPOCH), Some("exit"));
+        assert!(
+            matches!(connection, ipc::Connection::Connected { .. }),
+            "{connection:?}"
+        );
     }
 }

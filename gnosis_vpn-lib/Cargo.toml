@@ -16,6 +16,7 @@ bytesize                     = { workspace = true, features = ["serde"] }
 cfg-if.workspace             = true
 edgli.workspace              = true
 futures-util.workspace       = true
+gnosis_vpn-ipc.workspace     = true
 hopr-utils-session.workspace = true
 human-bandwidth              = { workspace = true, features = ["serde"] }
 humantime.workspace          = true
@@ -26,6 +27,7 @@ neptun.workspace             = true
 ping.workspace               = true
 rand.workspace               = true
 reqwest.workspace            = true
+semver.workspace             = true
 serde.workspace              = true
 serde-saphyr.workspace       = true
 serde_json.workspace         = true

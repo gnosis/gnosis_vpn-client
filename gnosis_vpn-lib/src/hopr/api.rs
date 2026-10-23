@@ -48,6 +48,7 @@ use crate::{
         types::{SessionClientMetadata, SplicedWgSession},
     },
     info::Info,
+    wire,
 };
 
 pub struct Hopr {
@@ -494,19 +495,19 @@ impl Hopr {
         let (Some(forward), Some(back)) = (&forward, &back) else {
             return Ok(RouteWalk::NoPath {
                 walked_at: now,
-                forward_count: forward.as_ref().map_or(0, |f| f.count),
-                return_count: back.as_ref().map_or(0, |b| b.count),
+                forward_count: wire_count(forward.as_ref().map_or(0, |f| f.count)),
+                return_count: wire_count(back.as_ref().map_or(0, |b| b.count)),
             });
         };
 
         Ok(RouteWalk::Paths {
             walked_at: now,
-            count: forward.count,
-            distinct_first_relays: forward.distinct_first_relays,
-            best_relays: forward.best_relays.clone(),
+            count: wire_count(forward.count),
+            distinct_first_relays: wire_count(forward.distinct_first_relays),
+            best_relays: forward.best_relays.iter().map(wire::address).collect(),
             best_value: forward.best_value,
-            return_count: back.count,
-            return_best_relays: back.best_relays.clone(),
+            return_count: wire_count(back.count),
+            return_best_relays: back.best_relays.iter().map(wire::address).collect(),
             return_best_value: back.best_value,
         })
     }
@@ -578,6 +579,11 @@ fn summarize_paths(paths: Vec<(Vec<Address>, f64)>) -> Option<PathSummary> {
         best_relays,
         best_value,
     })
+}
+
+/// Path counts are bounded by the planner's cache size, far below `u32::MAX`.
+fn wire_count(count: usize) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
 }
 
 /// Extract all unique IPv4 addresses from a list of multiaddrs.

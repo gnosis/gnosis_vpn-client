@@ -1,5 +1,4 @@
 use edgli::hopr_lib::exports::transport::{HoprSessionConfigurator, SurbBalancerConfig};
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use std::collections::VecDeque;
@@ -211,19 +210,7 @@ enum Inbound {
     Unclear,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum Phase {
-    Init,
-    GatherPeerIps,
-    KillswitchLockdown,
-    GeneratingWg,
-    RegisterWg,
-    OpeningPing,
-    EstablishWgTunnel,
-    VerifyPing,
-    AdjustToMain,
-    ConnectionEstablished,
-}
+pub use gnosis_vpn_ipc::ConnectPhase as Phase;
 
 impl Error {
     pub fn is_ping_error(&self) -> bool {
@@ -472,24 +459,6 @@ impl Display for Up {
             self.phase.1,
             log_output::elapsed(&self.phase.0)
         )
-    }
-}
-
-impl Display for Phase {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let phase_str = match self {
-            Phase::Init => "Init",
-            Phase::GatherPeerIps => "Retrieving peer IPs",
-            Phase::KillswitchLockdown => "Activating killswitch",
-            Phase::GeneratingWg => "Generating WireGuard keypairs",
-            Phase::RegisterWg => "Registering WireGuard public key",
-            Phase::OpeningPing => "Opening main connection",
-            Phase::EstablishWgTunnel => "Establishing WireGuard tunnel",
-            Phase::VerifyPing => "Verifying established connection",
-            Phase::AdjustToMain => "Upgrading for general traffic",
-            Phase::ConnectionEstablished => "Connection established",
-        };
-        write!(f, "{}", phase_str)
     }
 }
 
