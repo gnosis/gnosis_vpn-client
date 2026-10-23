@@ -1,10 +1,11 @@
 use backon::ExponentialBuilder;
+use edgli::{BlokliDnsOverride, BlokliEndpoint};
 use reqwest::header::{self, HeaderMap, HeaderValue};
 use thiserror::Error;
 use tokio::net;
 
 use std::io;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -16,6 +17,8 @@ pub enum Error {
     NoIpv4,
     #[error("IO error: {0}")]
     IO(#[from] io::Error),
+    #[error("Blokli query failed: {0}")]
+    Blokli(String),
 }
 
 pub fn json_headers() -> HeaderMap {
@@ -48,6 +51,14 @@ pub fn backoff_expo_short_delay() -> ExponentialBuilder {
 /// The one IPv4 address the whole session pins Blokli to (client, killswitch exemption, WAN probe).
 pub async fn resolve_blokli_ip(url: &url::Url) -> Result<Ipv4Addr, Error> {
     resolve_ips(url).await?.first().copied().ok_or(Error::NoIpv4)
+}
+
+/// Blokli's `chainInfo.network`, through the already pinned address.
+pub async fn query_blokli_network(url: &url::Url, ip: Ipv4Addr) -> Result<String, Error> {
+    let endpoint = BlokliEndpoint::new(url.clone()).with_dns_override(BlokliDnsOverride::new(IpAddr::V4(ip), None));
+    edgli::query_network(&endpoint)
+        .await
+        .map_err(|e| Error::Blokli(format!("{e:#}")))
 }
 
 /// Resolves the IPv4 addresses for the host and port specified in the provided URL.

@@ -1,129 +1,95 @@
-use std::path::PathBuf;
 use thiserror::Error;
 use tokio::process::Command;
+use tokio::time;
+use uzers::os::unix::UserExt;
 
-use crate::{
-    dirs,
-    shell_command_ext::{self, Logs, ShellCommandExt},
-};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use crate::dirs::{self, UserDirs};
+use crate::shell_command_ext::{self, Logs, ShellCommandExt};
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Worker user not found")]
-    UserNotFound,
-    #[error("Worker binary not found")]
-    BinaryNotFound,
-    #[error("Worker executable check failed")]
-    NotExecutable,
-    #[error("Worker binary version mismatch")]
-    VersionMismatch,
-    #[error("Worker primary group missing")]
-    PrimaryGroupMissing,
-    #[error("Invalid worker binary path")]
-    InvalidBinaryPath,
-    #[error("Unable to ensure home state directory")]
-    InvalidHomeDir,
-    #[error("Shell command error: {0}")]
-    ShellCommandExt(#[from] shell_command_ext::Error),
+    #[error("user {uid} not found")]
+    UserNotFound { uid: u32 },
+    #[error("home directory {} of user {uid} is not a directory", home.display())]
+    HomeMissing { uid: u32, home: PathBuf },
+    #[error("worker binary {} not found", path.display())]
+    BinaryNotFound { path: PathBuf },
+    #[error("worker binary {} is not a file", path.display())]
+    NotAFile { path: PathBuf },
+    #[error("worker binary version mismatch: expected {expected}, found {found}")]
+    VersionMismatch { expected: String, found: String },
+    #[error("worker binary version probe timed out after {0:?}")]
+    ProbeTimeout(Duration),
+    #[error("worker binary version probe failed: {0}")]
+    Probe(#[from] shell_command_ext::Error),
 }
-
-#[derive(Debug)]
-pub struct Input {
-    user: String,
-    binary: PathBuf,
-    version: String,
-    state_home: PathBuf,
-}
-
-pub const USERNAME: &str = "gnosisvpn";
-pub const GROUPNAME: &str = "gnosisvpn";
 
 pub const DEFAULT_WORKER_BINARY: &str = "./gnosis_vpn-worker";
-pub const DEFAULT_WORKER_USER: &str = USERNAME;
 pub const ENV_VAR_WORKER_BINARY: &str = "GNOSISVPN_WORKER_BINARY";
-pub const ENV_VAR_WORKER_USER: &str = "GNOSISVPN_WORKER_USER";
-pub const ENV_VAR_CLIENT_AUTOSTART: &str = "GNOSISVPN_CLIENT_AUTOSTART";
 
+/// The probe runs inline in root's daemon loop, so a hanging binary must not hang the service.
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The local user a worker runs as; root records it for the lifetime of that worker.
 #[derive(Debug, Clone)]
-pub struct Worker {
+pub struct WorkerOwner {
     pub uid: u32,
     pub gid: u32,
-    pub group_name: String,
-    pub binary: String,
+    pub name: String,
+    /// The passwd home: upstream crates read `HOME`, nothing in this repo does.
     pub home: PathBuf,
+    pub dirs: UserDirs,
 }
 
-impl Input {
-    pub fn new(user: String, binary: PathBuf, version: &str, state_home: PathBuf) -> Self {
-        Self {
-            user,
-            binary,
-            version: version.to_string(),
-            state_home,
+impl WorkerOwner {
+    pub fn from_uid(uid: u32, state_home_override: Option<&Path>) -> Result<Self, Error> {
+        let user = uzers::get_user_by_uid(uid).ok_or(Error::UserNotFound { uid })?;
+        let home = user.home_dir().to_path_buf();
+        if !home.is_dir() {
+            return Err(Error::HomeMissing { uid, home });
         }
+        Ok(Self {
+            uid,
+            gid: user.primary_group_id(),
+            name: user.name().to_string_lossy().to_string(),
+            dirs: dirs::user_dirs(&home, state_home_override),
+            home,
+        })
     }
 }
 
-impl Worker {
-    /// This function is called before tracing is set up
-    /// So we need to work with eprintln
-    pub async fn from_system(input: Input) -> Result<Self, Error> {
-        let worker_user = uzers::get_user_by_name(input.user.as_str()).ok_or(Error::UserNotFound)?;
-        let path = input.binary.canonicalize().map_err(|error| {
-            eprintln!(
-                "Worker binary {} at invalid path for {worker_user:?}: {error:?}",
-                input.binary.display()
-            );
-            Error::InvalidBinaryPath
-        })?;
-        let binary = path.to_str().ok_or(Error::InvalidBinaryPath)?;
-        // check if binary exists
-        if !path.exists() {
-            eprintln!("Worker binary {} not found for {:?}", binary, worker_user);
-            return Err(Error::BinaryNotFound);
-        }
-        if !path.is_file() {
-            eprintln!("Worker binary {} is not a file for {:?}", binary, worker_user);
-            return Err(Error::NotExecutable);
-        }
-        // check if binary exists
-        let uid = worker_user.uid();
-        let gid = worker_user.primary_group_id();
-        let group = worker_user
-            .groups()
-            .ok_or(Error::PrimaryGroupMissing)?
-            .into_iter()
-            .find(|g| g.gid() == gid)
-            .ok_or(Error::PrimaryGroupMissing)?;
-        let group_name = group.name().to_string_lossy().to_string();
-        let version_output = Command::new(binary)
-            .arg("--version")
-            .uid(uid)
-            .gid(gid)
-            .run_stdout(Logs::Print)
-            .await?;
-
-        let version = version_output.split_whitespace().nth(1).unwrap_or_default();
-        if version == input.version {
-            // set up application state directory
-            dirs::setup_home(input.state_home.clone(), uid, gid).map_err(|error| {
-                eprintln!("Error setting up home directory for {worker_user:?}: {error:?}");
-                Error::InvalidHomeDir
-            })?;
-            Ok(Worker {
-                uid,
-                binary: binary.to_string(),
-                gid,
-                group_name,
-                home: input.state_home,
-            })
-        } else {
-            eprintln!(
-                "Worker binary {binary} version mismatch: expected {expected} - found {found} for {worker_user:?}",
-                expected = input.version,
-                found = version
-            );
-            Err(Error::VersionMismatch)
-        }
+/// Resolves the worker binary once at startup as root; whether the owner may execute it is probed at spawn.
+pub fn resolve_binary(path: &Path) -> Result<PathBuf, Error> {
+    let canonical = path.canonicalize().map_err(|_| Error::BinaryNotFound {
+        path: path.to_path_buf(),
+    })?;
+    if !canonical.is_file() {
+        return Err(Error::NotAFile { path: canonical });
     }
+    Ok(canonical)
+}
+
+/// Runs `<binary> --version` as the owner: one check for exec permission and version in a single step.
+pub async fn probe_version(binary: &Path, owner: &WorkerOwner, expected: &str) -> Result<(), Error> {
+    let mut command = Command::new(binary);
+    // A timed-out probe must not survive as an orphan.
+    command
+        .arg("--version")
+        .uid(owner.uid)
+        .gid(owner.gid)
+        .kill_on_drop(true);
+    let output = time::timeout(VERSION_PROBE_TIMEOUT, command.run_stdout(Logs::Print))
+        .await
+        .map_err(|_| Error::ProbeTimeout(VERSION_PROBE_TIMEOUT))??;
+    let found = output.split_whitespace().nth(1).unwrap_or_default();
+    if found != expected {
+        return Err(Error::VersionMismatch {
+            expected: expected.to_string(),
+            found: found.to_string(),
+        });
+    }
+    Ok(())
 }

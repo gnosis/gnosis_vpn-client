@@ -3,23 +3,17 @@ use rand::distr::Alphanumeric;
 use rand::prelude::*;
 use thiserror::Error;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::dirs;
-
-pub const ID_FILE: &str = "gnosisvpn-hopr.id";
-const ID_PASS: &str = "gnosisvpn-hopr.pass";
+pub const ID_FILE: &str = "hopr.id";
+const ID_PASS: &str = "hopr.pass";
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("keypair error: {0}")]
-    KeyPair(#[source] anyhow::Error),
-    #[error("Unable to determine project directories")]
-    ProjectDirs,
+    KeyPair(String),
     #[error(transparent)]
     IO(#[from] std::io::Error),
-    #[error(transparent)]
-    Dirs(#[from] crate::dirs::Error),
 }
 
 pub fn from_path(file: PathBuf, pass: String) -> Result<HoprKeys, Error> {
@@ -28,15 +22,15 @@ pub fn from_path(file: PathBuf, pass: String) -> Result<HoprKeys, Error> {
         password: pass.as_str(),
         id_path: id_path.as_str(),
     };
-    HoprKeys::try_from(retrieval_mode).map_err(|e| Error::KeyPair(anyhow::anyhow!(e)))
+    HoprKeys::try_from(retrieval_mode).map_err(|e| Error::KeyPair(e.to_string()))
 }
 
-pub fn file(state_home: PathBuf) -> PathBuf {
-    dirs::config_dir(state_home, ID_FILE)
+pub fn file(network_data_dir: &Path) -> PathBuf {
+    network_data_dir.join(ID_FILE)
 }
 
-pub fn pass_file(state_home: PathBuf) -> PathBuf {
-    dirs::config_dir(state_home, ID_PASS)
+pub fn pass_file(network_data_dir: &Path) -> PathBuf {
+    network_data_dir.join(ID_PASS)
 }
 
 pub fn generate_pass() -> String {

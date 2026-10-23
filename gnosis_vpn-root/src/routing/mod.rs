@@ -4,7 +4,6 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use gnosis_vpn_lib::dirs;
 use gnosis_vpn_lib::shell_command_ext::{self, Logs};
 
 use std::net::Ipv4Addr;
@@ -64,8 +63,6 @@ pub enum Error {
     ShellCommand(#[from] shell_command_ext::Error),
     #[error("Unable to determine default interface")]
     NoInterface,
-    #[error("Directories error: {0}")]
-    Dirs(#[from] dirs::Error),
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
     #[error("TUN device error: {0}")]
