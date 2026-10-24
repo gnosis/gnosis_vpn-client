@@ -1,7 +1,7 @@
 pub use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
-use crate::serde_utils;
+use crate::{serde_utils, wire};
 
 use std::collections::HashMap;
 use std::fmt::{self, Display};
@@ -34,39 +34,19 @@ pub fn wxhopr_scientific(b: Balance<WxHOPR>) -> Option<String> {
     })
 }
 
-/// Traffic/gas health, pooled across all allocations rather than checked per-location.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-pub enum FundingLevel {
-    Good,
-    Low,
-    Empty,
-}
+pub use gnosis_vpn_ipc::FundingLevel;
 
 /// Traffic/gas health plus wxHOPR/xDAI still needed to reach the ideal recommendation.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct FundingStatus {
     pub traffic: FundingLevel,
     pub gas: FundingLevel,
     /// wxHOPR still needed to reach the ideal recommendation; can be `None` even while `traffic` isn't `Good`.
-    #[serde(with = "serde_utils::opt_balance")]
     pub wxhopr_deficit: Option<Balance<WxHOPR>>,
     /// xDAI still needed to reach the ideal recommendation; `None` while `gas` is `Good`.
-    #[serde(with = "serde_utils::opt_balance")]
     pub xdai_deficit: Option<Balance<XDai>>,
     /// wxHOPR the Safe lacks for the next top-up pass over open channels; `None` when covered. Informational, never moves `traffic`.
-    #[serde(default, with = "serde_utils::opt_balance")]
     pub refill_shortfall: Option<Balance<WxHOPR>>,
-}
-
-impl Display for FundingLevel {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let s = match self {
-            FundingLevel::Good => "Good",
-            FundingLevel::Low => "Low",
-            FundingLevel::Empty => "Empty",
-        };
-        write!(f, "{s}")
-    }
 }
 
 // Retuned for the reconciled (pooled) quota counting; bounds inclusive.
@@ -103,9 +83,8 @@ impl FundingTool {
 }
 
 /// Data-throughput capacity for a wxHOPR stake at the current ticket price.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug)]
 pub struct Capacity {
-    #[serde(with = "serde_utils::balance")]
     pub stake: Balance<WxHOPR>,
     pub expected_messages: u64,
     pub min_guaranteed_messages: u64,
@@ -126,10 +105,9 @@ impl Default for Capacity {
 /// Serde mirror of [`edgli::strategy::CapacityAllocations`]: every entity holding
 /// a wxHOPR stake — open outgoing channels, the unallocated Safe balance, and the
 /// node EOA (deposited funds not yet swept into the Safe).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default)]
 pub struct CapacityAllocations {
     /// Open outgoing payment channels, keyed by destination peer.
-    #[serde(with = "serde_utils::address_map")]
     pub peer_allocations: HashMap<Address, Capacity>,
     /// wxHOPR on the node EOA, not yet swept into the Safe.
     pub node: Capacity,
@@ -324,33 +302,27 @@ impl CapacityReconciler {
 /// recommendation (computed once during onboarding, surfaced in the PreparingSafe
 /// run mode and gating safe deployment) and the ideal recommendation (refreshed
 /// periodically while running, feeding funding-issue checks and balance responses).
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug)]
 pub struct BalanceRecommendation {
     /// Total wxHOPR to fund: channel stakes plus the fee to start.
-    #[serde(with = "serde_utils::balance")]
     pub wxhopr: Balance<WxHOPR>,
     /// Recommended xDai balance for gas: the total amount to fund the node with.
     ///
     /// Not [`Self::xdai_fee_per_tx`], which is a ceiling on a single transaction rather than
     /// expected spend -- funding one transaction's worth would leave the node unable to finish
     /// starting up.
-    #[serde(with = "serde_utils::balance")]
     pub xdai: Balance<XDai>,
     /// wxHOPR needed to stake the missing channels.
-    #[serde(with = "serde_utils::balance")]
     pub channel_stakes: Balance<WxHOPR>,
     /// One-time key-binding fee still owed before the node can start;
     /// zero once the key is bound on-chain.
-    #[serde(with = "serde_utils::balance")]
     pub fee_to_start: Balance<WxHOPR>,
     /// Number of on-chain transactions still needed before channel funding can
     /// begin (Safe deployment, Safe registration, key-binding announcement).
     pub txs_to_start: u64,
     /// Maximum xDAI fee per transaction (gas).
-    #[serde(with = "serde_utils::balance")]
     pub xdai_fee_per_tx: Balance<XDai>,
     /// wxHOPR the next top-up pass over open channels will try to spend; not part of `wxhopr`.
-    #[serde(default, with = "serde_utils::balance")]
     pub topup_headroom: Balance<WxHOPR>,
 }
 
@@ -466,6 +438,57 @@ pub fn to_funding_status(
         wxhopr_deficit,
         xdai_deficit,
         refill_shortfall,
+    }
+}
+
+impl From<&FundingStatus> for gnosis_vpn_ipc::FundingStatus {
+    fn from(status: &FundingStatus) -> Self {
+        Self {
+            traffic: status.traffic,
+            gas: status.gas,
+            wxhopr_deficit: status.wxhopr_deficit.map(wire::wxhopr),
+            xdai_deficit: status.xdai_deficit.map(wire::xdai),
+            refill_shortfall: status.refill_shortfall.map(wire::wxhopr),
+        }
+    }
+}
+
+impl From<&Capacity> for gnosis_vpn_ipc::Capacity {
+    fn from(capacity: &Capacity) -> Self {
+        Self {
+            stake: wire::wxhopr(capacity.stake),
+            expected_messages: capacity.expected_messages,
+            min_guaranteed_messages: capacity.min_guaranteed_messages,
+            byte_capacity: capacity.byte_capacity,
+        }
+    }
+}
+
+impl From<&CapacityAllocations> for gnosis_vpn_ipc::CapacityAllocations {
+    fn from(allocations: &CapacityAllocations) -> Self {
+        Self {
+            peer_allocations: allocations
+                .peer_allocations
+                .iter()
+                .map(|(address, capacity)| (wire::address(address), capacity.into()))
+                .collect(),
+            node: (&allocations.node).into(),
+            safe: (&allocations.safe).into(),
+        }
+    }
+}
+
+impl From<&BalanceRecommendation> for gnosis_vpn_ipc::BalanceRecommendation {
+    fn from(rec: &BalanceRecommendation) -> Self {
+        Self {
+            wxhopr: wire::wxhopr(rec.wxhopr),
+            xdai: wire::xdai(rec.xdai),
+            channel_stakes: wire::wxhopr(rec.channel_stakes),
+            fee_to_start: wire::wxhopr(rec.fee_to_start),
+            txs_to_start: rec.txs_to_start,
+            xdai_fee_per_tx: wire::xdai(rec.xdai_fee_per_tx),
+            topup_headroom: wire::wxhopr(rec.topup_headroom),
+        }
     }
 }
 
@@ -953,22 +976,5 @@ mod tests {
         );
         assert_eq!(status.traffic, FundingLevel::Empty);
         assert_eq!(status.refill_shortfall, Some(Balance::<WxHOPR>::from(WXHOPR)));
-    }
-
-    #[test]
-    fn funding_status_deserializes_without_refill_shortfall() {
-        // A payload predating the field must still load, leaving it None.
-        let old = r#"{"traffic":"Good","gas":"Low","wxhopr_deficit":null,"xdai_deficit":null}"#;
-        let status: FundingStatus = serde_json::from_str(old).expect("old payload must deserialize");
-        assert_eq!(status.traffic, FundingLevel::Good);
-        assert_eq!(status.refill_shortfall, None);
-    }
-
-    #[test]
-    fn balance_recommendation_deserializes_without_topup_headroom() {
-        let mut json = serde_json::to_value(ideal(1, 1)).unwrap();
-        json.as_object_mut().unwrap().remove("topup_headroom");
-        let rec: BalanceRecommendation = serde_json::from_value(json).expect("old payload must deserialize");
-        assert!(rec.topup_headroom.is_zero());
     }
 }

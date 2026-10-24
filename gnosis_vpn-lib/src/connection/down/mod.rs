@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use std::fmt::{self, Display};
@@ -22,13 +21,7 @@ pub struct Down {
     pub wg_public_key: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum Phase {
-    Disconnecting,
-    OpeningBridge,
-    UnregisterWg,
-    ClosingBridge,
-}
+pub use gnosis_vpn_ipc::DisconnectPhase as Phase;
 
 #[derive(Debug, Error)]
 pub(crate) enum Error {
@@ -101,17 +94,5 @@ impl Display for Down {
             self.phase.1,
             log_output::elapsed(&self.phase.0)
         )
-    }
-}
-
-impl Display for Phase {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let phase_str = match self {
-            Phase::Disconnecting => "Disconnecting",
-            Phase::OpeningBridge => "Opening bridge connection",
-            Phase::UnregisterWg => "Unregistering WireGuard public key",
-            Phase::ClosingBridge => "Closing bridge connection",
-        };
-        write!(f, "{}", phase_str)
     }
 }

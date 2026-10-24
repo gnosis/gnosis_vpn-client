@@ -4435,12 +4435,26 @@ dependencies = [
  "clap",
  "clap_complete",
  "exitcode",
- "gnosis_vpn-lib",
+ "gnosis_vpn-ipc",
  "humantime",
+ "serde",
  "serde-saphyr",
  "serde_json",
  "tikv-jemallocator",
- "tokio",
+]
+
+[[package]]
+name = "gnosis_vpn-ipc"
+version = "0.101.1"
+dependencies = [
+ "base64 0.23.1",
+ "humantime",
+ "semver 1.0.28",
+ "serde",
+ "serde_json",
+ "sha3 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4455,6 +4469,7 @@ dependencies = [
  "cfg-if",
  "edgli",
  "futures-util",
+ "gnosis_vpn-ipc",
  "hopr-utils-session",
  "human-bandwidth",
  "humantime",
@@ -4473,6 +4488,7 @@ dependencies = [
  "rand 0.10.3",
  "reqwest",
  "rustix",
+ "semver 1.0.28",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -4499,6 +4515,7 @@ dependencies = [
  "clap",
  "exitcode",
  "futures",
+ "gnosis_vpn-ipc",
  "gnosis_vpn-lib",
  "humantime",
  "libc",
@@ -4506,6 +4523,7 @@ dependencies = [
  "notify",
  "rtnetlink 0.23.0",
  "rustix",
+ "semver 1.0.28",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -4523,6 +4541,7 @@ dependencies = [
  "anyhow",
  "clap",
  "exitcode",
+ "gnosis_vpn-ipc",
  "gnosis_vpn-lib",
  "rand 0.10.3",
  "reqwest",
@@ -9052,6 +9071,10 @@ name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+dependencies = [
+ "serde",
+ "serde_core",
+]
 
 [[package]]
 name = "semver-parser"
