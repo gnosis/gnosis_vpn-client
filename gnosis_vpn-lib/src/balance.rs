@@ -53,7 +53,7 @@ pub struct FundingStatus {
     /// xDAI still needed to reach the ideal recommendation; `None` while `gas` is `Good`.
     #[serde(with = "serde_utils::opt_balance")]
     pub xdai_deficit: Option<Balance<XDai>>,
-    /// wxHOPR the Safe lacks for the next top-up pass over open channels; `None` when covered.
+    /// wxHOPR the Safe lacks for the next top-up pass over open channels; `None` when covered. Informational, never moves `traffic`.
     #[serde(default, with = "serde_utils::opt_balance")]
     pub refill_shortfall: Option<Balance<WxHOPR>>,
 }
@@ -429,7 +429,7 @@ pub fn to_funding_status(
         .sum();
     let total_bytes = capacity_allocations.node.byte_capacity + capacity_allocations.safe.byte_capacity + peer_bytes;
 
-    let pooled_traffic = if total_bytes <= TRAFFIC_EMPTY_MAX_BYTES {
+    let traffic = if total_bytes <= TRAFFIC_EMPTY_MAX_BYTES {
         FundingLevel::Empty
     } else if total_bytes <= TRAFFIC_LOW_MAX_BYTES {
         FundingLevel::Low
@@ -440,12 +440,6 @@ pub fn to_funding_status(
     // Safe funds missing channels first (wxhopr_deficit counts it there), only the rest can refill; `-` saturates.
     let safe_after_missing = safe_wxhopr - ideal.wxhopr;
     let refill_shortfall = Some(ideal.topup_headroom - safe_after_missing).filter(|d| !d.is_zero());
-    // Only lowers: a pooled Good hides a Safe that can no longer refill its channels.
-    let traffic = if pooled_traffic == FundingLevel::Good && refill_shortfall.is_some() {
-        FundingLevel::Low
-    } else {
-        pooled_traffic
-    };
 
     let xdai_empty_below = Balance::<XDai>::from(XDAI_EMPTY_BELOW_WEI);
     let xdai_low_below = Balance::<XDai>::from(XDAI_LOW_BELOW_WEI);
@@ -919,8 +913,8 @@ mod tests {
     }
 
     #[test]
-    fn refill_shortfall_caps_good_at_low_and_reports_the_gap() {
-        // The pool reads Good, but the Safe holds 2 of the 7 wxHOPR the next fund pass wants.
+    fn refill_shortfall_reports_the_gap_without_lowering_traffic() {
+        // The pool reads Good and stays Good even though the Safe holds 2 of the 7 wxHOPR the next fund pass wants.
         let allocations = allocs(None, capacity(0, 2 * GB), Capacity::default());
         let status = to_funding_status(
             ideal_with_headroom(7),
@@ -928,7 +922,7 @@ mod tests {
             Balance::<XDai>::zero(),
             Balance::<WxHOPR>::from(2 * WXHOPR),
         );
-        assert_eq!(status.traffic, FundingLevel::Low);
+        assert_eq!(status.traffic, FundingLevel::Good);
         assert_eq!(status.refill_shortfall, Some(Balance::<WxHOPR>::from(5 * WXHOPR)));
     }
 
@@ -950,7 +944,7 @@ mod tests {
     }
 
     #[test]
-    fn refill_shortfall_only_lowers_never_raises() {
+    fn refill_shortfall_is_reported_alongside_an_empty_pool() {
         let status = to_funding_status(
             ideal_with_headroom(1),
             &CapacityAllocations::default(),

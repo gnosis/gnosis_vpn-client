@@ -106,7 +106,7 @@ jobs:
     # NOTE: Do not switch to a depot runner here. The system-test recipe requires passwordless
     # sudo (for useradd, chown, etc.). Depot containers restrict these syscalls even for root.
     # Standard GitHub-hosted runners support passwordless sudo for all commands out of the box.
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs:
       - build-x86_64-linux
@@ -114,7 +114,7 @@ jobs:
       contents: read
     steps:
       - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@3f13feab2962a87273d379ebc36ea159527e6cc9 # v1.3.2
+        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6 # v2.0.0
         with:
           tool-cache: true
           android: true
