@@ -13,6 +13,24 @@
       "enabled": true,
       "groupName": "nix flake updates",
       "pinDigests": false
+<<<<<<< HEAD
+=======
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["patch"],
+      "groupName": "rust crates (patch)"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor"],
+      "groupName": "rust crates (minor)"
+    },
+    {
+      "description": "Only an unchanged Cargo.toml range gets cargo update --precise; a bumped range re-resolves past minimumReleaseAge",
+      "matchManagers": ["cargo"],
+      "rangeStrategy": "update-lockfile"
+>>>>>>> 1134c2a (fix(renovate): update cargo lockfile precisely so crates respect minimumReleaseAge (#947))
     }
   ],
   "vulnerabilityAlerts": { "enabled": true, "minimumReleaseAge": null }
