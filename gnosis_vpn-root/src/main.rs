@@ -132,7 +132,7 @@ struct WorkerChild {
     /// close on, so it is held until the worker exits.
     _child_tun_socket: UnixStream,
     /// SIGKILLs the worker; its exit is still reported through the exit channel.
-    kill: Option<oneshot::Sender<()>>,
+    kill: CancellationToken,
 }
 
 #[derive(Debug)]
@@ -1190,8 +1190,8 @@ impl DaemonState {
             Err(error) => {
                 // The worker runs as its user, who may write anything; that must not stop root for everyone.
                 tracing::error!(%error, "failed parsing incoming worker command - killing worker");
-                if let Some(kill) = self.worker_child.as_mut().and_then(|child| child.kill.take()) {
-                    let _ = kill.send(());
+                if let Some(child) = self.worker_child.as_ref() {
+                    child.kill.cancel();
                 }
                 return Ok(());
             }
@@ -1579,17 +1579,16 @@ impl DaemonState {
         let owned_cancel = cancel.clone();
         let lines_sender = self.incoming_worker_channel.0.clone();
         let exit_sender = self.worker_exit_channel.0.clone();
-        let (kill, mut kill_requested) = oneshot::channel::<()>();
+        let kill = CancellationToken::new();
+        let owned_kill = kill.clone();
         tokio::spawn(async move {
-            // A completed oneshot must not be polled again; a dropped sender means teardown, so no kill.
-            let mut kill_settled = false;
+            // A cancelled token resolves on every poll; kill once, then keep waiting for the exit.
+            let mut kill_sent = false;
             loop {
                 tokio::select! {
-                    requested = &mut kill_requested, if !kill_settled => {
-                        kill_settled = true;
-                        if requested.is_ok() {
-                            let _ = child.start_kill();
-                        }
+                    _ = owned_kill.cancelled(), if !kill_sent => {
+                        kill_sent = true;
+                        let _ = child.start_kill();
                     },
                     Ok(Some(line)) = socket_lines_reader.next_line() => {
                         let _ = lines_sender.send(line.clone()).await.map_err(|err| {
@@ -1619,7 +1618,7 @@ impl DaemonState {
             socket_writer,
             tun_fd_socket: parent_tun_socket,
             _child_tun_socket: child_tun_socket,
-            kill: Some(kill),
+            kill,
         });
         Ok(())
     }
