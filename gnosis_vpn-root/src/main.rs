@@ -1172,7 +1172,11 @@ impl DaemonState {
             },
 
             RootCommand::StopClient => match (self.shutdown_ongoing, &mut self.worker_child) {
-                (Shutdown::None, None) => Ok(Response::StopClient(command::StopClientResponse::NotRunning)),
+                (Shutdown::None, None) => {
+                    // A crashed worker leaves the killswitch armed with nothing left to disconnect.
+                    self.disable_killswitch().await;
+                    Ok(Response::StopClient(command::StopClientResponse::NotRunning))
+                }
                 (Shutdown::None, Some(child)) => {
                     tracing::debug!("sending shutdown signal to worker process due to stop client command");
                     self.shutdown_ongoing = Shutdown::Worker;

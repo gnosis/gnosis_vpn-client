@@ -2936,9 +2936,9 @@ dependencies = [
 
 [[package]]
 name = "crypto-bigint"
-version = "0.7.5"
+version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a52aa3fcda4e6302a9f48734f234d35d4721b96f8fe07d073f07ce9df4f0271"
+checksum = "9c035cb64cba03dad2fb921f3e218785e8cf9a41790da5eb3a1400f62fa2be11"
 dependencies = [
  "cpubits",
  "ctutils",
@@ -2993,9 +2993,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.3"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03bb0e1cc970d482d121d9a1744999169b69a07470b3d644a7894e53fcaf4574"
+checksum = "fe3e9d21d39e6f39ff46e03d5b621424f88ee23d8a1672c6bfc9ccc7f2da4f6a"
 dependencies = [
  "cmov",
  "subtle",
@@ -3095,7 +3095,7 @@ dependencies = [
  "ark-ec 0.6.0",
  "ark-ff 0.6.0",
  "ark-secp256k1",
- "crypto-bigint 0.7.5",
+ "crypto-bigint 0.7.10",
  "ctr 0.10.1",
  "getrandom 0.2.17",
  "hkdf 0.13.0",
@@ -3394,7 +3394,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.6",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -3781,7 +3781,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d65aa39b3a5c1c9c1b745c9a019234bb7a21b77abcb4f4d266d706e2d577d65"
 dependencies = [
  "base16ct 1.0.0",
- "crypto-bigint 0.7.5",
+ "crypto-bigint 0.7.10",
  "crypto-common 0.2.2",
  "digest 0.11.3",
  "ff 0.14.0",
@@ -4429,7 +4429,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-ctl"
-version = "0.101.0"
+version = "0.101.1"
 dependencies = [
  "bytesize",
  "clap",
@@ -4445,7 +4445,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-lib"
-version = "0.101.0"
+version = "0.101.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4491,7 +4491,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-root"
-version = "0.101.0"
+version = "0.101.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4518,7 +4518,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-system_tests"
-version = "0.101.0"
+version = "0.101.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -4538,7 +4538,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis_vpn-worker"
-version = "0.101.0"
+version = "0.101.1"
 dependencies = [
  "clap",
  "exitcode",
@@ -7080,7 +7080,7 @@ checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 [[package]]
 name = "neptun"
 version = "2.2.3"
-source = "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.5#ed75813cebb00c2fbe1a7723764c12dd381818c3"
+source = "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.6#ce185155e1639403cc40e01260d0830065a49555"
 dependencies = [
  "aead 0.5.2",
  "base64 0.22.1",
@@ -7964,7 +7964,7 @@ version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c555a6e4eb7d4e158fcb028c835c3b8642206ddc279b5c6b202ef9a8bdb592f4"
 dependencies = [
- "crypto-bigint 0.7.5",
+ "crypto-bigint 0.7.10",
  "crypto-common 0.2.2",
  "ff 0.14.0",
  "rand_core 0.10.1",
@@ -8580,7 +8580,7 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4a459cddafb3fe76b31fd8f1108007566c40301feb64dc7b54656eb7388172b"
 dependencies = [
- "crypto-bigint 0.7.5",
+ "crypto-bigint 0.7.10",
  "hmac 0.13.0",
 ]
 
@@ -8824,9 +8824,9 @@ checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -9714,7 +9714,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -10369,7 +10369,7 @@ version = "6.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6bfc736cfd88115aedb95ba84bc2d428fe351e92a56f69fce090af301402d91"
 dependencies = [
- "crypto-bigint 0.7.5",
+ "crypto-bigint 0.7.10",
  "elliptic-curve 0.14.1",
  "elliptic-curve-tools",
  "ff 0.14.0",
@@ -10522,9 +10522,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "e49d0e65abc00c142e8f9428da991da9f1a250c39be97459901eb12b9b49f62a"
 dependencies = [
  "rustls-pki-types",
 ]

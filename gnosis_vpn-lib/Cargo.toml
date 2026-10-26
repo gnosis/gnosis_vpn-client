@@ -54,7 +54,7 @@ pfctl.workspace            = true
 
 [dev-dependencies]
 anyhow.workspace   = true
-insta              = "1.48.0"
+insta              = "1.49.0"
 tempfile.workspace = true
 tokio              = { workspace = true, features = ["test-util"] }
 

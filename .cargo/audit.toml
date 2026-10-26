@@ -14,6 +14,7 @@ ignore = [
   # blocked on libp2p upgrading hickory-dns to >=0.26.1
   "RUSTSEC-2026-0118", # hickory-proto: NSEC3 unbounded loop - no fixed version available yet
   "RUSTSEC-2026-0119", # hickory-proto: O(n²) name compression CPU exhaustion - fixed in hickory-proto >=0.26.1
+  "RUSTSEC-2026-0387", # crypto-bigint 0.5.5: constant-time leaks - via alloy → k256 0.13, upstream-blocked (GNO-1057, hoprnet/contracts#162)
 ]
 
 # Output configuration
