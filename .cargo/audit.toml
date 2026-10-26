@@ -14,11 +14,7 @@ ignore = [
   # blocked on libp2p upgrading hickory-dns to >=0.26.1
   "RUSTSEC-2026-0118", # hickory-proto: NSEC3 unbounded loop - no fixed version available yet
   "RUSTSEC-2026-0119", # hickory-proto: O(n²) name compression CPU exhaustion - fixed in hickory-proto >=0.26.1
-  # crypto-bigint 0.5.5: transitive via elliptic-curve 0.13 → k256 0.13 → alloy-signer-local (alloy 1.x and 2.x);
-  # the fix exists only in crypto-bigint >=0.7.6, so it is blocked on k256/elliptic-curve moving to a
-  # RustCrypto release that depends on it. The 0.7.x copy in the tree is already patched.
-  # Remove this entry once `cargo tree -i crypto-bigint@0.5.5` reports nothing.
-  "RUSTSEC-2026-0387", # crypto-bigint: timing variability in operations meant to be constant-time (2026-10-23)
+  "RUSTSEC-2026-0387", # crypto-bigint 0.5.5: constant-time leaks - via alloy → k256 0.13, upstream-blocked (GNO-1057, hoprnet/contracts#162)
 ]
 
 # Output configuration
