@@ -43,6 +43,8 @@ mod routing_actor;
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
+/// DNS is open at this point, so a slow answer is a broken resolver; the pin covers it.
+const BLOKLI_RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
 const DAEMON_LOCK_FILE: &str = "daemon.lock";
 
 fn try_acquire_daemon_lock_at(path: &Path) -> std::io::Result<File> {
@@ -67,8 +69,12 @@ struct DaemonState {
     worker_binary: PathBuf,
     /// Whose worker runs or is still shutting down; outlives `worker_child` until forgotten.
     worker_owner: Option<WorkerOwner>,
-    /// Resolved once at startup; the killswitch blocks DNS for the rest of the session.
+    /// The CLI's URL or edgli's default, so every lookup asks for the same host.
+    blokli_url: url::Url,
+    /// Resolved at startup and again before every first arm; frozen while the killswitch blocks DNS.
     blokli_ip: Ipv4Addr,
+    /// Mirrors the routing actor's policy: a lookup is only possible while this is false.
+    killswitch_armed: bool,
     /// Blokli's `chainInfo.network`; keys every user's identity directory.
     network: String,
     config: Config,
@@ -579,7 +585,9 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         cli: args,
         worker_binary,
         worker_owner: None,
+        blokli_url,
         blokli_ip,
+        killswitch_armed: false,
         network,
         config,
         config_path,
@@ -741,6 +749,24 @@ async fn spawn_ping(options: ping::Options) -> Result<Duration, String> {
 fn valid_network_name(name: &str) -> bool {
     let safe_char = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-';
     !name.is_empty() && name.bytes().all(safe_char)
+}
+
+/// A failed lookup with DNS open is unexpected but not fatal: the last known address still works until Blokli moves.
+fn choose_blokli_ip(resolved: Result<Ipv4Addr, String>, current: Ipv4Addr) -> Ipv4Addr {
+    match resolved {
+        Ok(ip) if ip == current => {
+            tracing::debug!(%ip, "blokli address unchanged");
+            ip
+        }
+        Ok(ip) => {
+            tracing::info!(old = %current, new = %ip, "blokli address changed - exempting and routing the new one");
+            ip
+        }
+        Err(error) => {
+            tracing::warn!(%error, fallback = %current, "blokli host not resolvable before connect - keeping the current address");
+            current
+        }
+    }
 }
 
 /// Root reads and stops but never owns; everyone else must be the owner.
@@ -1231,7 +1257,8 @@ impl DaemonState {
         }
     }
 
-    async fn disable_killswitch(&self) {
+    async fn disable_killswitch(&mut self) {
+        self.killswitch_armed = false;
         let _ = self
             .routing_actor_sender
             .send(routing_actor::Msg::DisableKillswitch)
@@ -1246,8 +1273,11 @@ impl DaemonState {
                 peer_ips,
                 interface,
             } => {
-                let ips: Vec<IpAddr> = peer_ips.into_iter().map(IpAddr::V4).collect();
+                self.refresh_blokli_ip().await;
+                let mut ips: Vec<IpAddr> = peer_ips.into_iter().map(IpAddr::V4).collect();
+                ips.push(IpAddr::V4(self.blokli_ip));
                 let res = self.apply_killswitch(interface, ips).await;
+                self.killswitch_armed |= res.is_ok();
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
@@ -1639,6 +1669,19 @@ impl DaemonState {
             .await;
     }
 
+    /// Before the first arm only: reconnects and exit switches keep the killswitch up, so DNS is closed there.
+    async fn refresh_blokli_ip(&mut self) {
+        if self.killswitch_armed {
+            return;
+        }
+        let url = self.blokli_url.clone();
+        let resolved = match time::timeout(BLOKLI_RESOLVE_TIMEOUT, remote_data::resolve_blokli_ip(&url)).await {
+            Ok(res) => res.map_err(|e| e.to_string()),
+            Err(_) => Err("timed out".to_string()),
+        };
+        self.blokli_ip = choose_blokli_ip(resolved, self.blokli_ip);
+    }
+
     async fn setup_static_routing(
         &self,
         interface_address: String,
@@ -1739,6 +1782,20 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+
+    const CURRENT: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 9);
+
+    #[test]
+    fn fresh_blokli_address_replaces_the_current_one() {
+        let fresh = Ipv4Addr::new(198, 51, 100, 7);
+        assert_eq!(choose_blokli_ip(Ok(fresh), CURRENT), fresh);
+        assert_eq!(choose_blokli_ip(Ok(CURRENT), CURRENT), CURRENT);
+    }
+
+    #[test]
+    fn unresolvable_blokli_host_keeps_the_current_address() {
+        assert_eq!(choose_blokli_ip(Err("no answer".to_string()), CURRENT), CURRENT);
+    }
 
     // The caller is blocked on this oneshot; dropping it is what produced the EOF.
     #[tokio::test]

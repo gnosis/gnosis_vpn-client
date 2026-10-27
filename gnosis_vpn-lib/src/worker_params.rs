@@ -201,7 +201,7 @@ impl WorkerParams {
         self.blokli_url.clone()
     }
 
-    /// Pinned for the session: the Blokli client, the killswitch exemption and the WAN probe all use it.
+    /// The address edgli's clients are built with; root keeps its own copy, re-resolved before each first arm.
     pub fn blokli_ip(&self) -> Ipv4Addr {
         self.blokli_ip
     }
