@@ -141,7 +141,22 @@ impl State {
 pub(crate) struct Memory {
     /// A filled order of ours carried the permit, so the vault relayer allowance is unlimited already.
     pub permit_granted: bool,
+    /// Next xHOPR permit nonce to sign with; Blokli cannot read `nonces()`, so it is learned by probing.
     pub permit_nonce: u64,
+}
+
+impl Memory {
+    pub(crate) fn record_fill(&mut self, permit_used: bool, permit_nonce: u64) {
+        if permit_used {
+            self.permit_granted = true;
+            self.permit_nonce = self.permit_nonce.max(permit_nonce + 1);
+        }
+    }
+
+    /// Keeps probe progress, so a nonce beyond one run's probes is still reached by later runs.
+    pub(crate) fn record_probe(&mut self, next_nonce: u64) {
+        self.permit_nonce = self.permit_nonce.max(next_nonce);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -149,6 +164,8 @@ pub(crate) enum Outcome {
     Filled {
         uid: String,
         permit_used: bool,
+        /// Nonce the carried permit was signed with; meaningful only when `permit_used`.
+        permit_nonce: u64,
     },
     /// Gas was no longer Empty when the run looked - a fill landed unnoticed.
     AlreadyRefueled,
@@ -187,8 +204,8 @@ pub(crate) enum Error {
     SellTooLarge(U256),
     #[error("order uid mismatch: local {local}, server {server}")]
     UidMismatch { local: String, server: String },
-    #[error("permit nonce could not be established")]
-    PermitNonceUnknown,
+    #[error("permit nonce not found yet, next run probes from {next_nonce}")]
+    PermitNonceUnknown { next_nonce: u64 },
     #[error("safe hook rejected by the orderbook simulation")]
     SafeHookRejected,
     #[error("order {0} expired unfilled")]
@@ -264,7 +281,11 @@ pub(crate) async fn refuel(
         let permit_used = open.has_hook_target(tokens.xhopr);
         let uid = open.uid.clone();
         await_fill(&api, &uid, open.valid_to).await?;
-        return Ok(Outcome::Filled { uid, permit_used });
+        return Ok(Outcome::Filled {
+            uid,
+            permit_used,
+            permit_nonce: memory.permit_nonce,
+        });
     }
 
     let placeholders = hooks::placeholders(safe_evm, tokens.xhopr, !memory.permit_granted);
@@ -333,14 +354,16 @@ pub(crate) async fn refuel(
             Err(Error::Api { error_type, .. }) if error_type == "DuplicatedOrder" => break uid,
             // The permit hook did not grant the allowance in simulation: our nonce guess is stale.
             Err(Error::Api { error_type, .. }) if error_type == "InsufficientAllowance" => {
-                probes += 1;
-                if probes > PERMIT_NONCE_PROBES {
-                    return Err(Error::PermitNonceUnknown);
-                }
                 if with_permit {
                     permit_nonce += 1;
                 } else {
                     with_permit = true;
+                }
+                probes += 1;
+                if probes > PERMIT_NONCE_PROBES {
+                    return Err(Error::PermitNonceUnknown {
+                        next_nonce: permit_nonce,
+                    });
                 }
                 tracing::debug!(permit_nonce, with_permit, "probing the xHOPR permit nonce");
             }
@@ -362,6 +385,7 @@ pub(crate) async fn refuel(
     Ok(Outcome::Filled {
         uid,
         permit_used: with_permit,
+        permit_nonce,
     })
 }
 
@@ -422,6 +446,26 @@ mod tests {
         );
         assert!(!Error::CowUnavailable("dns".into()).is_permanent());
         assert!(!Error::Expired("0x".into()).is_permanent());
+    }
+
+    #[test]
+    fn a_fill_with_a_permit_advances_past_the_nonce_it_used() {
+        let mut memory = Memory::default();
+        memory.record_fill(false, 7);
+        assert!(!memory.permit_granted);
+        assert_eq!(memory.permit_nonce, 0);
+        memory.record_fill(true, 4);
+        assert!(memory.permit_granted);
+        assert_eq!(memory.permit_nonce, 5);
+    }
+
+    #[test]
+    fn probe_progress_survives_into_the_next_run() {
+        let mut memory = Memory::default();
+        memory.record_probe(4);
+        assert_eq!(memory.permit_nonce, 4);
+        memory.record_probe(2);
+        assert_eq!(memory.permit_nonce, 4);
     }
 
     #[test]

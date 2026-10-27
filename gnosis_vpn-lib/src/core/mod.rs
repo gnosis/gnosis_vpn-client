@@ -1290,18 +1290,27 @@ impl Core {
 
     fn on_results_refuel(&mut self, res: Result<cowswap::Outcome, cowswap::Error>) {
         self.refuel = match res {
-            Ok(cowswap::Outcome::Filled { uid, permit_used }) => {
+            Ok(cowswap::Outcome::Filled {
+                uid,
+                permit_used,
+                permit_nonce,
+            }) => {
                 tracing::info!(%uid, "refuel order filled - node xDAI topped up");
-                if permit_used {
-                    self.refuel_memory.permit_granted = true;
-                    self.refuel_memory.permit_nonce += 1;
-                }
+                self.refuel_memory.record_fill(permit_used, permit_nonce);
                 cowswap::State::Done(SystemTime::now())
             }
             Ok(cowswap::Outcome::AlreadyRefueled) => cowswap::State::Done(SystemTime::now()),
             Err(err) if err.is_permanent() => {
                 tracing::error!(%err, "refuel failed permanently - auto-refuel disabled until restart");
                 cowswap::State::Disabled
+            }
+            Err(cowswap::Error::PermitNonceUnknown { next_nonce }) => {
+                tracing::warn!(
+                    next_nonce,
+                    "xHOPR permit nonce not found yet - next attempt continues probing"
+                );
+                self.refuel_memory.record_probe(next_nonce);
+                cowswap::State::Done(SystemTime::now())
             }
             Err(cowswap::Error::Expired(uid)) => {
                 tracing::warn!(%uid, "refuel order expired unfilled - next attempt after cooldown");
