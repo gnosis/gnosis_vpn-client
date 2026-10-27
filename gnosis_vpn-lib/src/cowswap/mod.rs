@@ -258,18 +258,19 @@ pub(crate) async fn refuel(
     let chain_key = worker_params.calc_keys().await?.chain_key;
     let signer =
         PrivateKeySigner::from_slice(chain_key.secret().as_ref()).map_err(|e| Error::Signing(e.to_string()))?;
-    let blokli = chain::blokli_client(worker_params.blokli_endpoint(blokli_timeout));
+    let blokli = chain::Client::new(&worker_params.blokli_endpoint(blokli_timeout))?;
     let api = api::Client::new(worker_params.cow_api_url(), cfg.request_timeout)?;
     let (safe_evm, eoa_evm) = (evm(safe), evm(eoa));
 
-    let tokens = chain::tokens(&blokli).await?;
-    let native = chain::native_balance(&blokli, eoa).await?;
+    let snapshot = blokli.snapshot(safe, eoa).await?;
+    let tokens = snapshot.tokens;
+    let native = snapshot.eoa_native;
     if balance::gas_level(native) != FundingLevel::Empty {
         tracing::info!(%native, "node xDAI is no longer empty - skipping refuel");
         return Ok(Outcome::AlreadyRefueled);
     }
-    let mut balances = chain::Balances::read(&blokli, safe, eoa).await?;
-    let mut safe_nonce = chain::safe_nonce(&blokli, safe).await?;
+    let mut balances = snapshot.balances;
+    let mut safe_nonce = snapshot.safe_nonce;
 
     let history = api.account_orders(eoa_evm).await?;
     let mut memory = memory;
@@ -373,8 +374,9 @@ pub(crate) async fn refuel(
                     return Err(Error::SafeHookRejected);
                 }
                 safe_rebuilt = true;
-                balances = chain::Balances::read(&blokli, safe, eoa).await?;
-                safe_nonce = chain::safe_nonce(&blokli, safe).await?;
+                let fresh = blokli.snapshot(safe, eoa).await?;
+                balances = fresh.balances;
+                safe_nonce = fresh.safe_nonce;
                 tracing::debug!(safe_nonce, "rebuilding the safe hook after a rejected simulation");
             }
             Err(err) => return Err(err),
