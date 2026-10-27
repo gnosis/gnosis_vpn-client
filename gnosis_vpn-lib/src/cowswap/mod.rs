@@ -2,7 +2,7 @@
 //!
 //! The node never sends a transaction. The order is owned by the EOA and carries two pre-hooks the
 //! solver executes and pays for: an owner-signed Safe transaction that unwraps wxHOPR and moves the
-//! xHOPR to the EOA, and an xHOPR permit for CoW's vault relayer. Blokli is only read.
+//! xHOPR to the EOA, and an xHOPR permit for CoW's vault relayer.
 
 pub(crate) mod api;
 pub(crate) mod chain;
@@ -13,11 +13,10 @@ use edgli::hopr_lib::api::types::chain::exports::alloy;
 use edgli::hopr_lib::api::types::primitive::prelude::{Address, XDaiBalance};
 use edgli::hopr_lib::builder::Keypair;
 use serde::{Deserialize, Serialize};
-use serde_with::{DisplayFromStr, serde_as};
 use thiserror::Error;
 use tokio::time;
 
-use alloy::primitives::{Address as EvmAddress, U256, address};
+use alloy::primitives::{Address as EvmAddress, U256, address, keccak256, uint};
 use alloy::signers::local::PrivateKeySigner;
 
 use std::fmt::{self, Display};
@@ -36,8 +35,8 @@ pub(crate) const VAULT_RELAYER: EvmAddress = address!("c92e8bdf79f0507f65a392b0a
 pub(crate) const MULTISEND: EvmAddress = address!("38869bf66a61cf6bdb996a6ae40d5853fd43b526");
 /// Unwraps wxHOPR it receives back into xHOPR for the sender; hard-wired to the two tokens below.
 pub(crate) const HOPR_WRAPPER: EvmAddress = address!("097707143e01318734535676cfe2e5cf8b656ae8");
-pub(crate) const WRAPPER_WXHOPR: EvmAddress = address!("d4fdec44db9d44b8f2b6d529620f9c0c7066a2c1");
-pub(crate) const WRAPPER_XHOPR: EvmAddress = address!("d057604a14982fe8d88c5fc25aac3267ea142a08");
+pub(crate) const WXHOPR_TOKEN: EvmAddress = address!("d4fdec44db9d44b8f2b6d529620f9c0c7066a2c1");
+pub(crate) const XHOPR_TOKEN: EvmAddress = address!("d057604a14982fe8d88c5fc25aac3267ea142a08");
 /// CoW's sentinel for buying the native token.
 pub(crate) const BUY_NATIVE: EvmAddress = address!("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
 pub(crate) const APP_CODE: &str = "gnosis_vpn";
@@ -49,80 +48,45 @@ pub(crate) const HOOK_PERMIT_GAS: u64 = 100_000;
 const POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// Indexing lag past validTo before an unobserved order counts as expired.
 const EXPIRY_GRACE: Duration = Duration::from_secs(120);
-/// The orderbook rejects shorter remaining validity.
+/// Too close to validTo to be worth resuming.
 const MIN_REMAINING_VALIDITY: u64 = 60;
 const PERMIT_NONCE_PROBES: u32 = 3;
-/// Tripwire against a corrupt quote: ~70x today's sell amount.
-const MAX_SELL_WEI: U256 = U256::from_limbs([0xb5e3af16b1880000, 0x2, 0, 0]);
+/// Tripwire against a corrupt quote: ~70x the 0.01 xDAI sell.
+const MAX_SELL_WEI: U256 = uint!(50_000_000_000_000_000_000_U256);
 
-#[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RefuelConfig {
-    #[serde(default = "RefuelConfig::default_enabled")]
     pub enabled: bool,
     /// xDAI bought per refuel; lands an Empty EOA well above the Low line.
-    #[serde_as(as = "DisplayFromStr")]
-    #[serde(default = "RefuelConfig::default_target")]
     pub target: XDaiBalance,
     /// Sell-side buffer as a fraction; unused buffer comes back as xDAI surplus.
-    #[serde(default = "RefuelConfig::default_slippage")]
     pub slippage: f64,
     /// Gap after a failed or expired attempt before the trigger may fire again; a fill does not wait.
-    #[serde(with = "humantime_serde", default = "RefuelConfig::default_cooldown")]
     pub cooldown: Duration,
     /// validFor of the order; a stale order expires on its own, nothing cancels it.
-    #[serde(with = "humantime_serde", default = "RefuelConfig::default_order_validity")]
     pub order_validity: Duration,
     /// Bound on one api.cow.fi request; the Linux killswitch drops silently.
-    #[serde(with = "humantime_serde", default = "RefuelConfig::default_request_timeout")]
     pub request_timeout: Duration,
 }
 
 impl Default for RefuelConfig {
     fn default() -> Self {
         Self {
-            enabled: Self::default_enabled(),
-            target: Self::default_target(),
-            slippage: Self::default_slippage(),
-            cooldown: Self::default_cooldown(),
-            order_validity: Self::default_order_validity(),
-            request_timeout: Self::default_request_timeout(),
+            enabled: true,
+            target: "0.01 xDai".parse().expect("valid default refuel target"),
+            slippage: 0.02,
+            cooldown: Duration::from_secs(30 * 60),
+            order_validity: Duration::from_secs(30 * 60),
+            request_timeout: Duration::from_secs(20),
         }
     }
 }
 
-// Per-field defaults (container-level `#[serde(default)]` doesn't survive `serde_as`).
-impl RefuelConfig {
-    fn default_enabled() -> bool {
-        true
-    }
-
-    fn default_target() -> XDaiBalance {
-        "0.01 xDai".parse().expect("valid default refuel target")
-    }
-
-    fn default_slippage() -> f64 {
-        0.02
-    }
-
-    fn default_cooldown() -> Duration {
-        Duration::from_secs(30 * 60)
-    }
-
-    fn default_order_validity() -> Duration {
-        Duration::from_secs(30 * 60)
-    }
-
-    fn default_request_timeout() -> Duration {
-        Duration::from_secs(20)
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) enum State {
     Idle,
     InFlight,
-    Done(SystemTime),
+    CoolingDown(SystemTime),
     /// A permanent error (wrong chain, our own encoding); stays until the worker restarts.
     Disabled,
 }
@@ -130,42 +94,16 @@ pub(crate) enum State {
 impl State {
     pub(crate) fn cooldown_remaining(&self, cooldown: Duration, now: SystemTime) -> Option<Duration> {
         match self {
-            State::Done(at) => cooldown.checked_sub(now.duration_since(*at).unwrap_or_default()),
+            State::CoolingDown(at) => cooldown.checked_sub(now.duration_since(*at).unwrap_or_default()),
             _ => None,
         }
     }
 }
 
-/// What a finished run teaches the next one; lost on restart and re-derived from CoW's order history.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Memory {
-    /// A filled order of ours carried the permit, so the vault relayer allowance is unlimited already.
-    pub permit_granted: bool,
-    /// Next xHOPR permit nonce to sign with; Blokli cannot read `nonces()`, so it is learned by probing.
-    pub permit_nonce: u64,
-}
-
-impl Memory {
-    pub(crate) fn record_fill(&mut self, permit_used: bool, permit_nonce: u64) {
-        if permit_used {
-            self.permit_granted = true;
-            self.permit_nonce = self.permit_nonce.max(permit_nonce + 1);
-        }
-    }
-
-    /// Keeps probe progress, so a nonce beyond one run's probes is still reached by later runs.
-    pub(crate) fn record_probe(&mut self, next_nonce: u64) {
-        self.permit_nonce = self.permit_nonce.max(next_nonce);
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) enum Outcome {
     Filled {
         uid: String,
-        permit_used: bool,
-        /// Nonce the carried permit was signed with; meaningful only when `permit_used`.
-        permit_nonce: u64,
     },
     /// Gas was no longer Empty when the run looked - a fill landed unnoticed.
     AlreadyRefueled,
@@ -174,7 +112,7 @@ pub(crate) enum Outcome {
 impl Display for Outcome {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Outcome::Filled { uid, .. } => write!(f, "Filled({uid})"),
+            Outcome::Filled { uid } => write!(f, "Filled({uid})"),
             Outcome::AlreadyRefueled => write!(f, "AlreadyRefueled"),
         }
     }
@@ -197,7 +135,7 @@ pub(crate) enum Error {
     #[error("refuel only supports gnosis chain, blokli reports chain id {0}")]
     UnsupportedChain(u64),
     #[error("token deployment unknown to the wrapper: token {token}, xhopr {xhopr}")]
-    UnexpectedTokens { token: String, xhopr: String },
+    UnexpectedTokens { token: EvmAddress, xhopr: EvmAddress },
     #[error("safe wxHOPR too low: need {needed} wei, have {available} wei")]
     InsufficientWxhopr { needed: U256, available: U256 },
     #[error("quote implies an implausible sell amount of {0} wei")]
@@ -235,7 +173,7 @@ impl Error {
     }
 }
 
-pub(crate) fn evm(address: Address) -> EvmAddress {
+fn evm(address: Address) -> EvmAddress {
     EvmAddress::from_slice(address.as_ref())
 }
 
@@ -246,105 +184,78 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
-/// One refuel attempt: three off-chain signatures and a handful of HTTP calls, no transaction.
+/// One refuel attempt. `permit_nonce` is where the xHOPR permit nonce probe left off last time.
 pub(crate) async fn refuel(
     worker_params: &WorkerParams,
     blokli_timeout: Duration,
     cfg: &RefuelConfig,
     safe: Address,
     eoa: Address,
-    memory: Memory,
+    permit_nonce: u64,
 ) -> Result<Outcome, Error> {
     let chain_key = worker_params.calc_keys().await?.chain_key;
     let signer =
         PrivateKeySigner::from_slice(chain_key.secret().as_ref()).map_err(|e| Error::Signing(e.to_string()))?;
     let blokli = chain::Client::new(&worker_params.blokli_endpoint(blokli_timeout))?;
     let api = api::Client::new(worker_params.cow_api_url(), cfg.request_timeout)?;
-    let (safe_evm, eoa_evm) = (evm(safe), evm(eoa));
+    let (safe, eoa) = (evm(safe), evm(eoa));
 
-    let snapshot = blokli.snapshot(safe, eoa).await?;
-    let tokens = snapshot.tokens;
-    let native = snapshot.eoa_native;
-    if balance::gas_level(native) != FundingLevel::Empty {
-        tracing::info!(%native, "node xDAI is no longer empty - skipping refuel");
+    let mut snapshot = blokli.snapshot(safe, eoa).await?;
+    if balance::gas_level(snapshot.eoa_native) != FundingLevel::Empty {
+        tracing::info!(native = %snapshot.eoa_native, "node xDAI is no longer empty - skipping refuel");
         return Ok(Outcome::AlreadyRefueled);
     }
-    let mut balances = snapshot.balances;
-    let mut safe_nonce = snapshot.safe_nonce;
 
-    let history = api.account_orders(eoa_evm).await?;
-    let mut memory = memory;
-    if api::has_filled_order(&history) {
-        memory.permit_granted = true;
-    }
+    let history = api.account_orders(eoa).await?;
+    let permit_granted = api::has_filled_order(&history);
     if let Some(open) = api::live_order(&history, unix_now() + MIN_REMAINING_VALIDITY) {
         tracing::info!(uid = %open.uid, "resuming the open refuel order from a previous run");
-        let permit_used = open.has_hook_target(tokens.xhopr);
-        let uid = open.uid.clone();
-        await_fill(&api, &uid, open.valid_to).await?;
-        return Ok(Outcome::Filled {
-            uid,
-            permit_used,
-            permit_nonce: memory.permit_nonce,
-        });
+        await_fill(&api, &open.uid, open.valid_to).await?;
+        return Ok(Outcome::Filled { uid: open.uid.clone() });
     }
 
-    let placeholders = hooks::placeholders(safe_evm, tokens.xhopr, !memory.permit_granted);
+    let target = order::wei(cfg.target);
+    let placeholders = hooks::placeholders(safe, !permit_granted);
     let quote = api
-        .quote(
-            tokens.xhopr,
-            eoa_evm,
-            order::wei(cfg.target),
-            cfg.order_validity,
-            &order::app_data_json(&placeholders),
-        )
+        .quote(eoa, target, cfg.order_validity, &order::app_data_json(&placeholders))
         .await?;
     let sell = order::sell_amount(quote.sell_amount, quote.fee_amount, order::slippage_bps(cfg.slippage));
     if sell > MAX_SELL_WEI {
         return Err(Error::SellTooLarge(sell));
     }
-    let target = order::wei(cfg.target);
     let valid_to = quote.valid_to;
 
-    let mut with_permit = !memory.permit_granted;
-    let mut permit_nonce = memory.permit_nonce;
+    let mut with_permit = !permit_granted;
+    let mut permit_nonce = permit_nonce;
     let mut probes = 0;
     let mut safe_rebuilt = false;
     let uid = loop {
-        let sizing = order::Sizing::new(sell, balances.eoa_xhopr, balances.safe_xhopr);
-        if balances.safe_wxhopr < sizing.unwrap {
+        let sizing = order::Sizing::new(sell, snapshot.eoa_xhopr, snapshot.safe_xhopr);
+        if snapshot.safe_wxhopr < sizing.unwrap {
             return Err(Error::InsufficientWxhopr {
                 needed: sizing.unwrap,
-                available: balances.safe_wxhopr,
+                available: snapshot.safe_wxhopr,
             });
         }
         let mut pre = Vec::new();
         if sizing.need > U256::ZERO {
             pre.push(hooks::safe_hook(
                 &signer,
-                safe_evm,
-                eoa_evm,
-                tokens,
+                safe,
+                eoa,
                 sizing.unwrap,
                 sizing.need,
-                safe_nonce,
+                snapshot.safe_nonce,
             )?);
         }
         if with_permit {
-            pre.push(hooks::permit_hook(&signer, eoa_evm, tokens.xhopr, permit_nonce)?);
+            pre.push(hooks::permit_hook(&signer, eoa, permit_nonce)?);
         }
         let app_data = order::app_data_json(&pre);
-        let order = order::sell_order(
-            tokens.xhopr,
-            eoa_evm,
-            sell,
-            target,
-            valid_to,
-            order::app_data_hash(&app_data),
-        );
-        let uid = order::uid_hex(&order::order_uid(&order, eoa_evm));
+        let order = order::sell_order(eoa, sell, target, valid_to, keccak256(app_data.as_bytes()));
+        let uid = order::order_uid(&order, eoa);
         let signature = order::sign_order(&order, &signer)?;
-        match api.post_order(&order, eoa_evm, &signature, &app_data).await {
+        match api.post_order(&order, eoa, &signature, &app_data).await {
             Ok(server_uid) if server_uid.eq_ignore_ascii_case(&uid) => break uid,
             Ok(server_uid) => {
                 return Err(Error::UidMismatch {
@@ -353,7 +264,7 @@ pub(crate) async fn refuel(
                 });
             }
             Err(Error::Api { error_type, .. }) if error_type == "DuplicatedOrder" => break uid,
-            // The permit hook did not grant the allowance in simulation: our nonce guess is stale.
+            // No allowance in simulation: the permit was missing, or signed with a stale nonce.
             Err(Error::Api { error_type, .. }) if error_type == "InsufficientAllowance" => {
                 if with_permit {
                     permit_nonce += 1;
@@ -374,21 +285,18 @@ pub(crate) async fn refuel(
                     return Err(Error::SafeHookRejected);
                 }
                 safe_rebuilt = true;
-                let fresh = blokli.snapshot(safe, eoa).await?;
-                balances = fresh.balances;
-                safe_nonce = fresh.safe_nonce;
-                tracing::debug!(safe_nonce, "rebuilding the safe hook after a rejected simulation");
+                snapshot = blokli.snapshot(safe, eoa).await?;
+                tracing::debug!(
+                    safe_nonce = snapshot.safe_nonce,
+                    "rebuilding the safe hook after a rejected simulation"
+                );
             }
             Err(err) => return Err(err),
         }
     };
     tracing::info!(%uid, %sell, valid_to, with_permit, "placed gasless cow order");
     await_fill(&api, &uid, valid_to).await?;
-    Ok(Outcome::Filled {
-        uid,
-        permit_used: with_permit,
-        permit_nonce,
-    })
+    Ok(Outcome::Filled { uid })
 }
 
 async fn await_fill(api: &api::Client, uid: &str, valid_to: u32) -> Result<(), Error> {
@@ -413,16 +321,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cooldown_remaining_only_for_done() {
+    fn cooldown_remaining_only_while_cooling_down() {
         let now = SystemTime::now();
         let cooldown = Duration::from_secs(1800);
         assert_eq!(State::Idle.cooldown_remaining(cooldown, now), None);
         assert_eq!(State::InFlight.cooldown_remaining(cooldown, now), None);
         assert_eq!(State::Disabled.cooldown_remaining(cooldown, now), None);
-        let remaining = State::Done(now - Duration::from_secs(600)).cooldown_remaining(cooldown, now);
+        let remaining = State::CoolingDown(now - Duration::from_secs(600)).cooldown_remaining(cooldown, now);
         assert_eq!(remaining, Some(Duration::from_secs(1200)));
         assert_eq!(
-            State::Done(now - Duration::from_secs(1801)).cooldown_remaining(cooldown, now),
+            State::CoolingDown(now - Duration::from_secs(1801)).cooldown_remaining(cooldown, now),
             None
         );
     }
@@ -448,51 +356,5 @@ mod tests {
         );
         assert!(!Error::CowUnavailable("dns".into()).is_permanent());
         assert!(!Error::Expired("0x".into()).is_permanent());
-    }
-
-    #[test]
-    fn a_fill_with_a_permit_advances_past_the_nonce_it_used() {
-        let mut memory = Memory::default();
-        memory.record_fill(false, 7);
-        assert!(!memory.permit_granted);
-        assert_eq!(memory.permit_nonce, 0);
-        memory.record_fill(true, 4);
-        assert!(memory.permit_granted);
-        assert_eq!(memory.permit_nonce, 5);
-    }
-
-    #[test]
-    fn probe_progress_survives_into_the_next_run() {
-        let mut memory = Memory::default();
-        memory.record_probe(4);
-        assert_eq!(memory.permit_nonce, 4);
-        memory.record_probe(2);
-        assert_eq!(memory.permit_nonce, 4);
-    }
-
-    #[test]
-    fn max_sell_is_fifty_xhopr() {
-        assert_eq!(
-            MAX_SELL_WEI,
-            U256::from(50u64) * U256::from(10u64).pow(U256::from(18u64))
-        );
-    }
-
-    #[test]
-    fn defaults_match_the_documented_values() {
-        let cfg = RefuelConfig::default();
-        assert!(cfg.enabled);
-        assert_eq!(cfg.target, "0.01 xDai".parse::<XDaiBalance>().unwrap());
-        assert_eq!(cfg.slippage, 0.02);
-        assert_eq!(cfg.cooldown, Duration::from_secs(1800));
-        assert_eq!(cfg.order_validity, Duration::from_secs(1800));
-        assert_eq!(cfg.request_timeout, Duration::from_secs(20));
-    }
-
-    #[test]
-    fn config_round_trips_through_serde_json() {
-        let cfg = RefuelConfig::default();
-        let json = serde_json::to_string(&cfg).unwrap();
-        assert_eq!(serde_json::from_str::<RefuelConfig>(&json).unwrap(), cfg);
     }
 }

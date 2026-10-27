@@ -61,6 +61,7 @@ pub struct AllowFlags {
 }
 
 impl WorkerParams {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         identity_file: Option<PathBuf>,
         identity_pass: Option<String>,
@@ -68,6 +69,7 @@ impl WorkerParams {
         allow: AllowFlags,
         blokli_url: Url,
         blokli_ip: Ipv4Addr,
+        cow_api_url: Url,
         state_home: PathBuf,
     ) -> Self {
         Self {
@@ -79,16 +81,9 @@ impl WorkerParams {
             allow_funding_tool_rerun: allow.funding_tool_rerun,
             blokli_url,
             blokli_ip,
-            cow_api_url: crate::cowswap::DEFAULT_API_URL
-                .parse()
-                .expect("valid default cow api url"),
+            cow_api_url,
             state_home,
         }
-    }
-
-    pub fn with_cow_api_url(mut self, cow_api_url: Url) -> Self {
-        self.cow_api_url = cow_api_url;
-        self
     }
 
     pub async fn persist_identity_generation(&self) -> Result<HoprKeys, Error> {
@@ -287,6 +282,7 @@ mod tests {
             AllowFlags::default(),
             blokli_url,
             BLOKLI_IP,
+            crate::cowswap::DEFAULT_API_URL.parse().unwrap(),
             PathBuf::from("/tmp/gnosisvpn"),
         )
     }

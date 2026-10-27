@@ -1010,7 +1010,7 @@ impl TryFrom<Config> for config::Config {
         let pix_strategy = value.pix_strategy.into();
         let refuel: RefuelConfig = value.refuel.into();
         if crate::balance::gas_level(refuel.target) == crate::balance::FundingLevel::Empty {
-            return Err(config::Error::RefuelTargetTooLow("0.0015 xDai".into()));
+            return Err(config::Error::RefuelTargetTooLow);
         }
         if refuel.order_validity < Duration::from_secs(120) {
             return Err(config::Error::RefuelValidityTooShort);
@@ -2080,7 +2080,7 @@ enabled = false
     }
 
     #[test]
-    fn refuel_fields_are_known_keys() {
+    fn refuel_keys_are_known_and_a_typo_is_reported() {
         let table = r#####"
 version = 7
 
@@ -2091,25 +2091,12 @@ slippage = 0.05
 cooldown = "1h"
 order_validity = "15m"
 request_timeout = "45s"
+nonsense = 1
 "#####
             .parse::<toml::Table>()
             .expect("valid TOML");
 
-        assert_eq!(wrong_keys(&table), Vec::<String>::new());
-    }
-
-    #[test]
-    fn refuel_typo_is_reported() {
-        let table = r#####"
-version = 7
-
-[refuel]
-targt = "0.02 xDai"
-"#####
-            .parse::<toml::Table>()
-            .expect("valid TOML");
-
-        assert_eq!(wrong_keys(&table), vec!["refuel.targt".to_string()]);
+        assert_eq!(wrong_keys(&table), vec!["refuel.nonsense".to_string()]);
     }
 
     #[test]
@@ -2126,38 +2113,25 @@ slippage = 0.6
     }
 
     #[test]
-    fn refuel_target_at_or_below_the_empty_line_is_a_load_error() {
-        let cfg = parse(
-            r#####"
+    fn refuel_target_below_the_empty_line_is_a_load_error() {
+        let with_target = |target: &str| {
+            parse(&format!(
+                r#####"
 version = 7
 
 [refuel]
-target = "0 xDai"
-"#####,
-        );
-        let result: Result<crate::config::Config, _> = cfg.try_into();
-        assert!(matches!(result, Err(crate::config::Error::RefuelTargetTooLow(_))));
-
-        let cfg = parse(
-            r#####"
-version = 7
-
-[refuel]
-target = "0.001 xDai"
-"#####,
-        );
-        let result: Result<crate::config::Config, _> = cfg.try_into();
-        assert!(matches!(result, Err(crate::config::Error::RefuelTargetTooLow(_))));
-
-        let cfg = parse(
-            r#####"
-version = 7
-
-[refuel]
-target = "0.0015 xDai"
-"#####,
-        );
-        assert!(TryInto::<crate::config::Config>::try_into(cfg).is_ok());
+target = "{target}"
+"#####
+            ))
+        };
+        for target in ["0 xDai", "0.001 xDai"] {
+            let result: Result<crate::config::Config, _> = with_target(target).try_into();
+            assert!(
+                matches!(result, Err(crate::config::Error::RefuelTargetTooLow)),
+                "{target}"
+            );
+        }
+        assert!(TryInto::<crate::config::Config>::try_into(with_target("0.0015 xDai")).is_ok());
     }
 
     #[test]

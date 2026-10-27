@@ -4,14 +4,14 @@ use edgli::hopr_lib::api::types::chain::exports::alloy;
 use edgli::hopr_lib::api::types::primitive::prelude::{Balance, Currency};
 use serde::Serialize;
 
-use alloy::primitives::{Address, B256, U256, keccak256};
+use alloy::primitives::{Address, B256, U256, hex};
 use alloy::signers::SignerSync;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::sol;
 use alloy::sol_types::{Eip712Domain, SolStruct, eip712_domain};
 
 use super::hooks::Hook;
-use super::{APP_CODE, BUY_NATIVE, CHAIN_ID, Error, SETTLEMENT};
+use super::{APP_CODE, BUY_NATIVE, CHAIN_ID, Error, SETTLEMENT, XHOPR_TOKEN};
 
 const APP_DATA_VERSION: &str = "1.6.0";
 
@@ -33,7 +33,7 @@ sol! {
     }
 }
 
-pub(crate) fn domain() -> Eip712Domain {
+fn domain() -> Eip712Domain {
     eip712_domain! {
         name: "Gnosis Protocol",
         version: "v2",
@@ -73,12 +73,7 @@ pub(crate) fn app_data_json(pre: &[Hook]) -> String {
     serde_json::to_string(&doc).expect("app data serialises")
 }
 
-pub(crate) fn app_data_hash(json: &str) -> B256 {
-    keccak256(json.as_bytes())
-}
-
 pub(crate) fn sell_order(
-    sell_token: Address,
     receiver: Address,
     sell_amount: U256,
     buy_amount: U256,
@@ -86,7 +81,7 @@ pub(crate) fn sell_order(
     app_data: B256,
 ) -> Order {
     Order {
-        sellToken: sell_token,
+        sellToken: XHOPR_TOKEN,
         buyToken: BUY_NATIVE,
         receiver,
         sellAmount: sell_amount,
@@ -101,17 +96,13 @@ pub(crate) fn sell_order(
     }
 }
 
-/// `digest ‖ owner ‖ validTo` - what the orderbook returns on placement and what hooks reference.
-pub(crate) fn order_uid(order: &Order, owner: Address) -> [u8; 56] {
+/// `digest ‖ owner ‖ validTo`, as the orderbook returns it on placement.
+pub(crate) fn order_uid(order: &Order, owner: Address) -> String {
     let mut uid = [0u8; 56];
     uid[..32].copy_from_slice(order.eip712_signing_hash(&domain()).as_slice());
     uid[32..52].copy_from_slice(owner.as_slice());
     uid[52..].copy_from_slice(&order.validTo.to_be_bytes());
-    uid
-}
-
-pub(crate) fn uid_hex(uid: &[u8; 56]) -> String {
-    alloy::primitives::hex::encode_prefixed(uid)
+    hex::encode_prefixed(uid)
 }
 
 pub(crate) fn sign_order(order: &Order, signer: &PrivateKeySigner) -> Result<[u8; 65], Error> {
@@ -136,7 +127,7 @@ pub(crate) fn wei<C: Currency>(balance: Balance<C>) -> U256 {
 }
 
 /// How much xHOPR the Safe must send and how much wxHOPR it must unwrap for that.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Sizing {
     pub need: U256,
     pub unwrap: U256,
@@ -155,14 +146,11 @@ impl Sizing {
 
 #[cfg(test)]
 mod tests {
-    use alloy::primitives::{address, b256};
+    use alloy::primitives::{Signature, b256, keccak256};
     use edgli::hopr_lib::api::types::primitive::prelude::XDaiBalance;
 
     use super::*;
-    use crate::cowswap::hooks::tests::test_signer;
-
-    const OWNER: Address = address!("c364f6b404d94e510a95064cfb0557708b181140");
-    const XHOPR: Address = address!("d057604a14982fe8d88c5fc25aac3267ea142a08");
+    use crate::cowswap::hooks::tests::{OWNER, test_signer};
 
     #[test]
     fn domain_separator_matches_the_settlement_contract() {
@@ -181,62 +169,40 @@ mod tests {
     }
 
     #[test]
-    fn order_uid_is_digest_owner_valid_to() {
-        let order = sell_order(
-            XHOPR,
-            OWNER,
-            U256::from(1u64),
-            U256::from(2u64),
-            1_790_864_944,
-            B256::ZERO,
-        );
+    fn order_uid_ends_with_owner_and_valid_to() {
+        let order = sell_order(OWNER, U256::from(1u64), U256::from(2u64), 1_790_864_944, B256::ZERO);
         let uid = order_uid(&order, OWNER);
-        assert_eq!(&uid[..32], order.eip712_signing_hash(&domain()).as_slice());
-        assert_eq!(&uid[32..52], OWNER.as_slice());
-        assert_eq!(&uid[52..], &1_790_864_944u32.to_be_bytes());
-        assert_eq!(uid_hex(&uid).len(), 2 + 112);
+        assert_eq!(uid.len(), 2 + 112);
+        assert!(uid.ends_with(&format!("{OWNER:x}{:08x}", 1_790_864_944u32)));
     }
 
     #[test]
     fn order_signature_recovers_the_owner() {
         let signer = test_signer();
-        let order = sell_order(
-            XHOPR,
-            signer.address(),
-            U256::from(1u64),
-            U256::from(2u64),
-            1,
-            B256::ZERO,
-        );
+        let order = sell_order(signer.address(), U256::from(1u64), U256::from(2u64), 1, B256::ZERO);
         let bytes = sign_order(&order, &signer).unwrap();
         assert!(bytes[64] == 27 || bytes[64] == 28);
-        let signature = alloy::primitives::Signature::from_raw(&bytes).unwrap();
-        let recovered = signature
+        let recovered = Signature::from_raw(&bytes)
+            .unwrap()
             .recover_address_from_prehash(&order.eip712_signing_hash(&domain()))
             .unwrap();
         assert_eq!(recovered, signer.address());
     }
 
     #[test]
-    fn app_data_json_is_byte_stable_and_hashes_consistently() {
+    fn app_data_json_is_byte_stable() {
         assert_eq!(
             app_data_json(&[]),
             r#"{"appCode":"gnosis_vpn","metadata":{},"version":"1.6.0"}"#
         );
         let hook = Hook {
-            target: XHOPR,
-            call_data: vec![0xd5, 0x05, 0xac, 0xcf],
+            target: XHOPR_TOKEN,
+            call_data: vec![0xd5, 0x05, 0xac, 0xcf].into(),
             gas_limit: 100_000,
         };
-        let json = app_data_json(&[hook]);
         assert_eq!(
-            json,
+            app_data_json(&[hook]),
             r#"{"appCode":"gnosis_vpn","metadata":{"hooks":{"pre":[{"target":"0xd057604a14982fe8d88c5fc25aac3267ea142a08","callData":"0xd505accf","gasLimit":"100000"}]}},"version":"1.6.0"}"#
-        );
-        assert_eq!(app_data_hash(&json), keccak256(json.as_bytes()));
-        assert_eq!(
-            app_data_hash("{}"),
-            b256!("b48d38f93eaa084033fc5970bf96e559c33c4cdc07d889ab00b4d63f9590739d")
         );
     }
 

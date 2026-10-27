@@ -57,8 +57,8 @@ pub enum Error {
     SurbBalancingMismatch,
     #[error("surb_balancing.ramp interval and duration must both be greater than zero")]
     SurbRampZero,
-    #[error("refuel.target must be above the {0} empty gas line, or every fill re-triggers")]
-    RefuelTargetTooLow(String),
+    #[error("refuel.target must be at least 0.0015 xDai, or every fill re-triggers")]
+    RefuelTargetTooLow,
     #[error("refuel.order_validity must be at least 2 minutes")]
     RefuelValidityTooShort,
     #[error("Error in hopr-lib: {0}")]
@@ -233,19 +233,5 @@ request_timeout = "45s"
         );
 
         assert_eq!(config.blokli.request_timeout, Duration::from_secs(45));
-    }
-
-    #[tokio::test]
-    async fn refuel_can_be_disabled_from_a_v6_config_file() {
-        let config = read_config(&with_blokli_section("[refuel]\nenabled = false"));
-
-        assert!(!config.refuel.enabled);
-    }
-
-    #[tokio::test]
-    async fn an_absent_refuel_section_is_enabled_by_default() {
-        let config = read_config(&with_blokli_section(""));
-
-        assert_eq!(config.refuel, RefuelConfig::default());
     }
 }

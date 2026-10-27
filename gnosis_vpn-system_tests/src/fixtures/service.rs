@@ -23,10 +23,6 @@ impl Service {
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
 
-        if let Some(cow_api_url) = &cfg.cow_api_url {
-            cmd.arg("--cow-api-url").arg(cow_api_url.as_str());
-        }
-
         if cfg.allow_insecure {
             cmd.arg("--allow-insecure");
         }

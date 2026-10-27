@@ -1,20 +1,20 @@
-//! Blokli reads for the refuel: token addresses, balances and the Safe nonce. Nothing here signs or sends.
+//! Blokli reads for the refuel: deployment check, balances and the Safe nonce. Nothing here signs or sends.
 
+use backon::Retryable;
 use edgli::hopr_lib::api::types::chain::exports::alloy;
-use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, Currency, WxHOPR, XDaiBalance, XHOPR};
-use reqwest::header::ACCEPT;
+use edgli::hopr_lib::api::types::primitive::prelude::{Balance, Currency, WxHOPR, XDaiBalance, XHOPR};
 use serde::Deserialize;
 use serde_json::json;
-use url::Url;
 
-use alloy::primitives::{Address as EvmAddress, U256, hex};
+use alloy::primitives::{Address, U256, hex};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::str::FromStr;
 
 use super::order::wei;
-use super::{CHAIN_ID, Error, WRAPPER_WXHOPR, WRAPPER_XHOPR, evm};
+use super::{CHAIN_ID, Error, WXHOPR_TOKEN, XHOPR_TOKEN};
+use crate::remote_data;
 
 /// Schema version edgli's own Blokli client announces.
 const SCHEMA_VERSION: &str = "1";
@@ -37,37 +37,26 @@ fragment CountFailure on TransactionCountResult {
   ... on InvalidAddressError { message } ... on QueryFailedError { message }
 }"#;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Tokens {
-    pub wxhopr: EvmAddress,
-    pub xhopr: EvmAddress,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Balances {
+#[derive(Debug)]
+pub(crate) struct Snapshot {
+    pub eoa_native: XDaiBalance,
     pub safe_wxhopr: U256,
     pub safe_xhopr: U256,
     pub eoa_xhopr: U256,
-}
-
-#[derive(Debug)]
-pub(crate) struct Snapshot {
-    pub tokens: Tokens,
-    pub eoa_native: XDaiBalance,
-    pub balances: Balances,
     /// For a Safe address Blokli answers with the Safe's own `nonce()`, which only owner-path executions advance.
     pub safe_nonce: u64,
 }
 
 pub(crate) struct Client {
     http: reqwest::Client,
-    url: Url,
+    url: String,
 }
 
 impl Client {
     /// Same endpoint edgli talks to, including the DNS pin that keeps Blokli reachable under the killswitch.
     pub(crate) fn new(endpoint: &edgli::BlokliEndpoint) -> Result<Self, Error> {
-        let mut builder = reqwest::Client::builder().timeout(endpoint.request_timeout);
+        // An env proxy would sit outside the pin; the killswitch exempts the pinned address only.
+        let mut builder = reqwest::Client::builder().no_proxy().timeout(endpoint.request_timeout);
         if let Some(pin) = &endpoint.dns_override {
             let host = endpoint
                 .url
@@ -82,39 +71,38 @@ impl Client {
         let http = builder.build().map_err(|e| Error::Blokli(e.to_string()))?;
         Ok(Self {
             http,
-            url: graphql_url(&endpoint.url)?,
+            // The endpoint path is a directory, as for edgli's client: `…/api` serves `…/api/graphql`.
+            url: format!("{}/graphql", endpoint.url.as_str().trim_end_matches('/')),
         })
     }
 
+    /// Transport and HTTP failures are retried briefly; an error member in the answer is final.
     pub(crate) async fn snapshot(&self, safe: Address, eoa: Address) -> Result<Snapshot, Error> {
         let body = json!({
             "query": SNAPSHOT_QUERY,
-            "variables": { "safe": hex::encode(evm(safe)), "eoa": hex::encode(evm(eoa)) },
+            "variables": { "safe": hex::encode(safe), "eoa": hex::encode(eoa) },
         });
-        let response: Response = self
-            .http
-            .post(self.url.clone())
-            .header(ACCEPT, "application/json")
+        (|| self.post(&body))
+            .retry(remote_data::backoff_expo_short_delay())
+            .notify(|err, delay| tracing::warn!(?err, ?delay, "blokli request failed, retrying..."))
+            .await?
+            .into_snapshot()
+    }
+
+    async fn post(&self, body: &serde_json::Value) -> Result<Response, Error> {
+        self.http
+            .post(&self.url)
+            .headers(remote_data::json_headers())
             .header("X-Blokli-Schema-Version", SCHEMA_VERSION)
-            .json(&body)
+            .json(body)
             .send()
             .await
             .and_then(|r| r.error_for_status())
             .map_err(|e| Error::Blokli(e.to_string()))?
             .json()
             .await
-            .map_err(|e| Error::Blokli(e.to_string()))?;
-        response.into_snapshot()
+            .map_err(|e| Error::Blokli(e.to_string()))
     }
-}
-
-/// The endpoint path is a directory, as for edgli's client: `…/api` serves `…/api/graphql`.
-fn graphql_url(base: &Url) -> Result<Url, Error> {
-    let mut base = base.clone();
-    if !base.path().ends_with('/') {
-        base.set_path(&format!("{}/", base.path()));
-    }
-    base.join("graphql").map_err(|e| Error::Blokli(e.to_string()))
 }
 
 #[derive(Deserialize)]
@@ -173,7 +161,7 @@ impl Response {
             return Err(Error::Blokli(format!("no data: {}", messages.join(", "))));
         };
         let info = data.chain_info.ok("chainInfo")?;
-        let tokens = tokens(
+        check_deployment(
             present(info.chain_id, "chainInfo.chainId")?,
             &present(info.contract_addresses, "chainInfo.contractAddresses")?,
         )?;
@@ -186,50 +174,37 @@ impl Response {
             .parse()
             .map_err(|e| Error::Blokli(format!("safe nonce {count:?}: {e}")))?;
         Ok(Snapshot {
-            tokens,
             eoa_native,
-            balances: Balances {
-                safe_wxhopr: token_wei::<WxHOPR>(data.safe_wxhopr, "safeWxhopr")?,
-                safe_xhopr: token_wei::<XHOPR>(data.safe_xhopr, "safeXhopr")?,
-                eoa_xhopr: token_wei::<XHOPR>(data.eoa_xhopr, "eoaXhopr")?,
-            },
+            safe_wxhopr: token_wei::<WxHOPR>(data.safe_wxhopr, "safeWxhopr")?,
+            safe_xhopr: token_wei::<XHOPR>(data.safe_xhopr, "safeXhopr")?,
+            eoa_xhopr: token_wei::<XHOPR>(data.eoa_xhopr, "eoaXhopr")?,
             safe_nonce,
         })
     }
 }
 
 /// The wrapper is hard-wired to one token pair; any other deployment would make the unwrap hook revert.
-fn tokens(chain_id: u64, contract_addresses: &str) -> Result<Tokens, Error> {
+fn check_deployment(chain_id: u64, contract_addresses: &str) -> Result<(), Error> {
     if chain_id != CHAIN_ID {
         return Err(Error::UnsupportedChain(chain_id));
     }
     let addresses: HashMap<String, String> =
         serde_json::from_str(contract_addresses).map_err(|e| Error::Blokli(format!("contract addresses: {e}")))?;
-    let address = |key: &str| -> Result<EvmAddress, Error> {
+    let address = |key: &str| -> Result<Address, Error> {
         let raw = addresses
             .get(key)
             .ok_or_else(|| Error::Blokli(format!("contract addresses lack {key}")))?;
-        EvmAddress::from_str(raw).map_err(|e| Error::Blokli(format!("contract address {key} {raw:?}: {e}")))
+        Address::from_str(raw).map_err(|e| Error::Blokli(format!("contract address {key} {raw:?}: {e}")))
     };
-    let tokens = Tokens {
-        wxhopr: address("token")?,
-        xhopr: address("xhopr_token")?,
-    };
-    if tokens.wxhopr != WRAPPER_WXHOPR || tokens.xhopr != WRAPPER_XHOPR {
-        return Err(Error::UnexpectedTokens {
-            token: tokens.wxhopr.to_string(),
-            xhopr: tokens.xhopr.to_string(),
-        });
+    let (token, xhopr) = (address("token")?, address("xhopr_token")?);
+    if token != WXHOPR_TOKEN || xhopr != XHOPR_TOKEN {
+        return Err(Error::UnexpectedTokens { token, xhopr });
     }
-    Ok(tokens)
+    Ok(())
 }
 
 /// A parse failure must surface, never read as zero: it would size the unwrap wrong.
-fn token_wei<C: Currency>(member: Member, alias: &str) -> Result<U256, Error>
-where
-    Balance<C>: FromStr,
-    <Balance<C> as FromStr>::Err: std::fmt::Display,
-{
+fn token_wei<C: Currency>(member: Member, alias: &str) -> Result<U256, Error> {
     let raw = present(member.ok(alias)?.balance, alias)?;
     raw.parse::<Balance<C>>()
         .map(wei)
@@ -256,22 +231,10 @@ mod tests {
     #[test]
     fn a_captured_answer_is_read_in_full() {
         let snapshot = snapshot(CAPTURED).unwrap();
-        assert_eq!(
-            snapshot.tokens,
-            Tokens {
-                wxhopr: WRAPPER_WXHOPR,
-                xhopr: WRAPPER_XHOPR
-            }
-        );
         assert_eq!(snapshot.eoa_native, "0.010200033532698918 xDai".parse().unwrap());
-        assert_eq!(
-            snapshot.balances,
-            Balances {
-                safe_wxhopr: U256::from(238_512_179_384_556_959_849_u128),
-                safe_xhopr: U256::ZERO,
-                eoa_xhopr: U256::ZERO,
-            }
-        );
+        assert_eq!(snapshot.safe_wxhopr, U256::from(238_512_179_384_556_959_849_u128));
+        assert_eq!(snapshot.safe_xhopr, U256::ZERO);
+        assert_eq!(snapshot.eoa_xhopr, U256::ZERO);
         assert_eq!(snapshot.safe_nonce, 8);
     }
 
@@ -303,7 +266,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "talks to blokli"]
     async fn a_pinned_live_snapshot_is_read() {
-        let url: Url = std::env::var(crate::hopr::ENV_VAR_BLOKLI_URL)
+        let url: url::Url = std::env::var(crate::hopr::ENV_VAR_BLOKLI_URL)
             .expect("blokli url")
             .parse()
             .unwrap();
@@ -316,22 +279,7 @@ mod tests {
         let endpoint = edgli::BlokliEndpoint::new(url)
             .with_request_timeout(std::time::Duration::from_secs(20))
             .with_dns_override(edgli::BlokliDnsOverride::new(ip, None));
-        let any = Address::from([1u8; 20]);
-        let snapshot = Client::new(&endpoint).unwrap().snapshot(any, any).await.unwrap();
-        assert_eq!(snapshot.tokens.xhopr, WRAPPER_XHOPR);
-    }
-
-    #[test]
-    fn the_graphql_path_extends_the_endpoint_path() {
-        let url = |raw: &str| graphql_url(&raw.parse().unwrap()).unwrap().to_string();
-        assert_eq!(url("https://blokli.example.com"), "https://blokli.example.com/graphql");
-        assert_eq!(
-            url("https://blokli.example.com/api"),
-            "https://blokli.example.com/api/graphql"
-        );
-        assert_eq!(
-            url("https://blokli.example.com/api/"),
-            "https://blokli.example.com/api/graphql"
-        );
+        let any = Address::repeat_byte(1);
+        Client::new(&endpoint).unwrap().snapshot(any, any).await.unwrap();
     }
 }

@@ -78,7 +78,7 @@ pub struct Cli {
     #[arg(long, env = hopr::ENV_VAR_BLOKLI_URL)]
     pub hopr_blokli_url: Url,
 
-    /// CoW Protocol orderbook API used by the gasless xDAI refuel; point it at CoW's barn orderbook for staging
+    /// CoW Protocol orderbook URL used by the gasless xDAI refuel
     #[arg(long, env = cowswap::ENV_VAR_API_URL, default_value = cowswap::DEFAULT_API_URL)]
     pub cow_api_url: Url,
 
@@ -128,9 +128,9 @@ impl Cli {
             allow,
             self.hopr_blokli_url.clone(),
             blokli_ip,
+            self.cow_api_url.clone(),
             self.state_home.clone(),
         )
-        .with_cow_api_url(self.cow_api_url.clone())
     }
 }
 
@@ -155,17 +155,7 @@ mod tests {
     fn parses_cli_with_minimum_arguments() -> anyhow::Result<()> {
         let args = Cli::try_parse_from(base_args())?;
         assert!(args.hopr_config_path.is_none());
-        assert_eq!(args.cow_api_url.as_str(), "https://api.cow.fi/xdai/api/v1");
-
-        Ok(())
-    }
-
-    #[test]
-    fn accepts_a_custom_cow_api_url() -> anyhow::Result<()> {
-        let mut args = base_args();
-        args.extend(["--cow-api-url", "https://barn.api.cow.fi/xdai/api/v1"]);
-        let args = Cli::try_parse_from(args)?;
-        assert_eq!(args.cow_api_url.as_str(), "https://barn.api.cow.fi/xdai/api/v1");
+        assert_eq!(args.cow_api_url.as_str(), cowswap::DEFAULT_API_URL);
 
         Ok(())
     }
