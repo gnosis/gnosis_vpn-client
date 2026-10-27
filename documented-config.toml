@@ -3,11 +3,6 @@
 #
 # On Unix the default config path is `/etc/gnosisvpn/config.toml`
 # However, you can override this by using the `GNOSISVPN_CONFIG_PATH` environment variable.
-#
-# This file is machine-wide. Per-user state (identity, safe cache, PIX state, worker logs) is
-# not configured here: the worker runs as whoever calls `start-client` and keeps it under that
-# user's home in `networks/<network>/`, where `<network>` is Blokli's `chainInfo.network`.
-# One worker runs per machine at a time; see README.md "Multi-user model".
 ###
 
 # general config file version
