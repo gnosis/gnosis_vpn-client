@@ -78,7 +78,7 @@ pub struct Cli {
     #[arg(long, env = hopr::ENV_VAR_BLOKLI_URL)]
     pub hopr_blokli_url: Url,
 
-    /// CoW Protocol orderbook API used by the gasless xDAI refuel (CoW staging: https://barn.api.cow.fi/xdai/api/v1)
+    /// CoW Protocol orderbook API used by the gasless xDAI refuel; point it at CoW's barn orderbook for staging
     #[arg(long, env = cowswap::ENV_VAR_API_URL, default_value = cowswap::DEFAULT_API_URL)]
     pub cow_api_url: Url,
 
