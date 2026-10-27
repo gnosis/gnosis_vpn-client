@@ -39,7 +39,7 @@ pub fn make_rolling_fmt_layer(log_path: &Path) -> Result<FileFmtLayer, std::io::
     let (Some(log_dir), Some(prefix)) = (log_path.parent(), log_path.file_name()) else {
         return Err(std::io::Error::other("log file path has no directory or file name"));
     };
-    dirs::ensure_private_dir(log_dir)?;
+    dirs::ensure_private_dir(log_dir, log_dir)?;
     let appender = RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
         .filename_prefix(prefix.to_string_lossy())

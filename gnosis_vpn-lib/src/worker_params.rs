@@ -85,10 +85,8 @@ impl WorkerParams {
 
     /// The per-network state tree, created by the worker as itself before anything is written into it.
     pub fn ensure_dirs(&self) -> std::io::Result<()> {
-        // The data dir first: created as a mere parent of pix/ it would get the umask mode, not 0o700.
-        dirs::ensure_private_dir(&self.network_data_dir())?;
-        dirs::ensure_private_dir(&self.pix_state_dir())?;
-        dirs::ensure_private_dir(&self.network_cache_dir())
+        dirs::ensure_private_dir(&self.user_dirs.data, &self.pix_state_dir())?;
+        dirs::ensure_private_dir(&self.user_dirs.cache, &self.network_cache_dir())
     }
 
     pub async fn persist_identity_generation(&self) -> Result<HoprKeys, Error> {
@@ -371,7 +369,49 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(dir_mode, 0o700);
-        assert!(identity::file(&params.network_data_dir()).exists());
+        let id = identity::file(&params.network_data_dir());
+        let id_mode = std::fs::metadata(&id).expect("id file").permissions().mode() & 0o777;
+        assert_eq!(id_mode, 0o600);
+    }
+
+    #[tokio::test]
+    async fn loading_an_identity_readable_by_others_restricts_it_to_the_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let params = params_in(tmp.path());
+        params.ensure_dirs().expect("dirs");
+        params.persist_identity_generation().await.expect("fresh identity");
+        let id = identity::file(&params.network_data_dir());
+        std::fs::set_permissions(&id, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        params.calc_keys().await.expect("load identity");
+
+        let mode = std::fs::metadata(&id).expect("id file").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn a_fresh_tree_is_private_from_our_own_root_down() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let params = params_in(tmp.path());
+        params.ensure_dirs().expect("dirs");
+
+        let data = &params.user_dirs.data;
+        let cache = &params.user_dirs.cache;
+        let ours = [
+            data.clone(),
+            data.join("networks"),
+            params.network_data_dir(),
+            params.pix_state_dir(),
+            cache.clone(),
+            cache.join("networks"),
+            params.network_cache_dir(),
+        ];
+        for dir in ours {
+            let mode = std::fs::metadata(&dir).expect("dir").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{}", dir.display());
+        }
     }
 
     /// A migrated `.id` without its `.pass` must not be silently replaced by a key nobody can open.
