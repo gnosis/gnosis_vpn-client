@@ -67,7 +67,7 @@ pub struct RefuelConfig {
     /// Sell-side buffer as a fraction; unused buffer comes back as xDAI surplus.
     #[serde(default = "RefuelConfig::default_slippage")]
     pub slippage: f64,
-    /// Gap after any finished attempt before the trigger may fire again.
+    /// Gap after a failed or expired attempt before the trigger may fire again; a fill does not wait.
     #[serde(with = "humantime_serde", default = "RefuelConfig::default_cooldown")]
     pub cooldown: Duration,
     /// validFor of the order; a stale order expires on its own, nothing cancels it.

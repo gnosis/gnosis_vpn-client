@@ -57,8 +57,8 @@ pub enum Error {
     SurbBalancingMismatch,
     #[error("surb_balancing.ramp interval and duration must both be greater than zero")]
     SurbRampZero,
-    #[error("refuel.target must be greater than zero")]
-    RefuelTargetZero,
+    #[error("refuel.target must be above the {0} empty gas line, or every fill re-triggers")]
+    RefuelTargetTooLow(String),
     #[error("refuel.order_validity must be at least 2 minutes")]
     RefuelValidityTooShort,
     #[error("Error in hopr-lib: {0}")]

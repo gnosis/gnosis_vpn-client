@@ -303,11 +303,11 @@ path    = { hops = 1 }
 # [refuel]
 # set to false to never trade Safe wxHOPR; default: true
 # enabled = true
-# xDAI bought per refuel; default: 0.01 xDai
+# xDAI bought per refuel, above the 0.0015 xDai empty line; default: 0.01 xDai
 # target = "0.01 xDai"
 # extra xHOPR offered on top of the quoted price, as a fraction in [0.0, 0.5]; default: 0.02
 # slippage = 0.02
-# wait after a finished attempt before trying again; default: 30m
+# wait after a failed or expired attempt before trying again (a fill re-arms immediately); default: 30m
 # cooldown = "30m"
 # how long a placed order stays fillable, at least 2m; default: 30m
 # order_validity = "30m"

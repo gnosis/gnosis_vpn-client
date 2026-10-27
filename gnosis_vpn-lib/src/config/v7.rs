@@ -1009,8 +1009,8 @@ impl TryFrom<Config> for config::Config {
         let strategy = value.strategy.into();
         let pix_strategy = value.pix_strategy.into();
         let refuel: RefuelConfig = value.refuel.into();
-        if refuel.target.is_zero() {
-            return Err(config::Error::RefuelTargetZero);
+        if crate::balance::gas_level(refuel.target) == crate::balance::FundingLevel::Empty {
+            return Err(config::Error::RefuelTargetTooLow("0.0015 xDai".into()));
         }
         if refuel.order_validity < Duration::from_secs(120) {
             return Err(config::Error::RefuelValidityTooShort);
@@ -2126,7 +2126,7 @@ slippage = 0.6
     }
 
     #[test]
-    fn refuel_target_zero_is_a_load_error() {
+    fn refuel_target_at_or_below_the_empty_line_is_a_load_error() {
         let cfg = parse(
             r#####"
 version = 7
@@ -2136,7 +2136,28 @@ target = "0 xDai"
 "#####,
         );
         let result: Result<crate::config::Config, _> = cfg.try_into();
-        assert!(matches!(result, Err(crate::config::Error::RefuelTargetZero)));
+        assert!(matches!(result, Err(crate::config::Error::RefuelTargetTooLow(_))));
+
+        let cfg = parse(
+            r#####"
+version = 7
+
+[refuel]
+target = "0.001 xDai"
+"#####,
+        );
+        let result: Result<crate::config::Config, _> = cfg.try_into();
+        assert!(matches!(result, Err(crate::config::Error::RefuelTargetTooLow(_))));
+
+        let cfg = parse(
+            r#####"
+version = 7
+
+[refuel]
+target = "0.0015 xDai"
+"#####,
+        );
+        assert!(TryInto::<crate::config::Config>::try_into(cfg).is_ok());
     }
 
     #[test]

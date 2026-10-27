@@ -39,6 +39,8 @@ enum Responder {
 }
 
 const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
+/// Same cadence as the running node's balances tick, which takes over once the node runs.
+const STARTUP_GAS_INTERVAL: Duration = Duration::from_secs(60);
 /// Graph walk cadence while a destination is not routable yet or a target is pending.
 const ROUTABILITY_EAGER_INTERVAL: Duration = Duration::from_secs(10);
 /// Graph walk cadence once every destination has settled.
@@ -94,6 +96,8 @@ pub struct Core {
 
     /// One graph walk in flight at a time; replaced on every spawn.
     cancel_routability: CancellationToken,
+    /// One startup gas watcher at a time; replaced on every node (re)start.
+    cancel_startup_gas: CancellationToken,
     announced_peers_loop_running: bool,
     /// Mirrors root's `probing`: it holds the idle countdown for an explicit probe until we say the probe is gone.
     root_probe_hold: bool,
@@ -107,6 +111,8 @@ pub struct Core {
     funding_tool: balance::FundingTool,
     refuel: cowswap::State,
     refuel_memory: cowswap::Memory,
+    /// Known before the node runs, so the refuel can fund a node that cannot start without gas.
+    refuel_safe: Option<Address>,
     incentive_operations: Option<Arc<dyn IncentiveOperations>>,
     hopr: Option<Arc<Hopr>>,
     minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
@@ -233,6 +239,7 @@ impl Core {
             cancel_balances: cancel_on_shutdown.child_token(),
             wg_pump_tasks: TaskTracker::new(),
             cancel_routability: cancel_on_shutdown.child_token(),
+            cancel_startup_gas: cancel_on_shutdown.child_token(),
             announced_peers_loop_running: false,
             root_probe_hold: false,
 
@@ -244,6 +251,7 @@ impl Core {
             funding_tool: balance::FundingTool::NotStarted,
             refuel: cowswap::State::Idle,
             refuel_memory: cowswap::Memory::default(),
+            refuel_safe: None,
             hopr: None,
             incentive_operations: None,
             minimum_balance_recommendation: None,
@@ -710,6 +718,7 @@ impl Core {
             Results::DeploySafe { res } => self.on_results_deploy_safe(res, results_sender).await,
             Results::FundingTool { res } => self.on_results_funding_tool(res),
             Results::Refuel { res } => self.on_results_refuel(res),
+            Results::StartupGas { res } => self.on_results_startup_gas(res, results_sender),
 
             Results::PersistSafe { res, safe_module } => match res {
                 Ok(()) => {
@@ -1297,9 +1306,10 @@ impl Core {
             }) => {
                 tracing::info!(%uid, "refuel order filled - node xDAI topped up");
                 self.refuel_memory.record_fill(permit_used, permit_nonce);
-                cowswap::State::Done(SystemTime::now())
+                // A later drop below the line is a new need, not a retry; the cooldown only throttles failures.
+                cowswap::State::Idle
             }
-            Ok(cowswap::Outcome::AlreadyRefueled) => cowswap::State::Done(SystemTime::now()),
+            Ok(cowswap::Outcome::AlreadyRefueled) => cowswap::State::Idle,
             Err(err) if err.is_permanent() => {
                 tracing::error!(%err, "refuel failed permanently - auto-refuel disabled until restart");
                 cowswap::State::Disabled
@@ -1332,7 +1342,7 @@ impl Core {
             return;
         }
         if let Some(remaining) = self.refuel.cooldown_remaining(cfg.cooldown, SystemTime::now()) {
-            tracing::debug!(?remaining, "refuel cooling down");
+            tracing::info!(%node_xdai, ?remaining, "gas empty - refuel cooling down after a failed attempt");
             return;
         }
         // A target without a tunnel means the killswitch blocks api.cow.fi, or a WAN call would leak the real IP.
@@ -1340,13 +1350,46 @@ impl Core {
             tracing::info!("gas empty - refuel waits for the tunnel");
             return;
         }
-        let Some(hopr) = self.hopr.clone() else {
+        let Some(safe_address) = self.refuel_safe else {
             return;
         };
         // Set before spawning so the next balances tick cannot start a second run.
         self.refuel = cowswap::State::InFlight;
         tracing::info!(%node_xdai, "gas empty - refueling via cow protocol");
-        self.spawn_refuel_runner(hopr.info().safe_address, results_sender);
+        self.spawn_refuel_runner(safe_address, results_sender);
+    }
+
+    /// hopr-lib refuses to start an unfunded node, so the running node's balances tick never comes.
+    fn on_results_startup_gas(
+        &mut self,
+        res: Result<balance::PreSafe, runner::Error>,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
+        if !matches!(self.phase, Phase::Starting { .. } | Phase::HoprSyncing) {
+            return;
+        }
+        match res {
+            Ok(presafe) => self.trigger_refuel(presafe.node_xdai, results_sender),
+            Err(err) => tracing::warn!(?err, "failed to read node xDAI while starting - retrying"),
+        }
+        self.spawn_startup_gas_runner(results_sender, STARTUP_GAS_INTERVAL);
+    }
+
+    fn spawn_startup_gas_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        self.cancel_startup_gas.cancel();
+        self.cancel_startup_gas = self.cancel_on_shutdown.child_token();
+        let cancel = self.cancel_startup_gas.clone();
+        let results_sender = results_sender.clone();
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::startup_gas(incentive_operations, results_sender).await;
+                    })
+                    .await
+            });
+        }
     }
 
     fn spawn_refuel_runner(&self, safe_address: Address, results_sender: &mpsc::Sender<Results>) {
@@ -1633,7 +1676,18 @@ impl Core {
             edgli_init_state: None,
             last_error: None,
         };
+        self.watch_startup_gas(&safe_module, results_sender);
         self.spawn_hopr_runner(safe_module, results_sender, delay);
+    }
+
+    fn watch_startup_gas(&mut self, safe_module: &SafeModule, results_sender: &mpsc::Sender<Results>) {
+        match safe_module.safe_address.parse() {
+            Ok(safe_address) => self.refuel_safe = Some(safe_address),
+            Err(err) => {
+                tracing::warn!(%err, safe = %safe_module.safe_address, "unparsable safe address - refuel unavailable")
+            }
+        }
+        self.spawn_startup_gas_runner(results_sender, Duration::ZERO);
     }
 
     fn retry_hopr_runner(
@@ -1647,6 +1701,7 @@ impl Core {
             edgli_init_state: None,
             last_error: Some(error),
         };
+        self.watch_startup_gas(&safe_module, results_sender);
         self.spawn_hopr_runner(safe_module, results_sender, delay);
     }
 

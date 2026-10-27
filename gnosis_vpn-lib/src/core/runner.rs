@@ -88,6 +88,9 @@ pub(crate) enum Results {
     Refuel {
         res: Result<cowswap::Outcome, cowswap::Error>,
     },
+    StartupGas {
+        res: Result<balance::PreSafe, Error>,
+    },
     AnnouncedPeers {
         res: Result<HashMap<Address, peer::Peer>, Error>,
     },
@@ -276,6 +279,14 @@ pub(crate) async fn node_wxhopr_withdraw(
 ) {
     let res = run_node_wxhopr_withdraw(incentive_operations, safe_address).await;
     let _ = results_sender.send(Results::NodeWxhoprWithdraw { res }).await;
+}
+
+pub(crate) async fn startup_gas(
+    incentive_operations: Arc<dyn IncentiveOperations>,
+    results_sender: mpsc::Sender<Results>,
+) {
+    let res = run_node_balance(incentive_operations).await;
+    let _ = results_sender.send(Results::StartupGas { res }).await;
 }
 
 pub(crate) async fn refuel(
@@ -758,6 +769,10 @@ impl Display for Results {
             Results::Refuel { res } => match res {
                 Ok(outcome) => write!(f, "Refuel: {}", outcome),
                 Err(err) => write!(f, "Refuel: Error({})", err),
+            },
+            Results::StartupGas { res } => match res {
+                Ok(presafe) => write!(f, "StartupGas: {}", presafe),
+                Err(err) => write!(f, "StartupGas: Error({})", err),
             },
             Results::AnnouncedPeers { res } => match res {
                 Ok(peers) => write!(f, "AnnouncedPeers: {}", peers.len()),
