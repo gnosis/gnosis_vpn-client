@@ -36,8 +36,6 @@ pub enum CoreToWorker {
 pub enum RootToWorker {
     /// Wrap up and tear down any resources before worker process exits
     Shutdown,
-    /// Rotate logs
-    RotateLogs,
     /// Startup parameters
     StartupParams {
         config: Box<Config>,

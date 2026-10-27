@@ -40,12 +40,51 @@ privileges and takes care of routing setup. It spawn the worker process
 control application (`gnosis_vpn-ctl`) is used to manage the client and its
 connections.
 
+## Multi-user model
+
+`gnosis_vpn-root` is the only privileged component; there is no service
+account. Whoever runs `gnosis_vpn-ctl start-client` gets a worker running as
+themselves, with state in their own per-user directories. The kernel reports the
+caller's uid on the control socket, so nothing is configured for this.
+
+- **One worker per machine.** While user A's worker runs (or is still shutting
+  down), every other user's `start-client`, `status`, `destinations`, `connect`,
+  … is answered with `InUseByOtherUser` (`gnosis_vpn-ctl` exits `NOPERM`).
+  `ping` and `info` stay open to everyone; `info` reports the worker log
+  directory only to the owner and root. The tunnel is machine-wide, so all local
+  traffic uses A's connection while it is up.
+- **Root may use anyone's worker, never own one.** `sudo gnosis_vpn-ctl status` and
+  `stop-client` work on anyone's worker; `sudo gnosis_vpn-ctl start-client` is
+  refused with `RootCannotOwnWorker`.
+- **A failed spawn is a response, not an outage.** `start-client` answers
+  `SpawnFailed { reason }` (exit `UNAVAILABLE`) and the service stays up.
+
+### Per-user directories
+
+The network name comes from the Blokli `chainInfo.network` the service talks
+to; it is never configured. Per user and network:
+
+| Content                             | Linux                                          | macOS                                                         |
+| ----------------------------------- | ---------------------------------------------- | ------------------------------------------------------------- |
+| identity `hopr.id`/`hopr.pass`      | `~/.local/share/gnosisvpn/networks/<network>/` | `~/Library/Application Support/GnosisVPN/networks/<network>/` |
+| safe cache `hopr.safe`              | `~/.cache/gnosisvpn/networks/<network>/`       | `~/Library/Caches/GnosisVPN/networks/<network>/`              |
+| worker logs `worker.log.YYYY-MM-DD` | `~/.local/state/gnosisvpn/`                    | `~/Library/Logs/GnosisVPN/`                                   |
+
+With `--state-home <dir>` the same layout sits under `<dir>/`, `<dir>/cache/`
+and `<dir>/logs/` for every caller; the calling user must be able to write to
+it, root neither creates nor chowns it. An empty `networks/<network>/`
+means a fresh identity is generated; `hopr.pass` is `0600`, the directories are
+`0700`. The worker keeps seven daily log files; the root log
+(`--log-file`) is root-owned and rotated by logrotate/newsyslog via SIGHUP as
+before. A log file that cannot be opened never stops either process: it logs
+to stdout instead and says so on stderr, and a failed reopen after SIGHUP keeps
+the current file. Root's own runtime files (control socket, lock,
+crash-recovery state) live in `/run/gnosisvpn/` on Linux and under `/var/run/`
+on macOS.
+
 ## Development setup
 
-1. Create an extra user on your system (e.g. `gnosisvpn`) with normal
-   privileges. This user will be used to run the worker process.
-
-2. _**Only for: Ubuntu 26.04 LTS**_ (TODO: remove once userspace wireguard is
+1. _**Only for: Ubuntu 26.04 LTS**_ (TODO: remove once userspace wireguard is
    merged)
 
 ```
@@ -57,42 +96,29 @@ EOF
 sudo apparmor_parser -r /etc/apparmor.d/wg-quick`
 ```
 
-3. Build binaries via: `cargo build` or `nix build .#gnosis_vpn-dev`.
+2. Build binaries via: `cargo build` or `nix build .#gnosis_vpn-dev`.
 
-4. Copy worker binary into user's home directory and make it owned by the user:
-
-```bash
-> sudo cp target/debug/gnosis_vpn-worker /home/gnosisvpn/
-# or from nix build:
-# sudo cp result/bin/gnosis_vpn-worker /home/gnosisvpn/
-> sudo chown gnosisvpn:gnosisvpn /home/gnosisvpn/gnosis_vpn-worker
-```
-
-5. Run the root binary with sudo and provide the path to the worker binary:
+3. Run the root binary with sudo and point it at the worker binary; the worker
+   binary must be executable by whoever runs `start-client`:
 
 ```bash
-> sudo RUST_LOG="debug" GNOSISVPN_HOME=/home/gnosisvpn ./target/debug/gnosis_vpn-root -c <config.toml> \
-    --hopr-blokli-url <hopr blokli url> --worker-binary /home/gnosisvpn/gnosis_vpn-worker
+> sudo RUST_LOG="debug" ./target/debug/gnosis_vpn-root -c <config.toml> \
+    --hopr-blokli-url <hopr blokli url> --worker-binary ./target/debug/gnosis_vpn-worker
 # or from nix build:
-> sudo RUST_LOG="debug" GNOSISVPN_HOME=/home/gnosisvpn ./result/bin/gnosis_vpn-root -c <config.toml> \
-    --hopr-blokli-url <hopr blokli url> --worker-binary /home/gnosisvpn/gnosis_vpn-worker
+> sudo RUST_LOG="debug" ./result/bin/gnosis_vpn-root -c <config.toml> \
+    --hopr-blokli-url <hopr blokli url> --worker-binary ./result/bin/gnosis_vpn-worker
 ```
 
-### Worker user configuration
+4. From your own shell: `gnosis_vpn-ctl start-client 10m`. The worker runs as you,
+   with state under your home (see [Per-user directories](#per-user-directories)).
 
-There are three environment variables that control the worker process setup:
+### Worker configuration
 
-- `GNOSISVPN_HOME`: The home directory for the service. This is where state and
-  caching data will be stored. Defaults to `/var/lib/gnosisvpn` on Linux and
-  `/Libary/Application Support/gnosisvpn` on macOS.
+- `GNOSISVPN_WORKER_BINARY` / `--worker-binary`: the worker binary to spawn.
+  Defaults to `./gnosis_vpn-worker`.
 
-- `GNOSISVPN_WORKER_USER`: The user with limited privileges that will run the
-  worker process. This user needs to have read and execute permissions for the
-  worker binary and write permissions for the `GNOSISVPN_HOME` directory.
-  Defaults to `gnosisvpn`.
-
-- `GNOSISVPN_WORKER_BINARY`: The path to the worker binary. The worker process
-  will be spawned with this binary.
+- `GNOSISVPN_HOME` / `--state-home`: state directory override for every
+  caller's worker (see above). Without it the per-user directories apply.
 
 ## Testing
 
@@ -111,9 +137,8 @@ Verify integrity before installing - see [SECURITY.md](./SECURITY.md).
 
 ## Idle shutdown
 
-When `--client-autostart <duration>` (or `GNOSISVPN_CLIENT_AUTOSTART`) is set,
-the service starts the worker automatically on launch and shuts it down after
-the worker has been idle for the given duration.
+`gnosis_vpn-ctl start-client <duration>` shuts the worker down after it has been
+idle for the given duration.
 
 The idle countdown behaves as follows:
 
@@ -127,7 +152,7 @@ The idle countdown behaves as follows:
 Example — shut down the worker after 10 minutes of idle time:
 
 ```bash
-gnosis_vpn-root --client-autostart 10m ...
+gnosis_vpn-ctl start-client 10m
 ```
 
 ## General usage
@@ -137,6 +162,36 @@ Check available params and env vars via:
 `gnosis_vpn-root --help` `gnosis_vpn-ctl --help`
 
 Diagnostic/ops scripts (connectivity smoke test, capacity/latency drain tour, WireGuard traffic sampling) live in [`scripts/`](scripts/README.md).
+
+## Docker
+
+`just docker-build` then `just docker-run`. The worker runs as the image's
+`gnosisvpn` user (home `/var/lib/gnosisvpn`):
+
+```bash
+docker exec -u gnosisvpn gnosis_vpn-client gnosis_vpn-ctl start-client 10m
+```
+
+To use an existing identity, mount a writable directory holding `hopr.id` and
+`hopr.pass` at `/var/lib/gnosisvpn/.local/share/gnosisvpn/networks/<network>/`
+(`just docker-run` does this for `IDENTITY_DIR` and `NETWORK`). `<network>` is
+what root logs at startup as `blokli network`.
+
+### Migrating a pre-GNO-958 volume
+
+The image does not migrate; native installs are migrated by the installer
+through the toolkit's `gnosis_vpn-migrate`. With the container stopped, inside
+the volume (formerly `/var/lib/gnosisvpn`):
+
+```bash
+net=.local/share/gnosisvpn/networks/<network>
+mkdir -p "$net"
+mv .config/gnosisvpn-hopr.id "$net/hopr.id"
+mv .config/gnosisvpn-hopr.pass "$net/hopr.pass"
+rm -f .config/gnosisvpn-hopr.safe           # cache, rebuilt on start
+chmod 0600 "$net/hopr.pass"
+chmod -R go-rwx .local
+```
 
 ## Branches
 

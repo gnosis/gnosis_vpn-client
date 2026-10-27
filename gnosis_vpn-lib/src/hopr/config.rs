@@ -1,16 +1,16 @@
 use serde_saphyr;
 use thiserror::Error;
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::compat::SafeModule;
-use crate::dirs;
 
 pub use edgli::hopr_lib::config::HoprLibConfig;
 
-const SAFE_FILE: &str = "gnosisvpn-hopr.safe";
+const SAFE_FILE: &str = "hopr.safe";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -20,8 +20,6 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("Output error: {0}")]
     Output(String),
-    #[error("Project directory error: {0}")]
-    Dirs(#[from] crate::dirs::Error),
 }
 
 impl From<serde_saphyr::Error> for Error {
@@ -48,14 +46,20 @@ pub async fn from_path(path: PathBuf) -> Result<HoprLibConfig, Error> {
     serde_saphyr::from_str::<HoprLibConfig>(&content).map_err(Into::into)
 }
 
-pub async fn store_safe(state_home: PathBuf, safe_module: &SafeModule) -> Result<(), Error> {
-    let safe_file = safe_file(state_home);
+pub async fn store_safe(network_cache_dir: &Path, safe_module: &SafeModule) -> Result<(), Error> {
     let content = serde_saphyr::to_string(&safe_module)?;
-    fs::write(&safe_file, &content).await.map_err(Error::IO)
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(safe_file(network_cache_dir))
+        .await?;
+    file.write_all(content.as_bytes()).await.map_err(Error::IO)
 }
 
-pub async fn read_safe(state_home: PathBuf) -> Result<SafeModule, Error> {
-    let content = fs::read_to_string(safe_file(state_home)).await.map_err(|e| {
+pub async fn read_safe(network_cache_dir: &Path) -> Result<SafeModule, Error> {
+    let content = fs::read_to_string(safe_file(network_cache_dir)).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::NoFile
         } else {
@@ -91,8 +95,8 @@ pub async fn generate(
     Ok(cfg)
 }
 
-pub fn safe_file(state_home: PathBuf) -> PathBuf {
-    dirs::config_dir(state_home, SAFE_FILE)
+pub fn safe_file(network_cache_dir: &Path) -> PathBuf {
+    network_cache_dir.join(SAFE_FILE)
 }
 
 #[cfg(test)]
