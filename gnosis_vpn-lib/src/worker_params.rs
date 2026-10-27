@@ -369,7 +369,25 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(dir_mode, 0o700);
-        assert!(identity::file(&params.network_data_dir()).exists());
+        let id = identity::file(&params.network_data_dir());
+        let id_mode = std::fs::metadata(&id).expect("id file").permissions().mode() & 0o777;
+        assert_eq!(id_mode, 0o600);
+    }
+
+    #[tokio::test]
+    async fn loading_an_identity_readable_by_others_restricts_it_to_the_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let params = params_in(tmp.path());
+        params.ensure_dirs().expect("dirs");
+        params.persist_identity_generation().await.expect("fresh identity");
+        let id = identity::file(&params.network_data_dir());
+        std::fs::set_permissions(&id, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        params.calc_keys().await.expect("load identity");
+
+        let mode = std::fs::metadata(&id).expect("id file").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]
