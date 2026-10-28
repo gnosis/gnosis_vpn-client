@@ -29,6 +29,363 @@ pub(super) struct Destination {
     pub(super) path: Option<DestinationPath>,
 }
 
+<<<<<<< HEAD
+=======
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct ConnectionProtocol {
+    pub(super) capabilities: Option<Vec<Capability>>,
+    pub(super) target: Option<SocketAddr>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct PingOptions {
+    pub(super) address: Option<IpAddr>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) timeout: Option<Duration>,
+    pub(super) ttl: Option<u32>,
+    pub(super) seq_count: Option<u16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct HealthCheckIntervalOptions {
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) version: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) ping: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) load: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) tunnel_ping: Option<Duration>,
+    #[serde(default, deserialize_with = "validate_tunnel_ping_max_failures")]
+    pub(super) tunnel_ping_max_failures: Option<u32>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) tunnel_ping_max_rtt: Option<Duration>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct SessionSurbConfig {
+    enabled: Option<bool>,
+    buffer: Option<ByteSize>,
+    #[serde(default, with = "human_bandwidth::serde")]
+    max_surb_upstream: Option<Bandwidth>,
+    always_max_out_surbs: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct SurbRampConfig {
+    #[serde(default, with = "humantime_serde::option")]
+    interval: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    duration: Option<Duration>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct SurbBalancingConfig {
+    ping: Option<SessionSurbConfig>,
+    main: Option<SessionSurbConfig>,
+    bridge: Option<SessionSurbConfig>,
+    ramp: Option<SurbRampConfig>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct WireGuard {
+    pub(super) allowed_ips: Option<String>,
+    pub(super) dns: Option<WireGuardDNS>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct WireGuardDNS {
+    pub overwrite: bool,
+    pub servers: Option<String>,
+}
+
+impl WireGuardDNS {
+    fn default_server() -> String {
+        "1.1.1.1,8.8.8.8".to_string()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct BlokliConfig {
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) connection_sync_timeout: Option<Duration>,
+    pub(super) sync_tolerance: Option<usize>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) request_timeout: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) resolve_timeout: Option<Duration>,
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+fn validate_path_planner_min_ack_rate<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<f64>::deserialize(deserializer)?;
+    match value {
+        Some(v) if !(0.0..=1.0).contains(&v) => Err(serde::de::Error::custom(
+            "path_planner_min_ack_rate must be in the range [0.0, 1.0]",
+        )),
+        other => Ok(other),
+    }
+}
+
+fn validate_tunnel_ping_max_failures<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<i64>::deserialize(deserializer)?;
+    match value {
+        None => Ok(None),
+        Some(n) if n < 1 => Err(serde::de::Error::custom("tunnel_ping_max_failures must be at least 1")),
+        Some(n) => u32::try_from(n)
+            .map(Some)
+            .map_err(|_| serde::de::Error::custom("tunnel_ping_max_failures is out of range")),
+    }
+}
+
+pub(super) fn validate_hops<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u8::deserialize(deserializer)?;
+    if value <= MAX_HOPS {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "hops must be less than or equal to {MAX_HOPS}"
+        )))
+    }
+}
+
+pub(super) fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
+    let mut flags = SessionCapabilities::empty();
+    for cap in caps {
+        let cap = match cap {
+            Capability::Segmentation => SessionCapability::Segmentation,
+            Capability::Retransmission => SessionCapability::RetransmissionNack,
+            Capability::RetransmissionAckOnly => SessionCapability::RetransmissionAck,
+            Capability::NoDelay => SessionCapability::NoDelay,
+            Capability::NoRateControl => SessionCapability::NoRateControl,
+        };
+        flags |= cap;
+    }
+    flags
+}
+
+// ── Shared From impls ─────────────────────────────────────────────────────────
+
+impl Connection {
+    // Bridge capabilities must never include retransmissions — those require additional SURBs.
+    pub fn default_bridge_capabilities() -> Vec<Capability> {
+        vec![Capability::Segmentation, Capability::NoRateControl]
+    }
+
+    pub fn default_wg_capabilities() -> Vec<Capability> {
+        // NoDelay on a stateless session preserves UDP/WireGuard datagram boundaries over the
+        // session (hoprnet#8356): each datagram is delivered as exactly one read, so neptun never
+        // sees a split/coalesced buffer.
+        vec![Capability::Segmentation, Capability::NoDelay]
+    }
+
+    pub fn default_bridge_target() -> SessionTarget {
+        SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
+            [172, 30, 0, 1],
+            8000,
+        )))))
+    }
+
+    pub fn default_wg_target() -> SessionTarget {
+        SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(SocketAddr::from((
+            [172, 30, 0, 1],
+            51820,
+        )))))
+    }
+
+    pub fn default_http_timeout() -> Duration {
+        Duration::from_secs(60)
+    }
+}
+
+/// Zero intervals feed `time::sleep(0)` and hammer the exit; a zero RTT ceiling calls every reply slow.
+pub(super) fn reject_zero_intervals(intervals: &options::HealthCheckIntervals) -> Result<(), config::Error> {
+    let any_zero = [
+        intervals.version,
+        intervals.ping,
+        intervals.load,
+        intervals.tunnel_ping,
+        intervals.tunnel_ping_max_rtt,
+    ]
+    .iter()
+    .any(Duration::is_zero);
+    if any_zero {
+        return Err(config::Error::HealthCheckIntervalZero);
+    }
+    Ok(())
+}
+
+fn apply_session_surb(cfg: Option<SessionSurbConfig>, def: options::SessionSurbOptions) -> options::SessionSurbOptions {
+    match cfg {
+        None => def,
+        Some(c) => {
+            let enabled = c.enabled.unwrap_or(def.enabled);
+            options::SessionSurbOptions {
+                enabled,
+                buffer: c.buffer.unwrap_or(def.buffer),
+                max_surb_upstream: c.max_surb_upstream.unwrap_or(def.max_surb_upstream),
+                always_max_out_surbs: c.always_max_out_surbs.unwrap_or(enabled),
+            }
+        }
+    }
+}
+
+impl From<Option<Connection>> for options::Options {
+    fn from(conn: Option<Connection>) -> Self {
+        let connection = conn.as_ref();
+        let bridge_target = connection
+            .and_then(|c| c.bridge.as_ref())
+            .and_then(|b| b.target)
+            .map(|socket| SessionTarget::TcpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
+            .unwrap_or(Connection::default_bridge_target());
+        let bridge_caps = connection
+            .and_then(|c| c.bridge.as_ref())
+            .and_then(|b| b.capabilities.clone())
+            .unwrap_or(Connection::default_bridge_capabilities());
+        let params_bridge = options::SessionParameters::new(bridge_target, to_flags(bridge_caps));
+
+        let wg_target = connection
+            .and_then(|c| c.wg.as_ref())
+            .and_then(|w| w.target)
+            .map(|socket| SessionTarget::UdpStream(SealedHost::Plain(IpOrHost::Ip(socket))))
+            .unwrap_or(Connection::default_wg_target());
+        let wg_caps = connection
+            .and_then(|c| c.wg.as_ref())
+            .and_then(|w| w.capabilities.clone())
+            .unwrap_or(Connection::default_wg_capabilities());
+        let params_wg = options::SessionParameters::new(wg_target, to_flags(wg_caps));
+
+        let sessions = options::Sessions {
+            bridge: params_bridge,
+            wg: params_wg,
+        };
+
+        let def_opts = ping::Options::default();
+        let ping_opts = connection
+            .and_then(|c| c.ping.as_ref())
+            .map(|p| ping::Options {
+                address: p.address.unwrap_or(def_opts.address),
+                timeout: p.timeout.unwrap_or(def_opts.timeout),
+                ttl: p.ttl.unwrap_or(def_opts.ttl),
+                seq_count: p.seq_count.unwrap_or(def_opts.seq_count),
+            })
+            .unwrap_or(def_opts);
+
+        let surb_cfg = connection.and_then(|c| c.surb_balancing.clone());
+        let def = options::SurbBalancing::default();
+        let surb_balancing = options::SurbBalancing {
+            ping: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.ping.clone()), def.ping),
+            main: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.main.clone()), def.main),
+            bridge: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.bridge.clone()), def.bridge),
+            ramp: options::SurbRampOptions {
+                interval: surb_cfg
+                    .as_ref()
+                    .and_then(|s| s.ramp.as_ref())
+                    .and_then(|r| r.interval)
+                    .unwrap_or(def.ramp.interval),
+                duration: surb_cfg
+                    .as_ref()
+                    .and_then(|s| s.ramp.as_ref())
+                    .and_then(|r| r.duration)
+                    .unwrap_or(def.ramp.duration),
+            },
+        };
+        let http_timeout = connection
+            .and_then(|c| c.http_timeout)
+            .unwrap_or(Connection::default_http_timeout());
+
+        let timeouts = options::Timeouts { http: http_timeout };
+
+        let def_intervals = options::HealthCheckIntervals::default();
+        let health_check_intervals = connection
+            .and_then(|c| c.health_check_intervals.as_ref())
+            .map(|h| options::HealthCheckIntervals {
+                version: h.version.unwrap_or(def_intervals.version),
+                ping: h.ping.unwrap_or(def_intervals.ping),
+                load: h.load.unwrap_or(def_intervals.load),
+                tunnel_ping: h.tunnel_ping.unwrap_or(def_intervals.tunnel_ping),
+                tunnel_ping_max_failures: h
+                    .tunnel_ping_max_failures
+                    .unwrap_or(def_intervals.tunnel_ping_max_failures),
+                tunnel_ping_max_rtt: h.tunnel_ping_max_rtt.unwrap_or(def_intervals.tunnel_ping_max_rtt),
+            })
+            .unwrap_or(def_intervals);
+
+        options::Options {
+            sessions,
+            ping_options: ping_opts,
+            surb_balancing,
+            timeouts,
+            health_check_intervals,
+            lan_lockdown: connection.and_then(|c| c.lan_lockdown).unwrap_or(false),
+            probe_local_addresses: connection.and_then(|c| c.probe_local_addresses).unwrap_or(false),
+            path_planner_min_ack_rate: connection
+                .and_then(|c| c.path_planner_min_ack_rate)
+                .unwrap_or(options::DEFAULT_PATH_PLANNER_MIN_ACK_RATE),
+            path_planner: connection.and_then(|c| c.path_planner.clone()).unwrap_or_default(),
+        }
+    }
+}
+
+impl From<Option<WireGuard>> for WireGuardConfig {
+    fn from(value: Option<WireGuard>) -> Self {
+        let allowed_ips = value.as_ref().and_then(|wg| wg.allowed_ips.clone());
+        let dns = value
+            .as_ref()
+            .and_then(|wg| {
+                wg.dns.as_ref().map(|dns| {
+                    if dns.overwrite {
+                        Some(dns.servers.clone().unwrap_or(WireGuardDNS::default_server()))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or(Some(WireGuardDNS::default_server()));
+        WireGuardConfig::new(allowed_ips, dns)
+    }
+}
+
+impl From<Option<BlokliConfig>> for HoprBlokliConfig {
+    fn from(value: Option<BlokliConfig>) -> Self {
+        let connection_sync_timeout = value
+            .as_ref()
+            .and_then(|b| b.connection_sync_timeout)
+            .unwrap_or_else(|| HoprBlokliConfig::default().connection_sync_timeout);
+        let sync_tolerance = value
+            .as_ref()
+            .and_then(|b| b.sync_tolerance)
+            .unwrap_or_else(|| HoprBlokliConfig::default().sync_tolerance);
+        let request_timeout = value
+            .as_ref()
+            .and_then(|b| b.request_timeout)
+            .unwrap_or_else(|| HoprBlokliConfig::default().request_timeout);
+        let resolve_timeout = value
+            .as_ref()
+            .and_then(|b| b.resolve_timeout)
+            .unwrap_or_else(|| HoprBlokliConfig::default().resolve_timeout);
+        HoprBlokliConfig {
+            connection_sync_timeout,
+            sync_tolerance,
+            request_timeout,
+            resolve_timeout,
+        }
+    }
+}
+
+// ── v6-specific items ─────────────────────────────────────────────────────────
+
+>>>>>>> dc09334 (feat(root): re-resolve the Blokli address before every first killswitch arm, the startup pin is the fallback (GNO-1025) (#957))
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong = Vec::new();
     for (key, value) in table.iter() {
@@ -60,7 +417,11 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "blokli" {
             if let Some(blokli) = value.as_table() {
                 for (k, _) in blokli.iter() {
-                    if k == "connection_sync_timeout" || k == "sync_tolerance" || k == "request_timeout" {
+                    let is_known = k == "connection_sync_timeout"
+                        || k == "sync_tolerance"
+                        || k == "request_timeout"
+                        || k == "resolve_timeout";
+                    if is_known {
                         continue;
                     }
                     wrong.push(format!("blokli.{k}"));
@@ -313,7 +674,85 @@ mod tests {
     /// End-to-end regression: a v6 file forward-converts through v7 into the runtime config,
     /// with its destination resolved to a plain `Configured` entry carrying no target override.
     #[test]
+<<<<<<< HEAD
     fn v6_file_forward_converts_into_the_runtime_config() {
+=======
+    fn blokli_request_timeout_is_optional() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[blokli]
+sync_tolerance = 50
+"#####,
+        );
+        let blokli = cfg.blokli.expect("blokli section present");
+        assert_eq!(blokli.request_timeout, None);
+    }
+
+    #[test]
+    fn absent_blokli_request_timeout_falls_back_to_the_default() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[blokli]
+sync_tolerance = 50
+"#####,
+        );
+        let blokli: HoprBlokliConfig = cfg.blokli.into();
+        assert_eq!(blokli.request_timeout, HoprBlokliConfig::default().request_timeout);
+    }
+
+    #[test]
+    fn configured_blokli_request_timeout_wins_over_the_default() {
+        let cfg = parse(
+            r#####"
+version = 6
+
+[blokli]
+request_timeout = "45s"
+"#####,
+        );
+        let blokli: HoprBlokliConfig = cfg.blokli.into();
+        assert_eq!(blokli.request_timeout, Duration::from_secs(45));
+    }
+
+    #[test]
+    fn absent_blokli_resolve_timeout_falls_back_to_the_default() {
+        let cfg = parse("version = 6\n\n[blokli]\nsync_tolerance = 50\n");
+        let blokli: HoprBlokliConfig = cfg.blokli.into();
+        assert_eq!(blokli.resolve_timeout, HoprBlokliConfig::default().resolve_timeout);
+    }
+
+    #[test]
+    fn configured_blokli_resolve_timeout_wins_over_the_default() {
+        let cfg = parse("version = 6\n\n[blokli]\nresolve_timeout = \"7s\"\n");
+        let blokli: HoprBlokliConfig = cfg.blokli.into();
+        assert_eq!(blokli.resolve_timeout, Duration::from_secs(7));
+    }
+
+    #[test]
+    fn blokli_request_timeout_is_a_supported_key() {
+        let table = r#####"
+version = 6
+
+[blokli]
+connection_sync_timeout = "30s"
+sync_tolerance = 50
+request_timeout = "10s"
+resolve_timeout = "3s"
+nonsense = 1
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), vec!["blokli.nonsense".to_string()]);
+    }
+
+    #[test]
+    fn convert_destinations_hops_path_preserved() {
+>>>>>>> dc09334 (feat(root): re-resolve the Blokli address before every first killswitch arm, the startup pin is the fallback (GNO-1025) (#957))
         let cfg = parse(
             r#####"
 version = 6
