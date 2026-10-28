@@ -72,7 +72,9 @@ to; it is never configured. Per user and network:
 
 With `--state-home <dir>` the same layout sits under `<dir>/`, `<dir>/cache/`
 and `<dir>/logs/` for every caller; the calling user must be able to write to
-it, root neither creates nor chowns it. An empty `networks/<network>/`
+it, root neither creates nor chowns it. It is meant for single-user, Docker and
+test setups: the first user's worker makes it `0700`, so a second user's
+worker exits 73. An empty `networks/<network>/`
 means a fresh identity is generated; `hopr.pass` is `0600`, the directories are
 `0700`. The worker keeps seven daily log files; the root log
 (`--log-file`) is root-owned and rotated by logrotate/newsyslog via SIGHUP as
@@ -118,7 +120,7 @@ sudo apparmor_parser -r /etc/apparmor.d/wg-quick`
   Defaults to `./gnosis_vpn-worker`.
 
 - `GNOSISVPN_HOME` / `--state-home`: state directory override for every
-  caller's worker (see above). Without it the per-user directories apply.
+  caller's worker, single-user only (see above). Without it the per-user directories apply.
 
 ## Testing
 
