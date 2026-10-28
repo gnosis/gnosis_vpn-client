@@ -200,7 +200,9 @@ pub struct SessionSurbOptions {
     pub enabled: bool,
     pub buffer: ByteSize,
     pub max_surb_upstream: Bandwidth,
-    /// When the balancer is inactive, send only 1 SURB per HTTP request even if 2 would fit.
+    /// `true` sends as many SURBs per request as fit, up to [`MAXED_OUT_SURBS_PER_PACKET`]; `false`
+    /// sends only 1 even if more would fit. With the balancer active the count is gated on its
+    /// target: that many while the counterparty holds fewer SURBs than the target, none from there on.
     pub always_max_out_surbs: bool,
 }
 
@@ -384,10 +386,38 @@ pub(crate) enum SurbConfigError {
 #[derive(Clone, Debug)]
 pub(crate) struct SurbParams {
     pub(crate) management: Option<SurbBalancerConfig>,
-    /// hopr-lib's `max_surbs_per_data_packet`: `1` follows the balancer's target, anything above
-    /// bypasses that gate, and the value saturates at what the packet can carry.
+    /// hopr-lib's `max_surbs_per_data_packet`: the most SURBs a data packet carries, which hopr-lib
+    /// clamps to what fits beside the packet's message. Every finite value is gated on the balancer's
+    /// target (hoprnet#8576): that many while the counterparty holds fewer SURBs than the target, none
+    /// from there on. Only `usize::MAX` is not gated, and the client does not use it.
     pub(crate) max_surbs_per_data_packet: usize,
 }
+
+/// What "max out" means for `max_surbs_per_data_packet`: the most SURBs a HOPR packet can carry at
+/// all, the ones that fit beside an empty message.
+///
+/// hopr-lib clamps `max_surbs_per_data_packet` to what fits beside each packet's own message, so this
+/// sends exactly as many SURBs per packet as `usize::MAX` did: every one that fits. It is finite on
+/// purpose. `usize::MAX` is the one value hoprnet#8576's organic-SURB gate does not touch, and a
+/// client that uses it keeps filling the Exit's SURB store past the balancer's target, up to the
+/// store's capacity. A finite count is gated: the same SURBs per packet below the target and none at
+/// or above it, so the Exit's stock stays near the target, and a SURB generation wipe then costs what
+/// the PIX surplus covers.
+///
+/// 8 at today's packet payload (3246 B) and SURB size (402 B); 4 of them fit beside a full session
+/// segment.
+pub(crate) const MAXED_OUT_SURBS_PER_PACKET: usize =
+    edgli::hopr_lib::exports::transport::PACKET_PAYLOAD_SIZE / edgli::hopr_lib::exports::transport::SURB_SIZE;
+
+// "Max out" must stay at least what a full-size session segment leaves room for, or the count would no
+// longer be "every SURB that fits" for the bulk of the traffic. Checked at build time, since a payload
+// or SURB size change in hopr-lib is what could break it.
+const _: () = assert!(
+    MAXED_OUT_SURBS_PER_PACKET
+        >= (edgli::hopr_lib::exports::transport::PACKET_PAYLOAD_SIZE
+            - edgli::hopr_lib::exports::transport::SESSION_MTU)
+            / edgli::hopr_lib::exports::transport::SURB_SIZE
+);
 
 pub(crate) fn surb_config_for(opts: &SessionSurbOptions) -> Result<SurbParams, SurbConfigError> {
     let management = if opts.enabled {
@@ -397,10 +427,16 @@ pub(crate) fn surb_config_for(opts: &SessionSurbOptions) -> Result<SurbParams, S
     };
     Ok(SurbParams {
         management,
-        // `always_max_out_surbs` predates hopr-lib's count: "max out" is every SURB that fits
-        // (`usize::MAX` saturates, as hopr-lib's own sessions use it), otherwise the one per
-        // packet the balancer's target allows.
-        max_surbs_per_data_packet: if opts.always_max_out_surbs { usize::MAX } else { 1 },
+        // `always_max_out_surbs` predates hopr-lib's count. "Max out" used to be `usize::MAX`, every
+        // SURB that fits, which hoprnet#8576's organic gate does not touch. A finite count sends the
+        // same SURBs per packet below the balancer's target and none at or above it, so the Exit's
+        // stock stays near the target (a generation wipe then costs what the PIX surplus covers):
+        // that is the point of the change. Otherwise the one per packet the target allows.
+        max_surbs_per_data_packet: if opts.always_max_out_surbs {
+            MAXED_OUT_SURBS_PER_PACKET
+        } else {
+            1
+        },
     })
 }
 
@@ -428,4 +464,42 @@ pub(crate) fn to_surb_balancer_config(
         ..Default::default()
     };
     Ok(config)
+}
+
+#[cfg(test)]
+mod surb_params_tests {
+    use super::*;
+
+    fn surb_options(enabled: bool, always_max_out_surbs: bool) -> SessionSurbOptions {
+        SessionSurbOptions {
+            enabled,
+            buffer: ByteSize::mb(10),
+            max_surb_upstream: Bandwidth::from_mbps(16),
+            always_max_out_surbs,
+        }
+    }
+
+    #[test]
+    fn maxing_out_surbs_is_a_finite_count_that_the_balancer_target_gates() {
+        let params = surb_config_for(&surb_options(true, true)).expect("a valid SURB configuration");
+        assert_eq!(params.max_surbs_per_data_packet, MAXED_OUT_SURBS_PER_PACKET);
+        assert!(
+            params.max_surbs_per_data_packet > 1,
+            "maxing out must send more than the one SURB per packet the default does"
+        );
+        assert_ne!(
+            params.max_surbs_per_data_packet,
+            usize::MAX,
+            "usize::MAX is the one count hoprnet#8576's gate leaves alone"
+        );
+    }
+
+    #[test]
+    fn not_maxing_out_surbs_sends_one_per_packet() {
+        let params = surb_config_for(&surb_options(true, false)).expect("a valid SURB configuration");
+        assert_eq!(params.max_surbs_per_data_packet, 1);
+        let unbalanced = surb_config_for(&surb_options(false, false)).expect("a valid SURB configuration");
+        assert_eq!(unbalanced.max_surbs_per_data_packet, 1);
+        assert!(unbalanced.management.is_none());
+    }
 }
