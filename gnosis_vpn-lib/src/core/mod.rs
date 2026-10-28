@@ -1909,13 +1909,7 @@ impl Core {
                 cancel: self.cancel_connection.clone(),
                 tasks: self.wg_pump_tasks.clone(),
             };
-            let runner = connection::up::runner::Runner::new(
-                spec,
-                hopr.clone(),
-                self.worker_params.clone(),
-                prev_conn,
-                pump_lifecycle,
-            );
+            let runner = connection::up::runner::Runner::new(spec, hopr.clone(), prev_conn, pump_lifecycle);
             let results_sender = results_sender.clone();
             self.phase = Phase::Connecting(conn);
             tokio::spawn(async move {
