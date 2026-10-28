@@ -67,6 +67,8 @@ struct DaemonState {
     worker_binary: PathBuf,
     /// Whose worker runs or is still shutting down; outlives `worker_child` until forgotten.
     worker_owner: Option<WorkerOwner>,
+    /// Whose killswitch is armed; outlives a crashed owner so no other user can lift it.
+    killswitch_holder: Option<u32>,
     /// Resolved at startup and again before every first arm; frozen while the killswitch blocks DNS.
     blokli_ip: Ipv4Addr,
     /// Mirrors the routing actor's policy: a lookup is only possible while this is false.
@@ -581,6 +583,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         cli: args,
         worker_binary,
         worker_owner: None,
+        killswitch_holder: None,
         blokli_ip,
         killswitch_armed: false,
         network,
@@ -887,7 +890,7 @@ impl DaemonState {
                     self.shutdown_ongoing = Shutdown::Service;
                     if let Some(ref mut child) = self.worker_child {
                         tracing::debug!("sending shutdown signal to worker process");
-                        send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                        send_to_worker_lossy(RootToWorker::Shutdown, &mut child.socket_writer).await;
                         self.cleanup_worker_resources().await;
                         Ok(())
                     } else {
@@ -941,7 +944,11 @@ impl DaemonState {
     async fn incoming_socket_command(&mut self, socket_cmd: SocketCmd) -> Result<(), exitcode::ExitCode> {
         let SocketCmd { cmd, resp, peer_uid } = socket_cmd;
         // Before any side effect: a refused connect must not touch the owner's idle countdown.
-        let owner_uid = self.worker_owner.as_ref().map(|owner| owner.uid);
+        let owner_uid = self
+            .worker_owner
+            .as_ref()
+            .map(|owner| owner.uid)
+            .or(self.killswitch_holder);
         if let Some(refusal) = gate(owner_uid, &cmd, peer_uid) {
             tracing::debug!(?cmd, peer_uid, owner_uid, "refusing socket command");
             let _ = resp.send(refusal).map_err(|error| {
@@ -1011,7 +1018,7 @@ impl DaemonState {
                 {
                     tracing::debug!("sending shutdown signal to worker process due to config reload");
                     self.shutdown_ongoing = Shutdown::RestartWorker;
-                    send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                    send_to_worker_lossy(RootToWorker::Shutdown, &mut child.socket_writer).await;
                     self.cleanup_worker_resources().await;
                 }
             }
@@ -1121,7 +1128,7 @@ impl DaemonState {
                     Ok(Response::StartClient(command::StartClientResponse::AlreadyRunning))
                 }
                 (Shutdown::None, None) => {
-                    let owner = match WorkerOwner::from_uid(peer_uid, self.cli.state_home.as_deref()) {
+                    let owner = match WorkerOwner::from_uid(peer_uid) {
                         Ok(owner) => owner,
                         Err(error) => {
                             tracing::warn!(%error, peer_uid, "cannot start a worker for this caller");
@@ -1178,7 +1185,7 @@ impl DaemonState {
                 (Shutdown::None, Some(child)) => {
                     tracing::debug!("sending shutdown signal to worker process due to stop client command");
                     self.shutdown_ongoing = Shutdown::Worker;
-                    send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                    send_to_worker_lossy(RootToWorker::Shutdown, &mut child.socket_writer).await;
                     self.cleanup_worker_resources().await;
                     self.disable_killswitch().await;
                     self.target_dest_id = None;
@@ -1250,7 +1257,7 @@ impl DaemonState {
         Ok(())
     }
 
-    async fn apply_killswitch(&self, interface: Option<String>, ips: Vec<IpAddr>) -> Result<(), String> {
+    async fn apply_killswitch(&mut self, interface: Option<String>, ips: Vec<IpAddr>) -> Result<(), String> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = self
             .routing_actor_sender
@@ -1261,14 +1268,19 @@ impl DaemonState {
                 reply: reply_tx,
             })
             .await;
-        match reply_rx.await {
+        let res = match reply_rx.await {
             Ok(res) => res,
             Err(_) => Err("killswitch actor dropped reply channel".to_string()),
+        };
+        if res.is_ok() {
+            self.killswitch_holder = self.worker_owner.as_ref().map(|owner| owner.uid);
         }
+        res
     }
 
     async fn disable_killswitch(&mut self) {
         self.killswitch_armed = false;
+        self.killswitch_holder = None;
         let _ = self
             .routing_actor_sender
             .send(routing_actor::Msg::DisableKillswitch)
@@ -1484,7 +1496,7 @@ impl DaemonState {
             && let Some(ref mut child) = self.worker_child
         {
             self.shutdown_ongoing = Shutdown::Worker;
-            send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+            send_to_worker_lossy(RootToWorker::Shutdown, &mut child.socket_writer).await;
             self.cleanup_worker_resources().await;
             self.target_dest_id = None;
         }
@@ -1534,8 +1546,7 @@ impl DaemonState {
 
         let mut worker_command = TokioCommand::new(&self.worker_binary);
 
-        // Root's environment stays (RUST_LOG, GNOSISVPN_CLIENT_SESSION_PORT_RANGE, HOPRD_CURVY_*);
-        // only the identity of the user is overridden, for upstream crates that read it.
+        // Root's whole env is inherited: its keys are world-readable config, and an allowlist would silently drop proxy/cert vars.
         worker_command
             .current_dir(&owner.home)
             // The control channel arrives as the worker's stdin: spawn dup2s the fd
