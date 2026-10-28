@@ -73,6 +73,8 @@ struct DaemonState {
     blokli_ip: Ipv4Addr,
     /// Mirrors the routing actor's policy: a lookup is only possible while this is false.
     killswitch_armed: bool,
+    /// The next spawn follows a Blokli move, so its first arm trusts the address just resolved.
+    blokli_just_resolved: bool,
     /// Blokli's `chainInfo.network`; keys every user's identity directory.
     network: String,
     config: Config,
@@ -137,6 +139,10 @@ struct WorkerChild {
     _child_tun_socket: UnixStream,
     /// SIGKILLs the worker; its exit is still reported through the exit channel.
     kill: CancellationToken,
+    /// edgli's Blokli DNS override; fixed for this worker's lifetime.
+    blokli_ip: Ipv4Addr,
+    /// Skips this worker's first lookup so flapping DNS cannot loop restarts.
+    blokli_just_resolved: bool,
 }
 
 #[derive(Debug)]
@@ -586,6 +592,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         killswitch_holder: None,
         blokli_ip,
         killswitch_armed: false,
+        blokli_just_resolved: false,
         network,
         config,
         config_path,
@@ -757,7 +764,7 @@ fn choose_blokli_ip(resolved: Result<Ipv4Addr, String>, current: Ipv4Addr) -> Ip
             ip
         }
         Ok(ip) => {
-            tracing::info!(old = %current, new = %ip, "blokli address changed - exempting and routing the new one");
+            tracing::info!(old = %current, new = %ip, "blokli address changed - restarting the worker on it");
             ip
         }
         Err(error) => {
@@ -1295,7 +1302,12 @@ impl DaemonState {
                 peer_ips,
                 interface,
             } => {
-                self.refresh_blokli_ip().await;
+                let blokli_moved = self.refresh_blokli_ip().await;
+                if blokli_moved && matches!(self.shutdown_ongoing, Shutdown::None) {
+                    // Nothing is armed yet; the respawned worker reconnects to the kept target on the new address.
+                    self.restart_worker_on_new_blokli().await;
+                    return Ok(());
+                }
                 let mut ips: Vec<IpAddr> = peer_ips.into_iter().map(IpAddr::V4).collect();
                 ips.push(IpAddr::V4(self.blokli_ip));
                 let res = self.apply_killswitch(interface, ips).await;
@@ -1316,8 +1328,10 @@ impl DaemonState {
                 interface_address,
                 mtu,
                 dns,
-                peer_ips,
+                mut peer_ips,
             } => {
+                // Blokli stays on the WAN like the peers, or the worker's chain access would depend on its own tunnel.
+                peer_ips.push(self.blokli_ip);
                 let res = match self.setup_static_routing(interface_address, mtu, dns, peer_ips).await {
                     Ok((interface, tun_fd)) => match self.worker_child {
                         // Pass the fd out-of-band first; the worker recv_fd's it only
@@ -1655,6 +1669,8 @@ impl DaemonState {
             tun_fd_socket: parent_tun_socket,
             _child_tun_socket: child_tun_socket,
             kill,
+            blokli_ip: self.blokli_ip,
+            blokli_just_resolved: std::mem::take(&mut self.blokli_just_resolved),
         });
         Ok(())
     }
@@ -1690,10 +1706,15 @@ impl DaemonState {
             .await;
     }
 
-    /// Before the first arm only: reconnects and exit switches keep the killswitch up, so DNS is closed there.
-    async fn refresh_blokli_ip(&mut self) {
-        if self.killswitch_armed {
-            return;
+    /// Before the first arm only (later arms have DNS closed); true when Blokli left the worker's address.
+    async fn refresh_blokli_ip(&mut self) -> bool {
+        let Some(child) = self.worker_child.as_mut() else {
+            return false;
+        };
+        let just_resolved = std::mem::take(&mut child.blokli_just_resolved);
+        let worker_ip = child.blokli_ip;
+        if self.killswitch_armed || just_resolved {
+            return false;
         }
         let url = self.cli.hopr_blokli_url.clone();
         let timeout = self.config.blokli.resolve_timeout;
@@ -1702,6 +1723,18 @@ impl DaemonState {
             Err(_) => Err("timed out".to_string()),
         };
         self.blokli_ip = choose_blokli_ip(resolved, self.blokli_ip);
+        self.blokli_ip != worker_ip
+    }
+
+    /// edgli keeps its spawn-time Blokli address, so only a respawn moves the worker; same path as a config reload.
+    async fn restart_worker_on_new_blokli(&mut self) {
+        let Some(ref mut child) = self.worker_child else {
+            return;
+        };
+        self.shutdown_ongoing = Shutdown::RestartWorker;
+        self.blokli_just_resolved = true;
+        send_to_worker_lossy(RootToWorker::Shutdown, &mut child.socket_writer).await;
+        self.cleanup_worker_resources().await;
     }
 
     async fn setup_static_routing(
