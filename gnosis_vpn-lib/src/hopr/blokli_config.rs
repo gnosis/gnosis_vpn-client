@@ -9,6 +9,9 @@ use std::time::Duration;
 /// the TLS handshake alone can take several round trips before the request goes out.
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Only looked up while DNS is still open, so a slow answer is a broken resolver; the startup pin covers it.
+const DEFAULT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BlokliConfig {
     pub connection_sync_timeout: Duration,
@@ -16,6 +19,8 @@ pub struct BlokliConfig {
     /// Bound on one request to Blokli, applied to the [`edgli::BlokliEndpoint`] rather than to
     /// [`BlockchainConnectorConfig`] - see the `From` impl below.
     pub request_timeout: Duration,
+    /// Bound on root's lookup of the Blokli host before the first killswitch arm.
+    pub resolve_timeout: Duration,
 }
 
 impl From<BlokliConfig> for BlockchainConnectorConfig {
@@ -40,6 +45,7 @@ impl Default for BlokliConfig {
             // its blokli index typically covers only a fraction of all on-chain accounts.
             sync_tolerance: 50,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            resolve_timeout: DEFAULT_RESOLVE_TIMEOUT,
         }
     }
 }
