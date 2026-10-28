@@ -8,6 +8,10 @@ use std::path::Path;
 
 use crate::command::{Command, Response};
 
+/// Linux: inside `dirs::RUNTIME_DIR`; macOS keeps the flat `/var/run` name next to the pid file newsyslog reads.
+#[cfg(target_os = "linux")]
+pub const DEFAULT_PATH: &str = "/run/gnosisvpn/gnosisvpn.sock";
+#[cfg(target_os = "macos")]
 pub const DEFAULT_PATH: &str = "/var/run/gnosisvpn.sock";
 pub const ENV_VAR: &str = "GNOSISVPN_SOCKET_PATH";
 
@@ -141,5 +145,11 @@ mod tests {
         assert!(matches!(resp, Response::Pong));
         server.await.expect("listener task");
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_socket_lives_in_the_runtime_dir() {
+        assert!(DEFAULT_PATH.starts_with(crate::dirs::RUNTIME_DIR));
     }
 }

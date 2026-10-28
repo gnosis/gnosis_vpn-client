@@ -14,7 +14,6 @@ cfg-if.workspace         = true
 clap.workspace           = true
 exitcode.workspace       = true
 gnosis_vpn-lib.workspace = true
-humantime.workspace      = true
 neptun                   = { workspace = true, features = ["device"] }
 notify.workspace         = true
 serde.workspace          = true

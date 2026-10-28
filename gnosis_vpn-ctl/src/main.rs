@@ -270,12 +270,16 @@ fn pretty_print(resp: &Response) {
         }
         Response::Info(info) => {
             println!(
-                "Gnosis VPN: client service version: {}, package version: {}{}",
+                "Gnosis VPN: client service version: {}, package version: {}{}{}",
                 info.version,
                 info.package_version.as_deref().unwrap_or("not available"),
                 info.log_file
                     .as_ref()
                     .map(|f| format!("\nLog file: {}", f.display()))
+                    .unwrap_or_default(),
+                info.worker_log_dir
+                    .as_ref()
+                    .map(|d| format!("\nWorker log dir: {}", d.display()))
                     .unwrap_or_default(),
             );
         }
@@ -284,6 +288,9 @@ fn pretty_print(resp: &Response) {
         }
         Response::StartClient(command::StartClientResponse::AlreadyRunning) => {
             eprintln!("Worker client already running");
+        }
+        Response::StartClient(command::StartClientResponse::SpawnFailed { reason }) => {
+            eprintln!("Worker client could not be started: {reason}");
         }
         Response::StopClient(command::StopClientResponse::Stopped) => {
             println!("Worker client stopped");
@@ -301,6 +308,12 @@ fn pretty_print(resp: &Response) {
         }
         Response::WorkerRestarting => {
             eprintln!("Worker client is restarting - try again shortly");
+        }
+        Response::InUseByOtherUser => {
+            eprintln!("Worker client is in use by another user of this machine - wait until they stop it");
+        }
+        Response::RootCannotOwnWorker => {
+            eprintln!("Run `start-client` as a regular user - root cannot own the worker client");
         }
         // Internal response sent by the root process to itself when a WAN interface change
         // triggers a HOPR session reconnect. Never issued in response to a ctl command.
@@ -412,11 +425,14 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Info(..) => exitcode::OK,
         Response::StartClient(command::StartClientResponse::Started) => exitcode::OK,
         Response::StartClient(command::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,
+        Response::StartClient(command::StartClientResponse::SpawnFailed { .. }) => exitcode::UNAVAILABLE,
         Response::StopClient(command::StopClientResponse::Stopped) => exitcode::OK,
         Response::StopClient(command::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
         Response::Destinations(..) => exitcode::OK,
         Response::WorkerOffline => exitcode::UNAVAILABLE,
         Response::WorkerRestarting => exitcode::TEMPFAIL,
+        Response::InUseByOtherUser => exitcode::NOPERM,
+        Response::RootCannotOwnWorker => exitcode::USAGE,
         // Internal response — see pretty_print for explanation
         Response::ForceReconnectAcknowledged => exitcode::PROTOCOL,
     }
