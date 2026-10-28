@@ -32,7 +32,7 @@ pub struct Cli {
         )]
     pub config_path: PathBuf,
 
-    /// State directory for every caller's worker instead of their own home; the calling user must be able to write it
+    /// State directory for every caller's worker instead of their own home; single-user only (Docker, tests): a second user cannot write it
     #[arg(long, env = dirs::ENV_VAR_STATE_HOME)]
     pub state_home: Option<PathBuf>,
 
