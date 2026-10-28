@@ -1107,7 +1107,7 @@ impl DaemonState {
                     Ok(Response::StartClient(command::StartClientResponse::AlreadyRunning))
                 }
                 (Shutdown::None, None) => {
-                    let owner = match WorkerOwner::from_uid(peer_uid, self.cli.state_home.as_deref()) {
+                    let owner = match WorkerOwner::from_uid(peer_uid) {
                         Ok(owner) => owner,
                         Err(error) => {
                             tracing::warn!(%error, peer_uid, "cannot start a worker for this caller");
