@@ -1,15 +1,16 @@
 //! Wire contract for the opt-in public-interface traffic capture.
 //!
 //! The root daemon captures IP traffic on one explicitly selected interface and
-//! publishes one-second aggregates. Aggregation lives in the daemon so that
-//! neither packet payloads nor per-packet events ever leave the privileged
-//! process. Presentation state (history retention, row assignment, viewport
+//! publishes byte observations per remote endpoint, direction and second.
+//! Aggregation into rolling totals lives in the consumer, while packet access
+//! stays in the daemon so that neither payloads nor per-packet events ever leave
+//! the privileged process. Presentation state (history retention, window
 //! projection) belongs to the client application, not here.
 //!
-//! Capture only describes what is observable on the wire: a target is either
-//! associated with an announced HOPR peer address or it is not. The daemon makes
-//! no claim about which process sent a packet, and it cannot see payload that a
-//! tunnel carries.
+//! Capture only describes what is observable on the wire: how many bytes the
+//! host sent to or received from each remote address in a second. The daemon
+//! makes no claim about which process sent a packet or whether the traffic
+//! belongs to the mixnet.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +18,7 @@ use std::net::IpAddr;
 
 /// Bumped on any incompatible change to the types below. Consumers must refuse
 /// to interpret a batch carrying an unknown version.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 3;
 
 /// One interface the daemon is willing to capture on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,18 +33,6 @@ pub struct Interface {
     pub is_default: bool,
 }
 
-/// How a captured packet relates to the VPN transport.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Class {
-    /// The remote address is one announced by the HOPR node, i.e. the traffic is
-    /// plausibly part of the mixnet transport. Association, not ownership.
-    HoprAssociated,
-    /// No association rule matched. May be ordinary traffic, RPC traffic, an
-    /// unrelated VPN, or mixnet traffic to an address that is not announced.
-    Other,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
@@ -53,18 +42,17 @@ pub enum Direction {
     Downstream,
 }
 
-/// Aggregated traffic for one target, class, direction and second.
+/// Bytes observed for one remote endpoint and direction in one second. Several
+/// deltas may cover the same second and endpoint; consumers add them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delta {
     /// Whole seconds since the capture session started.
     pub second: u64,
+    /// The remote endpoint of the packets.
     pub target: IpAddr,
-    pub class: Class,
     pub direction: Direction,
-    pub packets: u32,
     /// Sum of complete IP-layer lengths, including the IP header.
     pub bytes: u64,
-    pub largest_packet: u32,
 }
 
 /// A bounded slice of aggregated traffic.
@@ -126,12 +114,6 @@ pub struct StopResponse {
     pub stopped: bool,
 }
 
-/// Replaces the announced-peer address set used for [`Class::HoprAssociated`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PeerAddresses {
-    pub addresses: Vec<IpAddr>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,17 +128,16 @@ mod tests {
             deltas: vec![Delta {
                 second: 1,
                 target: "192.0.2.10".parse().expect("ip"),
-                class: Class::HoprAssociated,
                 direction: Direction::Downstream,
-                packets: 4,
                 bytes: 5120,
-                largest_packet: 1400,
             }],
             dropped_batches: 0,
         };
         let json = serde_json::to_string(&batch).expect("serialize");
-        assert!(json.contains("\"class\":\"hopr_associated\""), "{json}");
         assert!(json.contains("\"direction\":\"downstream\""), "{json}");
+        assert!(json.contains("\"bytes\":5120"), "{json}");
+        assert!(json.contains("\"target\":\"192.0.2.10\""), "{json}");
+        assert!(!json.contains("class"), "{json}");
         let parsed: Batch = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, batch);
     }
@@ -204,7 +185,7 @@ mod tests {
             protocol: PROTOCOL_VERSION,
         }));
         assert_eq!(
-            r#"{"TrafficStart":{"Ok":{"session_id":1,"interface":{"id":"en0","name":"en0","addresses":["192.0.2.2"],"is_default":true},"protocol":1}}}"#,
+            r#"{"TrafficStart":{"Ok":{"session_id":1,"interface":{"id":"en0","name":"en0","addresses":["192.0.2.2"],"is_default":true},"protocol":3}}}"#,
             serde_json::to_string(&started).expect("serialize")
         );
         assert_eq!(

@@ -1347,10 +1347,6 @@ impl DaemonState {
                 Ok(())
             }
             RequestToRoot::UpdatePeerIps { peer_ips } => {
-                // The same announced addresses the killswitch exempts are the ones
-                // traffic capture associates with the mixnet transport.
-                self.traffic
-                    .update_peer_addresses(peer_ips.iter().copied().map(IpAddr::V4).collect());
                 let _ = self
                     .routing_actor_sender
                     .send(routing_actor::Msg::UpdatePeerIps { peer_ips })
@@ -1363,8 +1359,6 @@ impl DaemonState {
     async fn incoming_worker_exit(&mut self, status: process::ExitStatus) -> Result<(), exitcode::ExitCode> {
         self.worker_child = None;
         self.probing = false;
-        // A dead worker's announced peers say nothing about the next one.
-        self.traffic.clear_peer_addresses();
         // A dead worker's device must never be handed to its replacement as a reusable one.
         self.teardown_any_routing().await;
         match self.shutdown_ongoing {
@@ -1566,7 +1560,6 @@ impl DaemonState {
     /// Remove routing and stop ping tasks
     async fn teardown(&mut self) {
         self.traffic.shutdown();
-        self.traffic.clear_peer_addresses();
         self.cleanup_worker_resources().await;
         if let Some(ref mut child) = self.worker_child {
             child.cancel.cancel();

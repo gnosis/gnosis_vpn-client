@@ -1,13 +1,13 @@
 //! Turns captured link-layer frames into direction-tagged, IP-sized observations.
 //!
-//! Only the IP headers are inspected. Payload bytes are never copied, decoded or
+//! Only the link-layer and IP headers are inspected. Payload bytes are never copied, decoded or
 //! retained: everything downstream of [`observe`] sees an address, a direction and
 //! a length.
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use gnosis_vpn_lib::traffic::{Class, Delta, Direction};
+use gnosis_vpn_lib::traffic::{Delta, Direction};
 
 /// Ethernet, plus up to two stacked VLAN tags (802.1Q / 802.1ad).
 const ETHERNET_HEADER_LEN: usize = 14;
@@ -18,10 +18,23 @@ const ETHERTYPE_VLAN: [u16; 3] = [0x8100, 0x88a8, 0x9100];
 const IPV4_HEADER_LEN: usize = 20;
 const IPV6_HEADER_LEN: usize = 40;
 
+/// What identifies the capturing host on its interface.
+pub struct Host {
+    /// Addresses the interface reports as its own.
+    pub addresses: HashSet<IpAddr>,
+    /// The interface's link-layer address. Decides direction when neither IP
+    /// endpoint is a reported address, as with CLAT46 translation on IPv6-only
+    /// networks or an IPv6 privacy address created after capture started.
+    pub mac: Option<[u8; 6]>,
+    /// Networks the interface is attached to, as address and prefix length.
+    /// Endpoints inside them are LAN peers such as the router, not targets.
+    pub networks: Vec<(IpAddr, u8)>,
+}
+
 /// A packet that involves the captured interface exactly once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Observation {
-    /// The remote endpoint. Private to the model; never rendered.
+    /// The remote endpoint. Published to the consumer; never rendered as text.
     pub target: IpAddr,
     pub direction: Direction,
     /// Complete IP-layer size: IP header plus IP payload.
@@ -30,7 +43,7 @@ pub struct Observation {
 
 /// Classifies one captured frame, or returns `None` when it is not IP traffic
 /// involving exactly one local endpoint.
-pub fn observe(frame: &[u8], local: &HashSet<IpAddr>) -> Option<Observation> {
+pub fn observe(frame: &[u8], host: &Host) -> Option<Observation> {
     let ip = ip_layer(frame)?;
     let (source, destination, length) = match ip[0] >> 4 {
         4 => ipv4_endpoints(ip)?,
@@ -38,17 +51,19 @@ pub fn observe(frame: &[u8], local: &HashSet<IpAddr>) -> Option<Observation> {
         _ => return None,
     };
 
-    let source_is_local = local.contains(&source);
-    if source_is_local == local.contains(&destination) {
-        return None;
-    }
+    let source_is_local = match (host.addresses.contains(&source), host.addresses.contains(&destination)) {
+        (true, false) => true,
+        (false, true) => false,
+        (true, true) => return None,
+        (false, false) => sent_by_host(frame, host.mac?)?,
+    };
 
     let (target, direction) = if source_is_local {
         (destination, Direction::Upstream)
     } else {
         (source, Direction::Downstream)
     };
-    if is_unusable_target(target) {
+    if is_unusable_target(target) || host.networks.iter().any(|network| within(*network, target)) {
         return None;
     }
 
@@ -57,6 +72,18 @@ pub fn observe(frame: &[u8], local: &HashSet<IpAddr>) -> Option<Observation> {
         direction,
         length,
     })
+}
+
+/// Direction from the Ethernet addresses: `Some(true)` when the host sent the
+/// frame, `Some(false)` when it was addressed to the host.
+fn sent_by_host(frame: &[u8], mac: [u8; 6]) -> Option<bool> {
+    let destination = frame.get(0..6)?;
+    let source = frame.get(6..12)?;
+    match (source == mac, destination == mac) {
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        _ => None,
+    }
 }
 
 fn ip_layer(frame: &[u8]) -> Option<&[u8]> {
@@ -110,35 +137,54 @@ fn be_u16(bytes: &[u8]) -> Option<u16> {
     Some(u16::from_be_bytes(bytes.try_into().ok()?))
 }
 
+/// Only public endpoints are targets: private, link-local and shared address
+/// space never leaves the local network or the provider's.
 fn is_unusable_target(target: IpAddr) -> bool {
     match target {
-        IpAddr::V4(v4) => v4.is_loopback() || v4.is_multicast() || v4.is_unspecified() || v4 == Ipv4Addr::BROADCAST,
-        IpAddr::V6(v6) => v6.is_loopback() || v6.is_multicast() || v6.is_unspecified(),
+        IpAddr::V4(v4) => {
+            let shared = v4.octets()[0] == 100 && v4.octets()[1] & 0xc0 == 64;
+            v4.is_loopback()
+                || v4.is_multicast()
+                || v4.is_unspecified()
+                || v4 == Ipv4Addr::BROADCAST
+                || v4.is_private()
+                || v4.is_link_local()
+                || shared
+        }
+        IpAddr::V6(v6) => {
+            let link_local = v6.segments()[0] & 0xffc0 == 0xfe80;
+            let unique_local = v6.segments()[0] & 0xfe00 == 0xfc00;
+            v6.is_loopback() || v6.is_multicast() || v6.is_unspecified() || link_local || unique_local
+        }
     }
 }
 
-/// Per-second aggregates keyed by target, class and direction.
-#[derive(Default)]
-pub struct Aggregates {
-    entries: HashMap<(u64, IpAddr, Class, Direction), Aggregate>,
+/// Whether `address` lies inside the network given as address and prefix length.
+fn within((network, prefix): (IpAddr, u8), address: IpAddr) -> bool {
+    let (network, address, bits) = match (network, address) {
+        (IpAddr::V4(network), IpAddr::V4(address)) => {
+            (u128::from(u32::from(network)), u128::from(u32::from(address)), 32)
+        }
+        (IpAddr::V6(network), IpAddr::V6(address)) => (u128::from(network), u128::from(address), 128),
+        _ => return false,
+    };
+    let host_bits = bits - u32::from(prefix).min(bits);
+    network.checked_shr(host_bits).unwrap_or(0) == address.checked_shr(host_bits).unwrap_or(0)
 }
 
+/// Per-second byte totals keyed by target and direction.
 #[derive(Default)]
-struct Aggregate {
-    packets: u32,
-    bytes: u64,
-    largest_packet: u32,
+pub struct Aggregates {
+    entries: HashMap<(u64, IpAddr, Direction), u64>,
 }
 
 impl Aggregates {
-    pub fn record(&mut self, second: u64, observation: Observation, class: Class) {
+    pub fn record(&mut self, second: u64, observation: Observation) {
         let entry = self
             .entries
-            .entry((second, observation.target, class, observation.direction))
-            .or_default();
-        entry.packets = entry.packets.saturating_add(1);
-        entry.bytes = entry.bytes.saturating_add(u64::from(observation.length));
-        entry.largest_packet = entry.largest_packet.max(observation.length);
+            .entry((second, observation.target, observation.direction))
+            .or_insert(0);
+        *entry = entry.saturating_add(u64::from(observation.length));
     }
 
     pub fn is_empty(&self) -> bool {
@@ -149,14 +195,11 @@ impl Aggregates {
     pub fn take(&mut self) -> Vec<Delta> {
         self.entries
             .drain()
-            .map(|((second, target, class, direction), aggregate)| Delta {
+            .map(|((second, target, direction), bytes)| Delta {
                 second,
                 target,
-                class,
                 direction,
-                packets: aggregate.packets,
-                bytes: aggregate.bytes,
-                largest_packet: aggregate.largest_packet,
+                bytes,
             })
             .collect()
     }
@@ -168,12 +211,26 @@ mod tests {
 
     const LOCAL_V4: Ipv4Addr = Ipv4Addr::new(192, 168, 1, 20);
 
-    fn local() -> HashSet<IpAddr> {
-        [IpAddr::V4(LOCAL_V4)].into_iter().collect()
+    const LOCAL_MAC: [u8; 6] = [0x02, 0x00, 0x5e, 0x10, 0x00, 0x01];
+    const ROUTER_MAC: [u8; 6] = [0x02, 0x00, 0x5e, 0x10, 0x00, 0xfe];
+    /// A CLAT46-style source the interface does not report as its own.
+    const UNREPORTED_V4: Ipv4Addr = Ipv4Addr::new(192, 0, 0, 9);
+
+    fn local() -> Host {
+        Host {
+            addresses: [IpAddr::V4(LOCAL_V4)].into_iter().collect(),
+            mac: Some(LOCAL_MAC),
+            networks: vec![(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 0)), 24)],
+        }
     }
 
     fn ethernet(ethertype: u16, payload: &[u8]) -> Vec<u8> {
-        let mut frame = vec![0u8; 12];
+        ethernet_link([0; 6], [0; 6], ethertype, payload)
+    }
+
+    fn ethernet_link(destination: [u8; 6], source: [u8; 6], ethertype: u16, payload: &[u8]) -> Vec<u8> {
+        let mut frame = destination.to_vec();
+        frame.extend_from_slice(&source);
         frame.extend_from_slice(&ethertype.to_be_bytes());
         frame.extend_from_slice(payload);
         frame
@@ -226,6 +283,41 @@ mod tests {
     }
 
     #[test]
+    fn unreported_local_address_sent_from_the_interface_is_upstream() {
+        let remote = Ipv4Addr::new(203, 0, 113, 9);
+        let frame = ethernet_link(ROUTER_MAC, LOCAL_MAC, ETHERTYPE_IPV4, &ipv4(UNREPORTED_V4, remote, 8));
+        let observation = observe(&frame, &local()).expect("observed");
+        assert_eq!(observation.target, IpAddr::V4(remote));
+        assert_eq!(observation.direction, Direction::Upstream);
+        assert_eq!(observation.length, 28);
+    }
+
+    #[test]
+    fn unreported_local_address_addressed_to_the_interface_is_downstream() {
+        let remote = Ipv4Addr::new(203, 0, 113, 9);
+        let frame = ethernet_link(LOCAL_MAC, ROUTER_MAC, ETHERTYPE_IPV4, &ipv4(remote, UNREPORTED_V4, 8));
+        let observation = observe(&frame, &local()).expect("observed");
+        assert_eq!(observation.target, IpAddr::V4(remote));
+        assert_eq!(observation.direction, Direction::Downstream);
+    }
+
+    #[test]
+    fn unreported_addresses_are_ignored_without_a_link_address() {
+        let remote = Ipv4Addr::new(203, 0, 113, 9);
+        let frame = ethernet_link(ROUTER_MAC, LOCAL_MAC, ETHERTYPE_IPV4, &ipv4(UNREPORTED_V4, remote, 8));
+        let host = Host { mac: None, ..local() };
+        assert_eq!(observe(&frame, &host), None);
+    }
+
+    #[test]
+    fn local_addresses_decide_before_the_link_layer() {
+        let remote = Ipv4Addr::new(203, 0, 113, 9);
+        let frame = ethernet_link(LOCAL_MAC, ROUTER_MAC, ETHERTYPE_IPV4, &ipv4(LOCAL_V4, remote, 8));
+        let observation = observe(&frame, &local()).expect("observed");
+        assert_eq!(observation.direction, Direction::Upstream);
+    }
+
+    #[test]
     fn non_ip_frames_are_ignored() {
         let frame = ethernet(0x0806, &[0u8; 28]);
         assert_eq!(observe(&frame, &local()), None);
@@ -241,19 +333,23 @@ mod tests {
         assert_eq!(observation.target, IpAddr::V4(remote));
     }
 
+    fn ipv6(source: Ipv6Addr, destination: Ipv6Addr, payload_len: u16) -> Vec<u8> {
+        // version/traffic class/flow label, payload length, next header, hop limit
+        let mut header = vec![0x60u8, 0, 0, 0];
+        header.extend_from_slice(&payload_len.to_be_bytes());
+        header.push(17);
+        header.push(64);
+        header.extend_from_slice(&source.octets());
+        header.extend_from_slice(&destination.octets());
+        header
+    }
+
     #[test]
     fn ipv6_uses_payload_length_plus_fixed_header() {
         let remote: Ipv6Addr = "2001:db8::7".parse().expect("ip");
-        // version/traffic class/flow label, payload length, next header, hop limit
-        let mut header = vec![0x60u8, 0, 0, 0];
-        header.extend_from_slice(&64u16.to_be_bytes());
-        header.push(17);
-        header.push(64);
-        header.extend_from_slice(&Ipv6Addr::LOCALHOST.octets());
-        header.extend_from_slice(&remote.octets());
-        let frame = ethernet(ETHERTYPE_IPV6, &header);
+        let frame = ethernet(ETHERTYPE_IPV6, &ipv6(Ipv6Addr::LOCALHOST, remote, 64));
         let mut local = local();
-        local.insert(IpAddr::V6(Ipv6Addr::LOCALHOST));
+        local.addresses.insert(IpAddr::V6(Ipv6Addr::LOCALHOST));
         let observation = observe(&frame, &local).expect("observed");
         assert_eq!(observation.target, IpAddr::V6(remote));
         assert_eq!(observation.direction, Direction::Upstream);
@@ -274,33 +370,96 @@ mod tests {
     }
 
     #[test]
-    fn aggregates_combine_packets_of_one_second_and_direction() {
+    fn non_public_targets_are_rejected() {
+        for target in [
+            Ipv4Addr::new(10, 1, 2, 3),
+            Ipv4Addr::new(172, 16, 5, 4),
+            Ipv4Addr::new(192, 168, 7, 1),
+            Ipv4Addr::new(169, 254, 1, 1),
+            Ipv4Addr::new(100, 64, 0, 1),
+        ] {
+            let frame = ethernet(ETHERTYPE_IPV4, &ipv4(LOCAL_V4, target, 8));
+            assert_eq!(observe(&frame, &local()), None, "{target}");
+        }
+        let local_v6: Ipv6Addr = "2001:db8:1::20".parse().expect("ip");
+        let mut host = local();
+        host.addresses.insert(IpAddr::V6(local_v6));
+        for target in ["fe80::1", "fd12:3456::1"] {
+            let target: Ipv6Addr = target.parse().expect("ip");
+            let frame = ethernet(ETHERTYPE_IPV6, &ipv6(local_v6, target, 8));
+            assert_eq!(observe(&frame, &host), None, "{target}");
+        }
+    }
+
+    #[test]
+    fn targets_on_the_interface_network_are_rejected() {
+        let local_v6: Ipv6Addr = "2001:db8:1::20".parse().expect("ip");
+        let mut host = local();
+        host.addresses.insert(IpAddr::V6(local_v6));
+        host.networks
+            .push((IpAddr::V6("2001:db8:1::".parse().expect("ip")), 64));
+
+        let neighbour: Ipv6Addr = "2001:db8:1::99".parse().expect("ip");
+        let frame = ethernet(ETHERTYPE_IPV6, &ipv6(local_v6, neighbour, 8));
+        assert_eq!(observe(&frame, &host), None);
+
+        let remote: Ipv6Addr = "2001:db8:2::1".parse().expect("ip");
+        let frame = ethernet(ETHERTYPE_IPV6, &ipv6(local_v6, remote, 8));
+        assert_eq!(observe(&frame, &host).expect("observed").target, IpAddr::V6(remote));
+    }
+
+    #[test]
+    fn aggregates_combine_packets_of_one_second_target_and_direction() {
         let remote = Ipv4Addr::new(203, 0, 113, 9);
         let mut aggregates = Aggregates::default();
         for len in [100u16, 300, 200] {
             let frame = ethernet(ETHERTYPE_IPV4, &ipv4(LOCAL_V4, remote, len));
             let observation = observe(&frame, &local()).expect("observed");
-            aggregates.record(4, observation, Class::Other);
+            aggregates.record(4, observation);
         }
         let deltas = aggregates.take();
         assert_eq!(deltas.len(), 1);
         let delta = &deltas[0];
         assert_eq!(delta.second, 4);
-        assert_eq!(delta.packets, 3);
+        assert_eq!(delta.target, IpAddr::V4(remote));
+        assert_eq!(delta.direction, Direction::Upstream);
         assert_eq!(delta.bytes, (120 + 320 + 220) as u64);
-        assert_eq!(delta.largest_packet, 320);
         assert!(aggregates.is_empty());
     }
 
     #[test]
-    fn aggregates_keep_classes_and_directions_apart() {
+    fn aggregates_keep_directions_apart() {
         let remote = Ipv4Addr::new(203, 0, 113, 9);
         let mut aggregates = Aggregates::default();
         let out = observe(&ethernet(ETHERTYPE_IPV4, &ipv4(LOCAL_V4, remote, 10)), &local()).expect("observed");
         let back = observe(&ethernet(ETHERTYPE_IPV4, &ipv4(remote, LOCAL_V4, 10)), &local()).expect("observed");
-        aggregates.record(1, out, Class::HoprAssociated);
-        aggregates.record(1, back, Class::HoprAssociated);
-        aggregates.record(1, out, Class::Other);
-        assert_eq!(aggregates.take().len(), 3);
+        aggregates.record(1, out);
+        aggregates.record(1, back);
+        aggregates.record(1, out);
+        let mut deltas = aggregates.take();
+        deltas.sort_unstable_by_key(|delta| delta.direction == Direction::Upstream);
+        assert_eq!(deltas.len(), 2);
+        assert_eq!(deltas[0].direction, Direction::Downstream);
+        assert_eq!(deltas[0].bytes, 30);
+        assert_eq!(deltas[1].direction, Direction::Upstream);
+        assert_eq!(deltas[1].bytes, 60);
+    }
+
+    #[test]
+    fn aggregates_keep_targets_apart() {
+        let first = Ipv4Addr::new(203, 0, 113, 9);
+        let second = Ipv4Addr::new(198, 51, 100, 4);
+        let mut aggregates = Aggregates::default();
+        let to_first = observe(&ethernet(ETHERTYPE_IPV4, &ipv4(LOCAL_V4, first, 10)), &local()).expect("observed");
+        let to_second = observe(&ethernet(ETHERTYPE_IPV4, &ipv4(LOCAL_V4, second, 40)), &local()).expect("observed");
+        aggregates.record(1, to_first);
+        aggregates.record(1, to_second);
+        let mut deltas = aggregates.take();
+        deltas.sort_unstable_by_key(|delta| delta.bytes);
+        assert_eq!(deltas.len(), 2);
+        assert_eq!(deltas[0].target, IpAddr::V4(first));
+        assert_eq!(deltas[0].bytes, 30);
+        assert_eq!(deltas[1].target, IpAddr::V4(second));
+        assert_eq!(deltas[1].bytes, 60);
     }
 }

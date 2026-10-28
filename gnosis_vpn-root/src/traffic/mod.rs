@@ -11,16 +11,15 @@
 pub mod capture;
 pub mod classify;
 
-use std::collections::{HashSet, VecDeque};
-use std::net::IpAddr;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gnosis_vpn_lib::command::{Command, Response};
 use gnosis_vpn_lib::traffic::{
-    self, Batch, Class, Interface, PROTOCOL_VERSION, ReadRequest, ReadResponse, StartRequest, StartResponse,
-    StopRequest, StopResponse,
+    self, Batch, Interface, PROTOCOL_VERSION, ReadRequest, ReadResponse, StartRequest, StartResponse, StopRequest,
+    StopResponse,
 };
 use tokio::task::JoinHandle;
 
@@ -33,38 +32,6 @@ const BATCH_CAPACITY: usize = 20;
 /// leave a capture running.
 const LEASE: Duration = Duration::from_millis(5000);
 const MONITOR_INTERVAL: Duration = Duration::from_millis(500);
-
-/// Addresses announced by the HOPR node, used only to associate captured traffic
-/// with the mixnet transport.
-#[derive(Debug, Default)]
-pub struct PeerAddresses {
-    addresses: RwLock<HashSet<IpAddr>>,
-}
-
-impl PeerAddresses {
-    pub fn replace(&self, addresses: Vec<IpAddr>) {
-        let mut current = self.addresses.write().expect("peer addresses poisoned");
-        current.clear();
-        current.extend(addresses);
-    }
-
-    pub fn clear(&self) {
-        self.addresses.write().expect("peer addresses poisoned").clear();
-    }
-
-    pub fn classify(&self, target: IpAddr) -> Class {
-        if self
-            .addresses
-            .read()
-            .expect("peer addresses poisoned")
-            .contains(&target)
-        {
-            Class::HoprAssociated
-        } else {
-            Class::Other
-        }
-    }
-}
 
 #[derive(Default)]
 struct BatchLog {
@@ -220,7 +187,6 @@ pub fn is_traffic_command(cmd: &Command) -> bool {
 
 /// Owns the current capture session.
 pub struct TrafficService {
-    peers: Arc<PeerAddresses>,
     current: Option<ActiveSession>,
     last_session_id: u64,
 }
@@ -234,20 +200,9 @@ impl Default for TrafficService {
 impl TrafficService {
     pub fn new() -> Self {
         Self {
-            peers: Arc::new(PeerAddresses::default()),
             current: None,
             last_session_id: 0,
         }
-    }
-
-    /// Replaces the announced-peer set. Classification is applied at ingestion,
-    /// so history keeps the class it was captured with.
-    pub fn update_peer_addresses(&self, addresses: Vec<IpAddr>) {
-        self.peers.replace(addresses);
-    }
-
-    pub fn clear_peer_addresses(&self) {
-        self.peers.clear();
     }
 
     /// Answers traffic commands; returns `None` for anything else.
@@ -292,8 +247,7 @@ impl TrafficService {
         // until the capture thread reports back, so keep it off the command loop.
         let capture = {
             let session = shared.clone();
-            let peers = self.peers.clone();
-            run_blocking(move || capture::start(candidate, session, peers, stop))
+            run_blocking(move || capture::start(candidate, session, stop))
                 .await
                 .map_err(|e| format!("Cannot start capture task: {e}"))??
         };
@@ -411,23 +365,20 @@ mod tests {
         ))
     }
 
-    fn delta(second: u64, target: &str) -> traffic::Delta {
+    fn delta(second: u64) -> traffic::Delta {
         traffic::Delta {
             second,
-            target: target.parse().expect("ip"),
-            class: Class::Other,
+            target: "203.0.113.1".parse().expect("ip"),
             direction: Direction::Upstream,
-            packets: 1,
             bytes: 60,
-            largest_packet: 60,
         }
     }
 
     #[test]
     fn read_returns_only_unseen_batches_and_advances_the_cursor() {
         let shared = session();
-        shared.push(vec![delta(0, "203.0.113.1")], 100);
-        shared.push(vec![delta(1, "203.0.113.1")], 1100);
+        shared.push(vec![delta(0)], 100);
+        shared.push(vec![delta(1)], 1100);
 
         let first = shared.read(0);
         assert_eq!(first.batches.len(), 2);
@@ -445,7 +396,7 @@ mod tests {
     fn batches_beyond_capacity_drop_oldest_and_report_a_gap() {
         let shared = session();
         for sequence in 0..(BATCH_CAPACITY as u64 + 5) {
-            shared.push(vec![delta(sequence, "203.0.113.1")], sequence * 100);
+            shared.push(vec![delta(sequence)], sequence * 100);
         }
         let response = shared.read(0);
         assert_eq!(response.batches.len(), BATCH_CAPACITY);
@@ -490,8 +441,7 @@ mod tests {
         let interface = candidate.descriptor.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let session = Arc::new(SessionShared::new(1, interface.clone(), stop.clone()));
-        let capture = capture::start(candidate, session.clone(), Arc::new(PeerAddresses::default()), stop)
-            .expect("capture starts");
+        let capture = capture::start(candidate, session.clone(), stop).expect("capture starts");
 
         let socket = UdpSocket::bind("0.0.0.0:0").expect("udp socket");
         for destination in ["1.1.1.1:53", "8.8.8.8:53", "9.9.9.9:53"] {
@@ -511,6 +461,12 @@ mod tests {
                 .iter()
                 .any(|delta| delta.direction == gnosis_vpn_lib::traffic::Direction::Upstream),
             "expected outbound traffic in {deltas:?}"
+        );
+        assert!(
+            deltas
+                .iter()
+                .any(|delta| delta.target == "1.1.1.1".parse::<std::net::IpAddr>().expect("ip")),
+            "expected 1.1.1.1 as a target in {deltas:?}"
         );
     }
 
@@ -593,18 +549,5 @@ mod tests {
         assert!(peer_may_capture(501, 20, 501));
         // A uid without an account is never authorized.
         assert!(!peer_may_capture(4_294_967_294, 4_294_967_294, 501));
-    }
-
-    #[test]
-    fn peer_addresses_associate_only_announced_targets() {
-        let peers = PeerAddresses::default();
-        let peer: IpAddr = "203.0.113.9".parse().expect("ip");
-        let other: IpAddr = "198.51.100.4".parse().expect("ip");
-        assert_eq!(peers.classify(peer), Class::Other);
-        peers.replace(vec![peer]);
-        assert_eq!(peers.classify(peer), Class::HoprAssociated);
-        assert_eq!(peers.classify(other), Class::Other);
-        peers.clear();
-        assert_eq!(peers.classify(peer), Class::Other);
     }
 }

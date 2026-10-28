@@ -5,7 +5,6 @@
 //! never touches daemon state, never blocks on a consumer and never keeps a
 //! packet.
 
-use std::collections::HashSet;
 use std::net::{IpAddr, UdpSocket};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,8 +14,8 @@ use std::time::{Duration, Instant};
 use gnosis_vpn_lib::traffic::Interface;
 use pnet_datalink::{self, Channel, Config, NetworkInterface};
 
-use super::classify::{self, Aggregates};
-use super::{PeerAddresses, SessionShared};
+use super::SessionShared;
+use super::classify::{self, Aggregates, Host};
 
 /// How often finished aggregates are handed to the session.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
@@ -25,6 +24,9 @@ const HEARTBEAT_INTERVAL_MS: u64 = 1000;
 /// Bounds how long a blocked read can delay noticing a stop request.
 const READ_TIMEOUT: Duration = Duration::from_millis(50);
 const START_TIMEOUT: Duration = Duration::from_secs(3);
+/// Kernel capture buffer. The 4 KiB default holds two full frames and loses a
+/// third of a fast download; 512 KiB is the macOS default ceiling for BPF.
+const READ_BUFFER_SIZE: usize = 512 * 1024;
 
 /// A capture-capable interface plus the platform handle needed to open it.
 pub struct Candidate {
@@ -138,18 +140,22 @@ impl Drop for Capture {
 /// Opens a capture on `candidate` and returns once packets can arrive.
 ///
 /// A failure here leaves whatever capture was running untouched.
-pub fn start(
-    candidate: Candidate,
-    session: Arc<SessionShared>,
-    peers: Arc<PeerAddresses>,
-    stop: Arc<AtomicBool>,
-) -> Result<Capture, String> {
+pub fn start(candidate: Candidate, session: Arc<SessionShared>, stop: Arc<AtomicBool>) -> Result<Capture, String> {
     let (started_tx, started_rx) = std::sync::mpsc::channel::<Result<(), String>>();
     let thread_stop = stop.clone();
-    let local: HashSet<IpAddr> = candidate.descriptor.addresses.iter().copied().collect();
+    let host = Host {
+        addresses: candidate.descriptor.addresses.iter().copied().collect(),
+        mac: candidate.link.mac.map(|mac| mac.octets()),
+        networks: candidate
+            .link
+            .ips
+            .iter()
+            .map(|network| (network.network(), network.prefix()))
+            .collect(),
+    };
     let thread = thread::Builder::new()
         .name("traffic-capture".to_string())
-        .spawn(move || run(candidate.link, local, session, peers, thread_stop, started_tx))
+        .spawn(move || run(candidate.link, host, session, thread_stop, started_tx))
         .map_err(|e| format!("Cannot spawn capture thread: {e}"))?;
 
     match started_rx.recv_timeout(START_TIMEOUT) {
@@ -171,15 +177,15 @@ pub fn start(
 
 fn run(
     link: NetworkInterface,
-    local: HashSet<IpAddr>,
+    host: Host,
     session: Arc<SessionShared>,
-    peers: Arc<PeerAddresses>,
     stop: Arc<AtomicBool>,
     started: std::sync::mpsc::Sender<Result<(), String>>,
 ) {
     let name = link.name.clone();
     let config = Config {
         read_timeout: Some(READ_TIMEOUT),
+        read_buffer_size: READ_BUFFER_SIZE,
         promiscuous: false,
         ..Default::default()
     };
@@ -208,10 +214,9 @@ fn run(
         }
         match receiver.next() {
             Ok(frame) => {
-                if let Some(observation) = classify::observe(frame, &local) {
+                if let Some(observation) = classify::observe(frame, &host) {
                     let second = session.elapsed_ms() / 1000;
-                    let class = peers.classify(observation.target);
-                    aggregates.record(second, observation, class);
+                    aggregates.record(second, observation);
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
