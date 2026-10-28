@@ -14,12 +14,20 @@ use crate::fixtures::lib::{self, ConditionCheck};
 /// Thin wrapper around the gnosis_vpn control socket used during system tests.
 pub struct ControlClient {
     socket_path: PathBuf,
+    ctl_binary: PathBuf,
+    worker_user: uzers::User,
 }
 
 impl ControlClient {
     /// Creates a new client bound to a Unix domain socket path.
-    pub fn new(socket_path: PathBuf) -> Self {
-        Self { socket_path }
+    pub fn new(socket_path: PathBuf, ctl_binary: PathBuf, worker_user: &str) -> anyhow::Result<Self> {
+        let worker_user = uzers::get_user_by_name(worker_user)
+            .ok_or_else(|| anyhow::anyhow!("worker user {worker_user} not found"))?;
+        Ok(Self {
+            socket_path,
+            ctl_binary,
+            worker_user,
+        })
     }
 
     /// Sends a raw command to the control socket and returns the daemon response.
@@ -83,12 +91,24 @@ impl ControlClient {
         }
     }
 
-    /// Start the client
+    /// Start the client as the worker user: the worker runs as whoever asks, and root may not own one.
     pub async fn start(&self) -> anyhow::Result<StartClientResponse> {
-        match self.send(&Command::StartClient(Duration::from_mins(10))).await {
+        let output = tokio::process::Command::new(&self.ctl_binary)
+            .arg("--socket-path")
+            .arg(&self.socket_path)
+            .args(["--output", "json", "start-client", "10m"])
+            .uid(self.worker_user.uid())
+            .gid(self.worker_user.primary_group_id())
+            .output()
+            .await?;
+        match serde_json::from_slice(&output.stdout) {
             Ok(Response::StartClient(state)) => Ok(state),
             Ok(resp) => Err(anyhow::anyhow!("unexpected start response {resp:?}")),
-            Err(e) => Err(e),
+            Err(error) => Err(anyhow::anyhow!(
+                "unreadable start response ({}): {error}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            )),
         }
     }
 

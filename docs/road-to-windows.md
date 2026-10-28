@@ -88,13 +88,16 @@ Windows arm built on Wintun's overlapped I/O (`WintunReceivePacket`/
 ## The other IPC problem: root→worker privilege drop
 
 Today, `gnosis_vpn-root/src/main.rs::setup_worker()` spawns the worker with
-`.uid(self.worker_user.uid).gid(self.worker_user.gid)` — Unix-only inherent
-methods on `tokio::process::Command` that drop privileges to an
-unprivileged `gnosisvpn` system user (resolved via the `uzers` crate).
-Windows has no uid/gid model; the equivalent is
-`CreateProcessAsUser`/`CreateProcessWithTokenW` with a token for a
-dedicated low-privilege service account — a materially different API, not
-a parameter swap.
+`.uid(owner.uid).gid(owner.gid)` — Unix-only inherent methods on
+`tokio::process::Command` that drop privileges to the local user who called
+`start-client` (identified via `UnixStream::peer_cred()`, resolved via the
+`uzers` crate, one worker per machine at a time), with state under that
+user's home in `networks/<network>/`. Windows has no uid/gid model and no
+`SO_PEERCRED`; the equivalent is `CreateProcessAsUser`/
+`CreateProcessWithTokenW` with the caller's token (obtainable from the named
+pipe via `ImpersonateNamedPipeClient` + `OpenThreadToken`) and
+`%LOCALAPPDATA%\GnosisVPN\networks\<network>\` for the per-user state — a
+materially different API, not a parameter swap.
 
 ## `ping.rs` needs real platform work, not just a new arm
 

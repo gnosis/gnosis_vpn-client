@@ -230,9 +230,13 @@ pub(crate) async fn safe_deployment(
     let _ = results_sender.send(Results::DeploySafe { res }).await;
 }
 
-pub(crate) async fn persist_safe(state_home: PathBuf, safe_module: SafeModule, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn persist_safe(
+    network_cache_dir: PathBuf,
+    safe_module: SafeModule,
+    results_sender: mpsc::Sender<Results>,
+) {
     tracing::debug!("persisting safe module");
-    let res = hopr_config::store_safe(state_home, &safe_module).await;
+    let res = hopr_config::store_safe(&network_cache_dir, &safe_module).await;
     let _ = results_sender
         .send(Results::PersistSafe {
             res,
