@@ -35,6 +35,7 @@ use tracing::instrument;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::{
     net::{Ipv4Addr, SocketAddr},
+    path::PathBuf,
     sync::Arc,
     time::SystemTime,
 };
@@ -63,6 +64,7 @@ impl Hopr {
         blokli_endpoint: BlokliEndpoint,
         blokli_config: BlockchainConnectorConfig,
         probe_local_addresses: bool,
+        ticket_store_file: PathBuf,
         init_visitor: impl Fn(EdgliInitState) + Send + 'static,
     ) -> Result<Self, HoprError> {
         tracing::debug!("running hopr edge node");
@@ -72,6 +74,7 @@ impl Hopr {
             blokli_endpoint,
             Some(blokli_config),
             probe_local_addresses,
+            Some(ticket_store_file),
             init_visitor,
         )
         .await
@@ -545,6 +548,11 @@ impl Hopr {
         for process in self.open_listeners.as_ref().0.iter() {
             tracing::info!("shutting down session listener: {:?}", process.key());
             process.value().abort_handle.abort();
+        }
+
+        // Otherwise the restarted node issues the ticket indices used since the last periodic save again
+        if let Err(error) = self.edgli.save_outgoing_ticket_indices().await {
+            tracing::error!(%error, "failed to save outgoing ticket indices");
         }
     }
 }

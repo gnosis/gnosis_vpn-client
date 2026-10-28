@@ -18,6 +18,8 @@ use crate::dirs::{self, UserDirs};
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::{config, identity};
 
+const TICKET_STORE_FILE: &str = "tickets.redb";
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("HOPR identity error: {0}")]
@@ -220,9 +222,14 @@ impl WorkerParams {
         &self.network
     }
 
-    /// `<data>/networks/<network>/`: identity files and the PIX pool state.
+    /// `<data>/networks/<network>/`: identity files, the ticket store and the PIX pool state.
     pub fn network_data_dir(&self) -> PathBuf {
         self.user_dirs.network_data(&self.network)
+    }
+
+    /// `<data>/networks/<network>/tickets.redb`: the outgoing ticket indices, which must survive restarts.
+    pub fn ticket_store_file(&self) -> PathBuf {
+        self.network_data_dir().join(TICKET_STORE_FILE)
     }
 
     /// `<cache>/networks/<network>/`: the safe cache, re-queried from chain when missing.
@@ -337,6 +344,10 @@ mod tests {
         assert_eq!(
             params.pix_state_dir(),
             PathBuf::from("/tmp/gnosisvpn/networks/jura-dev/pix")
+        );
+        assert_eq!(
+            params.ticket_store_file(),
+            PathBuf::from("/tmp/gnosisvpn/networks/jura-dev/tickets.redb")
         );
     }
 
