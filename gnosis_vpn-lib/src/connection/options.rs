@@ -421,7 +421,10 @@ pub(crate) fn to_surb_balancer_config(
     let config = SurbBalancerConfig {
         target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::exports::transport::SESSION_MTU as u64,
         max_surbs_per_sec,
-        sustain_on_return_path_loss: true, // keep producing SURBs when return-path loss hides consumed replies (GNO-713)
+        // hopr-lib's `sustain_on_return_path_loss` (GNO-713) is no longer set here: hoprnet#8506
+        // removes it and writes off the SURBs through a relayer judged dead instead, and hoprnet#8576
+        // resets and paces the balancer when the session's SURB generation advances. The two fields
+        // above are still the client's; the rest is hopr-lib's default.
         ..Default::default()
     };
     Ok(config)

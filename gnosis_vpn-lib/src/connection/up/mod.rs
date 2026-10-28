@@ -92,7 +92,7 @@ fn step_towards(current: u64, target: u64, rate_per_sec: u64, elapsed: Duration)
     }
 }
 
-/// Moves `applied`'s capacity fields toward `target` by at most `rate`, never overshooting; decay/sustain flags come from `target` as-is.
+/// Moves `applied`'s capacity fields toward `target` by at most `rate`, never overshooting; every other field comes from `target` as-is.
 pub(crate) fn slew_towards(
     applied: SurbBalancerConfig,
     target: SurbBalancerConfig,
@@ -112,8 +112,8 @@ pub(crate) fn slew_towards(
             rate.rate_per_sec,
             elapsed,
         ),
-        surb_decay: target.surb_decay,
-        sustain_on_return_path_loss: target.sustain_on_return_path_loss,
+        // The fields the ramp does not slew are taken from the target.
+        ..target
     }
 }
 
@@ -569,11 +569,10 @@ mod surb_ramp_tests {
     }
 
     #[test]
-    fn slew_towards_keeps_target_decay_and_sustain_flags() {
+    fn slew_towards_keeps_target_decay() {
         let applied = config(0, 0);
         let target = SurbBalancerConfig {
             surb_decay: Some((Duration::from_secs(60), 0.05)),
-            sustain_on_return_path_loss: true,
             ..config(1000, 100)
         };
         let rate = SurbSlewRate::to_cover(applied, target, Duration::from_secs(10));
