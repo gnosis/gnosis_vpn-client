@@ -9,6 +9,7 @@ use crate::connection::{
     destination::{DefaultTargets, Destinations},
     options::Options as ConnectionOptions,
 };
+use crate::cowswap::RefuelConfig;
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::pix_config::PixConfig;
 use crate::hopr::strategy_config::StrategyConfig;
@@ -35,6 +36,7 @@ pub struct Config {
     pub pix_strategy: PixConfig,
     /// The country database, at the installer's location unless a v7 file points elsewhere.
     pub geoip_db: PathBuf,
+    pub refuel: RefuelConfig,
 }
 
 #[derive(Debug, Error)]
@@ -55,6 +57,10 @@ pub enum Error {
     SurbBalancingMismatch,
     #[error("surb_balancing.ramp interval and duration must both be greater than zero")]
     SurbRampZero,
+    #[error("refuel.target must be at least 0.0015 xDai, or every fill re-triggers")]
+    RefuelTargetTooLow,
+    #[error("refuel.order_validity must be at least 2 minutes")]
+    RefuelValidityTooShort,
     #[error("Error in hopr-lib: {0}")]
     HoprGeneral(#[from] GeneralError),
     #[error(

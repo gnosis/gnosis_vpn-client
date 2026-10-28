@@ -292,6 +292,7 @@ impl TryFrom<Config> for super::v7::Config {
             strategy: value.strategy,
             pix_strategy: None,
             geoip_db: Some(crate::geoip::DEFAULT_DB_PATH.into()),
+            refuel: None,
         })
     }
 }

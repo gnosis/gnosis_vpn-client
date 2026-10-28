@@ -8,7 +8,7 @@
 /// global `[connection.bridge/wg].target` default for that destination when present.
 use bytesize::ByteSize;
 use edgli::hopr_lib::HopRouting;
-use edgli::hopr_lib::api::types::primitive::prelude::{Address, HoprBalance};
+use edgli::hopr_lib::api::types::primitive::prelude::{Address, HoprBalance, XDaiBalance};
 use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
 use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionCapability, SessionTarget};
 use human_bandwidth::re::bandwidth::Bandwidth;
@@ -27,6 +27,7 @@ use crate::connection::destination::{
     DEFAULT_HOPS, DefaultTargets, Destination as ConnDestination, DestinationSource, Destinations, Meta, Overrides,
 };
 use crate::connection::options;
+use crate::cowswap::RefuelConfig;
 use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
 use crate::hopr::pix_config::PixConfig;
 use crate::hopr::strategy_config::StrategyConfig;
@@ -195,6 +196,19 @@ where
     match value {
         Some(v) if !(0.0..=1.0).contains(&v) => Err(serde::de::Error::custom(
             "path_planner_min_ack_rate must be in the range [0.0, 1.0]",
+        )),
+        other => Ok(other),
+    }
+}
+
+fn validate_refuel_slippage<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<f64>::deserialize(deserializer)?;
+    match value {
+        Some(v) if !(0.0..=0.5).contains(&v) => Err(serde::de::Error::custom(
+            "refuel.slippage must be in the range [0.0, 0.5]",
         )),
         other => Ok(other),
     }
@@ -592,6 +606,40 @@ impl From<Option<PixStrategy>> for PixConfig {
     }
 }
 
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct Refuel {
+    pub(super) enabled: Option<bool>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) target: Option<XDaiBalance>,
+    #[serde(default, deserialize_with = "validate_refuel_slippage")]
+    pub(super) slippage: Option<f64>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) cooldown: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) order_validity: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) request_timeout: Option<Duration>,
+}
+
+impl From<Option<Refuel>> for RefuelConfig {
+    fn from(v: Option<Refuel>) -> Self {
+        let def = RefuelConfig::default();
+        Self {
+            enabled: v.as_ref().and_then(|r| r.enabled).unwrap_or(def.enabled),
+            target: v.as_ref().and_then(|r| r.target).unwrap_or(def.target),
+            slippage: v.as_ref().and_then(|r| r.slippage).unwrap_or(def.slippage),
+            cooldown: v.as_ref().and_then(|r| r.cooldown).unwrap_or(def.cooldown),
+            order_validity: v.as_ref().and_then(|r| r.order_validity).unwrap_or(def.order_validity),
+            request_timeout: v
+                .as_ref()
+                .and_then(|r| r.request_timeout)
+                .unwrap_or(def.request_timeout),
+        }
+    }
+}
+
 // ── Destinations ───────────────────────────────────────────────────────────────
 
 #[serde_as]
@@ -605,6 +653,7 @@ pub struct Config {
     pub(super) strategy: Option<Strategy>,
     pub(super) pix_strategy: Option<PixStrategy>,
     pub(super) geoip_db: Option<PathBuf>,
+    pub(super) refuel: Option<Refuel>,
 }
 
 #[serde_as]
@@ -907,6 +956,20 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
+        if key == "refuel" {
+            if let Some(refuel) = value.as_table() {
+                for (k, _) in refuel.iter() {
+                    if matches!(
+                        k.as_str(),
+                        "enabled" | "target" | "slippage" | "cooldown" | "order_validity" | "request_timeout"
+                    ) {
+                        continue;
+                    }
+                    wrong.push(format!("refuel.{k}"));
+                }
+            }
+            continue;
+        }
         wrong.push(key.clone());
     }
     wrong
@@ -945,6 +1008,13 @@ impl TryFrom<Config> for config::Config {
         let blokli = value.blokli.into();
         let strategy = value.strategy.into();
         let pix_strategy = value.pix_strategy.into();
+        let refuel: RefuelConfig = value.refuel.into();
+        if crate::balance::gas_level(refuel.target) == crate::balance::FundingLevel::Empty {
+            return Err(config::Error::RefuelTargetTooLow);
+        }
+        if refuel.order_validity < Duration::from_secs(120) {
+            return Err(config::Error::RefuelValidityTooShort);
+        }
         Ok(config::Config {
             connection,
             destinations,
@@ -954,6 +1024,7 @@ impl TryFrom<Config> for config::Config {
             strategy,
             pix_strategy,
             geoip_db: value.geoip_db.unwrap_or_else(|| crate::geoip::DEFAULT_DB_PATH.into()),
+            refuel,
         })
     }
 }
@@ -1004,6 +1075,7 @@ mod tests {
         ChannelAllowlistConfig, Config, Connection, DefaultTargets, DestinationSource, Strategy, WireGuardConfig,
         convert_destinations, wrong_keys,
     };
+    use crate::cowswap::RefuelConfig;
     use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
     use crate::hopr::pix_config::PixConfig;
     use crate::hopr::strategy_config::StrategyConfig;
@@ -1947,6 +2019,133 @@ pric_per_byte = "5 wxHOPR"
             .expect("valid TOML");
 
         assert_eq!(wrong_keys(&table), vec!["pix_strategy.pric_per_byte".to_string()]);
+    }
+
+    #[test]
+    fn refuel_is_always_registered() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(result.refuel, RefuelConfig::default());
+    }
+
+    #[test]
+    fn refuel_fields_are_parsed_and_override_the_default() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[refuel]
+enabled = false
+target = "0.02 xDai"
+slippage = 0.05
+cooldown = "1h"
+order_validity = "15m"
+request_timeout = "45s"
+"#####,
+        );
+        let converted: RefuelConfig = cfg.refuel.into();
+        assert!(!converted.enabled);
+        assert_eq!(converted.target, "0.02 xDai".parse().unwrap());
+        assert_eq!(converted.slippage, 0.05);
+        assert_eq!(converted.cooldown, Duration::from_secs(60 * 60));
+        assert_eq!(converted.order_validity, Duration::from_secs(15 * 60));
+        assert_eq!(converted.request_timeout, Duration::from_secs(45));
+    }
+
+    #[test]
+    fn refuel_fields_are_optional_and_fall_back_to_defaults() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[refuel]
+enabled = false
+"#####,
+        );
+        let converted: RefuelConfig = cfg.refuel.into();
+        let def = RefuelConfig::default();
+        assert!(!converted.enabled);
+        assert_eq!(converted.target, def.target);
+        assert_eq!(converted.slippage, def.slippage);
+        assert_eq!(converted.cooldown, def.cooldown);
+        assert_eq!(converted.order_validity, def.order_validity);
+        assert_eq!(converted.request_timeout, def.request_timeout);
+    }
+
+    #[test]
+    fn refuel_keys_are_known_and_a_typo_is_reported() {
+        let table = r#####"
+version = 7
+
+[refuel]
+enabled = true
+target = "0.02 xDai"
+slippage = 0.05
+cooldown = "1h"
+order_validity = "15m"
+request_timeout = "45s"
+nonsense = 1
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        assert_eq!(wrong_keys(&table), vec!["refuel.nonsense".to_string()]);
+    }
+
+    #[test]
+    fn refuel_slippage_above_half_is_rejected() {
+        let result: Result<Config, _> = toml::from_str(
+            r#####"
+version = 7
+
+[refuel]
+slippage = 0.6
+"#####,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn refuel_target_below_the_empty_line_is_a_load_error() {
+        let with_target = |target: &str| {
+            parse(&format!(
+                r#####"
+version = 7
+
+[refuel]
+target = "{target}"
+"#####
+            ))
+        };
+        for target in ["0 xDai", "0.001 xDai"] {
+            let result: Result<crate::config::Config, _> = with_target(target).try_into();
+            assert!(
+                matches!(result, Err(crate::config::Error::RefuelTargetTooLow)),
+                "{target}"
+            );
+        }
+        assert!(TryInto::<crate::config::Config>::try_into(with_target("0.0015 xDai")).is_ok());
+    }
+
+    #[test]
+    fn refuel_validity_under_two_minutes_is_a_load_error() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[refuel]
+order_validity = "90s"
+"#####,
+        );
+        let result: Result<crate::config::Config, _> = cfg.try_into();
+        assert!(matches!(result, Err(crate::config::Error::RefuelValidityTooShort)));
     }
 
     #[test]

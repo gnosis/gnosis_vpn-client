@@ -25,7 +25,7 @@ use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::probe::{self, Probe};
 use crate::route_health::RouteHealth;
 use crate::worker_params::{self, WorkerParams};
-use crate::{balance, log_output, ticket_stats, wireguard};
+use crate::{balance, cowswap, log_output, ticket_stats, wireguard};
 
 mod channel_maintenance;
 pub(crate) mod runner;
@@ -105,6 +105,11 @@ pub struct Core {
     // runtime data
     phase: Phase,
     funding_tool: balance::FundingTool,
+    refuel: cowswap::State,
+    /// Where the xHOPR permit nonce probe left off; lost on restart.
+    refuel_permit_nonce: u64,
+    /// Known before the node runs, so the refuel can fund a node that cannot start without gas.
+    refuel_safe: Option<Address>,
     incentive_operations: Option<Arc<dyn IncentiveOperations>>,
     hopr: Option<Arc<Hopr>>,
     minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
@@ -240,6 +245,9 @@ impl Core {
             // runtime data
             phase: Phase::Initial { last_error: None },
             funding_tool: balance::FundingTool::NotStarted,
+            refuel: cowswap::State::Idle,
+            refuel_permit_nonce: 0,
+            refuel_safe: None,
             hopr: None,
             incentive_operations: None,
             minimum_balance_recommendation: None,
@@ -690,6 +698,7 @@ impl Core {
             Results::Balances { res } => match res {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
+                    self.trigger_refuel(balances.node_xdai, results_sender);
                     self.balances = Some(balances);
                     self.spawn_balances_runner(results_sender, Duration::from_secs(60));
                 }
@@ -703,6 +712,7 @@ impl Core {
             Results::QuerySafe { res } => self.on_results_query_safe(res, results_sender).await,
             Results::DeploySafe { res } => self.on_results_deploy_safe(res, results_sender).await,
             Results::FundingTool { res } => self.on_results_funding_tool(res),
+            Results::Refuel { res } => self.on_results_refuel(res),
 
             Results::PersistSafe { res, safe_module } => match res {
                 Ok(()) => {
@@ -1177,6 +1187,17 @@ impl Core {
                 };
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
             }
+            // hopr-lib refuses to start an unfunded node, so the running node's balances tick never comes.
+            (res, Phase::Starting { .. } | Phase::HoprSyncing) => {
+                match res {
+                    Ok(presafe) => self.trigger_refuel(presafe.node_xdai, results_sender),
+                    Err(err) => tracing::warn!(?err, "failed to read node xDAI while starting - retrying"),
+                }
+                // Replaced so a stale pre-Safe result cannot start a second chain.
+                self.cancel_presafe_queries.cancel();
+                self.cancel_presafe_queries = self.cancel_on_shutdown.child_token();
+                self.spawn_node_balance_runner(results_sender, Duration::from_secs(60));
+            }
             (res, phase) => {
                 tracing::warn!(?res, ?phase, "ignoring presafe node balance result in unexpected phase");
             }
@@ -1279,6 +1300,76 @@ impl Core {
             Ok(Some(reason)) => balance::FundingTool::CompletedError(reason),
             Err(err) => balance::FundingTool::CompletedError(err.to_string()),
         };
+    }
+
+    fn on_results_refuel(&mut self, res: Result<cowswap::Outcome, cowswap::Error>) {
+        self.refuel = match res {
+            Ok(cowswap::Outcome::Filled { uid }) => {
+                tracing::info!(%uid, "refuel order filled - node xDAI topped up");
+                // A later drop below the line is a new need, not a retry; the cooldown only throttles failures.
+                cowswap::State::Idle
+            }
+            Ok(cowswap::Outcome::AlreadyRefueled) => cowswap::State::Idle,
+            Err(err) if err.is_permanent() => {
+                tracing::error!(%err, "refuel failed permanently - auto-refuel disabled until restart");
+                cowswap::State::Disabled
+            }
+            Err(err) => {
+                if let cowswap::Error::PermitNonceUnknown { next_nonce } = &err {
+                    self.refuel_permit_nonce = *next_nonce;
+                }
+                tracing::warn!(%err, "refuel failed - next attempt after cooldown");
+                cowswap::State::CoolingDown(SystemTime::now())
+            }
+        };
+    }
+
+    fn trigger_refuel(&mut self, node_xdai: balance::Balance<balance::XDai>, results_sender: &mpsc::Sender<Results>) {
+        let cfg = &self.config.refuel;
+        if !cfg.enabled || balance::gas_level(node_xdai) != balance::FundingLevel::Empty {
+            return;
+        }
+        if matches!(self.refuel, cowswap::State::InFlight | cowswap::State::Disabled) {
+            return;
+        }
+        if let Some(remaining) = self.refuel.cooldown_remaining(cfg.cooldown, SystemTime::now()) {
+            tracing::info!(%node_xdai, ?remaining, "gas empty - refuel cooling down after a failed attempt");
+            return;
+        }
+        // A target without a tunnel means the killswitch blocks api.cow.fi, or a WAN call would leak the real IP.
+        if self.target.is_some() && !matches!(self.phase, Phase::Connected(_)) {
+            tracing::info!("gas empty - refuel waits for the tunnel");
+            return;
+        }
+        let Some(safe_address) = self.refuel_safe else {
+            return;
+        };
+        self.refuel = cowswap::State::InFlight;
+        tracing::info!(%node_xdai, "gas empty - refueling via cow protocol");
+        self.spawn_refuel_runner(safe_address, results_sender);
+    }
+
+    fn spawn_refuel_runner(&self, safe_address: Address, results_sender: &mpsc::Sender<Results>) {
+        let cancel = self.cancel_on_shutdown.clone();
+        let worker_params = self.worker_params.clone();
+        let blokli_timeout = self.config.blokli.request_timeout;
+        let cfg = self.config.refuel.clone();
+        let node_address = self.node_address;
+        let permit_nonce = self.refuel_permit_nonce;
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(runner::refuel(
+                    worker_params,
+                    blokli_timeout,
+                    cfg,
+                    safe_address,
+                    node_address,
+                    permit_nonce,
+                    results_sender,
+                ))
+                .await
+        });
     }
 
     fn trigger_deploy_safe(&mut self, results_sender: &mpsc::Sender<Results>) {
@@ -1539,6 +1630,13 @@ impl Core {
             edgli_init_state: None,
             last_error: None,
         };
+        // An unparsable address fails the node start itself; the pre-Safe poll keeps watching the gas until it runs.
+        self.refuel_safe = safe_module.safe_address.parse().ok();
+        if self.config.refuel.enabled {
+            self.spawn_node_balance_runner(results_sender, Duration::ZERO);
+        } else {
+            tracing::info!("auto-refuel disabled by [refuel] enabled = false");
+        }
         self.spawn_hopr_runner(safe_module, results_sender, delay);
     }
 
@@ -2294,6 +2392,8 @@ impl Core {
 
     fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
         self.phase = Phase::HoprRunning;
+        // The balances tick takes the gas watch over from the pre-Safe poll.
+        self.cancel_presafe_queries.cancel();
         self.spawn_exit_node_discovery_runner(results_sender, Duration::ZERO);
         self.spawn_ideal_balance_recommendation_runner(results_sender, Duration::ZERO);
         self.spawn_capacity_allocations_runner(results_sender, Duration::ZERO);
@@ -2570,6 +2670,7 @@ mod tests {
             crate::worker_params::AllowFlags::default(),
             "https://blokli.invalid".parse().expect("valid url"),
             net::Ipv4Addr::new(203, 0, 113, 7),
+            cowswap::DEFAULT_API_URL.parse().expect("valid url"),
             state_home.path().to_path_buf(),
         );
         let (outgoing, from_core) = mpsc::channel(32);
