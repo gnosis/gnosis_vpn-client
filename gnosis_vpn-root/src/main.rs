@@ -43,8 +43,6 @@ mod routing_actor;
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
-/// DNS is open at this point, so a slow answer is a broken resolver; the pin covers it.
-const BLOKLI_RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
 const DAEMON_LOCK_FILE: &str = "daemon.lock";
 
 fn try_acquire_daemon_lock_at(path: &Path) -> std::io::Result<File> {
@@ -1675,7 +1673,8 @@ impl DaemonState {
             return;
         }
         let url = self.blokli_url.clone();
-        let resolved = match time::timeout(BLOKLI_RESOLVE_TIMEOUT, remote_data::resolve_blokli_ip(&url)).await {
+        let timeout = self.config.blokli.resolve_timeout;
+        let resolved = match time::timeout(timeout, remote_data::resolve_blokli_ip(&url)).await {
             Ok(res) => res.map_err(|e| e.to_string()),
             Err(_) => Err("timed out".to_string()),
         };
