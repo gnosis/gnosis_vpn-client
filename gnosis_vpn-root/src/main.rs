@@ -69,8 +69,11 @@ struct DaemonState {
     worker_owner: Option<WorkerOwner>,
     /// Whose killswitch is armed; outlives a crashed owner so no other user can lift it.
     killswitch_holder: Option<u32>,
+<<<<<<< HEAD
     /// The CLI's URL or edgli's default, so every lookup asks for the same host.
     blokli_url: url::Url,
+=======
+>>>>>>> 4e502ca (feat(root): re-resolve the Blokli address before every first killswitch arm, the startup pin is the fallback (GNO-1025) (#929))
     /// Resolved at startup and again before every first arm; frozen while the killswitch blocks DNS.
     blokli_ip: Ipv4Addr,
     /// Mirrors the routing actor's policy: a lookup is only possible while this is false.
@@ -1704,7 +1707,11 @@ impl DaemonState {
         if self.killswitch_armed || just_resolved {
             return false;
         }
+<<<<<<< HEAD
         let url = self.blokli_url.clone();
+=======
+        let url = self.cli.hopr_blokli_url.clone();
+>>>>>>> 4e502ca (feat(root): re-resolve the Blokli address before every first killswitch arm, the startup pin is the fallback (GNO-1025) (#929))
         let timeout = self.config.blokli.resolve_timeout;
         let resolved = match time::timeout(timeout, remote_data::resolve_blokli_ip(&url)).await {
             Ok(res) => res.map_err(|e| e.to_string()),
