@@ -31,7 +31,7 @@ fn main() {
             match format {
                 OutputFormat::Json => json_print(&error),
                 OutputFormat::Yaml => yaml_print(&error),
-                OutputFormat::Plain => eprintln!("{}", service_error_text(&error)),
+                OutputFormat::Plain => eprintln!("{error}"),
             };
             process::exit(service_error_exitcode(&error));
         }
@@ -62,24 +62,6 @@ fn yaml_print<T: serde::Serialize>(value: &T) {
     match serde_saphyr::to_string(value) {
         Ok(s) => print!("{s}"),
         Err(e) => eprintln!("Error serializing response to YAML: {e}"),
-    }
-}
-
-fn service_error_text(error: &ServiceError) -> String {
-    match error {
-        ServiceError::WorkerOffline => {
-            "Worker client is currently offline - use command `start-client` to start it".to_string()
-        }
-        ServiceError::WorkerRestarting => "Worker client is restarting - try again shortly".to_string(),
-        ServiceError::InUseByOtherUser => {
-            "Worker client is in use by another user of this machine - wait until they stop it".to_string()
-        }
-        ServiceError::RootCannotOwnWorker => {
-            "Run `start-client` as a regular user - root cannot own the worker client".to_string()
-        }
-        ServiceError::ProtocolMismatch { .. } | ServiceError::InvalidRequest { .. } => {
-            format!("Service refused the request: {error}")
-        }
     }
 }
 

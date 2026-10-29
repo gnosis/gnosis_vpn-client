@@ -71,10 +71,10 @@ pub enum ServiceError {
     #[error("worker client is restarting - try again shortly")]
     WorkerRestarting,
     /// Only `ping` and `info` stay open to callers who do not own the running worker.
-    #[error("the service is in use by another user on this machine")]
+    #[error("worker client is in use by another user of this machine - wait until they stop it")]
     InUseByOtherUser,
     /// Root runs the service, it never owns a worker.
-    #[error("root cannot start a worker - run `start-client` as your own user")]
+    #[error("run `start-client` as a regular user - root cannot own the worker client")]
     RootCannotOwnWorker,
 }
 
