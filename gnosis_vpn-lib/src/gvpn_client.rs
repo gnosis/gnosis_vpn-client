@@ -90,7 +90,7 @@ pub const API: ApiVersion = ApiVersion::new(1);
 /// What `/versions` publishes; `latest` is ignored, as no decision depends on it.
 #[derive(Deserialize)]
 struct PublishedVersions {
-    versions: Vec<ApiVersion>,
+    versions: Vec<String>,
     server: Option<semver::Version>,
 }
 
@@ -116,8 +116,10 @@ pub async fn versions(client: &Client, socket_addr: SocketAddr, timeout: Duratio
         .json::<PublishedVersions>()
         .await?;
 
+    // Labels this client cannot parse are versions it does not speak, so they must not fail the check.
+    let api = resp.versions.iter().filter_map(|label| label.parse().ok()).collect();
     Ok(ExitVersions {
-        api: resp.versions,
+        api,
         server: resp.server,
     })
 }

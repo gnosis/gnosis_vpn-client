@@ -68,7 +68,7 @@ impl FromStr for Address {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let hex = s
             .strip_prefix("0x")
-            .filter(|h| h.len() == 40)
+            .filter(|h| h.len() == 40 && h.is_ascii())
             .ok_or_else(|| ParseError::Address(s.to_string()))?;
         let mut bytes = [0u8; 20];
         for (i, byte) in bytes.iter_mut().enumerate() {
@@ -462,21 +462,25 @@ pub mod unix_ms {
     }
 }
 
-/// Whole milliseconds on the wire.
+/// Fractional milliseconds on the wire, so sub-millisecond RTTs survive.
 pub mod duration_ms {
     use super::*;
     use std::time::Duration;
 
     pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_u64(to_ms(d))
+        s.serialize_f64(to_ms(d))
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
-        Ok(Duration::from_millis(u64::deserialize(d)?))
+        from_ms(f64::deserialize(d)?)
     }
 
-    fn to_ms(d: &Duration) -> u64 {
-        u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+    fn to_ms(d: &Duration) -> f64 {
+        d.as_secs_f64() * 1000.0
+    }
+
+    fn from_ms<E: serde::de::Error>(ms: f64) -> Result<Duration, E> {
+        Duration::try_from_secs_f64(ms / 1000.0).map_err(|_| E::custom(format!("invalid duration: {ms} ms")))
     }
 
     pub mod option {
@@ -487,7 +491,7 @@ pub mod duration_ms {
         }
 
         pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Duration>, D::Error> {
-            Ok(Option::<u64>::deserialize(d)?.map(Duration::from_millis))
+            Option::<f64>::deserialize(d)?.map(from_ms).transpose()
         }
     }
 }
@@ -529,6 +533,24 @@ mod tests {
     fn address_rejects_wrong_length_and_prefix() {
         assert!("0x1234".parse::<Address>().is_err());
         assert!(CHECKSUMMED[0].trim_start_matches("0x").parse::<Address>().is_err());
+    }
+
+    #[test]
+    fn duration_ms_keeps_sub_millisecond_precision() {
+        #[derive(Serialize, Deserialize)]
+        struct Rtt(#[serde(with = "duration_ms")] std::time::Duration);
+
+        let rtt = Rtt(std::time::Duration::from_micros(400));
+        let json = serde_json::to_string(&rtt).expect("serialize");
+        assert_eq!(json, "0.4");
+        assert_eq!(serde_json::from_str::<Rtt>(&json).expect("deserialize").0, rtt.0);
+        assert!(serde_json::from_str::<Rtt>("-1.0").is_err());
+    }
+
+    #[test]
+    fn address_rejects_multibyte_input_of_the_right_byte_length() {
+        let multibyte = format!("0x{}", "é".repeat(20));
+        assert!(multibyte.parse::<Address>().is_err());
     }
 
     #[test]

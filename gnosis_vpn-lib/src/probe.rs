@@ -962,12 +962,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quick_checks_fail_on_an_unparseable_api_label() {
-        let addr = canned_exit(r#"{"versions":["1.0"],"latest":"1.0"}"#, "200 OK").await;
+    async fn quick_checks_skip_unparseable_api_labels() {
+        let addr = canned_exit(r#"{"versions":["v1","v2-beta"],"latest":"v2-beta"}"#, "200 OK").await;
 
-        let error = quick_checks(addr).await.expect_err("a malformed label fails the check");
+        let outcome = quick_checks(addr).await.expect("checks succeed");
 
-        assert!(error.starts_with("versions check failed"), "unexpected error: {error}");
+        assert_eq!(outcome.api_version, Some(ApiVersion::new(1)));
+        assert_eq!(outcome.versions.api, vec![ApiVersion::new(1)]);
     }
 
     #[tokio::test]

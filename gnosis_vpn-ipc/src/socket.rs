@@ -23,6 +23,8 @@ pub enum CallError {
     ServiceNotRunning,
     #[error("service closed the connection without a reply")]
     NoReply,
+    #[error("service did not answer within {}s", CALL_TIMEOUT.as_secs())]
+    Timeout,
     #[error("unreadable reply: {0}")]
     Decode(serde_json::Error),
     #[error("reply does not match the request: {0:?}")]
@@ -48,16 +50,26 @@ pub fn call(socket_path: &Path, request: Request) -> Result<Response, CallError>
     };
     let mut line = serde_json::to_string(&envelope).expect("protocol types always serialize");
     line.push('\n');
-    (&stream).write_all(line.as_bytes())?;
+    (&stream).write_all(line.as_bytes()).map_err(timeout_or_io)?;
 
     let mut reply_line = String::new();
-    BufReader::new(&stream).read_line(&mut reply_line)?;
+    BufReader::new(&stream)
+        .read_line(&mut reply_line)
+        .map_err(timeout_or_io)?;
     if reply_line.is_empty() {
         return Err(CallError::NoReply);
     }
     match serde_json::from_str::<Reply>(&reply_line).map_err(CallError::Decode)? {
         Reply::Ok { response } => Ok(response),
         Reply::Err { error } => Err(CallError::Service(error)),
+    }
+}
+
+/// Socket timeouts surface as `WouldBlock` on Unix, which reads as a bare EAGAIN to users.
+fn timeout_or_io(error: io::Error) -> CallError {
+    match error.kind() {
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => CallError::Timeout,
+        _ => CallError::Io(error),
     }
 }
 
