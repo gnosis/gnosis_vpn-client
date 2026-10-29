@@ -71,6 +71,12 @@ fn service_error_text(error: &ServiceError) -> String {
             "Worker client is currently offline - use command `start-client` to start it".to_string()
         }
         ServiceError::WorkerRestarting => "Worker client is restarting - try again shortly".to_string(),
+        ServiceError::InUseByOtherUser => {
+            "Worker client is in use by another user of this machine - wait until they stop it".to_string()
+        }
+        ServiceError::RootCannotOwnWorker => {
+            "Run `start-client` as a regular user - root cannot own the worker client".to_string()
+        }
         ServiceError::ProtocolMismatch { .. } | ServiceError::InvalidRequest { .. } => {
             format!("Service refused the request: {error}")
         }
@@ -81,6 +87,8 @@ fn service_error_exitcode(error: &ServiceError) -> ExitCode {
     match error {
         ServiceError::WorkerOffline => exitcode::UNAVAILABLE,
         ServiceError::WorkerRestarting => exitcode::TEMPFAIL,
+        ServiceError::InUseByOtherUser => exitcode::NOPERM,
+        ServiceError::RootCannotOwnWorker => exitcode::USAGE,
         ServiceError::ProtocolMismatch { .. } => exitcode::PROTOCOL,
         ServiceError::InvalidRequest { .. } => exitcode::SOFTWARE,
     }
@@ -291,12 +299,16 @@ fn pretty_print(resp: &Response) {
         }
         Response::Info(info) => {
             println!(
-                "Gnosis VPN: client service version: {}, package version: {}{}",
+                "Gnosis VPN: client service version: {}, package version: {}{}{}",
                 info.version,
                 info.package_version.as_deref().unwrap_or("not available"),
                 info.log_file
                     .as_ref()
                     .map(|f| format!("\nLog file: {}", f.display()))
+                    .unwrap_or_default(),
+                info.worker_log_dir
+                    .as_ref()
+                    .map(|d| format!("\nWorker log dir: {}", d.display()))
                     .unwrap_or_default(),
             );
         }
@@ -305,6 +317,9 @@ fn pretty_print(resp: &Response) {
         }
         Response::StartClient(ipc::StartClientResponse::AlreadyRunning) => {
             eprintln!("Worker client already running");
+        }
+        Response::StartClient(ipc::StartClientResponse::SpawnFailed { reason }) => {
+            eprintln!("Worker client could not be started: {reason}");
         }
         Response::StopClient(ipc::StopClientResponse::Stopped) => {
             println!("Worker client stopped");
@@ -418,6 +433,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Info(..) => exitcode::OK,
         Response::StartClient(ipc::StartClientResponse::Started) => exitcode::OK,
         Response::StartClient(ipc::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,
+        Response::StartClient(ipc::StartClientResponse::SpawnFailed { .. }) => exitcode::UNAVAILABLE,
         Response::StopClient(ipc::StopClientResponse::Stopped) => exitcode::OK,
         Response::StopClient(ipc::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
         Response::Destinations(..) => exitcode::OK,

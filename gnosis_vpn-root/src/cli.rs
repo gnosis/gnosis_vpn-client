@@ -3,10 +3,10 @@ use url::Url;
 
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::time::Duration;
 
+use gnosis_vpn_lib::dirs::UserDirs;
 use gnosis_vpn_lib::worker_params::{self, WorkerParams};
-use gnosis_vpn_lib::{config, dirs, hopr, logging};
+use gnosis_vpn_lib::{config, hopr, logging};
 
 use crate::{ENV_VAR_PID_FILE, worker};
 
@@ -32,14 +32,6 @@ pub struct Cli {
         )]
     pub config_path: PathBuf,
 
-    /// Service state directory - practically identical with home directory of the worker user
-    #[arg(
-        long,
-        env = dirs::ENV_VAR_STATE_HOME,
-        default_value = dirs::DEFAULT_STATE_HOME,
-    )]
-    pub state_home: PathBuf,
-
     /// Log file path - provide if you want the service to manage the log file
     #[arg(
         long,
@@ -54,25 +46,13 @@ pub struct Cli {
     )]
     pub pid_file: Option<PathBuf>,
 
-    /// Username of the worker user (needs a home folder for caching and configurations)
-    #[arg(long, env = worker::ENV_VAR_WORKER_USER, default_value = worker::DEFAULT_WORKER_USER)]
-    pub worker_user: String,
-
-    /// Path to the worker binary - relative to the users home folder
+    /// Path to the worker binary
     #[arg(long, env = worker::ENV_VAR_WORKER_BINARY, default_value = worker::DEFAULT_WORKER_BINARY)]
     pub worker_binary: PathBuf,
 
     /// Hopr edge client configuration path
     #[arg(long, env = hopr::ENV_VAR_CONFIG, default_value = None) ]
     pub hopr_config_path: Option<PathBuf>,
-
-    /// Hopr edge client identity path
-    #[arg(long, env = hopr::ENV_VAR_ID_FILE, default_value = None)]
-    pub hopr_identity_file: Option<PathBuf>,
-
-    /// Hopr edge client identity pass
-    #[arg(long, env = hopr::ENV_VAR_ID_PASS, default_value = None)]
-    pub hopr_identity_pass: Option<String>,
 
     /// Hopr Blokli URL used for on chain queries
     #[arg(long, env = hopr::ENV_VAR_BLOKLI_URL)]
@@ -91,13 +71,6 @@ pub struct Cli {
     /// purposes)
     #[arg(long)]
     pub allow_funding_tool_rerun: bool,
-
-    /// Autostart client after service startup and shut it down after being idle for this duration.
-    /// The idle countdown is suspended while a VPN connection is active and resumes on disconnect.
-    #[arg(long, env = worker::ENV_VAR_CLIENT_AUTOSTART, default_value = None,
-                value_parser = humantime::parse_duration
-        )]
-    pub client_autostart: Option<Duration>,
 }
 
 pub fn parse() -> Cli {
@@ -105,8 +78,8 @@ pub fn parse() -> Cli {
 }
 
 impl Cli {
-    /// The worker's view of these arguments plus the blokli address root resolved at startup.
-    pub fn worker_params(&self, blokli_ip: Ipv4Addr) -> WorkerParams {
+    /// The worker's view of these arguments plus what root resolved at startup and who owns the worker.
+    pub fn worker_params(&self, blokli_ip: Ipv4Addr, network: &str, user_dirs: UserDirs) -> WorkerParams {
         let config_mode = match self.hopr_config_path.clone() {
             Some(path) => worker_params::ConfigFileMode::Manual(path),
             None => worker_params::ConfigFileMode::Generated,
@@ -118,13 +91,12 @@ impl Cli {
         };
 
         WorkerParams::new(
-            self.hopr_identity_file.clone(),
-            self.hopr_identity_pass.clone(),
             config_mode,
             allow,
             self.hopr_blokli_url.clone(),
             blokli_ip,
-            self.state_home.clone(),
+            user_dirs,
+            network.to_string(),
         )
     }
 }

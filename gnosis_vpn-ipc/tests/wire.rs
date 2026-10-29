@@ -280,3 +280,40 @@ fn a_reconnect_without_attempt_names_the_wait() {
     .to_string();
     assert!(waiting.contains("waiting for route health"), "{waiting}");
 }
+
+#[test]
+fn ownership_refusals_are_service_errors() {
+    round_trips(&ServiceError::InUseByOtherUser, json!({"type": "in_use_by_other_user"}));
+    round_trips(
+        &ServiceError::RootCannotOwnWorker,
+        json!({"type": "root_cannot_own_worker"}),
+    );
+}
+
+#[test]
+fn a_failed_spawn_names_its_reason() {
+    round_trips(
+        &Response::StartClient(StartClientResponse::SpawnFailed {
+            reason: "no home dir".to_string(),
+        }),
+        json!({"type": "start_client", "data": {"type": "spawn_failed", "reason": "no home dir"}}),
+    );
+}
+
+#[test]
+fn info_carries_the_owners_worker_log_dir() {
+    round_trips(
+        &Response::Info(InfoResponse {
+            version: "1.2.3".parse().unwrap(),
+            package_version: None,
+            log_file: Some("/var/log/gnosisvpn/gnosisvpn.log".into()),
+            worker_log_dir: Some("/home/alice/.local/state/gnosisvpn/logs".into()),
+        }),
+        json!({"type": "info", "data": {
+            "version": "1.2.3",
+            "package_version": null,
+            "log_file": "/var/log/gnosisvpn/gnosisvpn.log",
+            "worker_log_dir": "/home/alice/.local/state/gnosisvpn/logs",
+        }}),
+    );
+}

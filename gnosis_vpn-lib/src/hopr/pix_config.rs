@@ -105,7 +105,7 @@ impl PixConfig {
     }
 
     /// The edgli form; which pool the knobs reach is edgli's call, deployment stays on `HOPRD_CURVY_*`.
-    pub fn to_entry_config(&self, state_home: PathBuf) -> edgli::strategy::PixEntryConfig {
+    pub fn to_entry_config(&self, state_dir: PathBuf) -> edgli::strategy::PixEntryConfig {
         let pool = edgli::strategy::PixEntryPool::from_knobs(edgli::strategy::PixEntryPoolKnobs {
             max_deposit_tracking_time: Some(self.max_deposit_tracking_time),
             max_deposit_retries: self.max_deposit_retries,
@@ -126,7 +126,7 @@ impl PixConfig {
                 deposit_buffer_period: self.deposit_buffer_period,
             },
             pool,
-            state_dir: Some(state_home),
+            state_dir: Some(state_dir),
         }
     }
 }
@@ -151,15 +151,18 @@ mod tests {
     }
 
     #[test]
-    fn to_entry_config_keeps_pool_state_in_state_home() {
-        let cfg = PixConfig::default().to_entry_config(PathBuf::from("/var/lib/gnosisvpn"));
-        assert_eq!(cfg.state_dir, Some(PathBuf::from("/var/lib/gnosisvpn")));
+    fn to_entry_config_keeps_pool_state_in_the_network_pix_dir() {
+        let pix_dir = PathBuf::from("/home/alice/.local/share/gnosisvpn/networks/jura-dev/pix");
+        let cfg = PixConfig::default().to_entry_config(pix_dir.clone());
+        assert_eq!(cfg.state_dir, Some(pix_dir));
     }
 
     #[cfg(feature = "pix-curvy")]
     #[test]
     fn to_entry_config_submits_through_curvy_relayer() {
-        let cfg = PixConfig::default().to_entry_config(PathBuf::from("/var/lib/gnosisvpn"));
+        let cfg = PixConfig::default().to_entry_config(PathBuf::from(
+            "/home/alice/.local/share/gnosisvpn/networks/jura-dev/pix",
+        ));
         assert_eq!(
             cfg.pool.submission,
             edgli::strategy::PixCurvySubmission::Relayer(PixConfig::default_relayer_url())

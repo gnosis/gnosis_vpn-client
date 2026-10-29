@@ -35,6 +35,11 @@
       "matchManagers": ["cargo"],
       "matchUpdateTypes": ["minor"],
       "groupName": "rust crates (minor)"
+    },
+    {
+      "description": "Only an unchanged Cargo.toml range gets cargo update --precise; a bumped range re-resolves past minimumReleaseAge",
+      "matchManagers": ["cargo"],
+      "rangeStrategy": "update-lockfile"
     }
   ]
 }

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 use std::fmt::{self, Display};
+use std::time::Duration;
 
 use crate::balance;
 use crate::connection;
@@ -39,31 +40,42 @@ impl Display for WorkerCommand {
     }
 }
 
-/// None for the requests root answers itself.
-pub fn worker_command(request: &ipc::Request) -> Option<WorkerCommand> {
-    let cmd = match request {
-        ipc::Request::Status => WorkerCommand::Status,
-        ipc::Request::NerdStats => WorkerCommand::NerdStats,
-        ipc::Request::Connect { destination } => WorkerCommand::Connect {
-            destination: destination.clone(),
-        },
-        ipc::Request::Disconnect => WorkerCommand::Disconnect,
-        ipc::Request::Balance => WorkerCommand::Balance,
-        ipc::Request::FundingTool { secret } => WorkerCommand::FundingTool { secret: secret.clone() },
-        ipc::Request::Telemetry => WorkerCommand::Telemetry,
-        ipc::Request::Destinations => WorkerCommand::Destinations,
-        ipc::Request::Probe { destination } => WorkerCommand::Probe {
-            destination: destination.clone(),
-        },
-        ipc::Request::Unprobe => WorkerCommand::Unprobe,
-        ipc::Request::QuickProbe { destination } => WorkerCommand::QuickProbe {
-            destination: destination.clone(),
-        },
-        ipc::Request::Ping | ipc::Request::Info | ipc::Request::StartClient { .. } | ipc::Request::StopClient => {
-            return None;
+/// The requests root answers itself; everything else is a [`WorkerCommand`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum RootCommand {
+    Ping,
+    Info,
+    StartClient(Duration),
+    StopClient,
+}
+
+/// Who answers a socket request.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CommandRoute {
+    Worker(WorkerCommand),
+    Root(RootCommand),
+}
+
+impl From<ipc::Request> for CommandRoute {
+    fn from(request: ipc::Request) -> Self {
+        match request {
+            ipc::Request::Status => CommandRoute::Worker(WorkerCommand::Status),
+            ipc::Request::NerdStats => CommandRoute::Worker(WorkerCommand::NerdStats),
+            ipc::Request::Connect { destination } => CommandRoute::Worker(WorkerCommand::Connect { destination }),
+            ipc::Request::Disconnect => CommandRoute::Worker(WorkerCommand::Disconnect),
+            ipc::Request::Balance => CommandRoute::Worker(WorkerCommand::Balance),
+            ipc::Request::FundingTool { secret } => CommandRoute::Worker(WorkerCommand::FundingTool { secret }),
+            ipc::Request::Telemetry => CommandRoute::Worker(WorkerCommand::Telemetry),
+            ipc::Request::Destinations => CommandRoute::Worker(WorkerCommand::Destinations),
+            ipc::Request::Probe { destination } => CommandRoute::Worker(WorkerCommand::Probe { destination }),
+            ipc::Request::Unprobe => CommandRoute::Worker(WorkerCommand::Unprobe),
+            ipc::Request::QuickProbe { destination } => CommandRoute::Worker(WorkerCommand::QuickProbe { destination }),
+            ipc::Request::Ping => CommandRoute::Root(RootCommand::Ping),
+            ipc::Request::Info => CommandRoute::Root(RootCommand::Info),
+            ipc::Request::StartClient { timeout } => CommandRoute::Root(RootCommand::StartClient(timeout)),
+            ipc::Request::StopClient => CommandRoute::Root(RootCommand::StopClient),
         }
-    };
-    Some(cmd)
+    }
 }
 
 pub fn destination(dest: &Destination) -> Box<ipc::Destination> {
@@ -298,8 +310,8 @@ mod tests {
     #[test]
     fn listing_destinations_is_routed_to_the_worker() {
         assert_eq!(
-            Some(WorkerCommand::Destinations),
-            worker_command(&ipc::Request::Destinations)
+            CommandRoute::Worker(WorkerCommand::Destinations),
+            ipc::Request::Destinations.into()
         );
     }
 
@@ -307,12 +319,15 @@ mod tests {
     fn probe_commands_are_routed_to_the_worker() {
         let exit = ipc::DestinationId::from("exit");
         assert_eq!(
-            Some(WorkerCommand::Probe {
+            CommandRoute::Worker(WorkerCommand::Probe {
                 destination: exit.clone()
             }),
-            worker_command(&ipc::Request::Probe { destination: exit })
+            ipc::Request::Probe { destination: exit }.into()
         );
-        assert_eq!(Some(WorkerCommand::Unprobe), worker_command(&ipc::Request::Unprobe));
+        assert_eq!(
+            CommandRoute::Worker(WorkerCommand::Unprobe),
+            ipc::Request::Unprobe.into()
+        );
     }
 
     #[test]
@@ -325,7 +340,7 @@ mod tests {
             },
             ipc::Request::StopClient,
         ] {
-            assert_eq!(None, worker_command(&request));
+            assert!(matches!(CommandRoute::from(request), CommandRoute::Root(_)));
         }
     }
 

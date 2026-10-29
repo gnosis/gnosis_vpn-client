@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 
 use std::path::PathBuf;
 
+use gnosis_vpn_lib::{dirs, killswitch};
+
 use super::{dns, ipv6_blackhole};
 
 /// Side effects recorded at tunnel setup so a SIGKILLed root can be swept at the
@@ -60,7 +62,7 @@ impl TeardownState {
 
 /// Root-owned location for the teardown state file.
 fn candidate_paths() -> [PathBuf; 1] {
-    [PathBuf::from("/var/run/gnosisvpn/teardown-state.json")]
+    [dirs::runtime_file("teardown-state.json")]
 }
 
 /// Persist `state` so a crashed root can be swept at the next start. Best-effort:
@@ -137,7 +139,7 @@ pub async fn startup_sweep() {
 /// Reset the killswitch firewall by its fixed anchor/table name. Idempotent and safe
 /// to call when nothing is installed, so it runs unconditionally at every start.
 fn reset_leftover_killswitch(pf_was_enabled: Option<bool>) -> bool {
-    match gnosis_vpn_lib::killswitch::Firewall::new() {
+    match killswitch::Firewall::new() {
         Ok(mut firewall) => {
             if let Err(e) = firewall.reset_policy_with_state(pf_was_enabled) {
                 tracing::warn!(%e, "failed to reset leftover killswitch at startup (continuing)");
@@ -417,7 +419,8 @@ mod tests {
     fn production_state_path_is_root_owned() {
         let paths = candidate_paths();
         assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0], PathBuf::from("/var/run/gnosisvpn/teardown-state.json"));
+        assert!(paths[0].starts_with(dirs::RUNTIME_DIR), "{:?}", paths[0]);
+        assert_eq!(paths[0].file_name().unwrap(), "teardown-state.json");
     }
 
     #[test]

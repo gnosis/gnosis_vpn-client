@@ -70,6 +70,12 @@ pub enum ServiceError {
     WorkerOffline,
     #[error("worker client is restarting - try again shortly")]
     WorkerRestarting,
+    /// Only `ping` and `info` stay open to callers who do not own the running worker.
+    #[error("the service is in use by another user on this machine")]
+    InUseByOtherUser,
+    /// Root runs the service, it never owns a worker.
+    #[error("root cannot start a worker - run `start-client` as your own user")]
+    RootCannotOwnWorker,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -650,6 +656,8 @@ pub struct InfoResponse {
     /// The installer's version, a different numbering than the service's.
     pub package_version: Option<String>,
     pub log_file: Option<PathBuf>,
+    /// The owner's daily-rolled worker logs; none for callers who are neither the owner nor root.
+    pub worker_log_dir: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -657,6 +665,10 @@ pub struct InfoResponse {
 pub enum StartClientResponse {
     Started,
     AlreadyRunning,
+    /// Root could not bring a worker up for the caller; the service itself keeps running.
+    SpawnFailed {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
