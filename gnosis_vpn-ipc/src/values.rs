@@ -462,25 +462,21 @@ pub mod unix_ms {
     }
 }
 
-/// Fractional milliseconds on the wire, so sub-millisecond RTTs survive.
+/// Whole milliseconds on the wire.
 pub mod duration_ms {
     use super::*;
     use std::time::Duration;
 
     pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_f64(to_ms(d))
+        s.serialize_u64(to_ms(d))
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
-        from_ms(f64::deserialize(d)?)
+        Ok(Duration::from_millis(u64::deserialize(d)?))
     }
 
-    fn to_ms(d: &Duration) -> f64 {
-        d.as_secs_f64() * 1000.0
-    }
-
-    fn from_ms<E: serde::de::Error>(ms: f64) -> Result<Duration, E> {
-        Duration::try_from_secs_f64(ms / 1000.0).map_err(|_| E::custom(format!("invalid duration: {ms} ms")))
+    fn to_ms(d: &Duration) -> u64 {
+        u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
     }
 
     pub mod option {
@@ -491,7 +487,7 @@ pub mod duration_ms {
         }
 
         pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Duration>, D::Error> {
-            Option::<f64>::deserialize(d)?.map(from_ms).transpose()
+            Ok(Option::<u64>::deserialize(d)?.map(Duration::from_millis))
         }
     }
 }
@@ -536,15 +532,15 @@ mod tests {
     }
 
     #[test]
-    fn duration_ms_keeps_sub_millisecond_precision() {
+    fn duration_ms_is_whole_milliseconds() {
         #[derive(Serialize, Deserialize)]
         struct Rtt(#[serde(with = "duration_ms")] std::time::Duration);
 
-        let rtt = Rtt(std::time::Duration::from_micros(400));
+        let rtt = Rtt(std::time::Duration::from_micros(1500));
         let json = serde_json::to_string(&rtt).expect("serialize");
-        assert_eq!(json, "0.4");
-        assert_eq!(serde_json::from_str::<Rtt>(&json).expect("deserialize").0, rtt.0);
-        assert!(serde_json::from_str::<Rtt>("-1.0").is_err());
+        assert_eq!(json, "1");
+        let decoded = serde_json::from_str::<Rtt>(&json).expect("deserialize");
+        assert_eq!(decoded.0, std::time::Duration::from_millis(1));
     }
 
     #[test]

@@ -57,7 +57,7 @@ fn unit_requests_are_tagged_objects() {
         &Request::StartClient {
             timeout: Duration::from_secs(600),
         },
-        json!({"type": "start_client", "timeout": 600_000.0}),
+        json!({"type": "start_client", "timeout": 600_000}),
     );
 }
 
@@ -132,7 +132,7 @@ fn the_connection_is_one_tagged_state() {
             "type": "connected",
             "destination": "berlin",
             "since": 2_000,
-            "tunnel_ping_rtt": 90.0,
+            "tunnel_ping_rtt": 90,
             "stall": {"since": 3_000, "failed_pings": 2, "reconnect_at": 3}
         }),
     );
