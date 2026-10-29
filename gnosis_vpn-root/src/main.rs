@@ -1347,6 +1347,7 @@ impl DaemonState {
                 Ok(())
             }
             RequestToRoot::UpdatePeerIps { peer_ips } => {
+                self.traffic.update_hopr_peers(&peer_ips);
                 let _ = self
                     .routing_actor_sender
                     .send(routing_actor::Msg::UpdatePeerIps { peer_ips })

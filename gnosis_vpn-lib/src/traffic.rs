@@ -10,7 +10,8 @@
 //! Capture only describes what is observable on the wire: how many bytes the
 //! host sent to or received from each remote address in a second. The daemon
 //! makes no claim about which process sent a packet or whether the traffic
-//! belongs to the mixnet.
+//! belongs to the mixnet. It does say whether a remote address is one that HOPR
+//! nodes announced on chain, which describes the endpoint, not the traffic.
 
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +19,7 @@ use std::net::IpAddr;
 
 /// Bumped on any incompatible change to the types below. Consumers must refuse
 /// to interpret a batch carrying an unknown version.
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 
 /// One interface the daemon is willing to capture on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +54,9 @@ pub struct Delta {
     pub direction: Direction,
     /// Sum of complete IP-layer lengths, including the IP header.
     pub bytes: u64,
+    /// Whether `target` is an address announced by a HOPR node, per the most
+    /// recent peer snapshot. Always false while the HOPR node is not running.
+    pub hopr_peer: bool,
 }
 
 /// A bounded slice of aggregated traffic.
@@ -130,6 +134,7 @@ mod tests {
                 target: "192.0.2.10".parse().expect("ip"),
                 direction: Direction::Downstream,
                 bytes: 5120,
+                hopr_peer: true,
             }],
             dropped_batches: 0,
         };
@@ -137,6 +142,7 @@ mod tests {
         assert!(json.contains("\"direction\":\"downstream\""), "{json}");
         assert!(json.contains("\"bytes\":5120"), "{json}");
         assert!(json.contains("\"target\":\"192.0.2.10\""), "{json}");
+        assert!(json.contains("\"hopr_peer\":true"), "{json}");
         assert!(!json.contains("class"), "{json}");
         let parsed: Batch = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, batch);
@@ -185,7 +191,7 @@ mod tests {
             protocol: PROTOCOL_VERSION,
         }));
         assert_eq!(
-            r#"{"TrafficStart":{"Ok":{"session_id":1,"interface":{"id":"en0","name":"en0","addresses":["192.0.2.2"],"is_default":true},"protocol":3}}}"#,
+            r#"{"TrafficStart":{"Ok":{"session_id":1,"interface":{"id":"en0","name":"en0","addresses":["192.0.2.2"],"is_default":true},"protocol":4}}}"#,
             serde_json::to_string(&started).expect("serialize")
         );
         assert_eq!(

@@ -200,6 +200,8 @@ impl Aggregates {
                 target,
                 direction,
                 bytes,
+                // The session marks peers; it holds the announced addresses.
+                hopr_peer: false,
             })
             .collect()
     }

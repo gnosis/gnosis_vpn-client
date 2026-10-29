@@ -11,9 +11,10 @@
 pub mod capture;
 pub mod classify;
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use gnosis_vpn_lib::command::{Command, Response};
@@ -40,6 +41,26 @@ struct BatchLog {
     dropped: u64,
 }
 
+/// Addresses HOPR nodes announced on chain, as the worker last reported them.
+/// Shared between the service and its sessions so a new snapshot applies to the
+/// session that is already running.
+#[derive(Clone, Default)]
+pub struct HoprPeers(Arc<RwLock<HashSet<IpAddr>>>);
+
+impl HoprPeers {
+    pub fn replace(&self, ips: &[IpAddr]) {
+        let mut peers = self.0.write().expect("hopr peers poisoned");
+        *peers = ips.iter().copied().collect();
+    }
+
+    fn mark(&self, deltas: &mut [traffic::Delta]) {
+        let peers = self.0.read().expect("hopr peers poisoned");
+        for delta in deltas {
+            delta.hopr_peer = peers.contains(&delta.target);
+        }
+    }
+}
+
 /// State shared by the capture thread, the lease monitor and the command loop.
 pub struct SessionShared {
     pub id: u64,
@@ -50,10 +71,11 @@ pub struct SessionShared {
     ended: Mutex<Option<String>>,
     finished: AtomicBool,
     last_read_ms: AtomicU64,
+    hopr_peers: HoprPeers,
 }
 
 impl SessionShared {
-    fn new(id: u64, interface: Interface, stop: Arc<AtomicBool>) -> Self {
+    fn new(id: u64, interface: Interface, stop: Arc<AtomicBool>, hopr_peers: HoprPeers) -> Self {
         Self {
             id,
             interface,
@@ -63,6 +85,7 @@ impl SessionShared {
             ended: Mutex::new(None),
             finished: AtomicBool::new(false),
             last_read_ms: AtomicU64::new(0),
+            hopr_peers,
         }
     }
 
@@ -83,7 +106,8 @@ impl SessionShared {
         self.last_read_ms.store(self.elapsed_ms(), Ordering::Relaxed);
     }
 
-    pub fn push(&self, deltas: Vec<traffic::Delta>, elapsed_ms: u64) {
+    pub fn push(&self, mut deltas: Vec<traffic::Delta>, elapsed_ms: u64) {
+        self.hopr_peers.mark(&mut deltas);
         let mut log = self.batches.lock().expect("batch log poisoned");
         // Make room first so the batch that causes a drop reports it.
         if log.batches.len() >= BATCH_CAPACITY {
@@ -189,6 +213,7 @@ pub fn is_traffic_command(cmd: &Command) -> bool {
 pub struct TrafficService {
     current: Option<ActiveSession>,
     last_session_id: u64,
+    hopr_peers: HoprPeers,
 }
 
 impl Default for TrafficService {
@@ -202,7 +227,15 @@ impl TrafficService {
         Self {
             current: None,
             last_session_id: 0,
+            hopr_peers: HoprPeers::default(),
         }
+    }
+
+    /// Takes a new snapshot of announced HOPR peer addresses. Applies to the
+    /// running session as well as later ones.
+    pub fn update_hopr_peers(&self, peer_ips: &[Ipv4Addr]) {
+        let ips: Vec<IpAddr> = peer_ips.iter().copied().map(IpAddr::V4).collect();
+        self.hopr_peers.replace(&ips);
     }
 
     /// Answers traffic commands; returns `None` for anything else.
@@ -242,7 +275,12 @@ impl TrafficService {
         let interface = candidate.descriptor.clone();
         let id = self.last_session_id + 1;
         let stop = Arc::new(AtomicBool::new(false));
-        let shared = Arc::new(SessionShared::new(id, interface.clone(), stop.clone()));
+        let shared = Arc::new(SessionShared::new(
+            id,
+            interface.clone(),
+            stop.clone(),
+            self.hopr_peers.clone(),
+        ));
         // Open the candidate before disturbing the running session. Opening blocks
         // until the capture thread reports back, so keep it off the command loop.
         let capture = {
@@ -353,6 +391,10 @@ mod tests {
     use gnosis_vpn_lib::traffic::Direction;
 
     fn session() -> Arc<SessionShared> {
+        session_with_peers(HoprPeers::default())
+    }
+
+    fn session_with_peers(hopr_peers: HoprPeers) -> Arc<SessionShared> {
         Arc::new(SessionShared::new(
             1,
             Interface {
@@ -362,16 +404,73 @@ mod tests {
                 is_default: true,
             },
             Arc::new(AtomicBool::new(false)),
+            hopr_peers,
         ))
     }
 
     fn delta(second: u64) -> traffic::Delta {
+        delta_to(second, "203.0.113.1")
+    }
+
+    fn delta_to(second: u64, target: &str) -> traffic::Delta {
         traffic::Delta {
             second,
-            target: "203.0.113.1".parse().expect("ip"),
+            target: target.parse().expect("ip"),
             direction: Direction::Upstream,
             bytes: 60,
+            hopr_peer: false,
         }
+    }
+
+    fn marked_targets(response: &ReadResponse) -> Vec<(String, bool)> {
+        let mut targets: Vec<(String, bool)> = response
+            .batches
+            .iter()
+            .flat_map(|batch| batch.deltas.iter())
+            .map(|delta| (delta.target.to_string(), delta.hopr_peer))
+            .collect();
+        targets.sort();
+        targets
+    }
+
+    #[test]
+    fn deltas_to_announced_hopr_peers_are_marked() {
+        let peers = HoprPeers::default();
+        peers.replace(&["203.0.113.1".parse().expect("ip")]);
+        let shared = session_with_peers(peers);
+        shared.push(vec![delta_to(0, "203.0.113.1"), delta_to(0, "198.51.100.4")], 100);
+
+        assert_eq!(
+            marked_targets(&shared.read(0)),
+            vec![("198.51.100.4".to_string(), false), ("203.0.113.1".to_string(), true)]
+        );
+    }
+
+    #[test]
+    fn a_peer_snapshot_replaces_the_previous_one_for_running_sessions() {
+        let peers = HoprPeers::default();
+        peers.replace(&["203.0.113.1".parse().expect("ip")]);
+        let shared = session_with_peers(peers.clone());
+        shared.push(vec![delta_to(0, "203.0.113.1")], 100);
+
+        peers.replace(&["198.51.100.4".parse().expect("ip")]);
+        shared.push(vec![delta_to(1, "203.0.113.1"), delta_to(1, "198.51.100.4")], 1100);
+
+        let response = shared.read(1);
+        assert_eq!(
+            marked_targets(&response),
+            vec![("198.51.100.4".to_string(), true), ("203.0.113.1".to_string(), false)]
+        );
+    }
+
+    #[test]
+    fn the_service_shares_reported_peers_with_its_sessions() {
+        let service = TrafficService::new();
+        service.update_hopr_peers(&["203.0.113.1".parse().expect("ip")]);
+        let shared = session_with_peers(service.hopr_peers.clone());
+        shared.push(vec![delta(0)], 100);
+
+        assert_eq!(marked_targets(&shared.read(0)), vec![("203.0.113.1".to_string(), true)]);
     }
 
     #[test]
@@ -440,7 +539,12 @@ mod tests {
             .expect("an egress interface");
         let interface = candidate.descriptor.clone();
         let stop = Arc::new(AtomicBool::new(false));
-        let session = Arc::new(SessionShared::new(1, interface.clone(), stop.clone()));
+        let session = Arc::new(SessionShared::new(
+            1,
+            interface.clone(),
+            stop.clone(),
+            HoprPeers::default(),
+        ));
         let capture = capture::start(candidate, session.clone(), stop).expect("capture starts");
 
         let socket = UdpSocket::bind("0.0.0.0:0").expect("udp socket");
