@@ -156,10 +156,7 @@ jobs:
           SYSTEM_TEST_WORKER_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-worker
           SYSTEM_TEST_ROOT_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-root
           SYSTEM_TEST_CTL_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-ctl
-        run: |
-          # A lost runner leaves no other trace of why it died
-          ./scripts/ci-system-test-monitor.sh &
-          just system-tests ${{ github.workspace }}/result-system-tests/bin/gnosis_vpn-system_tests
+        run: just system-tests ${{ github.workspace }}/result-system-tests/bin/gnosis_vpn-system_tests
   ci-ok:
     name: CI OK
     # Single required status check: stable across matrix expansion, label gating and fork guards.
