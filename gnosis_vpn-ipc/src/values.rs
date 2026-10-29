@@ -590,6 +590,9 @@ mod tests {
         assert_eq!(Balance::<WxHopr>::from_wei(1).scientific().as_deref(), Some("1e-18"));
         assert_eq!(Balance::<WxHopr>::zero().scientific(), None);
         assert_eq!(Balance::<WxHopr>::from_wei(WEI_PER_TOKEN).scientific(), None);
+        let threshold_wei = WEI_PER_TOKEN / 1000;
+        assert!(Balance::<WxHopr>::from_wei(threshold_wei - 1).scientific().is_some());
+        assert_eq!(Balance::<WxHopr>::from_wei(threshold_wei).scientific(), None);
     }
 
     #[test]

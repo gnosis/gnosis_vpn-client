@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 use crate::connection::destination::Destination;
 use crate::connection::options::SurbConfigError;
 use crate::hopr::HoprError;
-use crate::{connection, gvpn_client, log_output, ping};
+use crate::{connection, gvpn_client, ping};
 
 pub(crate) mod runner;
 
@@ -92,7 +92,7 @@ impl Display for Down {
             "Disconnection from {} ({:?} since {})",
             self.destination,
             self.phase.1,
-            log_output::elapsed(&self.phase.0)
+            gnosis_vpn_ipc::elapsed(&self.phase.0)
         )
     }
 }

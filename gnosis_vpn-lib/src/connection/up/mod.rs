@@ -12,7 +12,7 @@ use crate::hopr::HoprError;
 use crate::hopr::types::SessionClientMetadata;
 use crate::wg_tunnel::{self, TunnelStatsSample};
 use crate::wireguard::WireGuard;
-use crate::{gvpn_client, log_output, remote_data, wireguard};
+use crate::{gvpn_client, remote_data, wireguard};
 
 pub(crate) mod runner;
 
@@ -457,7 +457,7 @@ impl Display for Up {
             "Connection to {} ({:?} since {})",
             self.destination,
             self.phase.1,
-            log_output::elapsed(&self.phase.0)
+            gnosis_vpn_ipc::elapsed(&self.phase.0)
         )
     }
 }

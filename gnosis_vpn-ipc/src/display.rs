@@ -589,10 +589,7 @@ impl Display for ChannelOut {
             Some(id) => write!(f, "Channel({},{id}): ", self.address)?,
             None => write!(f, "Channel({}): ", self.address)?,
         }
-        match &self.balance {
-            None => write!(f, "unknown balance"),
-            Some(amount) => write!(f, "{amount}{}", scientific_suffix(amount)),
-        }
+        write!(f, "{}{}", self.balance, scientific_suffix(&self.balance))
     }
 }
 

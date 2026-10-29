@@ -196,7 +196,7 @@ fn channels_out<'a>(
     channels
         .map(|(address, balance)| ipc::ChannelOut {
             address: wire::address(address),
-            balance: Some(wire::wxhopr(*balance)),
+            balance: wire::wxhopr(*balance),
             matched_exit: addr_to_id.get(address).map(|id| (*id).into()),
         })
         .collect()
@@ -385,7 +385,7 @@ mod tests {
         let stake = Balance::<WxHOPR>::zero();
         let channels = channels_out([(&address(1), &stake)].into_iter(), &destinations);
         assert_eq!(channels[0].matched_exit, Some(ipc::DestinationId::from("a-exit")));
-        assert_eq!(channels[0].balance, Some(ipc::Balance::zero()));
+        assert_eq!(channels[0].balance, ipc::Balance::zero());
     }
 
     #[test]

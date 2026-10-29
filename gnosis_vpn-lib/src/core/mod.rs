@@ -855,7 +855,7 @@ impl Core {
                     let route = format!(
                         "{}({})",
                         conn.destination.pretty_print_path(),
-                        log_output::address(&conn.destination.address)
+                        wire::address(&conn.destination.address).short()
                     );
                     log_output::print_session_established(route.as_str());
                     // A spliced session has no local listener to poll; the pump task

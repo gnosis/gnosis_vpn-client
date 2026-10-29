@@ -701,8 +701,7 @@ pub struct Balances {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChannelOut {
     pub address: Address,
-    /// None while the channel's balance is still being queried.
-    pub balance: Option<Balance<WxHopr>>,
+    pub balance: Balance<WxHopr>,
     /// The first destination id, in sort order, whose exit owns this channel.
     pub matched_exit: Option<DestinationId>,
 }

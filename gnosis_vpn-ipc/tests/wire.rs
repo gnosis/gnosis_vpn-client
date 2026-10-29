@@ -158,7 +158,7 @@ fn balances_are_wei_strings() {
         safe: Balance::zero(),
         channels_out: vec![ChannelOut {
             address: address(2),
-            balance: None,
+            balance: Balance::from_wei(750_000_000),
             matched_exit: Some("berlin".into()),
         }],
         info: NodeInfo {
@@ -180,7 +180,7 @@ fn balances_are_wei_strings() {
     assert_eq!(json["type"], "available");
     assert_eq!(json["node"], "1500000000000000000");
     assert_eq!(json["safe"], "0");
-    assert_eq!(json["channels_out"][0]["balance"], Value::Null);
+    assert_eq!(json["channels_out"][0]["balance"], "750000000");
     assert_eq!(json["funding_status"]["traffic"], json!({"type": "low"}));
     assert_eq!(json["funding_status"]["wxhopr_deficit"], "5");
 }
