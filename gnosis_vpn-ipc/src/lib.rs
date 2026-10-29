@@ -1,4 +1,5 @@
 //! The service socket protocol and a blocking client; serde-light so user interfaces need no HOPR stack.
+pub mod dirs;
 mod display;
 mod protocol;
 mod socket;
