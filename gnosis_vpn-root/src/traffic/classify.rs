@@ -75,7 +75,11 @@ pub fn observe(frame: &[u8], host: &Host) -> Option<Observation> {
     } else {
         (source, Direction::Downstream)
     };
-    let is_lan_peer = host.networks.iter().any(|network| within(*network, target));
+    // pnet reports macOS utun addresses with prefix 0, which would cover every target.
+    let is_lan_peer = host
+        .networks
+        .iter()
+        .any(|&(network, prefix)| prefix > 0 && within((network, prefix), target));
     if is_unusable_target(target) || is_lan_peer {
         return None;
     }
@@ -464,6 +468,20 @@ mod tests {
         let back = observe(&ipv4(remote, TUNNEL_V4, 8), &tunnel()).expect("observed");
         assert_eq!(back.direction, Direction::Downstream);
         assert_eq!(back.length, 28);
+    }
+
+    #[test]
+    fn zero_prefix_tunnel_network_does_not_hide_targets() {
+        // What pnet reports for a macOS utun device.
+        let host = Host {
+            networks: vec![(IpAddr::V4(TUNNEL_V4), 0)],
+            ..tunnel()
+        };
+        let remote = Ipv4Addr::new(1, 1, 1, 1);
+        let mut frame = vec![0u8; PNET_LOOPBACK_PADDING];
+        frame.extend_from_slice(&ipv4(TUNNEL_V4, remote, 64));
+        let out = observe(&frame, &host).expect("observed");
+        assert_eq!(out.target, IpAddr::V4(remote));
     }
 
     #[test]
