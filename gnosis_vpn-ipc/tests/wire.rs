@@ -317,3 +317,54 @@ fn info_carries_the_owners_worker_log_dir() {
         }}),
     );
 }
+
+#[test]
+fn traffic_requests_are_tagged_objects() {
+    round_trips(&Request::TrafficInterfaces, json!({"type": "traffic_interfaces"}));
+    round_trips(
+        &Request::TrafficStart(traffic::StartRequest {
+            interface_id: "en0".to_string(),
+        }),
+        json!({"type": "traffic_start", "interface_id": "en0"}),
+    );
+    round_trips(
+        &Request::TrafficRead(traffic::ReadRequest {
+            session_id: 2,
+            cursor: 7,
+        }),
+        json!({"type": "traffic_read", "session_id": 2, "cursor": 7}),
+    );
+    round_trips(
+        &Request::TrafficStop(traffic::StopRequest { session_id: 2 }),
+        json!({"type": "traffic_stop", "session_id": 2}),
+    );
+}
+
+#[test]
+fn traffic_start_replies_are_tagged_objects() {
+    let interface = traffic::Interface {
+        id: "en0".to_string(),
+        name: "en0".to_string(),
+        addresses: vec!["192.0.2.2".parse().unwrap()],
+        is_default: true,
+    };
+    round_trips(
+        &Response::TrafficStart(traffic::StartReply::Started(traffic::StartResponse {
+            session_id: 1,
+            interface,
+            protocol: traffic::PROTOCOL_VERSION,
+        })),
+        json!({"type": "traffic_start", "data": {
+            "type": "started",
+            "session_id": 1,
+            "interface": {"id": "en0", "name": "en0", "addresses": ["192.0.2.2"], "is_default": true},
+            "protocol": 5,
+        }}),
+    );
+    round_trips(
+        &Response::TrafficStart(traffic::StartReply::Failed {
+            reason: "Interface wg0 is not available".to_string(),
+        }),
+        json!({"type": "traffic_start", "data": {"type": "failed", "reason": "Interface wg0 is not available"}}),
+    );
+}

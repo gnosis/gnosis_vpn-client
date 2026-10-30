@@ -314,6 +314,13 @@ fn pretty_print(resp: &Response) {
                 println!("{id}");
             }
         }
+        // Traffic capture is driven by the desktop app; the ctl never requests it.
+        Response::TrafficInterfaces(_)
+        | Response::TrafficStart(_)
+        | Response::TrafficRead(_)
+        | Response::TrafficStop(_) => {
+            eprintln!("Traffic capture responses are only used by the desktop app");
+        }
     }
 }
 
@@ -419,6 +426,11 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::StopClient(ipc::StopClientResponse::Stopped) => exitcode::OK,
         Response::StopClient(ipc::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
         Response::Destinations(..) => exitcode::OK,
+        // See pretty_print: these never answer a ctl command.
+        Response::TrafficInterfaces(..)
+        | Response::TrafficStart(..)
+        | Response::TrafficRead(..)
+        | Response::TrafficStop(..) => exitcode::OK,
     }
 }
 

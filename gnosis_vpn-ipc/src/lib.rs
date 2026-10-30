@@ -3,6 +3,7 @@ pub mod dirs;
 mod display;
 mod protocol;
 mod socket;
+pub mod traffic;
 mod values;
 
 pub use display::{META_FIELD_MAX_CHARS, elapsed, join, sanitize_for_display, scientific_suffix};
