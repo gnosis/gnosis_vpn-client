@@ -15,6 +15,7 @@ pub mod probe;
 pub mod route_health;
 pub mod shell_command_ext;
 pub mod socket;
+pub mod traffic;
 pub mod wg_tunnel;
 pub mod wireguard;
 pub mod worker;

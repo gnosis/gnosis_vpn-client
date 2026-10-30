@@ -47,6 +47,7 @@ nftnl = "~0.9.4"
 notify = "~8.2.0"
 pfctl = "~0.7.0"
 ping = { version = "~0.10.0", features = ["tokio"] }
+pnet_datalink = "~0.35.0"
 rand = "~0.10.3"
 reqwest = { version = "~0.13.5", features = ["blocking", "json"] }
 rtnetlink = "~0.23.0"

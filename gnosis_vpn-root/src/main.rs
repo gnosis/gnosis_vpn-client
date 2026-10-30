@@ -35,6 +35,7 @@ mod device_monitor;
 mod network_info;
 mod routing;
 mod routing_actor;
+mod traffic;
 
 // Avoid musl's default allocator due to degraded performance
 // https://nickb.dev/blog/default-musl-allocator-considered-harmful-to-performance
@@ -103,6 +104,7 @@ struct DaemonState {
     // keepalive instructions from service to timer loop
     keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
     routing_actor_sender: mpsc::Sender<routing_actor::Msg>,
+    traffic: traffic::TrafficService,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -611,6 +613,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         worker_exit_channel: mpsc::channel(1),
         keep_alive_instruction_sender,
         routing_actor_sender,
+        traffic: traffic::TrafficService::new(),
     };
     let res = state
         .daemon_loop(
@@ -1214,6 +1217,11 @@ impl DaemonState {
                     Err(exitcode::TEMPFAIL)
                 }
             },
+
+            RootCommand::TrafficInterfaces => Ok(Response::TrafficInterfaces(self.traffic.interfaces())),
+            RootCommand::TrafficStart(request) => Ok(Response::TrafficStart(self.traffic.start(request).await)),
+            RootCommand::TrafficRead(request) => Ok(Response::TrafficRead(self.traffic.read(request))),
+            RootCommand::TrafficStop(request) => Ok(Response::TrafficStop(self.traffic.stop(request))),
         }
     }
 
@@ -1395,6 +1403,7 @@ impl DaemonState {
                 Ok(())
             }
             RequestToRoot::UpdatePeerIps { peer_ips } => {
+                self.traffic.update_hopr_peers(&peer_ips);
                 let _ = self
                     .routing_actor_sender
                     .send(routing_actor::Msg::UpdatePeerIps { peer_ips })
@@ -1676,6 +1685,7 @@ impl DaemonState {
 
     /// Remove routing and stop ping tasks
     async fn teardown(&mut self) {
+        self.traffic.shutdown();
         self.cleanup_worker_resources().await;
         if let Some(ref mut child) = self.worker_child {
             child.cancel.cancel();
@@ -1684,6 +1694,8 @@ impl DaemonState {
 
     async fn cleanup_worker_resources(&mut self) {
         self.probing = false;
+        // Without a node no address is an announced peer.
+        self.traffic.update_hopr_peers(&[]);
         self.ping_tasks.shutdown().await;
         self.teardown_any_routing().await;
         let worker_gone = self.worker_gone_response();

@@ -318,6 +318,13 @@ fn pretty_print(resp: &Response) {
         // Internal response sent by the root process to itself when a WAN interface change
         // triggers a HOPR session reconnect. Never issued in response to a ctl command.
         Response::ForceReconnectAcknowledged => {}
+        // Traffic capture is driven by the desktop app; the ctl never requests it.
+        Response::TrafficInterfaces(_)
+        | Response::TrafficStart(_)
+        | Response::TrafficRead(_)
+        | Response::TrafficStop(_) => {
+            eprintln!("Traffic capture responses are only used by the desktop app");
+        }
     }
 }
 
@@ -435,6 +442,11 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::RootCannotOwnWorker => exitcode::USAGE,
         // Internal response — see pretty_print for explanation
         Response::ForceReconnectAcknowledged => exitcode::PROTOCOL,
+        // See pretty_print: these never answer a ctl command.
+        Response::TrafficInterfaces(..)
+        | Response::TrafficStart(..)
+        | Response::TrafficRead(..)
+        | Response::TrafficStop(..) => exitcode::OK,
     }
 }
 

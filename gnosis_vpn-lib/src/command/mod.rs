@@ -55,6 +55,14 @@ pub enum Command {
     Unprobe,
     /// Start a short-lived check of one exit; its result appears in `status`
     QuickProbe(String),
+    /// List interfaces the daemon may capture traffic on
+    TrafficInterfaces,
+    /// Begin capturing on one interface, replacing any current capture
+    TrafficStart(crate::traffic::StartRequest),
+    /// Read aggregated traffic the consumer has not seen yet
+    TrafficRead(crate::traffic::ReadRequest),
+    /// End the capture session
+    TrafficStop(crate::traffic::StopRequest),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -94,6 +102,11 @@ pub enum Response {
     Probe(ProbeResponse),
     Unprobe(UnprobeResponse),
     QuickProbe(QuickProbeResponse),
+    /// Interface catalog for the traffic capture picker
+    TrafficInterfaces(Vec<crate::traffic::Interface>),
+    TrafficStart(Result<crate::traffic::StartResponse, String>),
+    TrafficRead(crate::traffic::ReadResponse),
+    TrafficStop(crate::traffic::StopResponse),
     WorkerOffline,
     WorkerRestarting,
     /// Another local user owns the running worker; only `ping` and `info` stay open.
@@ -252,6 +265,10 @@ pub enum RootCommand {
     Destinations,
     StartClient(Duration),
     StopClient,
+    TrafficInterfaces,
+    TrafficStart(crate::traffic::StartRequest),
+    TrafficRead(crate::traffic::ReadRequest),
+    TrafficStop(crate::traffic::StopRequest),
 }
 
 /// Who answers a socket command.
@@ -1030,6 +1047,10 @@ impl From<Command> for CommandRoute {
             Command::Destinations => CommandRoute::Root(RootCommand::Destinations),
             Command::StartClient(keepalive) => CommandRoute::Root(RootCommand::StartClient(keepalive)),
             Command::StopClient => CommandRoute::Root(RootCommand::StopClient),
+            Command::TrafficInterfaces => CommandRoute::Root(RootCommand::TrafficInterfaces),
+            Command::TrafficStart(req) => CommandRoute::Root(RootCommand::TrafficStart(req)),
+            Command::TrafficRead(req) => CommandRoute::Root(RootCommand::TrafficRead(req)),
+            Command::TrafficStop(req) => CommandRoute::Root(RootCommand::TrafficStop(req)),
         }
     }
 }
