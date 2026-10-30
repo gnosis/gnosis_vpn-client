@@ -10,7 +10,7 @@ pub const PROTOCOL_VERSION: u16 = 5;
 /// One interface the daemon is willing to capture on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Interface {
-    /// Stable capture identifier, accepted back by [`Command::TrafficStart`].
+    /// Stable capture identifier, accepted back by [`Command::TrafficStart`](crate::command::Command::TrafficStart).
     pub id: String,
     /// Human-readable name for the interface picker.
     pub name: String,
