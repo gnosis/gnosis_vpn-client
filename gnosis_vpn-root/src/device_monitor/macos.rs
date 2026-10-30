@@ -1,6 +1,5 @@
-use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
-
-use tokio::io::unix::AsyncFd;
+use rustix::net::{AddressFamily, SocketType};
+use tokio::net::UnixDatagram;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -14,28 +13,23 @@ pub fn start_pf_route(tx: mpsc::Sender<NetworkEvent>) -> (CancellationToken, tok
 }
 
 async fn run(tx: mpsc::Sender<NetworkEvent>, cancel: CancellationToken) {
-    let fd = unsafe { libc::socket(libc::AF_ROUTE, libc::SOCK_RAW, 0) };
-    if fd < 0 {
-        tracing::error!(
-            error = ?std::io::Error::last_os_error(),
-            "device monitor: failed to create PF_ROUTE socket"
-        );
+    let owned = match rustix::net::socket(AddressFamily::ROUTE, SocketType::RAW, None) {
+        Ok(fd) => fd,
+        Err(e) => {
+            tracing::error!(error = ?std::io::Error::from(e), "device monitor: failed to create PF_ROUTE socket");
+            return;
+        }
+    };
+
+    // A unix datagram type registers the PF_ROUTE fd without unsafe AsyncFd::register; recv works on any socket.
+    let std_socket = std::os::unix::net::UnixDatagram::from(owned);
+    if let Err(e) = std_socket.set_nonblocking(true) {
+        tracing::error!(error = ?e, "device monitor: failed to set non-blocking mode on PF_ROUTE socket");
         return;
     }
 
-    // Take ownership now so the fd is closed on all subsequent exit paths.
-    let owned = unsafe { OwnedFd::from_raw_fd(fd) };
-
-    if unsafe { libc::fcntl(owned.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } < 0 {
-        tracing::error!(
-            error = ?std::io::Error::last_os_error(),
-            "device monitor: failed to set non-blocking mode on PF_ROUTE socket"
-        );
-        return;
-    }
-
-    let async_fd = match AsyncFd::new(owned) {
-        Ok(f) => f,
+    let socket = match UnixDatagram::from_std(std_socket) {
+        Ok(s) => s,
         Err(e) => {
             tracing::error!(error = ?e, "device monitor: failed to register PF_ROUTE socket with tokio");
             return;
@@ -51,41 +45,25 @@ async fn run(tx: mpsc::Sender<NetworkEvent>, cancel: CancellationToken) {
                 tracing::debug!("device monitor stopping");
                 return;
             }
-            result = async_fd.readable() => {
-                let mut guard = match result {
-                    Ok(g) => g,
-                    Err(e) => {
-                        tracing::error!(error = ?e, "device monitor: PF_ROUTE socket error");
-                        return;
-                    }
-                };
+            result = socket.readable() => {
+                if let Err(e) = result {
+                    tracing::error!(error = ?e, "device monitor: PF_ROUTE socket error");
+                    return;
+                }
                 loop {
-                    match guard.try_io(|fd| {
-                        let n = unsafe {
-                            libc::read(
-                                std::os::unix::io::AsRawFd::as_raw_fd(fd.get_ref()),
-                                buf.as_mut_ptr().cast(),
-                                buf.len(),
-                            )
-                        };
-                        if n < 0 {
-                            Err(std::io::Error::last_os_error())
-                        } else {
-                            Ok(n as usize)
-                        }
-                    }) {
-                        Ok(Ok(n)) => {
+                    match socket.try_recv(&mut buf) {
+                        Ok(n) => {
                             if let Some(event) = to_network_event(&buf[..n]) {
                                 // try_send keeps the drain loop non-blocking; if the channel
                                 // is full we drop the event rather than stalling the socket reader.
                                 let _ = tx.try_send(event);
                             }
                         }
-                        Ok(Err(e)) => {
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(e) => {
                             tracing::error!(error = ?e, "device monitor: PF_ROUTE read error");
                             return;
                         }
-                        Err(_would_block) => break,
                     }
                 }
             }
