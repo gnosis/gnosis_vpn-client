@@ -1,16 +1,4 @@
-//! Opt-in capture of the traffic that leaves the host on its public interface.
-//!
-//! Only one session is current. Starting a capture is transactional: the
-//! candidate opens first and a failure leaves the running session and its
-//! history untouched. The session keeps a short bounded window of finished
-//! batches; retention and presentation belong to the consuming application.
-//!
-//! Capture stops on its own when the consumer stops reading. A viewer that dies
-//! must not leave a privileged capture running.
-//!
-//! While a session runs, it also follows the VPN tunnel that owns the default
-//! route and captures there, so the consumer sees destinations as well as the
-//! next hops they travel through.
+//! Opt-in capture on the public interface plus the VPN tunnel owning the default route; one session at a time.
 
 pub mod capture;
 pub mod classify;
@@ -29,12 +17,10 @@ use tokio::task::JoinHandle;
 
 /// About two seconds of batches from the wire and tunnel threads, which push into one log.
 const BATCH_CAPACITY: usize = 40;
-/// A consumer that stops reading ends the session, so a crashed viewer cannot
-/// leave a capture running.
+/// A consumer that stops reading ends the session, so a crashed viewer cannot leave a capture running.
 const LEASE: Duration = Duration::from_millis(5000);
 const MONITOR_INTERVAL: Duration = Duration::from_millis(500);
-/// How quickly a session notices a VPN connecting, disconnecting or switching
-/// devices.
+/// How quickly a session notices a VPN connecting, disconnecting or switching devices.
 const TUNNEL_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
@@ -44,9 +30,7 @@ struct BatchLog {
     dropped: u64,
 }
 
-/// Addresses HOPR nodes announced on chain, as the worker last reported them.
-/// Shared between the service and its sessions so a new snapshot applies to the
-/// session that is already running.
+/// Shared with running sessions so a new peer snapshot applies immediately.
 #[derive(Clone, Default)]
 pub struct HoprPeers(Arc<RwLock<HashSet<IpAddr>>>);
 
@@ -70,7 +54,6 @@ pub struct SessionShared {
     pub id: u64,
     pub interface: Interface,
     start: Instant,
-    stop: Arc<AtomicBool>,
     batches: Mutex<BatchLog>,
     ended: Mutex<Option<String>>,
     finished: AtomicBool,
@@ -79,12 +62,11 @@ pub struct SessionShared {
 }
 
 impl SessionShared {
-    fn new(id: u64, interface: Interface, stop: Arc<AtomicBool>, hopr_peers: HoprPeers) -> Self {
+    fn new(id: u64, interface: Interface, hopr_peers: HoprPeers) -> Self {
         Self {
             id,
             interface,
             start: Instant::now(),
-            stop,
             batches: Mutex::new(BatchLog::default()),
             ended: Mutex::new(None),
             finished: AtomicBool::new(false),
@@ -141,7 +123,6 @@ impl SessionShared {
 
     fn finish(&self) {
         self.finished.store(true, Ordering::Relaxed);
-        self.stop.store(true, Ordering::Relaxed);
     }
 
     fn read(&self, cursor: u64) -> ReadResponse {
@@ -170,20 +151,18 @@ impl SessionShared {
 
 struct ActiveSession {
     shared: Arc<SessionShared>,
-    capture: Option<capture::Capture>,
+    capture: capture::Capture,
     monitor: JoinHandle<()>,
     tunnel_follower: JoinHandle<()>,
 }
 
 impl ActiveSession {
-    fn shutdown(mut self) {
+    fn shutdown(self) {
         self.monitor.abort();
         // Aborting drops the tunnel capture, which stops and joins its thread.
         self.tunnel_follower.abort();
         self.shared.finish();
-        if let Some(capture) = self.capture.take() {
-            capture.stop();
-        }
+        drop(self.capture);
     }
 }
 
@@ -209,8 +188,6 @@ impl TrafficService {
         }
     }
 
-    /// Takes a new snapshot of announced HOPR peer addresses. Applies to the
-    /// running session as well as later ones.
     pub fn update_hopr_peers(&self, peer_ips: &[Ipv4Addr]) {
         let ips: Vec<IpAddr> = peer_ips.iter().copied().map(IpAddr::V4).collect();
         self.hopr_peers.replace(&ips);
@@ -241,18 +218,11 @@ impl TrafficService {
             .ok_or_else(|| format!("Interface {} is not available", request.interface_id))?;
         let interface = candidate.descriptor.clone();
         let id = self.last_session_id + 1;
-        let stop = Arc::new(AtomicBool::new(false));
-        let shared = Arc::new(SessionShared::new(
-            id,
-            interface.clone(),
-            stop.clone(),
-            self.hopr_peers.clone(),
-        ));
-        // Open the candidate before disturbing the running session. Opening blocks
-        // until the capture thread reports back, so keep it off the command loop.
+        let shared = Arc::new(SessionShared::new(id, interface.clone(), self.hopr_peers.clone()));
+        // Open before replacing the running session so a failure leaves it untouched.
         let capture = {
             let session = shared.clone();
-            run_blocking(move || capture::start(candidate, session, stop))
+            tokio::task::spawn_blocking(move || capture::start(candidate, session))
                 .await
                 .map_err(|e| format!("Cannot start capture task: {e}"))??
         };
@@ -265,7 +235,7 @@ impl TrafficService {
         let tunnel_follower = spawn_tunnel_follower(shared.clone());
         self.current = Some(ActiveSession {
             shared,
-            capture: Some(capture),
+            capture,
             monitor,
             tunnel_follower,
         });
@@ -331,13 +301,6 @@ impl Drop for TrafficService {
     }
 }
 
-/// Runs a blocking capture operation on the blocking pool.
-async fn run_blocking<T: Send + 'static>(
-    operation: impl FnOnce() -> T + Send + 'static,
-) -> Result<T, tokio::task::JoinError> {
-    tokio::task::spawn_blocking(operation).await
-}
-
 fn spawn_monitor(session: Arc<SessionShared>) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -354,52 +317,64 @@ fn spawn_monitor(session: Arc<SessionShared>) -> JoinHandle<()> {
     })
 }
 
-/// Keeps a second capture on the VPN tunnel that owns the default route, and
-/// moves it when the VPN connects, disconnects or switches devices.
+/// Follows the VPN tunnel that owns the default route as it connects, disconnects or moves.
 fn spawn_tunnel_follower(session: Arc<SessionShared>) -> JoinHandle<()> {
     tokio::spawn(async move {
         // Keyed by the whole descriptor: a reconnect can keep the device name but change its address.
         let mut current: Option<(Interface, capture::Capture)> = None;
         // A device that refused capture is not retried until the tunnel changes.
         let mut refused: Option<Interface> = None;
-        while session.is_active() {
-            let wanted = run_blocking(capture::default_tunnel).await.ok().flatten();
+        let mut checks = tokio::time::interval(TUNNEL_CHECK_INTERVAL);
+        checks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            checks.tick().await;
+            if !session.is_active() {
+                break;
+            }
+            let wanted = tokio::task::spawn_blocking(capture::default_tunnel)
+                .await
+                .ok()
+                .flatten();
             let wanted_tunnel = wanted.as_ref().map(|candidate| candidate.descriptor.clone());
             let following = current
                 .as_ref()
                 .is_some_and(|(tunnel, capture)| Some(tunnel) == wanted_tunnel.as_ref() && capture.is_running());
-            if !following {
-                if let Some((tunnel, capture)) = current.take() {
-                    let _ = run_blocking(move || capture.stop()).await;
-                    tracing::info!(target: "traffic", session = session.id, tunnel = %tunnel.id, "tunnel capture stopped");
+            if following {
+                continue;
+            }
+
+            if let Some((tunnel, capture)) = current.take() {
+                let _ = tokio::task::spawn_blocking(move || drop(capture)).await;
+                tracing::info!(target: "traffic", session = session.id, tunnel = %tunnel.id, "tunnel capture stopped");
+            }
+            let Some(candidate) = wanted else {
+                refused = None;
+                continue;
+            };
+            if refused.as_ref() == Some(&candidate.descriptor) {
+                continue;
+            }
+            refused = None;
+
+            let tunnel = candidate.descriptor.clone();
+            let shared = session.clone();
+            match tokio::task::spawn_blocking(move || capture::start(candidate, shared)).await {
+                Ok(Ok(capture)) => {
+                    tracing::info!(target: "traffic", session = session.id, tunnel = %tunnel.id, "tunnel capture started");
+                    current = Some((tunnel, capture));
                 }
-                if refused != wanted_tunnel {
-                    refused = None;
+                Ok(Err(e)) => {
+                    tracing::warn!(target: "traffic", session = session.id, tunnel = %tunnel.id, error = %e, "cannot capture on tunnel");
+                    refused = Some(tunnel);
                 }
-                if let Some(candidate) = wanted.filter(|_| refused.is_none()) {
-                    let tunnel = candidate.descriptor.clone();
-                    let shared = session.clone();
-                    let stop = Arc::new(AtomicBool::new(false));
-                    match run_blocking(move || capture::start(candidate, shared, stop)).await {
-                        Ok(Ok(capture)) => {
-                            tracing::info!(target: "traffic", session = session.id, tunnel = %tunnel.id, "tunnel capture started");
-                            current = Some((tunnel, capture));
-                        }
-                        Ok(Err(e)) => {
-                            tracing::warn!(target: "traffic", session = session.id, tunnel = %tunnel.id, error = %e, "cannot capture on tunnel");
-                            refused = Some(tunnel);
-                        }
-                        Err(e) => {
-                            tracing::warn!(target: "traffic", session = session.id, tunnel = %tunnel.id, error = %e, "cannot start tunnel capture task");
-                            refused = Some(tunnel);
-                        }
-                    }
+                Err(e) => {
+                    tracing::warn!(target: "traffic", session = session.id, tunnel = %tunnel.id, error = %e, "cannot start tunnel capture task");
+                    refused = Some(tunnel);
                 }
             }
-            tokio::time::sleep(TUNNEL_CHECK_INTERVAL).await;
         }
         if let Some((_, capture)) = current {
-            let _ = run_blocking(move || capture.stop()).await;
+            let _ = tokio::task::spawn_blocking(move || drop(capture)).await;
         }
     })
 }
@@ -422,7 +397,6 @@ mod tests {
                 addresses: vec!["192.0.2.2".parse().expect("ip")],
                 is_default: true,
             },
-            Arc::new(AtomicBool::new(false)),
             hopr_peers,
         ))
     }
@@ -561,9 +535,7 @@ mod tests {
         assert_eq!(response.ended, None);
     }
 
-    /// Exercises the real capture path: discovery, socket capture, classification,
-    /// aggregation and batch publication. Needs capture privileges and a network
-    /// path, so it stays out of the default run.
+    /// Full capture path on a live interface.
     #[test]
     #[ignore = "opens a live capture; needs capture privileges and network traffic"]
     fn live_capture_publishes_batches() {
@@ -575,14 +547,8 @@ mod tests {
             .find(|candidate| candidate.descriptor.is_default)
             .expect("an egress interface");
         let interface = candidate.descriptor.clone();
-        let stop = Arc::new(AtomicBool::new(false));
-        let session = Arc::new(SessionShared::new(
-            1,
-            interface.clone(),
-            stop.clone(),
-            HoprPeers::default(),
-        ));
-        let capture = capture::start(candidate, session.clone(), stop).expect("capture starts");
+        let session = Arc::new(SessionShared::new(1, interface.clone(), HoprPeers::default()));
+        let capture = capture::start(candidate, session.clone()).expect("capture starts");
 
         let socket = UdpSocket::bind("0.0.0.0:0").expect("udp socket");
         for destination in ["1.1.1.1:53", "8.8.8.8:53", "9.9.9.9:53"] {
@@ -590,7 +556,7 @@ mod tests {
         }
         std::thread::sleep(Duration::from_millis(1500));
         let response = session.read(0);
-        capture.stop();
+        drop(capture);
 
         assert!(
             !response.batches.is_empty(),
@@ -611,8 +577,7 @@ mod tests {
         );
     }
 
-    /// Drives the command surface the socket dispatcher calls: list, start, read
-    /// and stop, including a second start replacing the first session.
+    /// List, start, read, restart-as-no-op and stop on a live interface.
     #[tokio::test]
     #[ignore = "opens a live capture; needs capture privileges"]
     async fn service_answers_the_traffic_commands() {
@@ -662,9 +627,7 @@ mod tests {
         service.shutdown();
     }
 
-    /// Starts a session on a public interface while a VPN owns the default route
-    /// and checks that the follower adds the tunnel: destinations show up as
-    /// tunnel deltas next to the wire deltas of the same session.
+    /// The follower adds tunnel deltas next to the wire deltas of the same session.
     #[tokio::test]
     #[ignore = "opens a live capture; needs capture privileges and a connected VPN"]
     async fn service_follows_the_vpn_tunnel() {
@@ -672,8 +635,7 @@ mod tests {
         use std::time::Duration;
 
         let mut service = TrafficService::new();
-        // While a VPN owns the default route no public interface is the default,
-        // so name the one the VPN's own traffic leaves through.
+        // With a VPN owning the default route no public interface is the default.
         let wire_name = std::env::var("GVPN_WIRE_INTERFACE").unwrap_or_else(|_| "en0".to_string());
         let wire = capture::discover()
             .into_iter()

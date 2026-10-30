@@ -1,8 +1,4 @@
-//! Turns captured frames into direction-tagged, IP-sized observations.
-//!
-//! Only the link-layer and IP headers are inspected. Payload bytes are never copied, decoded or
-//! retained: everything downstream of [`observe`] sees an address, a direction and
-//! a length.
+//! Turns frames into observations from link-layer and IP headers only; payload bytes are never read.
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -21,12 +17,10 @@ const IPV6_HEADER_LEN: usize = 40;
 /// Where a capture observes traffic relative to a VPN.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Side {
-    /// The public interface. Frames are Ethernet; the remote address is the
-    /// next hop, such as a VPN server or a HOPR peer.
+    /// Ethernet frames; the remote is the next hop, such as a VPN server or HOPR peer.
     #[default]
     Wire,
-    /// A VPN tunnel device. Frames are bare IP packets; the remote address is
-    /// the destination the host sends into the VPN.
+    /// Bare IP packets; the remote is the destination sent into the VPN.
     Tunnel,
 }
 
@@ -34,12 +28,9 @@ pub enum Side {
 pub struct Host {
     /// Addresses the interface reports as its own.
     pub addresses: HashSet<IpAddr>,
-    /// The interface's link-layer address. Decides direction when neither IP
-    /// endpoint is a reported address, as with CLAT46 translation on IPv6-only
-    /// networks or an IPv6 privacy address created after capture started.
+    /// Decides direction when neither IP endpoint is ours, e.g. CLAT46 or a new IPv6 privacy address.
     pub mac: Option<[u8; 6]>,
-    /// Networks the interface is attached to, as address and prefix length.
-    /// Endpoints inside them are LAN peers such as the router, not targets.
+    /// Endpoints inside these are LAN peers such as the router, not targets.
     pub networks: Vec<(IpAddr, u8)>,
     /// Decides how frames are laid out.
     pub side: Side,
@@ -55,8 +46,7 @@ pub struct Observation {
     pub length: u32,
 }
 
-/// Classifies one captured frame, or returns `None` when it is not IP traffic
-/// involving exactly one local endpoint.
+/// `None` unless the frame is IP traffic with exactly one local endpoint.
 pub fn observe(frame: &[u8], host: &Host) -> Option<Observation> {
     let ip = match host.side {
         Side::Wire => ip_layer(frame)?,
@@ -84,7 +74,8 @@ pub fn observe(frame: &[u8], host: &Host) -> Option<Observation> {
     } else {
         (source, Direction::Downstream)
     };
-    if is_unusable_target(target) || host.networks.iter().any(|network| within(*network, target)) {
+    let is_lan_peer = host.networks.iter().any(|network| within(*network, target));
+    if is_unusable_target(target) || is_lan_peer {
         return None;
     }
 
@@ -95,8 +86,7 @@ pub fn observe(frame: &[u8], host: &Host) -> Option<Observation> {
     })
 }
 
-/// Direction from the Ethernet addresses: `Some(true)` when the host sent the
-/// frame, `Some(false)` when it was addressed to the host.
+/// `Some(true)` when the host sent the frame, `Some(false)` when it was addressed to the host.
 fn sent_by_host(frame: &[u8], mac: [u8; 6]) -> Option<bool> {
     let destination = frame.get(0..6)?;
     let source = frame.get(6..12)?;
@@ -158,26 +148,21 @@ fn be_u16(bytes: &[u8]) -> Option<u16> {
     Some(u16::from_be_bytes(bytes.try_into().ok()?))
 }
 
-/// Only public endpoints are targets: private, link-local and shared address
-/// space never leaves the local network or the provider's.
+/// Private, link-local and shared address space never leaves the local or provider network.
 fn is_unusable_target(target: IpAddr) -> bool {
-    match target {
+    let is_special = target.is_loopback() || target.is_multicast() || target.is_unspecified();
+    let is_local_scope = match target {
         IpAddr::V4(v4) => {
-            let shared = v4.octets()[0] == 100 && v4.octets()[1] & 0xc0 == 64;
-            v4.is_loopback()
-                || v4.is_multicast()
-                || v4.is_unspecified()
-                || v4 == Ipv4Addr::BROADCAST
-                || v4.is_private()
-                || v4.is_link_local()
-                || shared
+            let is_shared = v4.octets()[0] == 100 && v4.octets()[1] & 0xc0 == 64;
+            v4 == Ipv4Addr::BROADCAST || v4.is_private() || v4.is_link_local() || is_shared
         }
         IpAddr::V6(v6) => {
-            let link_local = v6.segments()[0] & 0xffc0 == 0xfe80;
-            let unique_local = v6.segments()[0] & 0xfe00 == 0xfc00;
-            v6.is_loopback() || v6.is_multicast() || v6.is_unspecified() || link_local || unique_local
+            let is_link_local = v6.segments()[0] & 0xffc0 == 0xfe80;
+            let is_unique_local = v6.segments()[0] & 0xfe00 == 0xfc00;
+            is_link_local || is_unique_local
         }
-    }
+    };
+    is_special || is_local_scope
 }
 
 /// Whether `address` lies inside the network given as address and prefix length.

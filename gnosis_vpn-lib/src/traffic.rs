@@ -1,28 +1,10 @@
-//! Wire contract for the opt-in public-interface traffic capture.
-//!
-//! The root daemon captures IP traffic on one explicitly selected interface and
-//! publishes byte observations per remote endpoint, direction and second.
-//! Aggregation into rolling totals lives in the consumer, while packet access
-//! stays in the daemon so that neither payloads nor per-packet events ever leave
-//! the privileged process. Presentation state (history retention, window
-//! projection) belongs to the client application, not here.
-//!
-//! Capture only describes what is observable on the wire: how many bytes the
-//! host sent to or received from each remote address in a second. The daemon
-//! makes no claim about which process sent a packet or whether the traffic
-//! belongs to the mixnet. It does say whether a remote address is one that HOPR
-//! nodes announced on chain, which describes the endpoint, not the traffic.
-//!
-//! While a VPN tunnel owns the default route, the daemon also captures on that
-//! tunnel device. There the remote address is the destination the host sends
-//! into the VPN, before encryption; on the public interface it is the next hop.
+//! Wire contract for public-interface traffic capture; packets stay in the root daemon, only per-second byte counts leave it.
 
 use serde::{Deserialize, Serialize};
 
 use std::net::IpAddr;
 
-/// Bumped on any incompatible change to the types below. Consumers must refuse
-/// to interpret a batch carrying an unknown version.
+/// Bumped on any incompatible change; consumers refuse batches with an unknown version.
 pub const PROTOCOL_VERSION: u16 = 5;
 
 /// One interface the daemon is willing to capture on.
@@ -47,8 +29,7 @@ pub enum Direction {
     Downstream,
 }
 
-/// Bytes observed for one remote endpoint and direction in one second. Several
-/// deltas may cover the same second and endpoint; consumers add them.
+/// Bytes for one endpoint, direction and second; consumers sum deltas that share those keys.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delta {
     /// Whole seconds since the capture session started.
@@ -58,12 +39,9 @@ pub struct Delta {
     pub direction: Direction,
     /// Sum of complete IP-layer lengths, including the IP header.
     pub bytes: u64,
-    /// Whether `target` is an address announced by a HOPR node, per the most
-    /// recent peer snapshot. Always false while the HOPR node is not running,
-    /// and for destinations seen inside a tunnel.
+    /// `target` was announced by a HOPR node; never set for tunnel destinations or without a running node.
     pub hopr_peer: bool,
-    /// Seen on the VPN tunnel device rather than the public interface, so
-    /// `target` is a destination inside the VPN, not the next hop.
+    /// Seen inside the VPN tunnel, so `target` is the destination rather than the next hop.
     pub tunnel: bool,
 }
 
@@ -74,8 +52,7 @@ pub struct Batch {
     pub session_id: u64,
     /// Consecutive per session, starting at 0.
     pub sequence: u64,
-    /// Whole milliseconds since the capture session started. Advances even when
-    /// the session carried no traffic, so consumers can age their view.
+    /// Advances on idle batches too, so consumers can age their view.
     pub elapsed_ms: u64,
     pub deltas: Vec<Delta>,
     /// Batches the daemon discarded because the consumer fell behind.
@@ -107,8 +84,7 @@ pub struct ReadResponse {
     pub batches: Vec<Batch>,
     /// Cursor to send with the next read.
     pub cursor: u64,
-    /// The requested cursor is older than the retained window; batches were lost
-    /// and the consumer must treat the gap as missing data rather than as zero.
+    /// The cursor fell out of the retained window; treat the gap as missing data, not zero.
     pub gap: bool,
     /// Whether capture is still running.
     pub active: bool,

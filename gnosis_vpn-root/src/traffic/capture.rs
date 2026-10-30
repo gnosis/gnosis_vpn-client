@@ -1,9 +1,4 @@
-//! Interface discovery and the capture thread.
-//!
-//! The thread is deliberately dumb: it parses frames into observations, records
-//! them in per-second aggregates and hands finished batches to the session. It
-//! never touches daemon state, never blocks on a consumer and never keeps a
-//! packet.
+//! Interface discovery and the capture thread, which never touches daemon state or keeps a packet.
 
 use std::net::{IpAddr, UdpSocket};
 use std::sync::Arc;
@@ -24,8 +19,7 @@ const HEARTBEAT_INTERVAL_MS: u64 = 1000;
 /// Bounds how long a blocked read can delay noticing a stop request.
 const READ_TIMEOUT: Duration = Duration::from_millis(50);
 const START_TIMEOUT: Duration = Duration::from_secs(3);
-/// Kernel capture buffer. The 4 KiB default holds two full frames and loses a
-/// third of a fast download; 512 KiB is the macOS default ceiling for BPF.
+/// The 4 KiB default loses a third of a fast download; 512 KiB is the macOS BPF ceiling.
 const READ_BUFFER_SIZE: usize = 512 * 1024;
 
 /// A capture-capable interface plus the platform handle needed to open it.
@@ -35,11 +29,7 @@ pub struct Candidate {
     side: Side,
 }
 
-/// Lists interfaces that carry public traffic, in stable name order.
-///
-/// Loopback and tunnel interfaces are excluded: a tunnel is the VPN's own device
-/// (or another VPN's), not the interface this view describes. Interfaces without
-/// a routable address are excluded because direction cannot be inferred on them.
+/// Public interfaces with a routable address; tunnels are excluded since they are not the public path.
 pub fn discover() -> Vec<Candidate> {
     let default_ip = egress_ip();
     let mut candidates: Vec<Candidate> = pnet_datalink::interfaces()
@@ -72,10 +62,7 @@ pub fn discover() -> Vec<Candidate> {
     candidates
 }
 
-/// The VPN tunnel device that currently owns the default route, if any.
-///
-/// Captured next to the public interface, it shows where traffic goes before the
-/// VPN encrypts it. Works for any VPN whose device carries bare IP packets.
+/// The VPN tunnel device owning the default route; shows traffic before the VPN encrypts it.
 pub fn default_tunnel() -> Option<Candidate> {
     let egress = egress_ip()?;
     pnet_datalink::interfaces().into_iter().find_map(|link| {
@@ -101,14 +88,11 @@ pub fn default_tunnel() -> Option<Candidate> {
     })
 }
 
-/// Whether the device named `name` with `addresses` is a VPN tunnel holding the
-/// host's egress address.
 fn carries_egress(name: &str, addresses: &[IpAddr], egress: IpAddr) -> bool {
     is_vpn_tunnel_name(name) && addresses.contains(&egress)
 }
 
-/// Tunnel devices that hand over bare IP packets. Other tunnel kinds (TAP,
-/// IPsec, PPP) frame packets differently and are not followed.
+/// Only devices that carry bare IP packets; TAP, IPsec and PPP frame them differently.
 fn is_vpn_tunnel_name(name: &str) -> bool {
     const VPN_TUNNEL_PREFIXES: [&str; 3] = ["utun", "tun", "wg"];
     VPN_TUNNEL_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
@@ -121,22 +105,15 @@ fn is_tunnel_name(name: &str) -> bool {
 }
 
 fn is_routable_local(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            !v4.is_loopback() && !v4.is_multicast() && !v4.is_unspecified() && !v4.is_link_local() && !v4.is_broadcast()
-        }
-        IpAddr::V6(v6) => {
-            !v6.is_loopback() && !v6.is_multicast() && !v6.is_unspecified() && !(v6.segments()[0] & 0xffc0 == 0xfe80)
-        }
-    }
+    let is_special = ip.is_loopback() || ip.is_multicast() || ip.is_unspecified();
+    let is_link_scoped = match ip {
+        IpAddr::V4(v4) => v4.is_link_local() || v4.is_broadcast(),
+        IpAddr::V6(v6) => v6.segments()[0] & 0xffc0 == 0xfe80,
+    };
+    !is_special && !is_link_scoped
 }
 
-/// The address the host would use for internet traffic, if any.
-///
-/// Connecting a datagram socket sends nothing; it only asks the routing table
-/// which local address would be used. While a VPN tunnel owns the default route
-/// this resolves to the tunnel, which is not a candidate, so no interface is
-/// marked as the default in that case.
+/// Connecting a UDP socket sends nothing; it only asks the routing table for the egress address.
 fn egress_ip() -> Option<IpAddr> {
     for target in ["1.1.1.1:443", "[2606:4700:4700::1111]:443"] {
         let bind = if target.starts_with('[') { "[::]:0" } else { "0.0.0.0:0" };
@@ -156,25 +133,16 @@ fn egress_ip() -> Option<IpAddr> {
     None
 }
 
-/// A running capture. Dropping it stops the thread.
+/// Dropping it stops and joins the thread, so no callback outlives the session.
 pub struct Capture {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Capture {
-    /// Whether the capture thread is still reading. A tunnel capture ends on its
-    /// own when the device goes away.
+    /// A tunnel capture ends on its own when the device goes away.
     pub fn is_running(&self) -> bool {
         self.thread.as_ref().is_some_and(|thread| !thread.is_finished())
-    }
-
-    /// Stops the thread and waits for it, so no callback outlives the session.
-    pub fn stop(mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
     }
 }
 
@@ -187,11 +155,10 @@ impl Drop for Capture {
     }
 }
 
-/// Opens a capture on `candidate` and returns once packets can arrive.
-///
-/// A failure here leaves whatever capture was running untouched.
-pub fn start(candidate: Candidate, session: Arc<SessionShared>, stop: Arc<AtomicBool>) -> Result<Capture, String> {
+/// Returns once packets can arrive; a failure leaves any running capture untouched.
+pub fn start(candidate: Candidate, session: Arc<SessionShared>) -> Result<Capture, String> {
     let (started_tx, started_rx) = std::sync::mpsc::channel::<Result<(), String>>();
+    let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = stop.clone();
     let host = Host {
         addresses: candidate.descriptor.addresses.iter().copied().collect(),
@@ -349,9 +316,7 @@ mod tests {
         ));
     }
 
-    /// Opens the tunnel capture the session follows and checks that it sees the
-    /// real destination of a packet sent into the VPN. Needs BPF access and a
-    /// connected VPN that owns the default route.
+    /// The tunnel capture sees the real destination of a packet sent into the VPN.
     #[test]
     #[ignore = "opens a live capture; needs capture privileges and a connected VPN"]
     fn live_tunnel_capture_sees_destinations() {
@@ -359,7 +324,6 @@ mod tests {
         use gnosis_vpn_lib::traffic::Interface;
 
         let candidate = default_tunnel().expect("a VPN tunnel owning the default route");
-        let stop = Arc::new(AtomicBool::new(false));
         let session = Arc::new(SessionShared::new(
             1,
             Interface {
@@ -368,16 +332,15 @@ mod tests {
                 addresses: Vec::new(),
                 is_default: false,
             },
-            stop.clone(),
             HoprPeers::default(),
         ));
-        let capture = start(candidate, session.clone(), stop).expect("capture starts");
+        let capture = start(candidate, session.clone()).expect("capture starts");
 
         let socket = UdpSocket::bind("0.0.0.0:0").expect("udp socket");
         let _ = socket.send_to(&[0u8; 64], "1.1.1.1:9");
         std::thread::sleep(Duration::from_millis(500));
         let response = session.read(0);
-        capture.stop();
+        drop(capture);
 
         let destination: IpAddr = "1.1.1.1".parse().expect("ip");
         let deltas: Vec<_> = response.batches.iter().flat_map(|batch| batch.deltas.clone()).collect();
