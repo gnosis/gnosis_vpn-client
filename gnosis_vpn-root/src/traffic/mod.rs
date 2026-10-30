@@ -27,9 +27,8 @@ use gnosis_vpn_lib::traffic::{
 };
 use tokio::task::JoinHandle;
 
-/// Finished batches kept for a consumer that has not read them yet. At the
-/// daemon's flush cadence this covers roughly two seconds.
-const BATCH_CAPACITY: usize = 20;
+/// About two seconds of batches from the wire and tunnel threads, which push into one log.
+const BATCH_CAPACITY: usize = 40;
 /// A consumer that stops reading ends the session, so a crashed viewer cannot
 /// leave a capture running.
 const LEASE: Duration = Duration::from_millis(5000);
@@ -359,39 +358,40 @@ fn spawn_monitor(session: Arc<SessionShared>) -> JoinHandle<()> {
 /// moves it when the VPN connects, disconnects or switches devices.
 fn spawn_tunnel_follower(session: Arc<SessionShared>) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut current: Option<(String, capture::Capture)> = None;
+        // Keyed by the whole descriptor: a reconnect can keep the device name but change its address.
+        let mut current: Option<(Interface, capture::Capture)> = None;
         // A device that refused capture is not retried until the tunnel changes.
-        let mut refused: Option<String> = None;
+        let mut refused: Option<Interface> = None;
         while session.is_active() {
             let wanted = run_blocking(capture::default_tunnel).await.ok().flatten();
-            let wanted_id = wanted.as_ref().map(|candidate| candidate.descriptor.id.clone());
+            let wanted_tunnel = wanted.as_ref().map(|candidate| candidate.descriptor.clone());
             let following = current
                 .as_ref()
-                .is_some_and(|(id, capture)| Some(id) == wanted_id.as_ref() && capture.is_running());
+                .is_some_and(|(tunnel, capture)| Some(tunnel) == wanted_tunnel.as_ref() && capture.is_running());
             if !following {
-                if let Some((id, capture)) = current.take() {
+                if let Some((tunnel, capture)) = current.take() {
                     let _ = run_blocking(move || capture.stop()).await;
-                    tracing::info!(target: "traffic", session = session.id, tunnel = %id, "tunnel capture stopped");
+                    tracing::info!(target: "traffic", session = session.id, tunnel = %tunnel.id, "tunnel capture stopped");
                 }
-                if refused != wanted_id {
+                if refused != wanted_tunnel {
                     refused = None;
                 }
                 if let Some(candidate) = wanted.filter(|_| refused.is_none()) {
-                    let id = candidate.descriptor.id.clone();
+                    let tunnel = candidate.descriptor.clone();
                     let shared = session.clone();
                     let stop = Arc::new(AtomicBool::new(false));
                     match run_blocking(move || capture::start(candidate, shared, stop)).await {
                         Ok(Ok(capture)) => {
-                            tracing::info!(target: "traffic", session = session.id, tunnel = %id, "tunnel capture started");
-                            current = Some((id, capture));
+                            tracing::info!(target: "traffic", session = session.id, tunnel = %tunnel.id, "tunnel capture started");
+                            current = Some((tunnel, capture));
                         }
                         Ok(Err(e)) => {
-                            tracing::warn!(target: "traffic", session = session.id, tunnel = %id, error = %e, "cannot capture on tunnel");
-                            refused = Some(id);
+                            tracing::warn!(target: "traffic", session = session.id, tunnel = %tunnel.id, error = %e, "cannot capture on tunnel");
+                            refused = Some(tunnel);
                         }
                         Err(e) => {
-                            tracing::warn!(target: "traffic", session = session.id, tunnel = %id, error = %e, "cannot start tunnel capture task");
-                            refused = Some(id);
+                            tracing::warn!(target: "traffic", session = session.id, tunnel = %tunnel.id, error = %e, "cannot start tunnel capture task");
+                            refused = Some(tunnel);
                         }
                     }
                 }
@@ -639,9 +639,9 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         let read = service.read(ReadRequest {
-                session_id: started.session_id,
-                cursor: 0,
-            });
+            session_id: started.session_id,
+            cursor: 0,
+        });
         assert!(read.active);
         assert!(!read.gap);
         assert!(read.cursor > 0);
@@ -656,8 +656,8 @@ mod tests {
         assert_eq!(again.session_id, started.session_id);
 
         let stopped = service.stop(StopRequest {
-                session_id: started.session_id,
-            });
+            session_id: started.session_id,
+        });
         assert!(stopped.stopped);
         service.shutdown();
     }
@@ -694,9 +694,9 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         let read = service.read(ReadRequest {
-                session_id: started.session_id,
-                cursor: 0,
-            });
+            session_id: started.session_id,
+            cursor: 0,
+        });
         service.shutdown();
 
         let deltas: Vec<traffic::Delta> = read.batches.iter().flat_map(|batch| batch.deltas.clone()).collect();

@@ -1694,6 +1694,8 @@ impl DaemonState {
 
     async fn cleanup_worker_resources(&mut self) {
         self.probing = false;
+        // Without a node no address is an announced peer.
+        self.traffic.update_hopr_peers(&[]);
         self.ping_tasks.shutdown().await;
         self.teardown_any_routing().await;
         let worker_gone = self.worker_gone_response();
