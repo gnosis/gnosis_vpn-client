@@ -142,6 +142,8 @@ pub(super) struct BlokliConfig {
     pub(super) sync_tolerance: Option<usize>,
     #[serde(default, with = "humantime_serde::option")]
     pub(super) request_timeout: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) resolve_timeout: Option<Duration>,
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -398,10 +400,15 @@ impl From<Option<BlokliConfig>> for HoprBlokliConfig {
             .as_ref()
             .and_then(|b| b.request_timeout)
             .unwrap_or_else(|| HoprBlokliConfig::default().request_timeout);
+        let resolve_timeout = value
+            .as_ref()
+            .and_then(|b| b.resolve_timeout)
+            .unwrap_or_else(|| HoprBlokliConfig::default().resolve_timeout);
         HoprBlokliConfig {
             connection_sync_timeout,
             sync_tolerance,
             request_timeout,
+            resolve_timeout,
         }
     }
 }
@@ -439,7 +446,11 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "blokli" {
             if let Some(blokli) = value.as_table() {
                 for (k, _) in blokli.iter() {
-                    if k == "connection_sync_timeout" || k == "sync_tolerance" || k == "request_timeout" {
+                    let is_known = k == "connection_sync_timeout"
+                        || k == "sync_tolerance"
+                        || k == "request_timeout"
+                        || k == "resolve_timeout";
+                    if is_known {
                         continue;
                     }
                     wrong.push(format!("blokli.{k}"));
@@ -849,6 +860,20 @@ request_timeout = "45s"
     }
 
     #[test]
+    fn absent_blokli_resolve_timeout_falls_back_to_the_default() {
+        let cfg = parse("version = 6\n\n[blokli]\nsync_tolerance = 50\n");
+        let blokli: HoprBlokliConfig = cfg.blokli.into();
+        assert_eq!(blokli.resolve_timeout, HoprBlokliConfig::default().resolve_timeout);
+    }
+
+    #[test]
+    fn configured_blokli_resolve_timeout_wins_over_the_default() {
+        let cfg = parse("version = 6\n\n[blokli]\nresolve_timeout = \"7s\"\n");
+        let blokli: HoprBlokliConfig = cfg.blokli.into();
+        assert_eq!(blokli.resolve_timeout, Duration::from_secs(7));
+    }
+
+    #[test]
     fn blokli_request_timeout_is_a_supported_key() {
         let table = r#####"
 version = 6
@@ -857,6 +882,7 @@ version = 6
 connection_sync_timeout = "30s"
 sync_tolerance = 50
 request_timeout = "10s"
+resolve_timeout = "3s"
 nonsense = 1
 "#####
             .parse::<toml::Table>()

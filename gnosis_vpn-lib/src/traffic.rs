@@ -211,10 +211,6 @@ mod tests {
             )))
             .expect("serialize")
         );
-        assert_eq!(
-            r#""TrafficDenied""#,
-            serde_json::to_string(&Response::TrafficDenied).expect("serialize")
-        );
     }
 
     #[test]

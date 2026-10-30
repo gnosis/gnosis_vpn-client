@@ -21,15 +21,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use gnosis_vpn_lib::command::{Command, Response};
 use gnosis_vpn_lib::traffic::{
     self, Batch, Interface, PROTOCOL_VERSION, ReadRequest, ReadResponse, StartRequest, StartResponse, StopRequest,
     StopResponse,
 };
 use tokio::task::JoinHandle;
 
-/// Group whose members may drive capture; the worker's group, per the installer.
-const CLIENT_GROUP: &str = gnosis_vpn_lib::worker::GROUPNAME;
 /// Finished batches kept for a consumer that has not read them yet. At the
 /// daemon's flush cadence this covers roughly two seconds.
 const BATCH_CAPACITY: usize = 20;
@@ -191,35 +188,6 @@ impl ActiveSession {
     }
 }
 
-/// Whether a socket peer may control traffic capture.
-///
-/// Capture is a privileged monitoring capability, so it is limited to root, the
-/// worker user, and members of the client's group. Desktop users are granted that
-/// group at install time, which is what lets the app drive capture without
-/// opening the API to every local account.
-pub fn peer_may_capture(uid: u32, gid: u32, worker_uid: u32) -> bool {
-    if uid == 0 || uid == worker_uid {
-        return true;
-    }
-    let in_client_group = |group: &uzers::Group| group.name().to_string_lossy() == CLIENT_GROUP;
-    if uzers::get_group_by_gid(gid).is_some_and(|group| in_client_group(&group)) {
-        return true;
-    }
-    let Some(user) = uzers::get_user_by_uid(uid) else {
-        return false;
-    };
-    uzers::get_user_groups(user.name(), user.primary_group_id())
-        .is_some_and(|groups| groups.iter().any(in_client_group))
-}
-
-/// Whether `cmd` belongs to the traffic capture API.
-pub fn is_traffic_command(cmd: &Command) -> bool {
-    matches!(
-        cmd,
-        Command::TrafficInterfaces | Command::TrafficStart(_) | Command::TrafficRead(_) | Command::TrafficStop(_)
-    )
-}
-
 /// Owns the current capture session.
 pub struct TrafficService {
     current: Option<ActiveSession>,
@@ -249,25 +217,14 @@ impl TrafficService {
         self.hopr_peers.replace(&ips);
     }
 
-    /// Answers traffic commands; returns `None` for anything else.
-    pub async fn handle(&mut self, cmd: Command) -> Option<Response> {
-        match cmd {
-            Command::TrafficInterfaces => Some(Response::TrafficInterfaces(self.interfaces())),
-            Command::TrafficStart(request) => Some(Response::TrafficStart(self.start(request).await)),
-            Command::TrafficRead(request) => Some(Response::TrafficRead(self.read(request))),
-            Command::TrafficStop(request) => Some(Response::TrafficStop(self.stop(request))),
-            _ => None,
-        }
-    }
-
-    fn interfaces(&self) -> Vec<Interface> {
+    pub fn interfaces(&self) -> Vec<Interface> {
         capture::discover()
             .into_iter()
             .map(|candidate| candidate.descriptor)
             .collect()
     }
 
-    async fn start(&mut self, request: StartRequest) -> Result<StartResponse, String> {
+    pub async fn start(&mut self, request: StartRequest) -> Result<StartResponse, String> {
         if let Some(current) = &self.current
             && current.shared.interface.id == request.interface_id
             && current.shared.is_active()
@@ -321,7 +278,7 @@ impl TrafficService {
         })
     }
 
-    fn read(&mut self, request: ReadRequest) -> ReadResponse {
+    pub fn read(&mut self, request: ReadRequest) -> ReadResponse {
         let Some(current) = &self.current else {
             return ReadResponse {
                 session_id: request.session_id,
@@ -346,7 +303,7 @@ impl TrafficService {
         current.shared.read(request.cursor)
     }
 
-    fn stop(&mut self, request: StopRequest) -> StopResponse {
+    pub fn stop(&mut self, request: StopRequest) -> StopResponse {
         let matches = self
             .current
             .as_ref()
@@ -663,66 +620,44 @@ mod tests {
         use std::time::Duration;
 
         let mut service = TrafficService::new();
-        let interfaces = match service.handle(Command::TrafficInterfaces).await {
-            Some(Response::TrafficInterfaces(interfaces)) => interfaces,
-            other => panic!("unexpected interfaces response: {other:?}"),
-        };
-        let interface = interfaces
-            .iter()
+        let interface = service
+            .interfaces()
+            .into_iter()
             .find(|interface| interface.is_default)
-            .expect("an egress interface")
-            .clone();
+            .expect("an egress interface");
 
-        let started = match service
-            .handle(Command::TrafficStart(StartRequest {
+        let started = service
+            .start(StartRequest {
                 interface_id: interface.id.clone(),
-            }))
+            })
             .await
-        {
-            Some(Response::TrafficStart(Ok(started))) => started,
-            other => panic!("unexpected start response: {other:?}"),
-        };
+            .expect("start response");
         assert_eq!(started.protocol, PROTOCOL_VERSION);
 
         let socket = UdpSocket::bind("0.0.0.0:0").expect("udp socket");
         let _ = socket.send_to(&[0u8; 64], "1.1.1.1:53");
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        let read = match service
-            .handle(Command::TrafficRead(ReadRequest {
+        let read = service.read(ReadRequest {
                 session_id: started.session_id,
                 cursor: 0,
-            }))
-            .await
-        {
-            Some(Response::TrafficRead(read)) => read,
-            other => panic!("unexpected read response: {other:?}"),
-        };
+            });
         assert!(read.active);
         assert!(!read.gap);
         assert!(read.cursor > 0);
 
         // Starting the same interface again is a no-op, keeping the session.
-        let again = match service
-            .handle(Command::TrafficStart(StartRequest {
+        let again = service
+            .start(StartRequest {
                 interface_id: interface.id.clone(),
-            }))
+            })
             .await
-        {
-            Some(Response::TrafficStart(Ok(again))) => again,
-            other => panic!("unexpected restart response: {other:?}"),
-        };
+            .expect("restart response");
         assert_eq!(again.session_id, started.session_id);
 
-        let stopped = match service
-            .handle(Command::TrafficStop(StopRequest {
+        let stopped = service.stop(StopRequest {
                 session_id: started.session_id,
-            }))
-            .await
-        {
-            Some(Response::TrafficStop(stopped)) => stopped,
-            other => panic!("unexpected stop response: {other:?}"),
-        };
+            });
         assert!(stopped.stopped);
         service.shutdown();
     }
@@ -745,15 +680,12 @@ mod tests {
             .find(|candidate| candidate.descriptor.id == wire_name)
             .expect("the public interface")
             .descriptor;
-        let started = match service
-            .handle(Command::TrafficStart(StartRequest {
+        let started = service
+            .start(StartRequest {
                 interface_id: wire.id.clone(),
-            }))
+            })
             .await
-        {
-            Some(Response::TrafficStart(Ok(started))) => started,
-            other => panic!("unexpected start response: {other:?}"),
-        };
+            .expect("start response");
         // The follower checks for a tunnel as soon as the session starts.
         tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -761,16 +693,10 @@ mod tests {
         let _ = socket.send_to(&[0u8; 64], "1.1.1.1:9");
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        let read = match service
-            .handle(Command::TrafficRead(ReadRequest {
+        let read = service.read(ReadRequest {
                 session_id: started.session_id,
                 cursor: 0,
-            }))
-            .await
-        {
-            Some(Response::TrafficRead(read)) => read,
-            other => panic!("unexpected read response: {other:?}"),
-        };
+            });
         service.shutdown();
 
         let deltas: Vec<traffic::Delta> = read.batches.iter().flat_map(|batch| batch.deltas.clone()).collect();
@@ -783,13 +709,5 @@ mod tests {
             deltas.iter().any(|delta| !delta.tunnel),
             "expected wire traffic to the VPN server in {deltas:?}"
         );
-    }
-
-    #[test]
-    fn capture_control_is_limited_to_root_the_worker_and_the_client_group() {
-        assert!(peer_may_capture(0, 0, 501));
-        assert!(peer_may_capture(501, 20, 501));
-        // A uid without an account is never authorized.
-        assert!(!peer_may_capture(4_294_967_294, 4_294_967_294, 501));
     }
 }

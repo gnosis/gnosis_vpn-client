@@ -23,12 +23,12 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Stdio};
 use std::time::Duration;
 
-use gnosis_vpn_lib::command::{self, Command as LibCommand, Response, WorkerCommand};
+use gnosis_vpn_lib::command::{self, Command as LibCommand, CommandRoute, Response, RootCommand, WorkerCommand};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
-use gnosis_vpn_lib::worker_params::WorkerParams;
-use gnosis_vpn_lib::{dirs, hopr, logging, ping, remote_data, socket, worker};
+use gnosis_vpn_lib::worker::{self, WorkerOwner};
+use gnosis_vpn_lib::{dirs, hopr, logging, ping, remote_data, socket};
 
 mod cli;
 mod device_monitor;
@@ -44,14 +44,7 @@ mod traffic;
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub const ENV_VAR_PID_FILE: &str = "GNOSISVPN_PID_FILE";
-const DAEMON_LOCK_PATH: &str = "/var/run/gnosisvpn/daemon.lock";
-/// Usable bytes of `sockaddr_un::sun_path`: 104 on macOS, 108 on Linux, minus
-/// the terminator. Binding fails with an opaque OS error above this.
-const MAX_SOCKET_PATH_LEN: usize = 103;
-
-fn socket_path_fits(socket_path: &Path) -> bool {
-    socket_path.as_os_str().len() <= MAX_SOCKET_PATH_LEN
-}
+const DAEMON_LOCK_FILE: &str = "daemon.lock";
 
 fn try_acquire_daemon_lock_at(path: &Path) -> std::io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -71,11 +64,24 @@ fn try_acquire_daemon_lock_at(path: &Path) -> std::io::Result<File> {
 }
 
 struct DaemonState {
-    worker_user: worker::Worker,
+    cli: cli::Cli,
+    worker_binary: PathBuf,
+    /// Whose worker runs or is still shutting down; outlives `worker_child` until forgotten.
+    worker_owner: Option<WorkerOwner>,
+    /// Whose killswitch is armed; outlives a crashed owner so no other user can lift it.
+    killswitch_holder: Option<u32>,
+    /// The CLI's URL or edgli's default, so every lookup asks for the same host.
+    blokli_url: url::Url,
+    /// Resolved at startup and again before every first arm; frozen while the killswitch blocks DNS.
+    blokli_ip: Ipv4Addr,
+    /// Mirrors the routing actor's policy: a lookup is only possible while this is false.
+    killswitch_armed: bool,
+    /// The next spawn follows a Blokli move, so its first arm trusts the address just resolved.
+    blokli_just_resolved: bool,
+    /// Blokli's `chainInfo.network`; keys every user's identity directory.
+    network: String,
     config: Config,
     config_path: PathBuf,
-    log_file: Option<PathBuf>,
-    worker_params: WorkerParams,
     reload_handle: Option<LogReloadHandle>,
     shutdown_ongoing: Shutdown,
     // keep track of the current target for restore/restart/reload logic
@@ -117,8 +123,8 @@ enum SignalMessage {
 struct SocketCmd {
     cmd: LibCommand,
     resp: oneshot::Sender<Response>,
-    /// The peer passed the credential check for privileged capture commands.
-    traffic_authorized: bool,
+    /// Kernel-reported uid of the socket peer; the ownership gate trusts nothing else.
+    peer_uid: u32,
 }
 
 struct WorkerChild {
@@ -135,6 +141,12 @@ struct WorkerChild {
     /// (see gnosis_vpn-root/tests/tun_fd_pass.rs). There is no consumption ack to
     /// close on, so it is held until the worker exits.
     _child_tun_socket: UnixStream,
+    /// SIGKILLs the worker; its exit is still reported through the exit channel.
+    kill: CancellationToken,
+    /// edgli's Blokli DNS override; fixed for this worker's lifetime.
+    blokli_ip: Ipv4Addr,
+    /// Skips this worker's first lookup so flapping DNS cannot loop restarts.
+    blokli_just_resolved: bool,
 }
 
 #[derive(Debug)]
@@ -203,14 +215,12 @@ async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMes
 async fn incoming_on_root_socket(
     stream: TokioUnixStream,
     socket_cmd_sender: mpsc::Sender<SocketCmd>,
-    worker_uid: u32,
 ) -> Option<JoinHandle<()>> {
-    // Peer credentials come from the kernel, never from the request payload.
-    let traffic_authorized = match stream.peer_cred() {
-        Ok(cred) => traffic::peer_may_capture(cred.uid(), cred.gid(), worker_uid),
-        Err(e) => {
-            tracing::warn!(error = %e, "cannot read socket peer credentials");
-            false
+    let peer_uid = match stream.peer_cred() {
+        Ok(cred) => cred.uid(),
+        Err(err) => {
+            tracing::error!(error = ?err, "failed to read socket peer credentials - dropping connection");
+            return None;
         }
     };
     let (socket_reader_half, socket_writer_half) = stream.into_split();
@@ -226,7 +236,7 @@ async fn incoming_on_root_socket(
                     let socket_cmd = SocketCmd {
                         cmd,
                         resp: resp_sender,
-                        traffic_authorized,
+                        peer_uid,
                     };
                     if let Err(err) = socket_cmd_sender.send(socket_cmd).await {
                         tracing::error!(error = ?err, "failed to send socket command to main loop");
@@ -265,19 +275,7 @@ async fn incoming_on_root_socket(
 
 async fn socket_listener(
     socket_path: &Path,
-    worker_uid: u32,
 ) -> Result<(CancellationToken, mpsc::Receiver<SocketCmd>), exitcode::ExitCode> {
-    // Checked before binding so a too-deep path reports itself instead of a raw OS error.
-    if !socket_path_fits(socket_path) {
-        tracing::error!(
-            path = %socket_path.display(),
-            len = socket_path.as_os_str().len(),
-            limit = MAX_SOCKET_PATH_LEN,
-            "socket path is too long for a Unix socket - use a shorter --socket-path or state directory"
-        );
-        return Err(exitcode::USAGE);
-    }
-
     // The daemon lock guarantees no other instance is running, so a leftover
     // socket file is always stale — remove it without pinging.
     match socket_path.try_exists() {
@@ -324,9 +322,7 @@ async fn socket_listener(
             tokio::select! {
                 Ok((stream, _addr)) = listener.accept() => {
                     ongoing.spawn(async move {
-                        if let Some(handle) =
-                            incoming_on_root_socket(stream, cloned_sender, worker_uid).await
-                        {
+                        if let Some(handle) = incoming_on_root_socket(stream, cloned_sender).await {
                             handle.await.ok();
                         }
                     });
@@ -490,37 +486,31 @@ async fn keep_alive_timer(
 }
 
 async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
-    // ensure worker user exists
-    let input = worker::Input::new(
-        args.worker_user.clone(),
-        args.worker_binary.clone(),
-        env!("CARGO_PKG_VERSION"),
-        args.state_home.clone(),
-    );
-    let worker_user = worker::Worker::from_system(input).await.map_err(|error| {
-        eprintln!("error determining worker user: {:?}", error);
-        exitcode::NOUSER
+    // Checked as root once; whether an owner may execute it is probed at every spawn.
+    let worker_binary = worker::resolve_binary(&args.worker_binary).map_err(|error| {
+        eprintln!("error locating worker binary: {error}");
+        exitcode::NOINPUT
     })?;
 
     // setup logging
-    let reload_handle = setup_logging(&args.log_file, &worker_user)?;
+    let reload_handle = setup_logging(args.log_file.as_deref());
 
     // introduce ourself in the logs
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
-        state_home = %args.state_home.display(),
         "starting {}",
         env!("CARGO_PKG_NAME")
     );
 
     // This fixed lock guards global recovery and networking state. It must be held
     // before the startup sweep, including when an alternate socket path is used.
-    let _daemon_lock = try_acquire_daemon_lock_at(Path::new(DAEMON_LOCK_PATH)).map_err(|error| {
+    let lock_path = dirs::runtime_file(DAEMON_LOCK_FILE);
+    let _daemon_lock = try_acquire_daemon_lock_at(&lock_path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::WouldBlock {
             tracing::error!("system service is already running - cannot start another instance");
             exitcode::TEMPFAIL
         } else {
-            tracing::error!(%error, path = DAEMON_LOCK_PATH, "failed to acquire daemon lock");
+            tracing::error!(%error, path = %lock_path.display(), "failed to acquire daemon lock");
             exitcode::IOERR
         }
     })?;
@@ -543,7 +533,21 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
             exitcode::NOHOST
         })?;
     tracing::info!(%blokli_url, %blokli_ip, "resolved blokli host - pinning it for this session");
-    let worker_params = args.worker_params(blokli_ip);
+
+    // The chain says which network this is; the name keys every user's identity, so it also has to be a safe dir name.
+    let network = (|| remote_data::query_blokli_network(&blokli_url, blokli_ip))
+        .retry(remote_data::backoff_expo_long_delay().with_max_times(5))
+        .notify(|error, delay| tracing::warn!(%error, ?delay, %blokli_url, "blokli network not queryable - retrying"))
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %blokli_url, "cannot query blokli network - exiting");
+            exitcode::NOHOST
+        })?;
+    if !valid_network_name(&network) {
+        tracing::error!(%network, "blokli reported a network name unusable as a directory name - exiting");
+        return Err(exitcode::DATAERR);
+    }
+    tracing::info!(%network, "blokli network");
 
     // Write root pidfile for the newsyslog service to send signals to
     write_pidfile(&args.pid_file).await?;
@@ -567,7 +571,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     // set up system socket
     let socket_path = args.socket_path.clone();
-    let (cancel_socket_listener, socket_listener) = socket_listener(&args.socket_path, worker_user.uid).await?;
+    let (cancel_socket_listener, socket_listener) = socket_listener(&args.socket_path).await?;
 
     // set up config file watcher
     let (cancel_config_watcher, config_receiver) = config_watcher(config_path.clone()).await?;
@@ -586,10 +590,18 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         })?;
 
     let mut state = DaemonState {
+        cli: args,
+        worker_binary,
+        worker_owner: None,
+        killswitch_holder: None,
+        blokli_url,
+        blokli_ip,
+        killswitch_armed: false,
+        blokli_just_resolved: false,
+        network,
         config,
         config_path,
         incoming_worker_channel: mpsc::channel(32),
-        log_file: args.log_file,
         pending_response_counter: 0,
         pending_responses: HashMap::new(),
         ping_tasks: JoinSet::new(),
@@ -599,20 +611,10 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         probing: false,
         worker_child: None,
         worker_exit_channel: mpsc::channel(1),
-        worker_params,
-        worker_user,
         keep_alive_instruction_sender,
         routing_actor_sender,
         traffic: traffic::TrafficService::new(),
     };
-    if let Some(keepalive) = args.client_autostart {
-        tracing::debug!(?keepalive, "autostarting worker process");
-        state.setup_worker().await?;
-        let _ = state
-            .keep_alive_instruction_sender
-            .send(KeepAliveInstruction::Ignite(keepalive))
-            .await;
-    }
     let res = state
         .daemon_loop(
             signal_receiver,
@@ -754,33 +756,56 @@ async fn spawn_ping(options: ping::Options) -> Result<Duration, String> {
     })
 }
 
-fn setup_logging(
-    log_file: &Option<std::path::PathBuf>,
-    worker: &worker::Worker,
-) -> Result<Option<logging::LogReloadHandle>, exitcode::ExitCode> {
-    match log_file {
-        Some(log_path) => {
-            if let Some(parent) = log_path.parent() {
-                dirs::ensure_dir(parent.to_path_buf(), 0o755, worker.uid, worker.gid).map_err(|err| {
-                    eprintln!("Failed to create log directory {}: {}", parent.display(), err);
-                    exitcode::IOERR
-                })?;
-            }
-            let fmt_layer = logging::make_file_fmt_layer(&log_path.to_string_lossy(), worker).map_err(|err| {
-                eprintln!("Failed to create log layer for file {}: {}", log_path.display(), err);
-                exitcode::IOERR
-            })?;
-            let handle = logging::setup_log_file(fmt_layer).map_err(|err| {
-                eprintln!("Failed to open log file {}: {}", log_path.display(), err);
-                exitcode::IOERR
-            })?;
-            Ok(Some(handle))
+/// The network name becomes a directory name under every user's home.
+fn valid_network_name(name: &str) -> bool {
+    let safe_char = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-';
+    !name.is_empty() && name.bytes().all(safe_char)
+}
+
+/// A failed lookup with DNS open is unexpected but not fatal: the last known address still works until Blokli moves.
+fn choose_blokli_ip(resolved: Result<Ipv4Addr, String>, current: Ipv4Addr) -> Ipv4Addr {
+    match resolved {
+        Ok(ip) if ip == current => {
+            tracing::debug!(%ip, "blokli address unchanged");
+            ip
         }
-        None => {
-            logging::setup_stdout();
-            Ok(None)
+        Ok(ip) => {
+            tracing::info!(old = %current, new = %ip, "blokli address changed - restarting the worker on it");
+            ip
+        }
+        Err(error) => {
+            tracing::warn!(%error, fallback = %current, "blokli host not resolvable before connect - keeping the current address");
+            current
         }
     }
+}
+
+/// Root reads and stops but never owns; everyone else must be the owner.
+fn gate(owner_uid: Option<u32>, cmd: &LibCommand, peer_uid: u32) -> Option<Response> {
+    if matches!(cmd, LibCommand::Ping | LibCommand::Info) {
+        return None;
+    }
+    let caller_is_root = peer_uid == 0;
+    if caller_is_root && matches!(cmd, LibCommand::StartClient(_)) {
+        return Some(Response::RootCannotOwnWorker);
+    }
+    if caller_is_root {
+        return None;
+    }
+    let owner_uid = owner_uid?;
+    if owner_uid == peer_uid {
+        return None;
+    }
+    Some(Response::InUseByOtherUser)
+}
+
+/// An unopenable log file degrades to stdout; only a configured file yields a reload handle for SIGHUP.
+fn setup_logging(log_file: Option<&std::path::Path>) -> Option<logging::LogReloadHandle> {
+    let Some(log_path) = log_file else {
+        logging::setup_stdout();
+        return None;
+    };
+    logging::setup_file_or_stdout(log_path, logging::make_file_fmt_layer(log_path))
 }
 
 // On macOS newsyslog service needs the pid accessible via pidfile
@@ -878,7 +903,7 @@ impl DaemonState {
                     self.shutdown_ongoing = Shutdown::Service;
                     if let Some(ref mut child) = self.worker_child {
                         tracing::debug!("sending shutdown signal to worker process");
-                        send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                        send_to_worker_lossy(RootToWorker::Shutdown, &mut child.socket_writer).await;
                         self.cleanup_worker_resources().await;
                         Ok(())
                     } else {
@@ -907,26 +932,20 @@ impl DaemonState {
                     Ok(())
                 }
             },
+            // Root-only: the worker log lives in the owner's dir and rolls itself.
             SignalMessage::RotateLogs => {
-                if let (Some(handle), Some(path)) = (&self.reload_handle, &self.log_file) {
-                    let res = logging::make_file_fmt_layer(&path.to_string_lossy(), &self.worker_user)
-                        .map(|new_layer| handle.reload(new_layer));
-                    match res {
-                        Ok(_) => {
-                            tracing::info!("successfully reloaded logging layer with new log file after SIGHUP");
-                            if matches!(self.shutdown_ongoing, Shutdown::None)
-                                && let Some(ref mut child) = self.worker_child
-                            {
-                                tracing::debug!("sending rotate logs to worker process");
-                                send_to_worker(RootToWorker::RotateLogs, &mut child.socket_writer).await?;
-                            }
-                            Ok(())
+                if let (Some(handle), Some(path)) = (&self.reload_handle, &self.cli.log_file) {
+                    // A failed reopen keeps the current file descriptor; a log must never stop the service.
+                    match logging::make_file_fmt_layer(path).map(|new_layer| handle.reload(new_layer)) {
+                        Ok(Ok(())) => tracing::info!("reopened log file after SIGHUP"),
+                        Ok(Err(e)) => {
+                            tracing::error!(error = %e, "failed to swap the log layer after SIGHUP, keeping the current one")
                         }
                         Err(e) => {
-                            eprintln!("failed to reopen log file {:?}: {}", path, e);
-                            Err(exitcode::IOERR)
+                            tracing::error!(path = %path.display(), error = %e, "failed to reopen log file after SIGHUP, keeping the current one")
                         }
                     }
+                    Ok(())
                 } else {
                     tracing::debug!("no log file configured, skipping log reload on SIGHUP");
                     Ok(())
@@ -936,26 +955,22 @@ impl DaemonState {
     }
 
     async fn incoming_socket_command(&mut self, socket_cmd: SocketCmd) -> Result<(), exitcode::ExitCode> {
-        let SocketCmd {
-            cmd,
-            resp,
-            traffic_authorized,
-        } = socket_cmd;
-        if traffic::is_traffic_command(&cmd) {
-            // Authorize before acting: an unauthorized peer must not start or stop capture.
-            let response = if traffic_authorized {
-                self.traffic.handle(cmd).await.unwrap_or(Response::TrafficDenied)
-            } else {
-                tracing::warn!("rejected traffic command from unauthorized socket peer");
-                Response::TrafficDenied
-            };
-            let _ = resp.send(response).map_err(|error| {
+        let SocketCmd { cmd, resp, peer_uid } = socket_cmd;
+        // Before any side effect: a refused connect must not touch the owner's idle countdown.
+        let owner_uid = self
+            .worker_owner
+            .as_ref()
+            .map(|owner| owner.uid)
+            .or(self.killswitch_holder);
+        if let Some(refusal) = gate(owner_uid, &cmd, peer_uid) {
+            tracing::debug!(?cmd, peer_uid, owner_uid, "refusing socket command");
+            let _ = resp.send(refusal).map_err(|error| {
                 tracing::error!(?error, "socket command response channel closed");
             });
             return Ok(());
         }
-        match WorkerCommand::try_from(cmd.clone()) {
-            Ok(w_cmd) => {
+        match CommandRoute::from(cmd) {
+            CommandRoute::Worker(w_cmd) => {
                 self.handle_hybrid_cmd(&w_cmd).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
@@ -999,8 +1014,8 @@ impl DaemonState {
                     Ok(())
                 }
             }
-            Err(_) => {
-                let response = self.incoming_root_command(cmd).await?;
+            CommandRoute::Root(root_cmd) => {
+                let response = self.incoming_root_command(root_cmd, peer_uid).await?;
                 let _ = resp.send(response).map_err(|error| {
                     tracing::error!(?error, "socket command response channel closed");
                 });
@@ -1020,7 +1035,7 @@ impl DaemonState {
                 {
                     tracing::debug!("sending shutdown signal to worker process due to config reload");
                     self.shutdown_ongoing = Shutdown::RestartWorker;
-                    send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                    send_to_worker_lossy(RootToWorker::Shutdown, &mut child.socket_writer).await;
                     self.cleanup_worker_resources().await;
                 }
             }
@@ -1081,38 +1096,38 @@ impl DaemonState {
         })
     }
 
-    async fn incoming_root_command(&mut self, cmd: LibCommand) -> Result<Response, exitcode::ExitCode> {
+    async fn incoming_root_command(&mut self, cmd: RootCommand, peer_uid: u32) -> Result<Response, exitcode::ExitCode> {
         match cmd {
-            LibCommand::Status => Ok(self.status_response_offline()),
-            LibCommand::NerdStats
-            | LibCommand::Connect(_)
-            | LibCommand::Disconnect
-            | LibCommand::Probe(_)
-            | LibCommand::Unprobe
-            | LibCommand::QuickProbe(_)
-            | LibCommand::Balance
-            | LibCommand::FundingTool(_)
-            | LibCommand::Telemetry => Ok(self.worker_gone_response()),
-            LibCommand::Ping => Ok(Response::Pong),
-            LibCommand::Destinations => {
+            RootCommand::Ping => Ok(Response::Pong),
+            RootCommand::Destinations => {
                 let mut ids: Vec<String> = self.config.destinations.keys().cloned().collect();
                 ids.sort_unstable();
                 Ok(Response::Destinations(ids))
             }
-            LibCommand::Info => {
+            RootCommand::Info => {
                 let package_version = fs::read_to_string("/etc/gnosisvpn/version.txt")
                     .await
                     .ok()
                     .map(|s| s.trim().to_string());
+                // Another user's home path is not for everyone to see.
+                // Without a root log file the worker logs to stdout, so its log dir stays empty.
+                let worker_logs_to_file = self.cli.log_file.is_some();
+                let worker_log_dir = self
+                    .worker_owner
+                    .as_ref()
+                    .filter(|_| worker_logs_to_file)
+                    .filter(|owner| peer_uid == 0 || owner.uid == peer_uid)
+                    .map(|owner| owner.dirs.logs.clone());
                 let info = command::InfoResponse {
                     version: env!("CARGO_PKG_VERSION").to_string(),
-                    log_file: self.log_file.clone(),
+                    log_file: self.cli.log_file.clone(),
                     package_version,
+                    worker_log_dir,
                 };
                 Ok(Response::Info(info))
             }
 
-            LibCommand::StartClient(keepalive) => match (self.shutdown_ongoing, &self.worker_child) {
+            RootCommand::StartClient(keepalive) => match (self.shutdown_ongoing, &self.worker_child) {
                 (Shutdown::None, Some(_)) => {
                     let _ = self
                         .keep_alive_instruction_sender
@@ -1121,7 +1136,23 @@ impl DaemonState {
                     Ok(Response::StartClient(command::StartClientResponse::AlreadyRunning))
                 }
                 (Shutdown::None, None) => {
-                    self.setup_worker().await?;
+                    let owner = match WorkerOwner::from_uid(peer_uid) {
+                        Ok(owner) => owner,
+                        Err(error) => {
+                            tracing::warn!(%error, peer_uid, "cannot start a worker for this caller");
+                            return Ok(Response::StartClient(command::StartClientResponse::SpawnFailed {
+                                reason: error.to_string(),
+                            }));
+                        }
+                    };
+                    tracing::info!(uid = owner.uid, user = %owner.name, "starting worker for user");
+                    self.worker_owner = Some(owner);
+                    if let Err(reason) = self.setup_worker().await {
+                        self.forget_owner();
+                        return Ok(Response::StartClient(command::StartClientResponse::SpawnFailed {
+                            reason,
+                        }));
+                    }
                     let _ = self
                         .keep_alive_instruction_sender
                         .send(KeepAliveInstruction::Ignite(keepalive))
@@ -1153,12 +1184,16 @@ impl DaemonState {
                 }
             },
 
-            LibCommand::StopClient => match (self.shutdown_ongoing, &mut self.worker_child) {
-                (Shutdown::None, None) => Ok(Response::StopClient(command::StopClientResponse::NotRunning)),
+            RootCommand::StopClient => match (self.shutdown_ongoing, &mut self.worker_child) {
+                (Shutdown::None, None) => {
+                    // A crashed worker leaves the killswitch armed with nothing left to disconnect.
+                    self.disable_killswitch().await;
+                    Ok(Response::StopClient(command::StopClientResponse::NotRunning))
+                }
                 (Shutdown::None, Some(child)) => {
                     tracing::debug!("sending shutdown signal to worker process due to stop client command");
                     self.shutdown_ongoing = Shutdown::Worker;
-                    send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+                    send_to_worker_lossy(RootToWorker::Shutdown, &mut child.socket_writer).await;
                     self.cleanup_worker_resources().await;
                     self.disable_killswitch().await;
                     self.target_dest_id = None;
@@ -1183,20 +1218,25 @@ impl DaemonState {
                 }
             },
 
-            // Traffic commands are dispatched before this point; reaching it means
-            // the socket layer did not recognize them.
-            LibCommand::TrafficInterfaces
-            | LibCommand::TrafficStart(_)
-            | LibCommand::TrafficRead(_)
-            | LibCommand::TrafficStop(_) => Ok(Response::TrafficDenied),
+            RootCommand::TrafficInterfaces => Ok(Response::TrafficInterfaces(self.traffic.interfaces())),
+            RootCommand::TrafficStart(request) => Ok(Response::TrafficStart(self.traffic.start(request).await)),
+            RootCommand::TrafficRead(request) => Ok(Response::TrafficRead(self.traffic.read(request))),
+            RootCommand::TrafficStop(request) => Ok(Response::TrafficStop(self.traffic.stop(request))),
         }
     }
 
     async fn incoming_worker_line(&mut self, line: String) -> Result<(), exitcode::ExitCode> {
-        let cmd: WorkerToRoot = serde_json::from_str(&line).map_err(|err| {
-            tracing::error!(error = %err, "failed parsing incoming worker command");
-            exitcode::DATAERR
-        })?;
+        let cmd: WorkerToRoot = match serde_json::from_str(&line) {
+            Ok(cmd) => cmd,
+            Err(error) => {
+                // The worker runs as its user, who may write anything; that must not stop root for everyone.
+                tracing::error!(%error, "failed parsing incoming worker command - killing worker");
+                if let Some(child) = self.worker_child.as_ref() {
+                    child.kill.cancel();
+                }
+                return Ok(());
+            }
+        };
         match cmd {
             WorkerToRoot::Response { id, resp } => self.incoming_worker_response(id, *resp).await,
             WorkerToRoot::RequestToRoot(request) => self.incoming_worker_request(request).await,
@@ -1220,7 +1260,7 @@ impl DaemonState {
         Ok(())
     }
 
-    async fn apply_killswitch(&self, interface: Option<String>, ips: Vec<IpAddr>) -> Result<(), String> {
+    async fn apply_killswitch(&mut self, interface: Option<String>, ips: Vec<IpAddr>) -> Result<(), String> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = self
             .routing_actor_sender
@@ -1231,13 +1271,19 @@ impl DaemonState {
                 reply: reply_tx,
             })
             .await;
-        match reply_rx.await {
+        let res = match reply_rx.await {
             Ok(res) => res,
             Err(_) => Err("killswitch actor dropped reply channel".to_string()),
+        };
+        if res.is_ok() {
+            self.killswitch_holder = self.worker_owner.as_ref().map(|owner| owner.uid);
         }
+        res
     }
 
-    async fn disable_killswitch(&self) {
+    async fn disable_killswitch(&mut self) {
+        self.killswitch_armed = false;
+        self.killswitch_holder = None;
         let _ = self
             .routing_actor_sender
             .send(routing_actor::Msg::DisableKillswitch)
@@ -1252,8 +1298,16 @@ impl DaemonState {
                 peer_ips,
                 interface,
             } => {
-                let ips: Vec<IpAddr> = peer_ips.into_iter().map(IpAddr::V4).collect();
+                let blokli_moved = self.refresh_blokli_ip().await;
+                if blokli_moved && matches!(self.shutdown_ongoing, Shutdown::None) {
+                    // Nothing is armed yet; the respawned worker reconnects to the kept target on the new address.
+                    self.restart_worker_on_new_blokli().await;
+                    return Ok(());
+                }
+                let mut ips: Vec<IpAddr> = peer_ips.into_iter().map(IpAddr::V4).collect();
+                ips.push(IpAddr::V4(self.blokli_ip));
                 let res = self.apply_killswitch(interface, ips).await;
+                self.killswitch_armed |= res.is_ok();
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
@@ -1270,8 +1324,10 @@ impl DaemonState {
                 interface_address,
                 mtu,
                 dns,
-                peer_ips,
+                mut peer_ips,
             } => {
+                // Blokli stays on the WAN like the peers, or the worker's chain access would depend on its own tunnel.
+                peer_ips.push(self.blokli_ip);
                 let res = match self.setup_static_routing(interface_address, mtu, dns, peer_ips).await {
                     Ok((interface, tun_fd)) => match self.worker_child {
                         // Pass the fd out-of-band first; the worker recv_fd's it only
@@ -1358,23 +1414,32 @@ impl DaemonState {
     }
 
     async fn incoming_worker_exit(&mut self, status: process::ExitStatus) -> Result<(), exitcode::ExitCode> {
+        // Gone first, so a drained SetupTunnel hits the "worker gone" arm instead of a dead socket.
         self.worker_child = None;
+        // Lines were sent before the exit but select! may pick the exit first; a late connect would leak the target to the next owner.
+        while let Ok(line) = self.incoming_worker_channel.1.try_recv() {
+            self.incoming_worker_line(line).await?;
+        }
         self.probing = false;
         // A dead worker's device must never be handed to its replacement as a reusable one.
         self.teardown_any_routing().await;
         match self.shutdown_ongoing {
+            // A failed per-user init (CANTCREAT) or the owner killing its own worker; neither may take root down for everyone.
+            Shutdown::None if !status.success() => {
+                tracing::error!(
+                    user = self.worker_owner.as_ref().map(|owner| owner.name.as_str()),
+                    status = ?status.code(),
+                    "worker process exited unexpectedly - not restarting"
+                );
+                self.forget_owner();
+                Ok(())
+            }
             Shutdown::None => {
-                if status.success() {
-                    tracing::warn!(exit_code = ?status.code(), "worker process exited cleanly without shutdown signal - restarting");
-                    // Ids issued to the dead worker are never answered by its replacement.
-                    answer_pending(&mut self.pending_responses, Response::WorkerRestarting);
-                    self.setup_worker().await?;
-                    self.restart_idle_countdown().await;
-                    Ok(())
-                } else {
-                    tracing::error!(status = ?status.code(), "worker process exited unexpectedly");
-                    Err(exitcode::TEMPFAIL)
-                }
+                tracing::warn!("worker process exited cleanly without shutdown signal - restarting");
+                // Ids issued to the dead worker are never answered by its replacement.
+                answer_pending(&mut self.pending_responses, Response::WorkerRestarting);
+                self.respawn_or_forget().await;
+                Ok(())
             }
             Shutdown::Worker => {
                 if status.success() {
@@ -1383,6 +1448,7 @@ impl DaemonState {
                     tracing::warn!(status = ?status.code(), "worker exited with error during requested shutdown");
                 }
                 self.shutdown_ongoing = Shutdown::None;
+                self.forget_owner();
                 Ok(())
             }
             Shutdown::Service => {
@@ -1401,11 +1467,29 @@ impl DaemonState {
                     tracing::warn!(status = ?status.code(), "worker exited with error before restart");
                 }
                 self.shutdown_ongoing = Shutdown::None;
-                self.setup_worker().await?;
-                self.restart_idle_countdown().await;
+                self.respawn_or_forget().await;
                 Ok(())
             }
         }
+    }
+
+    /// A failed respawn is not fatal: root stays up with no worker and the next `start-client` tries again.
+    async fn respawn_or_forget(&mut self) {
+        match self.setup_worker().await {
+            Ok(()) => self.restart_idle_countdown().await,
+            Err(reason) => {
+                tracing::error!(%reason, "respawning the worker failed - forgetting its owner");
+                self.forget_owner();
+            }
+        }
+    }
+
+    /// The target goes with the owner; the killswitch stays as it is (recovery while armed is an invariant).
+    fn forget_owner(&mut self) {
+        self.worker_owner = None;
+        self.target_dest_id = None;
+        // Only the failed-exit path still has pending ids, and nothing restarts for them.
+        answer_pending(&mut self.pending_responses, Response::WorkerOffline);
     }
 
     /// Restart is a no-op while suspended, so a suspend whose answer died with the worker must not outlive it.
@@ -1423,24 +1507,36 @@ impl DaemonState {
             && let Some(ref mut child) = self.worker_child
         {
             self.shutdown_ongoing = Shutdown::Worker;
-            send_to_worker(RootToWorker::Shutdown, &mut child.socket_writer).await?;
+            send_to_worker_lossy(RootToWorker::Shutdown, &mut child.socket_writer).await;
             self.cleanup_worker_resources().await;
             self.target_dest_id = None;
         }
         Ok(())
     }
 
-    async fn setup_worker(&mut self) -> Result<(), exitcode::ExitCode> {
+    /// Every failure is a reason for `SpawnFailed`, never a root exit; the caller decides what to forget.
+    async fn setup_worker(&mut self) -> Result<(), String> {
+        let owner = self
+            .worker_owner
+            .clone()
+            .ok_or_else(|| "no worker owner recorded".to_string())?;
+        worker::probe_version(&self.worker_binary, &owner, env!("CARGO_PKG_VERSION"))
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, uid = owner.uid, "worker binary probe failed");
+                error.to_string()
+            })?;
+
         let (parent_socket, child_socket) = UnixStream::pair().map_err(|err| {
             tracing::error!(error = ?err, "unable to create socket pair for worker communication");
-            exitcode::IOERR
+            format!("socket pair: {err}")
         })?;
         // Dedicated socket for passing the TUN device fd to the worker via SCM_RIGHTS,
         // kept separate from the newline-JSON control channel (a BufReader there would
         // consume bytes past a newline that a raw recvmsg for the ancillary data needs).
         let (parent_tun_socket, child_tun_socket) = UnixStream::pair().map_err(|err| {
             tracing::error!(error = ?err, "unable to create socket pair for TUN fd passing");
-            exitcode::IOERR
+            format!("TUN fd socket pair: {err}")
         })?;
 
         // Hand the worker its end of the TUN-fd socket as the first message on the
@@ -1452,42 +1548,52 @@ impl DaemonState {
         // retained in WorkerChild until the worker exits.
         socket::fd_passing::send_fd(&parent_socket, &child_tun_socket).map_err(|err| {
             tracing::error!(error = ?err, "unable to send TUN fd socket to worker");
-            exitcode::IOERR
+            format!("TUN fd socket handoff: {err}")
         })?;
         tracing::debug!(
             fd = std::os::fd::AsRawFd::as_raw_fd(&parent_tun_socket),
             "created TUN fd passing socket (parent end)"
         );
 
-        let mut worker_command = TokioCommand::new(self.worker_user.binary.clone());
+        let mut worker_command = TokioCommand::new(&self.worker_binary);
 
+        // Root's whole env is inherited: its keys are world-readable config, and an allowlist would silently drop proxy/cert vars.
         worker_command
-            .current_dir(self.worker_user.home.clone())
+            .current_dir(&owner.home)
             // The control channel arrives as the worker's stdin: spawn dup2s the fd
             // onto fd 0 in the child, so no fd number crosses the environment and
             // no CLOEXEC toggling is needed.
             .stdin(Stdio::from(OwnedFd::from(child_socket)))
+            .env("HOME", &owner.home)
+            .env("USER", &owner.name)
+            .env("LOGNAME", &owner.name)
             .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
             .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
-            .uid(self.worker_user.uid)
-            .gid(self.worker_user.gid);
+            // std clears the supplementary groups on the uid drop; only the primary gid remains.
+            .uid(owner.uid)
+            .gid(owner.gid);
 
-        if let Some(ref log_file) = self.log_file {
-            worker_command.env(logging::ENV_VAR_LOG_FILE, log_file.to_string_lossy().to_string());
-        }
-        let mut child = worker_command.spawn().map_err(|err| {
-            tracing::error!(error = ?err, ?self.worker_user, "unable to spawn worker process");
-            exitcode::IOERR
-        })?;
-
+        // Before spawn, so only the startup send can fail with a worker running, and that path kills it.
         parent_socket.set_nonblocking(true).map_err(|err| {
             tracing::error!(error = ?err, "unable to set non-blocking mode on parent socket");
-            exitcode::IOERR
+            format!("parent socket: {err}")
         })?;
 
         let parent_stream = TokioUnixStream::from_std(parent_socket).map_err(|err| {
             tracing::error!(error = ?err, "unable to create unix stream from socket");
-            exitcode::IOERR
+            format!("parent stream: {err}")
+        })?;
+
+        // Only when root itself logs to a file; otherwise both log to stdout.
+        if self.cli.log_file.is_some() {
+            worker_command.env(
+                logging::ENV_VAR_LOG_FILE,
+                owner.dirs.logs.join(logging::WORKER_LOG_FILE),
+            );
+        }
+        let mut child = worker_command.spawn().map_err(|err| {
+            tracing::error!(error = ?err, uid = owner.uid, "unable to spawn worker process");
+            format!("spawn: {err}")
         })?;
 
         // root <-> worker communication setup
@@ -1498,23 +1604,39 @@ impl DaemonState {
         let mut socket_writer = BufWriter::new(writer_half);
 
         // send initial configuration and resources to worker
-        send_to_worker(
+        let worker_params = self
+            .cli
+            .worker_params(self.blokli_ip, &self.network, owner.dirs.clone());
+        let delivered = send_to_worker(
             RootToWorker::StartupParams {
                 config: Box::new(self.config.clone()),
-                worker_params: Box::new(self.worker_params.clone()),
+                worker_params: Box::new(worker_params),
                 target_dest_id: self.target_dest_id.clone(),
             },
             &mut socket_writer,
         )
-        .await?;
+        .await;
+        // No kill_on_drop: the listener drops the child on teardown, and the worker must get EOF, not SIGKILL.
+        if delivered.is_err() {
+            let _ = child.start_kill();
+            return Err("startup params not delivered to the worker".to_string());
+        }
 
         let cancel = CancellationToken::new();
         let owned_cancel = cancel.clone();
         let lines_sender = self.incoming_worker_channel.0.clone();
         let exit_sender = self.worker_exit_channel.0.clone();
+        let kill = CancellationToken::new();
+        let owned_kill = kill.clone();
         tokio::spawn(async move {
+            // A cancelled token resolves on every poll; kill once, then keep waiting for the exit.
+            let mut kill_sent = false;
             loop {
                 tokio::select! {
+                    _ = owned_kill.cancelled(), if !kill_sent => {
+                        kill_sent = true;
+                        let _ = child.start_kill();
+                    },
                     Ok(Some(line)) = socket_lines_reader.next_line() => {
                         let _ = lines_sender.send(line.clone()).await.map_err(|err| {
                             tracing::error!(error = ?err, "worker channel receiver dropped");
@@ -1543,6 +1665,9 @@ impl DaemonState {
             socket_writer,
             tun_fd_socket: parent_tun_socket,
             _child_tun_socket: child_tun_socket,
+            kill,
+            blokli_ip: self.blokli_ip,
+            blokli_just_resolved: std::mem::take(&mut self.blokli_just_resolved),
         });
         Ok(())
     }
@@ -1579,6 +1704,37 @@ impl DaemonState {
             .await;
     }
 
+    /// Before the first arm only (later arms have DNS closed); true when Blokli left the worker's address.
+    async fn refresh_blokli_ip(&mut self) -> bool {
+        let Some(child) = self.worker_child.as_mut() else {
+            return false;
+        };
+        let just_resolved = std::mem::take(&mut child.blokli_just_resolved);
+        let worker_ip = child.blokli_ip;
+        if self.killswitch_armed || just_resolved {
+            return false;
+        }
+        let url = self.blokli_url.clone();
+        let timeout = self.config.blokli.resolve_timeout;
+        let resolved = match time::timeout(timeout, remote_data::resolve_blokli_ip(&url)).await {
+            Ok(res) => res.map_err(|e| e.to_string()),
+            Err(_) => Err("timed out".to_string()),
+        };
+        self.blokli_ip = choose_blokli_ip(resolved, self.blokli_ip);
+        self.blokli_ip != worker_ip
+    }
+
+    /// edgli keeps its spawn-time Blokli address, so only a respawn moves the worker; same path as a config reload.
+    async fn restart_worker_on_new_blokli(&mut self) {
+        let Some(ref mut child) = self.worker_child else {
+            return;
+        };
+        self.shutdown_ongoing = Shutdown::RestartWorker;
+        self.blokli_just_resolved = true;
+        send_to_worker_lossy(RootToWorker::Shutdown, &mut child.socket_writer).await;
+        self.cleanup_worker_resources().await;
+    }
+
     async fn setup_static_routing(
         &self,
         interface_address: String,
@@ -1594,7 +1750,7 @@ impl DaemonState {
                 mtu,
                 dns,
                 peer_ips,
-                blokli_ip: self.worker_params.blokli_ip(),
+                blokli_ip: self.blokli_ip,
                 reply: reply_tx,
             })
             .await;
@@ -1679,6 +1835,20 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+
+    const CURRENT: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 9);
+
+    #[test]
+    fn fresh_blokli_address_replaces_the_current_one() {
+        let fresh = Ipv4Addr::new(198, 51, 100, 7);
+        assert_eq!(choose_blokli_ip(Ok(fresh), CURRENT), fresh);
+        assert_eq!(choose_blokli_ip(Ok(CURRENT), CURRENT), CURRENT);
+    }
+
+    #[test]
+    fn unresolvable_blokli_host_keeps_the_current_address() {
+        assert_eq!(choose_blokli_ip(Err("no answer".to_string()), CURRENT), CURRENT);
+    }
 
     // The caller is blocked on this oneshot; dropping it is what produced the EOF.
     #[tokio::test]
@@ -1783,6 +1953,58 @@ mod tests {
     }
 
     #[test]
+    fn network_names_must_be_plain_directory_names() {
+        assert!(valid_network_name("jura-dev"));
+        assert!(valid_network_name("piz-palu-dev"));
+        for bad in ["", "Jura", "jura dev", "../jura", "jura/dev", "jura_dev"] {
+            assert!(!valid_network_name(bad), "{bad:?} accepted");
+        }
+    }
+
+    const ALICE: u32 = 1000;
+    const BOB: u32 = 1001;
+
+    #[test]
+    fn without_an_owner_everything_is_open_except_owning_as_root() {
+        assert!(gate(None, &LibCommand::Status, BOB).is_none());
+        assert!(gate(None, &LibCommand::StopClient, BOB).is_none());
+        assert!(gate(None, &LibCommand::StartClient(Duration::from_secs(1)), BOB).is_none());
+        assert!(matches!(
+            gate(None, &LibCommand::StartClient(Duration::from_secs(1)), 0),
+            Some(Response::RootCannotOwnWorker)
+        ));
+    }
+
+    #[test]
+    fn another_user_is_refused_everything_but_ping_and_info() {
+        for cmd in [
+            LibCommand::Status,
+            LibCommand::Destinations,
+            LibCommand::Connect("x".into()),
+            LibCommand::StopClient,
+            LibCommand::StartClient(Duration::from_secs(1)),
+        ] {
+            assert!(
+                matches!(gate(Some(ALICE), &cmd, BOB), Some(Response::InUseByOtherUser)),
+                "{cmd:?}"
+            );
+            assert!(gate(Some(ALICE), &cmd, ALICE).is_none(), "{cmd:?}");
+        }
+        assert!(gate(Some(ALICE), &LibCommand::Ping, BOB).is_none());
+        assert!(gate(Some(ALICE), &LibCommand::Info, BOB).is_none());
+    }
+
+    #[test]
+    fn root_reads_and_stops_but_never_owns() {
+        assert!(gate(Some(ALICE), &LibCommand::Status, 0).is_none());
+        assert!(gate(Some(ALICE), &LibCommand::StopClient, 0).is_none());
+        assert!(matches!(
+            gate(Some(ALICE), &LibCommand::StartClient(Duration::from_secs(1)), 0),
+            Some(Response::RootCannotOwnWorker)
+        ));
+    }
+
+    #[test]
     fn daemon_lock_excludes_another_instance_until_released() -> anyhow::Result<()> {
         let path = std::env::temp_dir().join(format!("gvpn-daemon-lock-{}", std::process::id()));
         let first = try_acquire_daemon_lock_at(&path)?;
@@ -1796,16 +2018,5 @@ mod tests {
         let _second = try_acquire_daemon_lock_at(&path)?;
         std::fs::remove_file(path)?;
         Ok(())
-    }
-
-    #[test]
-    fn socket_paths_over_the_unix_limit_are_rejected_before_binding() {
-        assert!(socket_path_fits(Path::new("/var/run/gnosisvpn.sock")));
-        assert!(socket_path_fits(Path::new(&"a".repeat(MAX_SOCKET_PATH_LEN))));
-        // A deep checkout plus a nested run directory is the case that fails in practice.
-        assert!(!socket_path_fits(Path::new(&format!(
-            "{}/gnosisvpn.sock",
-            "a".repeat(MAX_SOCKET_PATH_LEN)
-        ))));
     }
 }

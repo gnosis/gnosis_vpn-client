@@ -46,6 +46,15 @@ pub struct SharedArgs {
         default_value_t = false
     )]
     pub allow_experimental: bool,
+
+    /// The user the worker runs as; root refuses to start a worker for root itself.
+    #[arg(
+        long = "workerUser",
+        env = "SYSTEM_TEST_WORKER_USER",
+        value_name = "NAME",
+        default_value = "gnosisvpn"
+    )]
+    pub worker_user: String,
 }
 
 #[derive(Debug, Clone, Copy, Args)]
