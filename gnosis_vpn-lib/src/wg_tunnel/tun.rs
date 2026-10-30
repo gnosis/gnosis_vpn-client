@@ -6,9 +6,7 @@
 //! packet, one `write` injects exactly one - so the adapters need no framing of
 //! their own, unlike the byte-duplex session side.
 //!
-//! A [`TunReader`] and a [`TunWriter`] each own a dup of the fd, so the pump can
-//! poll readable and writable readiness on the same device independently inside
-//! its `select!`.
+//! [`TunReader`] and [`TunWriter`] each own a dup of the fd, so the pump polls both directions independently.
 //!
 //! # Platform header
 //!
