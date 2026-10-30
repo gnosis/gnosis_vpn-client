@@ -7,6 +7,10 @@
 //!
 //! Capture stops on its own when the consumer stops reading. A viewer that dies
 //! must not leave a privileged capture running.
+//!
+//! While a session runs, it also follows the VPN tunnel that owns the default
+//! route and captures there, so the consumer sees destinations as well as the
+//! next hops they travel through.
 
 pub mod capture;
 pub mod classify;
@@ -33,6 +37,9 @@ const BATCH_CAPACITY: usize = 20;
 /// leave a capture running.
 const LEASE: Duration = Duration::from_millis(5000);
 const MONITOR_INTERVAL: Duration = Duration::from_millis(500);
+/// How quickly a session notices a VPN connecting, disconnecting or switching
+/// devices.
+const TUNNEL_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 struct BatchLog {
@@ -56,7 +63,8 @@ impl HoprPeers {
     fn mark(&self, deltas: &mut [traffic::Delta]) {
         let peers = self.0.read().expect("hopr peers poisoned");
         for delta in deltas {
-            delta.hopr_peer = peers.contains(&delta.target);
+            // Inside a tunnel the target is a destination, not a hop.
+            delta.hopr_peer = !delta.tunnel && peers.contains(&delta.target);
         }
     }
 }
@@ -168,11 +176,14 @@ struct ActiveSession {
     shared: Arc<SessionShared>,
     capture: Option<capture::Capture>,
     monitor: JoinHandle<()>,
+    tunnel_follower: JoinHandle<()>,
 }
 
 impl ActiveSession {
     fn shutdown(mut self) {
         self.monitor.abort();
+        // Aborting drops the tunnel capture, which stops and joins its thread.
+        self.tunnel_follower.abort();
         self.shared.finish();
         if let Some(capture) = self.capture.take() {
             capture.stop();
@@ -295,10 +306,12 @@ impl TrafficService {
         }
         self.last_session_id = id;
         let monitor = spawn_monitor(shared.clone());
+        let tunnel_follower = spawn_tunnel_follower(shared.clone());
         self.current = Some(ActiveSession {
             shared,
             capture: Some(capture),
             monitor,
+            tunnel_follower,
         });
         tracing::info!(target: "traffic", session = id, interface = %interface.id, "traffic session started");
         Ok(StartResponse {
@@ -385,6 +398,55 @@ fn spawn_monitor(session: Arc<SessionShared>) -> JoinHandle<()> {
     })
 }
 
+/// Keeps a second capture on the VPN tunnel that owns the default route, and
+/// moves it when the VPN connects, disconnects or switches devices.
+fn spawn_tunnel_follower(session: Arc<SessionShared>) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut current: Option<(String, capture::Capture)> = None;
+        // A device that refused capture is not retried until the tunnel changes.
+        let mut refused: Option<String> = None;
+        while session.is_active() {
+            let wanted = run_blocking(capture::default_tunnel).await.ok().flatten();
+            let wanted_id = wanted.as_ref().map(|candidate| candidate.descriptor.id.clone());
+            let following = current
+                .as_ref()
+                .is_some_and(|(id, capture)| Some(id) == wanted_id.as_ref() && capture.is_running());
+            if !following {
+                if let Some((id, capture)) = current.take() {
+                    let _ = run_blocking(move || capture.stop()).await;
+                    tracing::info!(target: "traffic", session = session.id, tunnel = %id, "tunnel capture stopped");
+                }
+                if refused != wanted_id {
+                    refused = None;
+                }
+                if let Some(candidate) = wanted.filter(|_| refused.is_none()) {
+                    let id = candidate.descriptor.id.clone();
+                    let shared = session.clone();
+                    let stop = Arc::new(AtomicBool::new(false));
+                    match run_blocking(move || capture::start(candidate, shared, stop)).await {
+                        Ok(Ok(capture)) => {
+                            tracing::info!(target: "traffic", session = session.id, tunnel = %id, "tunnel capture started");
+                            current = Some((id, capture));
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!(target: "traffic", session = session.id, tunnel = %id, error = %e, "cannot capture on tunnel");
+                            refused = Some(id);
+                        }
+                        Err(e) => {
+                            tracing::warn!(target: "traffic", session = session.id, tunnel = %id, error = %e, "cannot start tunnel capture task");
+                            refused = Some(id);
+                        }
+                    }
+                }
+            }
+            tokio::time::sleep(TUNNEL_CHECK_INTERVAL).await;
+        }
+        if let Some((_, capture)) = current {
+            let _ = run_blocking(move || capture.stop()).await;
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,6 +481,7 @@ mod tests {
             direction: Direction::Upstream,
             bytes: 60,
             hopr_peer: false,
+            tunnel: false,
         }
     }
 
@@ -443,6 +506,23 @@ mod tests {
         assert_eq!(
             marked_targets(&shared.read(0)),
             vec![("198.51.100.4".to_string(), false), ("203.0.113.1".to_string(), true)]
+        );
+    }
+
+    #[test]
+    fn destinations_inside_a_tunnel_are_never_marked_as_hopr_peers() {
+        let peers = HoprPeers::default();
+        peers.replace(&["203.0.113.1".parse().expect("ip")]);
+        let shared = session_with_peers(peers);
+        let inside = traffic::Delta {
+            tunnel: true,
+            ..delta_to(0, "203.0.113.1")
+        };
+        shared.push(vec![inside], 100);
+
+        assert_eq!(
+            marked_targets(&shared.read(0)),
+            vec![("203.0.113.1".to_string(), false)]
         );
     }
 
@@ -645,6 +725,64 @@ mod tests {
         };
         assert!(stopped.stopped);
         service.shutdown();
+    }
+
+    /// Starts a session on a public interface while a VPN owns the default route
+    /// and checks that the follower adds the tunnel: destinations show up as
+    /// tunnel deltas next to the wire deltas of the same session.
+    #[tokio::test]
+    #[ignore = "opens a live capture; needs capture privileges and a connected VPN"]
+    async fn service_follows_the_vpn_tunnel() {
+        use std::net::UdpSocket;
+        use std::time::Duration;
+
+        let mut service = TrafficService::new();
+        // While a VPN owns the default route no public interface is the default,
+        // so name the one the VPN's own traffic leaves through.
+        let wire_name = std::env::var("GVPN_WIRE_INTERFACE").unwrap_or_else(|_| "en0".to_string());
+        let wire = capture::discover()
+            .into_iter()
+            .find(|candidate| candidate.descriptor.id == wire_name)
+            .expect("the public interface")
+            .descriptor;
+        let started = match service
+            .handle(Command::TrafficStart(StartRequest {
+                interface_id: wire.id.clone(),
+            }))
+            .await
+        {
+            Some(Response::TrafficStart(Ok(started))) => started,
+            other => panic!("unexpected start response: {other:?}"),
+        };
+        // The follower checks for a tunnel as soon as the session starts.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let socket = UdpSocket::bind("0.0.0.0:0").expect("udp socket");
+        let _ = socket.send_to(&[0u8; 64], "1.1.1.1:9");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let read = match service
+            .handle(Command::TrafficRead(ReadRequest {
+                session_id: started.session_id,
+                cursor: 0,
+            }))
+            .await
+        {
+            Some(Response::TrafficRead(read)) => read,
+            other => panic!("unexpected read response: {other:?}"),
+        };
+        service.shutdown();
+
+        let deltas: Vec<traffic::Delta> = read.batches.iter().flat_map(|batch| batch.deltas.clone()).collect();
+        let destination: std::net::IpAddr = "1.1.1.1".parse().expect("ip");
+        assert!(
+            deltas.iter().any(|delta| delta.tunnel && delta.target == destination),
+            "expected 1.1.1.1 inside the tunnel in {deltas:?}"
+        );
+        assert!(
+            deltas.iter().any(|delta| !delta.tunnel),
+            "expected wire traffic to the VPN server in {deltas:?}"
+        );
     }
 
     #[test]

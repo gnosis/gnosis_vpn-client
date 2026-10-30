@@ -15,7 +15,7 @@ use gnosis_vpn_lib::traffic::Interface;
 use pnet_datalink::{self, Channel, Config, NetworkInterface};
 
 use super::SessionShared;
-use super::classify::{self, Aggregates, Host};
+use super::classify::{self, Aggregates, Host, Side};
 
 /// How often finished aggregates are handed to the session.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
@@ -32,6 +32,7 @@ const READ_BUFFER_SIZE: usize = 512 * 1024;
 pub struct Candidate {
     pub descriptor: Interface,
     link: NetworkInterface,
+    side: Side,
 }
 
 /// Lists interfaces that carry public traffic, in stable name order.
@@ -63,11 +64,54 @@ pub fn discover() -> Vec<Candidate> {
                     is_default,
                 },
                 link,
+                side: Side::Wire,
             })
         })
         .collect();
     candidates.sort_by(|a, b| a.descriptor.name.cmp(&b.descriptor.name));
     candidates
+}
+
+/// The VPN tunnel device that currently owns the default route, if any.
+///
+/// Captured next to the public interface, it shows where traffic goes before the
+/// VPN encrypts it. Works for any VPN whose device carries bare IP packets.
+pub fn default_tunnel() -> Option<Candidate> {
+    let egress = egress_ip()?;
+    pnet_datalink::interfaces().into_iter().find_map(|link| {
+        let addresses: Vec<IpAddr> = link
+            .ips
+            .iter()
+            .map(|network| network.ip())
+            .filter(|ip| is_routable_local(*ip))
+            .collect();
+        if !carries_egress(&link.name, &addresses, egress) {
+            return None;
+        }
+        Some(Candidate {
+            descriptor: Interface {
+                id: link.name.clone(),
+                name: link.name.clone(),
+                addresses,
+                is_default: true,
+            },
+            link,
+            side: Side::Tunnel,
+        })
+    })
+}
+
+/// Whether the device named `name` with `addresses` is a VPN tunnel holding the
+/// host's egress address.
+fn carries_egress(name: &str, addresses: &[IpAddr], egress: IpAddr) -> bool {
+    is_vpn_tunnel_name(name) && addresses.contains(&egress)
+}
+
+/// Tunnel devices that hand over bare IP packets. Other tunnel kinds (TAP,
+/// IPsec, PPP) frame packets differently and are not followed.
+fn is_vpn_tunnel_name(name: &str) -> bool {
+    const VPN_TUNNEL_PREFIXES: [&str; 3] = ["utun", "tun", "wg"];
+    VPN_TUNNEL_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
 }
 
 /// A tunnel device never describes the public path traffic takes.
@@ -119,6 +163,12 @@ pub struct Capture {
 }
 
 impl Capture {
+    /// Whether the capture thread is still reading. A tunnel capture ends on its
+    /// own when the device goes away.
+    pub fn is_running(&self) -> bool {
+        self.thread.as_ref().is_some_and(|thread| !thread.is_finished())
+    }
+
     /// Stops the thread and waits for it, so no callback outlives the session.
     pub fn stop(mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -152,6 +202,7 @@ pub fn start(candidate: Candidate, session: Arc<SessionShared>, stop: Arc<Atomic
             .iter()
             .map(|network| (network.network(), network.prefix()))
             .collect(),
+        side: candidate.side,
     };
     let thread = thread::Builder::new()
         .name("traffic-capture".to_string())
@@ -205,11 +256,11 @@ fn run(
     }
     tracing::info!(target: "traffic", interface = %name, "capture started");
 
-    let mut aggregates = Aggregates::default();
+    let mut aggregates = Aggregates::new(host.side);
     let mut last_flush = Instant::now();
     let mut last_batch_ms = 0;
     loop {
-        if stop.load(Ordering::Relaxed) {
+        if stop.load(Ordering::Relaxed) || !session.is_active() {
             break;
         }
         match receiver.next() {
@@ -221,7 +272,10 @@ fn run(
             }
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(e) => {
-                session.end(format!("capture on {name} stopped: {e}"));
+                // A tunnel going away is the VPN disconnecting, not a broken session.
+                if host.side == Side::Wire {
+                    session.end(format!("capture on {name} stopped: {e}"));
+                }
                 tracing::warn!(target: "traffic", interface = %name, error = %e, "capture stopped");
                 return;
             }
@@ -268,5 +322,68 @@ mod tests {
         for ip in ["192.168.1.20", "172.20.10.14", "2001:db8::5"] {
             assert!(is_routable_local(ip.parse().expect("ip")), "{ip}");
         }
+    }
+
+    #[test]
+    fn only_ip_tunnel_devices_count_as_vpn_tunnels() {
+        for name in ["utun8", "tun0", "wg0"] {
+            assert!(is_vpn_tunnel_name(name), "{name}");
+        }
+        for name in ["en0", "tap0", "ipsec0", "ppp0", "awdl0", "gif0", "lo0"] {
+            assert!(!is_vpn_tunnel_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_vpn_tunnel_is_the_one_holding_the_egress_address() {
+        let egress: IpAddr = "10.2.0.2".parse().expect("ip");
+        let tunnel_addresses = [egress];
+        assert!(carries_egress("utun8", &tunnel_addresses, egress));
+        // Another tunnel device without that address.
+        assert!(!carries_egress("utun2", &[], egress));
+        // The public interface holding the egress address means no VPN is active.
+        assert!(!carries_egress(
+            "en0",
+            &["192.168.1.20".parse().expect("ip")],
+            "192.168.1.20".parse().expect("ip")
+        ));
+    }
+
+    /// Opens the tunnel capture the session follows and checks that it sees the
+    /// real destination of a packet sent into the VPN. Needs BPF access and a
+    /// connected VPN that owns the default route.
+    #[test]
+    #[ignore = "opens a live capture; needs capture privileges and a connected VPN"]
+    fn live_tunnel_capture_sees_destinations() {
+        use super::super::{HoprPeers, SessionShared};
+        use gnosis_vpn_lib::traffic::Interface;
+
+        let candidate = default_tunnel().expect("a VPN tunnel owning the default route");
+        let stop = Arc::new(AtomicBool::new(false));
+        let session = Arc::new(SessionShared::new(
+            1,
+            Interface {
+                id: "en0".to_string(),
+                name: "en0".to_string(),
+                addresses: Vec::new(),
+                is_default: false,
+            },
+            stop.clone(),
+            HoprPeers::default(),
+        ));
+        let capture = start(candidate, session.clone(), stop).expect("capture starts");
+
+        let socket = UdpSocket::bind("0.0.0.0:0").expect("udp socket");
+        let _ = socket.send_to(&[0u8; 64], "1.1.1.1:9");
+        std::thread::sleep(Duration::from_millis(500));
+        let response = session.read(0);
+        capture.stop();
+
+        let destination: IpAddr = "1.1.1.1".parse().expect("ip");
+        let deltas: Vec<_> = response.batches.iter().flat_map(|batch| batch.deltas.clone()).collect();
+        assert!(
+            deltas.iter().any(|delta| delta.target == destination && delta.tunnel),
+            "expected 1.1.1.1 as a tunnel destination in {deltas:?}"
+        );
     }
 }

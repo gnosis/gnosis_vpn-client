@@ -12,6 +12,10 @@
 //! makes no claim about which process sent a packet or whether the traffic
 //! belongs to the mixnet. It does say whether a remote address is one that HOPR
 //! nodes announced on chain, which describes the endpoint, not the traffic.
+//!
+//! While a VPN tunnel owns the default route, the daemon also captures on that
+//! tunnel device. There the remote address is the destination the host sends
+//! into the VPN, before encryption; on the public interface it is the next hop.
 
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +23,7 @@ use std::net::IpAddr;
 
 /// Bumped on any incompatible change to the types below. Consumers must refuse
 /// to interpret a batch carrying an unknown version.
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
 
 /// One interface the daemon is willing to capture on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,8 +59,12 @@ pub struct Delta {
     /// Sum of complete IP-layer lengths, including the IP header.
     pub bytes: u64,
     /// Whether `target` is an address announced by a HOPR node, per the most
-    /// recent peer snapshot. Always false while the HOPR node is not running.
+    /// recent peer snapshot. Always false while the HOPR node is not running,
+    /// and for destinations seen inside a tunnel.
     pub hopr_peer: bool,
+    /// Seen on the VPN tunnel device rather than the public interface, so
+    /// `target` is a destination inside the VPN, not the next hop.
+    pub tunnel: bool,
 }
 
 /// A bounded slice of aggregated traffic.
@@ -135,6 +143,7 @@ mod tests {
                 direction: Direction::Downstream,
                 bytes: 5120,
                 hopr_peer: true,
+                tunnel: false,
             }],
             dropped_batches: 0,
         };
@@ -143,6 +152,7 @@ mod tests {
         assert!(json.contains("\"bytes\":5120"), "{json}");
         assert!(json.contains("\"target\":\"192.0.2.10\""), "{json}");
         assert!(json.contains("\"hopr_peer\":true"), "{json}");
+        assert!(json.contains("\"tunnel\":false"), "{json}");
         assert!(!json.contains("class"), "{json}");
         let parsed: Batch = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed, batch);
@@ -191,7 +201,7 @@ mod tests {
             protocol: PROTOCOL_VERSION,
         }));
         assert_eq!(
-            r#"{"TrafficStart":{"Ok":{"session_id":1,"interface":{"id":"en0","name":"en0","addresses":["192.0.2.2"],"is_default":true},"protocol":4}}}"#,
+            r#"{"TrafficStart":{"Ok":{"session_id":1,"interface":{"id":"en0","name":"en0","addresses":["192.0.2.2"],"is_default":true},"protocol":5}}}"#,
             serde_json::to_string(&started).expect("serialize")
         );
         assert_eq!(

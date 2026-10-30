@@ -1,4 +1,4 @@
-//! Turns captured link-layer frames into direction-tagged, IP-sized observations.
+//! Turns captured frames into direction-tagged, IP-sized observations.
 //!
 //! Only the link-layer and IP headers are inspected. Payload bytes are never copied, decoded or
 //! retained: everything downstream of [`observe`] sees an address, a direction and
@@ -18,6 +18,18 @@ const ETHERTYPE_VLAN: [u16; 3] = [0x8100, 0x88a8, 0x9100];
 const IPV4_HEADER_LEN: usize = 20;
 const IPV6_HEADER_LEN: usize = 40;
 
+/// Where a capture observes traffic relative to a VPN.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Side {
+    /// The public interface. Frames are Ethernet; the remote address is the
+    /// next hop, such as a VPN server or a HOPR peer.
+    #[default]
+    Wire,
+    /// A VPN tunnel device. Frames are bare IP packets; the remote address is
+    /// the destination the host sends into the VPN.
+    Tunnel,
+}
+
 /// What identifies the capturing host on its interface.
 pub struct Host {
     /// Addresses the interface reports as its own.
@@ -29,6 +41,8 @@ pub struct Host {
     /// Networks the interface is attached to, as address and prefix length.
     /// Endpoints inside them are LAN peers such as the router, not targets.
     pub networks: Vec<(IpAddr, u8)>,
+    /// Decides how frames are laid out.
+    pub side: Side,
 }
 
 /// A packet that involves the captured interface exactly once.
@@ -44,7 +58,14 @@ pub struct Observation {
 /// Classifies one captured frame, or returns `None` when it is not IP traffic
 /// involving exactly one local endpoint.
 pub fn observe(frame: &[u8], host: &Host) -> Option<Observation> {
-    let ip = ip_layer(frame)?;
+    let ip = match host.side {
+        Side::Wire => ip_layer(frame)?,
+        // A tunnel device hands over the IP packet itself.
+        Side::Tunnel => frame,
+    };
+    if ip.is_empty() {
+        return None;
+    }
     let (source, destination, length) = match ip[0] >> 4 {
         4 => ipv4_endpoints(ip)?,
         6 => ipv6_endpoints(ip)?,
@@ -176,9 +197,17 @@ fn within((network, prefix): (IpAddr, u8), address: IpAddr) -> bool {
 #[derive(Default)]
 pub struct Aggregates {
     entries: HashMap<(u64, IpAddr, Direction), u64>,
+    side: Side,
 }
 
 impl Aggregates {
+    pub fn new(side: Side) -> Self {
+        Self {
+            entries: HashMap::new(),
+            side,
+        }
+    }
+
     pub fn record(&mut self, second: u64, observation: Observation) {
         let entry = self
             .entries
@@ -193,6 +222,7 @@ impl Aggregates {
 
     /// Drains everything collected since the last flush.
     pub fn take(&mut self) -> Vec<Delta> {
+        let tunnel = self.side == Side::Tunnel;
         self.entries
             .drain()
             .map(|((second, target, direction), bytes)| Delta {
@@ -202,6 +232,7 @@ impl Aggregates {
                 bytes,
                 // The session marks peers; it holds the announced addresses.
                 hopr_peer: false,
+                tunnel,
             })
             .collect()
     }
@@ -223,6 +254,19 @@ mod tests {
             addresses: [IpAddr::V4(LOCAL_V4)].into_iter().collect(),
             mac: Some(LOCAL_MAC),
             networks: vec![(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 0)), 24)],
+            side: Side::Wire,
+        }
+    }
+
+    const TUNNEL_V4: Ipv4Addr = Ipv4Addr::new(10, 2, 0, 2);
+
+    /// A VPN tunnel device: no link-layer address, a host route of its own.
+    fn tunnel() -> Host {
+        Host {
+            addresses: [IpAddr::V4(TUNNEL_V4)].into_iter().collect(),
+            mac: None,
+            networks: vec![(IpAddr::V4(TUNNEL_V4), 32)],
+            side: Side::Tunnel,
         }
     }
 
@@ -408,6 +452,49 @@ mod tests {
         let remote: Ipv6Addr = "2001:db8:2::1".parse().expect("ip");
         let frame = ethernet(ETHERTYPE_IPV6, &ipv6(local_v6, remote, 8));
         assert_eq!(observe(&frame, &host).expect("observed").target, IpAddr::V6(remote));
+    }
+
+    #[test]
+    fn tunnel_frames_are_bare_ip_packets() {
+        // Byte layout seen on a macOS utun device: the IP header starts at offset 0.
+        let remote = Ipv4Addr::new(203, 0, 113, 9);
+        let out = observe(&ipv4(TUNNEL_V4, remote, 100), &tunnel()).expect("observed");
+        assert_eq!(out.target, IpAddr::V4(remote));
+        assert_eq!(out.direction, Direction::Upstream);
+        assert_eq!(out.length, 120);
+
+        let back = observe(&ipv4(remote, TUNNEL_V4, 8), &tunnel()).expect("observed");
+        assert_eq!(back.direction, Direction::Downstream);
+        assert_eq!(back.length, 28);
+    }
+
+    #[test]
+    fn tunnel_frames_that_are_not_ip_are_ignored() {
+        assert_eq!(observe(&[0u8; 40], &tunnel()), None);
+        assert_eq!(observe(&[], &tunnel()), None);
+        // An Ethernet frame is not a bare IP packet.
+        let remote = Ipv4Addr::new(203, 0, 113, 9);
+        let frame = ethernet(ETHERTYPE_IPV4, &ipv4(TUNNEL_V4, remote, 8));
+        assert_eq!(observe(&frame, &tunnel()), None);
+    }
+
+    #[test]
+    fn wire_frames_are_not_read_as_bare_ip_packets() {
+        let remote = Ipv4Addr::new(203, 0, 113, 9);
+        assert_eq!(observe(&ipv4(LOCAL_V4, remote, 8), &local()), None);
+    }
+
+    #[test]
+    fn aggregates_mark_the_side_they_were_captured_on() {
+        let remote = Ipv4Addr::new(203, 0, 113, 9);
+        let observation = observe(&ipv4(TUNNEL_V4, remote, 8), &tunnel()).expect("observed");
+        let mut on_tunnel = Aggregates::new(Side::Tunnel);
+        on_tunnel.record(0, observation);
+        assert!(on_tunnel.take().iter().all(|delta| delta.tunnel));
+
+        let mut on_wire = Aggregates::new(Side::Wire);
+        on_wire.record(0, observation);
+        assert!(on_wire.take().iter().all(|delta| !delta.tunnel));
     }
 
     #[test]
