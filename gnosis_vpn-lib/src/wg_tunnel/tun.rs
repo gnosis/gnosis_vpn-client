@@ -6,9 +6,9 @@
 //! packet, one `write` injects exactly one - so the adapters need no framing of
 //! their own, unlike the byte-duplex session side.
 //!
-//! Both a [`TunReader`] and a [`TunWriter`] share one [`AsyncFd`] over the fd via
-//! an `Arc`, so the pump can poll readable and writable readiness on the same
-//! device independently inside its `select!`.
+//! A [`TunReader`] and a [`TunWriter`] each own a dup of the fd, so the pump can
+//! poll readable and writable readiness on the same device independently inside
+//! its `select!`.
 //!
 //! # Platform header
 //!
@@ -21,10 +21,9 @@
 #![deny(unsafe_code)]
 
 use std::io;
-use std::os::fd::{AsFd, OwnedFd};
-use std::sync::Arc;
+use std::os::fd::OwnedFd;
 
-use tokio::io::unix::AsyncFd;
+use tokio::net::unix::pipe;
 
 use super::{TunReceiver, TunSender};
 
@@ -49,14 +48,6 @@ fn utun_header(packet: &[u8]) -> [u8; 4] {
     }
 }
 
-fn read_fd(fd: impl AsFd, buf: &mut [u8]) -> io::Result<usize> {
-    rustix::io::read(fd, buf).map_err(io::Error::from)
-}
-
-fn write_fd(fd: impl AsFd, buf: &[u8]) -> io::Result<usize> {
-    rustix::io::write(fd, buf).map_err(io::Error::from)
-}
-
 fn require_complete_packet_write(written: usize, expected: usize) -> io::Result<()> {
     if written == expected {
         Ok(())
@@ -68,7 +59,7 @@ fn require_complete_packet_write(written: usize, expected: usize) -> io::Result<
     }
 }
 
-/// Wrap a TUN fd into a reader/writer pair sharing one non-blocking [`AsyncFd`].
+/// Wrap a TUN fd into a non-blocking reader/writer pair.
 ///
 /// `header_len` is the per-packet platform header ([`PLATFORM_TUN_HEADER_LEN`]);
 /// pass `0` for a headerless device or `4` for macOS `utun`. Must be called from
@@ -87,14 +78,16 @@ pub fn tun_endpoints(fd: OwnedFd, header_len: usize) -> io::Result<(TunReader, T
         ));
     }
     rustix::io::ioctl_fionbio(&fd, true).map_err(io::Error::from)?;
-    let shared = Arc::new(AsyncFd::new(fd)?);
+    // Pipe types register the fd without unsafe AsyncFd::register; plain read/write keeps packet boundaries.
+    let reader = pipe::Receiver::from_owned_fd_unchecked(fd.try_clone()?)?;
+    let writer = pipe::Sender::from_owned_fd_unchecked(fd)?;
     Ok((
         TunReader {
-            inner: shared.clone(),
+            inner: reader,
             header_len,
         },
         TunWriter {
-            inner: shared,
+            inner: writer,
             header_len,
         },
     ))
@@ -103,7 +96,7 @@ pub fn tun_endpoints(fd: OwnedFd, header_len: usize) -> io::Result<(TunReader, T
 /// Reads whole IP packets from the TUN device, one per `recv`, stripping the
 /// platform header.
 pub struct TunReader {
-    inner: Arc<AsyncFd<OwnedFd>>,
+    inner: pipe::Receiver,
     header_len: usize,
 }
 
@@ -113,10 +106,10 @@ impl TunReceiver for TunReader {
         // Read into a header-inclusive scratch, then hand back just the packet.
         let mut scratch = [0u8; super::MAX_FRAME + 4];
         loop {
-            let mut guard = self.inner.readable().await?;
-            match guard.try_io(|fd| read_fd(fd, &mut scratch)) {
-                Ok(Ok(0)) => return Ok(None),
-                Ok(Ok(n)) => {
+            self.inner.readable().await?;
+            match self.inner.try_read(&mut scratch) {
+                Ok(0) => return Ok(None),
+                Ok(n) => {
                     let start = self.header_len.min(n);
                     let packet = &scratch[start..n];
                     if packet.len() > out.len() {
@@ -128,9 +121,9 @@ impl TunReceiver for TunReader {
                     out[..packet.len()].copy_from_slice(packet);
                     return Ok(Some(packet.len()));
                 }
-                Ok(Err(e)) => return Err(e),
                 // Spurious readiness: readiness was cleared, poll again.
-                Err(_would_block) => continue,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(e) => return Err(e),
             }
         }
     }
@@ -138,7 +131,7 @@ impl TunReceiver for TunReader {
 
 /// Writes whole IP packets to the TUN device, prepending the platform header.
 pub struct TunWriter {
-    inner: Arc<AsyncFd<OwnedFd>>,
+    inner: pipe::Sender,
     header_len: usize,
 }
 
@@ -161,13 +154,13 @@ impl TunSender for TunWriter {
             &framed[..header.len() + packet.len()]
         };
         loop {
-            let mut guard = self.inner.writable().await?;
-            match guard.try_io(|fd| write_fd(fd, payload)) {
+            self.inner.writable().await?;
+            match self.inner.try_write(payload) {
                 // A short write on a packet device drops the tail. Never retry it
                 // as a second packet; reject the incomplete write instead.
-                Ok(Ok(n)) => return require_complete_packet_write(n, payload.len()),
-                Ok(Err(e)) => return Err(e),
-                Err(_would_block) => continue,
+                Ok(n) => return require_complete_packet_write(n, payload.len()),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(e) => return Err(e),
             }
         }
     }
@@ -175,7 +168,17 @@ impl TunSender for TunWriter {
 
 #[cfg(test)]
 mod tests {
+    use std::os::fd::AsFd;
+
     use super::*;
+
+    fn read_fd(fd: impl AsFd, buf: &mut [u8]) -> io::Result<usize> {
+        rustix::io::read(fd, buf).map_err(io::Error::from)
+    }
+
+    fn write_fd(fd: impl AsFd, buf: &[u8]) -> io::Result<usize> {
+        rustix::io::write(fd, buf).map_err(io::Error::from)
+    }
 
     /// A connected, message-preserving (`SOCK_DGRAM`) socket pair standing in for
     /// the packet-oriented TUN device: one `write` on the peer becomes exactly one
