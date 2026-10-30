@@ -1,5 +1,4 @@
-//! Fake service that walks a user interface through the sync screen: deploying safe, warmup, then running without exits.
-//! Run as root after stopping the real service: `sudo ./target/debug/examples/fake_service [step_seconds]`.
+//! Fake service walking a UI through the sync screen; run as root with the real service stopped: `fake_service [step_seconds]`.
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
