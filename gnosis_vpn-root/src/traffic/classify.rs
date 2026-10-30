@@ -13,6 +13,8 @@ const ETHERTYPE_IPV6: u16 = 0x86dd;
 const ETHERTYPE_VLAN: [u16; 3] = [0x8100, 0x88a8, 0x9100];
 const IPV4_HEADER_LEN: usize = 20;
 const IPV6_HEADER_LEN: usize = 40;
+/// pnet zero-pads DLT_NULL frames (macOS utun) to a fake Ethernet header aligned to `bpf_hdr`.
+const PNET_LOOPBACK_PADDING: usize = 12;
 
 /// Where a capture observes traffic relative to a VPN.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -50,8 +52,7 @@ pub struct Observation {
 pub fn observe(frame: &[u8], host: &Host) -> Option<Observation> {
     let ip = match host.side {
         Side::Wire => ip_layer(frame)?,
-        // A tunnel device hands over the IP packet itself.
-        Side::Tunnel => frame,
+        Side::Tunnel => tunnel_ip_layer(frame)?,
     };
     if ip.is_empty() {
         return None;
@@ -95,6 +96,18 @@ fn sent_by_host(frame: &[u8], mac: [u8; 6]) -> Option<bool> {
         (false, true) => Some(false),
         _ => None,
     }
+}
+
+fn tunnel_ip_layer(frame: &[u8]) -> Option<&[u8]> {
+    let is_bare_ip = frame.first().is_some_and(|byte| matches!(byte >> 4, 4 | 6));
+    if is_bare_ip {
+        return Some(frame);
+    }
+    let padding = frame.get(..PNET_LOOPBACK_PADDING)?;
+    if padding.iter().any(|byte| *byte != 0) {
+        return None;
+    }
+    frame.get(PNET_LOOPBACK_PADDING..)
 }
 
 fn ip_layer(frame: &[u8]) -> Option<&[u8]> {
@@ -441,7 +454,7 @@ mod tests {
 
     #[test]
     fn tunnel_frames_are_bare_ip_packets() {
-        // Byte layout seen on a macOS utun device: the IP header starts at offset 0.
+        // Linux tun devices hand over the bare IP packet.
         let remote = Ipv4Addr::new(203, 0, 113, 9);
         let out = observe(&ipv4(TUNNEL_V4, remote, 100), &tunnel()).expect("observed");
         assert_eq!(out.target, IpAddr::V4(remote));
@@ -451,6 +464,17 @@ mod tests {
         let back = observe(&ipv4(remote, TUNNEL_V4, 8), &tunnel()).expect("observed");
         assert_eq!(back.direction, Direction::Downstream);
         assert_eq!(back.length, 28);
+    }
+
+    #[test]
+    fn padded_tunnel_frame_is_parsed_as_ip() {
+        let remote = Ipv4Addr::new(203, 0, 113, 9);
+        let mut frame = vec![0u8; PNET_LOOPBACK_PADDING];
+        frame.extend_from_slice(&ipv4(TUNNEL_V4, remote, 100));
+        let out = observe(&frame, &tunnel()).expect("observed");
+        assert_eq!(out.target, IpAddr::V4(remote));
+        assert_eq!(out.direction, Direction::Upstream);
+        assert_eq!(out.length, 120);
     }
 
     #[test]
