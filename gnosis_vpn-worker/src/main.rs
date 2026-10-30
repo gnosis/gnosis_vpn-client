@@ -35,6 +35,7 @@ enum IncomingResolution {
     RoundtripViaCore(Box<(command::WorkerCommand, u64)>),
     Shutdown(exitcode::ExitCode),
     ShutdownToCore,
+    ForceReconnectToCore,
     SustainLoop,
 }
 
@@ -307,6 +308,10 @@ impl State {
                 tracing::debug!(?cmd, id, "received command from root");
                 IncomingResolution::RoundtripViaCore(Box::new((cmd, id)))
             }
+            RootToWorker::ForceReconnect => {
+                tracing::debug!("received force reconnect from root");
+                IncomingResolution::ForceReconnectToCore
+            }
             RootToWorker::ResponseFromRoot(response) => {
                 tracing::debug!(?response, "received response from root");
                 IncomingResolution::ResponseToCore(Box::new(response))
@@ -429,6 +434,9 @@ impl State {
                     }
                     IncomingResolution::ShutdownToCore => {
                         let _ = worker_to_core_sender.send(WorkerToCore::Shutdown).await;
+                    }
+                    IncomingResolution::ForceReconnectToCore => {
+                        let _ = worker_to_core_sender.send(WorkerToCore::ForceReconnect).await;
                     }
                     IncomingResolution::SustainLoop => {}
                 },

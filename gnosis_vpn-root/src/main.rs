@@ -8,7 +8,7 @@ use tokio::net::{UnixListener as TokioUnixListener, UnixStream as TokioUnixStrea
 use tokio::process::Command as TokioCommand;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinSet;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
@@ -23,7 +23,8 @@ use std::path::{Path, PathBuf};
 use std::process::{self, Stdio};
 use std::time::Duration;
 
-use gnosis_vpn_lib::command::{self, Command as LibCommand, CommandRoute, Response, RootCommand, WorkerCommand};
+use gnosis_vpn_ipc::{self as ipc, Reply, Request, Response, ServiceError};
+use gnosis_vpn_lib::command::{CommandRoute, RootCommand, WorkerCommand};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
@@ -97,7 +98,7 @@ struct DaemonState {
     // root process will keep track of worker requests and map their responses
     // so that the requesting stream on the socket receives it's answer
     pending_response_counter: u64,
-    pending_responses: HashMap<u64, oneshot::Sender<Response>>,
+    pending_responses: HashMap<u64, oneshot::Sender<Reply>>,
     // keepalive instructions from service to timer loop
     keep_alive_instruction_sender: mpsc::Sender<KeepAliveInstruction>,
     routing_actor_sender: mpsc::Sender<routing_actor::Msg>,
@@ -117,8 +118,8 @@ enum SignalMessage {
 }
 
 struct SocketCmd {
-    cmd: LibCommand,
-    resp: oneshot::Sender<Response>,
+    request: Request,
+    resp: oneshot::Sender<Reply>,
     /// Kernel-reported uid of the socket peer; the ownership gate trusts nothing else.
     peer_uid: u32,
 }
@@ -208,65 +209,58 @@ async fn signal_channel() -> Result<(CancellationToken, mpsc::Receiver<SignalMes
     Ok((owned_cancel, receiver))
 }
 
-async fn incoming_on_root_socket(
-    stream: TokioUnixStream,
-    socket_cmd_sender: mpsc::Sender<SocketCmd>,
-) -> Option<JoinHandle<()>> {
+/// Serves one connection: each request line is answered in order until the caller hangs up.
+async fn incoming_on_root_socket(stream: TokioUnixStream, socket_cmd_sender: mpsc::Sender<SocketCmd>) {
     let peer_uid = match stream.peer_cred() {
         Ok(cred) => cred.uid(),
         Err(err) => {
             tracing::error!(error = ?err, "failed to read socket peer credentials - dropping connection");
-            return None;
+            return;
         }
     };
     let (socket_reader_half, socket_writer_half) = stream.into_split();
-    let socket_reader = BufReader::new(socket_reader_half);
-    let res_line = socket_reader.lines().next_line().await;
-    match res_line {
-        Ok(Some(line)) => {
-            let res_decode = serde_json::from_str::<LibCommand>(&line);
-            match res_decode {
-                Ok(cmd) => {
-                    tracing::debug!(command = ?cmd, "received socket command");
-                    let (resp_sender, resp_receiver) = oneshot::channel();
-                    let socket_cmd = SocketCmd {
-                        cmd,
-                        resp: resp_sender,
-                        peer_uid,
-                    };
-                    if let Err(err) = socket_cmd_sender.send(socket_cmd).await {
-                        tracing::error!(error = ?err, "failed to send socket command to main loop");
-                        return None;
-                    }
-                    // wait for response and send back to socket
-                    let handle = tokio::spawn(async move {
-                        match resp_receiver.await {
-                            Ok(resp) => {
-                                let mut writer = BufWriter::new(socket_writer_half);
-                                if let Err(err) = send_to_socket(&resp, &mut writer).await {
-                                    tracing::error!(error = ?err, "failed to send response to socket");
-                                }
-                            }
-                            Err(err) => {
-                                tracing::error!(error = ?err, "socket command response channel closed");
-                            }
-                        }
-                    });
-                    return Some(handle);
+    let mut lines = BufReader::new(socket_reader_half).lines();
+    let mut writer = BufWriter::new(socket_writer_half);
+    loop {
+        let line = match lines.next_line().await {
+            Ok(Some(line)) => line,
+            Ok(None) => return,
+            Err(err) => {
+                tracing::error!(error = ?err, "error reading from socket");
+                return;
+            }
+        };
+        let reply = match ipc::decode_request(&line) {
+            Ok(request) => {
+                tracing::debug!(?request, "received socket request");
+                let (resp_sender, resp_receiver) = oneshot::channel();
+                let socket_cmd = SocketCmd {
+                    request,
+                    resp: resp_sender,
+                    peer_uid,
+                };
+                if let Err(err) = socket_cmd_sender.send(socket_cmd).await {
+                    tracing::error!(error = ?err, "failed to send socket request to main loop");
+                    return;
                 }
-                Err(err) => {
-                    tracing::error!(error = %err, "failed parsing incoming socket command");
+                match resp_receiver.await {
+                    Ok(reply) => reply,
+                    Err(err) => {
+                        tracing::error!(error = ?err, "socket request response channel closed");
+                        return;
+                    }
                 }
             }
+            Err(error) => {
+                tracing::warn!(%error, "refusing socket request");
+                Reply::Err { error }
+            }
+        };
+        if let Err(err) = send_to_socket(&reply, &mut writer).await {
+            tracing::error!(error = ?err, "failed to send reply to socket");
+            return;
         }
-        Ok(None) => {
-            tracing::warn!("socket connection closed by peer");
-        }
-        Err(err) => {
-            tracing::error!(error = ?err, "error reading from socket");
-        }
-    };
-    None
+    }
 }
 
 async fn socket_listener(
@@ -317,11 +311,7 @@ async fn socket_listener(
             let cloned_sender = sender.clone();
             tokio::select! {
                 Ok((stream, _addr)) = listener.accept() => {
-                    ongoing.spawn(async move {
-                        if let Some(handle) = incoming_on_root_socket(stream, cloned_sender).await {
-                            handle.await.ok();
-                        }
-                    });
+                    ongoing.spawn(incoming_on_root_socket(stream, cloned_sender));
                 },
                 _ = cancel.cancelled() => {
                     tracing::debug!("socket listener received cancellation");
@@ -712,19 +702,14 @@ where
     }
 }
 
-async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) -> Result<(), exitcode::ExitCode> {
-    let serialized = serde_json::to_string(msg).map_err(|err| {
-        tracing::error!(error = ?err, "failed to serialize response");
-        exitcode::DATAERR
-    })?;
-    writer.write_all(serialized.as_bytes()).await.map_err(|err| {
-        tracing::error!(error = ?err, "error writing to system socket");
-        exitcode::IOERR
-    })?;
-    writer.write_all(b"\n").await.map_err(|err| {
-        tracing::error!(error = ?err, "error appending newline to system socket");
-        exitcode::IOERR
-    })?;
+async fn send_to_socket(reply: &Reply, writer: &mut BufWriter<OwnedWriteHalf>) -> Result<(), exitcode::ExitCode> {
+    writer
+        .write_all(ipc::encode_reply(reply).as_bytes())
+        .await
+        .map_err(|err| {
+            tracing::error!(error = ?err, "error writing to system socket");
+            exitcode::IOERR
+        })?;
     writer.flush().await.map_err(|err| {
         tracing::error!(error = ?err, "error flushing system socket");
         exitcode::IOERR
@@ -732,10 +717,15 @@ async fn send_to_socket(msg: &Response, writer: &mut BufWriter<OwnedWriteHalf>) 
     Ok(())
 }
 
+fn service_version() -> semver::Version {
+    semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("cargo package versions are semver")
+}
+
 /// Dropping a pending sender closes the caller's socket with zero bytes, read as EOF.
-fn answer_pending(pending: &mut HashMap<u64, oneshot::Sender<Response>>, response: Response) {
+fn answer_pending(pending: &mut HashMap<u64, oneshot::Sender<Reply>>, error: ServiceError) {
     for (_, resp) in pending.drain() {
-        let _ = resp.send(response.clone()).map_err(|error| {
+        let reply = Reply::Err { error: error.clone() };
+        let _ = resp.send(reply).map_err(|error| {
             tracing::error!(?error, "socket command response channel closed");
         });
     }
@@ -775,13 +765,13 @@ fn choose_blokli_ip(resolved: Result<Ipv4Addr, String>, current: Ipv4Addr) -> Ip
 }
 
 /// Root reads and stops but never owns; everyone else must be the owner.
-fn gate(owner_uid: Option<u32>, cmd: &LibCommand, peer_uid: u32) -> Option<Response> {
-    if matches!(cmd, LibCommand::Ping | LibCommand::Info) {
+fn gate(owner_uid: Option<u32>, request: &Request, peer_uid: u32) -> Option<ServiceError> {
+    if matches!(request, Request::Ping | Request::Info) {
         return None;
     }
     let caller_is_root = peer_uid == 0;
-    if caller_is_root && matches!(cmd, LibCommand::StartClient(_)) {
-        return Some(Response::RootCannotOwnWorker);
+    if caller_is_root && matches!(request, Request::StartClient { .. }) {
+        return Some(ServiceError::RootCannotOwnWorker);
     }
     if caller_is_root {
         return None;
@@ -790,7 +780,7 @@ fn gate(owner_uid: Option<u32>, cmd: &LibCommand, peer_uid: u32) -> Option<Respo
     if owner_uid == peer_uid {
         return None;
     }
-    Some(Response::InUseByOtherUser)
+    Some(ServiceError::InUseByOtherUser)
 }
 
 /// An unopenable log file degrades to stdout; only a configured file yields a reload handle for SIGHUP.
@@ -873,19 +863,14 @@ impl DaemonState {
 
     /// Sends ForceReconnect to the worker so the HOPR session restarts after a network change.
     /// The worker tears down and re-establishes routing and the HOPR connection.
-    /// Fire-and-forget: we don't wait for or track the acknowledgment.
+    /// Fire-and-forget: the worker sends no acknowledgment.
     async fn force_reconnect_on_network_change(&mut self) {
         tracing::info!("network changed — triggering HOPR session reconnect");
         if matches!(self.shutdown_ongoing, Shutdown::None)
             && let Some(ref mut child) = self.worker_child
+            && let Err(e) = send_to_worker(RootToWorker::ForceReconnect, &mut child.socket_writer).await
         {
-            let msg = RootToWorker::WorkerCommand {
-                cmd: WorkerCommand::ForceReconnect,
-                id: 0,
-            };
-            if let Err(e) = send_to_worker(msg, &mut child.socket_writer).await {
-                tracing::warn!(?e, "failed to send ForceReconnect to worker");
-            }
+            tracing::warn!(?e, "failed to send ForceReconnect to worker");
         }
     }
 
@@ -949,21 +934,25 @@ impl DaemonState {
     }
 
     async fn incoming_socket_command(&mut self, socket_cmd: SocketCmd) -> Result<(), exitcode::ExitCode> {
-        let SocketCmd { cmd, resp, peer_uid } = socket_cmd;
+        let SocketCmd {
+            request,
+            resp,
+            peer_uid,
+        } = socket_cmd;
         // Before any side effect: a refused connect must not touch the owner's idle countdown.
         let owner_uid = self
             .worker_owner
             .as_ref()
             .map(|owner| owner.uid)
             .or(self.killswitch_holder);
-        if let Some(refusal) = gate(owner_uid, &cmd, peer_uid) {
-            tracing::debug!(?cmd, peer_uid, owner_uid, "refusing socket command");
-            let _ = resp.send(refusal).map_err(|error| {
+        if let Some(error) = gate(owner_uid, &request, peer_uid) {
+            tracing::debug!(?request, peer_uid, owner_uid, "refusing socket request");
+            let _ = resp.send(Reply::Err { error }).map_err(|error| {
                 tracing::error!(?error, "socket command response channel closed");
             });
             return Ok(());
         }
-        match CommandRoute::from(cmd) {
+        match CommandRoute::from(request) {
             CommandRoute::Worker(w_cmd) => {
                 self.handle_hybrid_cmd(&w_cmd).await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
@@ -979,7 +968,10 @@ impl DaemonState {
                         // The worker died before the command could reach it; answer
                         // the caller directly instead of leaving the response pending.
                         if let Some(resp) = self.pending_responses.remove(&self.pending_response_counter) {
-                            let _ = resp.send(Response::WorkerRestarting).map_err(|error| {
+                            let reply = Reply::Err {
+                                error: ServiceError::WorkerRestarting,
+                            };
+                            let _ = resp.send(reply).map_err(|error| {
                                 tracing::error!(?error, "socket command response channel closed");
                             });
                         }
@@ -991,14 +983,17 @@ impl DaemonState {
                         .await;
                     Ok(())
                 } else {
-                    let response = self
-                        .offline_response(&w_cmd)
-                        .unwrap_or_else(|| self.worker_gone_response());
+                    let reply = match self.offline_response(&w_cmd) {
+                        Some(response) => Reply::Ok { response },
+                        None => Reply::Err {
+                            error: self.worker_gone_error(),
+                        },
+                    };
                     // The command suspended the countdown before we knew there was no worker; undo that.
-                    if matches!(w_cmd, WorkerCommand::Connect(_) | WorkerCommand::Probe(_)) {
+                    if matches!(w_cmd, WorkerCommand::Connect { .. } | WorkerCommand::Probe { .. }) {
                         self.probe_ended().await;
                     }
-                    let _ = resp.send(response).map_err(|error| {
+                    let _ = resp.send(reply).map_err(|error| {
                         tracing::error!(?error, "socket command response channel closed");
                     });
                     Ok(())
@@ -1006,7 +1001,7 @@ impl DaemonState {
             }
             CommandRoute::Root(root_cmd) => {
                 let response = self.incoming_root_command(root_cmd, peer_uid).await?;
-                let _ = resp.send(response).map_err(|error| {
+                let _ = resp.send(Reply::Ok { response }).map_err(|error| {
                     tracing::error!(?error, "socket command response channel closed");
                 });
                 Ok(())
@@ -1062,16 +1057,21 @@ impl DaemonState {
     }
 
     /// What root answers once the worker is gone and it has no config-level answer.
-    fn worker_gone_response(&self) -> Response {
+    fn worker_gone_error(&self) -> ServiceError {
         match self.shutdown_ongoing {
-            Shutdown::RestartWorker => Response::WorkerRestarting,
-            _ => Response::WorkerOffline,
+            Shutdown::RestartWorker => ServiceError::WorkerRestarting,
+            _ => ServiceError::WorkerOffline,
         }
     }
 
     /// Only what the config file names; the worker's answer also carries whatever discovery found.
-    fn configured_destination_ids(&self) -> Vec<String> {
-        self.config.destinations.connect_ids()
+    fn configured_destination_ids(&self) -> Vec<ipc::DestinationId> {
+        self.config
+            .destinations
+            .connect_ids()
+            .into_iter()
+            .map(Into::into)
+            .collect()
     }
 
     fn status_response_offline(&self) -> Response {
@@ -1079,25 +1079,23 @@ impl DaemonState {
         vals.sort_unstable_by(|a, b| a.connect_id.cmp(&b.connect_id));
         let destinations = vals
             .into_iter()
-            .map(|dest| command::DestinationState {
-                destination: dest.clone(),
+            .map(|dest| ipc::DestinationStatus {
+                destination: dest.into(),
                 route_health: None,
             })
             .collect();
         let run_mode = match self.shutdown_ongoing {
-            Shutdown::RestartWorker => command::RunMode::Restarting,
-            _ => command::RunMode::NotRunning,
+            Shutdown::RestartWorker => ipc::RunMode::Restarting,
+            _ => ipc::RunMode::NotRunning,
         };
-        Response::status(command::StatusResponse {
+        Response::Status(Box::new(ipc::Status {
             run_mode,
             destinations,
-            target_destination: self.target_dest_id.clone(),
-            connecting: None,
-            reconnecting: None,
-            connected: None,
+            target: self.target_dest_id.as_deref().map(Into::into),
+            connection: ipc::Connection::Disconnected,
             disconnecting: vec![],
             probe: None,
-        })
+        }))
     }
 
     async fn incoming_root_command(&mut self, cmd: RootCommand, peer_uid: u32) -> Result<Response, exitcode::ExitCode> {
@@ -1117,29 +1115,28 @@ impl DaemonState {
                     .filter(|_| worker_logs_to_file)
                     .filter(|owner| peer_uid == 0 || owner.uid == peer_uid)
                     .map(|owner| owner.dirs.logs.clone());
-                let info = command::InfoResponse {
-                    version: env!("CARGO_PKG_VERSION").to_string(),
+                let info = ipc::InfoResponse {
+                    version: service_version(),
                     log_file: self.cli.log_file.clone(),
                     package_version,
                     worker_log_dir,
                 };
                 Ok(Response::Info(info))
             }
-
             RootCommand::StartClient(keepalive) => match (self.shutdown_ongoing, &self.worker_child) {
                 (Shutdown::None, Some(_)) => {
                     let _ = self
                         .keep_alive_instruction_sender
                         .send(KeepAliveInstruction::Ignite(keepalive))
                         .await;
-                    Ok(Response::StartClient(command::StartClientResponse::AlreadyRunning))
+                    Ok(Response::StartClient(ipc::StartClientResponse::AlreadyRunning))
                 }
                 (Shutdown::None, None) => {
                     let owner = match WorkerOwner::from_uid(peer_uid) {
                         Ok(owner) => owner,
                         Err(error) => {
                             tracing::warn!(%error, peer_uid, "cannot start a worker for this caller");
-                            return Ok(Response::StartClient(command::StartClientResponse::SpawnFailed {
+                            return Ok(Response::StartClient(ipc::StartClientResponse::SpawnFailed {
                                 reason: error.to_string(),
                             }));
                         }
@@ -1148,15 +1145,13 @@ impl DaemonState {
                     self.worker_owner = Some(owner);
                     if let Err(reason) = self.setup_worker().await {
                         self.forget_owner();
-                        return Ok(Response::StartClient(command::StartClientResponse::SpawnFailed {
-                            reason,
-                        }));
+                        return Ok(Response::StartClient(ipc::StartClientResponse::SpawnFailed { reason }));
                     }
                     let _ = self
                         .keep_alive_instruction_sender
                         .send(KeepAliveInstruction::Ignite(keepalive))
                         .await;
-                    Ok(Response::StartClient(command::StartClientResponse::Started))
+                    Ok(Response::StartClient(ipc::StartClientResponse::Started))
                 }
                 (Shutdown::Worker, _) => {
                     // escalate to restart
@@ -1166,7 +1161,7 @@ impl DaemonState {
                         .keep_alive_instruction_sender
                         .send(KeepAliveInstruction::Ignite(keepalive))
                         .await;
-                    Ok(Response::StartClient(command::StartClientResponse::Started))
+                    Ok(Response::StartClient(ipc::StartClientResponse::Started))
                 }
                 (Shutdown::RestartWorker, _) => {
                     // ignore already restarting
@@ -1175,7 +1170,7 @@ impl DaemonState {
                         .keep_alive_instruction_sender
                         .send(KeepAliveInstruction::Ignite(keepalive))
                         .await;
-                    Ok(Response::StartClient(command::StartClientResponse::Started))
+                    Ok(Response::StartClient(ipc::StartClientResponse::Started))
                 }
                 (Shutdown::Service, _) => {
                     tracing::warn!("received start client command during service shutdown - cannot start client");
@@ -1187,7 +1182,7 @@ impl DaemonState {
                 (Shutdown::None, None) => {
                     // A crashed worker leaves the killswitch armed with nothing left to disconnect.
                     self.disable_killswitch().await;
-                    Ok(Response::StopClient(command::StopClientResponse::NotRunning))
+                    Ok(Response::StopClient(ipc::StopClientResponse::NotRunning))
                 }
                 (Shutdown::None, Some(child)) => {
                     tracing::debug!("sending shutdown signal to worker process due to stop client command");
@@ -1196,12 +1191,12 @@ impl DaemonState {
                     self.cleanup_worker_resources().await;
                     self.disable_killswitch().await;
                     self.target_dest_id = None;
-                    Ok(Response::StopClient(command::StopClientResponse::Stopped))
+                    Ok(Response::StopClient(ipc::StopClientResponse::Stopped))
                 }
                 (Shutdown::Worker, _) => {
                     // ignore already stopping
                     tracing::debug!("received stop client command during worker shutdown - ignoring");
-                    Ok(Response::StopClient(command::StopClientResponse::Stopped))
+                    Ok(Response::StopClient(ipc::StopClientResponse::Stopped))
                 }
                 (Shutdown::RestartWorker, _) => {
                     // cancel worker restart and keep it stopped
@@ -1209,7 +1204,7 @@ impl DaemonState {
                     self.shutdown_ongoing = Shutdown::Worker;
                     self.disable_killswitch().await;
                     self.target_dest_id = None;
-                    Ok(Response::StopClient(command::StopClientResponse::Stopped))
+                    Ok(Response::StopClient(ipc::StopClientResponse::Stopped))
                 }
                 (Shutdown::Service, _) => {
                     tracing::warn!("received stop client command during service shutdown - cannot stop client");
@@ -1239,23 +1234,19 @@ impl DaemonState {
 
     async fn incoming_worker_response(&mut self, id: u64, resp: Response) -> Result<(), exitcode::ExitCode> {
         tracing::debug!(?resp, "received worker response");
-        // ForceReconnect is fire-and-forget (id=0), no pending response entry
-        if matches!(resp, Response::ForceReconnectAcknowledged) {
-            return Ok(());
-        }
         // Only an accepted connect sets the target, and as the connect id, not the typed token.
         if let Response::Connect(
-            command::ConnectResponse::Connecting { destination }
-            | command::ConnectResponse::WaitingToConnect { destination, .. }
-            | command::ConnectResponse::AlreadyConnected { destination },
+            ipc::ConnectResponse::Connecting { destination }
+            | ipc::ConnectResponse::WaitingToConnect { destination, .. }
+            | ipc::ConnectResponse::AlreadyConnected { destination },
         ) = &resp
         {
-            tracing::debug!(id = %destination.connect_id, "remembering target destination from connect response");
-            self.target_dest_id = Some(destination.connect_id.clone());
+            tracing::debug!(id = %destination.id, "remembering target destination from connect response");
+            self.target_dest_id = Some(destination.id.to_string());
         }
         self.track_probe(&resp).await;
         if let Some(resp_sender) = self.pending_responses.remove(&id) {
-            if resp_sender.send(resp).is_err() {
+            if resp_sender.send(Reply::Ok { response: resp }).is_err() {
                 tracing::error!(id, "unexpected channel closure");
             }
         } else {
@@ -1440,7 +1431,7 @@ impl DaemonState {
             Shutdown::None => {
                 tracing::warn!("worker process exited cleanly without shutdown signal - restarting");
                 // Ids issued to the dead worker are never answered by its replacement.
-                answer_pending(&mut self.pending_responses, Response::WorkerRestarting);
+                answer_pending(&mut self.pending_responses, ServiceError::WorkerRestarting);
                 self.respawn_or_forget().await;
                 Ok(())
             }
@@ -1492,7 +1483,7 @@ impl DaemonState {
         self.worker_owner = None;
         self.target_dest_id = None;
         // Only the failed-exit path still has pending ids, and nothing restarts for them.
-        answer_pending(&mut self.pending_responses, Response::WorkerOffline);
+        answer_pending(&mut self.pending_responses, ServiceError::WorkerOffline);
     }
 
     /// Restart is a no-op while suspended, so a suspend whose answer died with the worker must not outlive it.
@@ -1698,7 +1689,7 @@ impl DaemonState {
         self.probing = false;
         self.ping_tasks.shutdown().await;
         self.teardown_any_routing().await;
-        let worker_gone = self.worker_gone_response();
+        let worker_gone = self.worker_gone_error();
         answer_pending(&mut self.pending_responses, worker_gone);
         let _ = self
             .keep_alive_instruction_sender
@@ -1766,11 +1757,11 @@ impl DaemonState {
     async fn track_probe(&mut self, resp: &Response) {
         match resp {
             Response::Probe(
-                command::ProbeResponse::Probing { .. }
-                | command::ProbeResponse::Replaced { .. }
-                | command::ProbeResponse::AlreadyProbing { .. },
+                ipc::ProbeResponse::Probing { .. }
+                | ipc::ProbeResponse::Replaced { .. }
+                | ipc::ProbeResponse::AlreadyProbing { .. },
             ) => self.probing = true,
-            Response::Unprobe(command::UnprobeResponse::Closing { .. } | command::UnprobeResponse::NotProbing) => {
+            Response::Unprobe(ipc::UnprobeResponse::Closing { .. } | ipc::UnprobeResponse::NotProbing) => {
                 self.probing = false
             }
             // The probe command suspended the countdown before the worker refused it; undo that.
@@ -1794,7 +1785,7 @@ impl DaemonState {
     async fn handle_hybrid_cmd(&mut self, cmd: &WorkerCommand) {
         match cmd {
             // A probe is deliberate long-running activity, so it holds the idle countdown like a connection.
-            WorkerCommand::Connect(_) | WorkerCommand::Probe(_) => {
+            WorkerCommand::Connect { .. } | WorkerCommand::Probe { .. } => {
                 let _ = self
                     .keep_alive_instruction_sender
                     .send(KeepAliveInstruction::Suspend)
@@ -1850,9 +1841,14 @@ mod tests {
         let (tx, rx) = oneshot::channel();
         let mut pending = HashMap::from([(1u64, tx)]);
 
-        answer_pending(&mut pending, Response::WorkerRestarting);
+        answer_pending(&mut pending, ServiceError::WorkerRestarting);
 
-        assert!(matches!(rx.await, Ok(Response::WorkerRestarting)));
+        assert!(matches!(
+            rx.await,
+            Ok(Reply::Err {
+                error: ServiceError::WorkerRestarting
+            })
+        ));
         assert!(pending.is_empty());
     }
 
@@ -1958,44 +1954,50 @@ mod tests {
     const ALICE: u32 = 1000;
     const BOB: u32 = 1001;
 
+    fn start_client() -> Request {
+        Request::StartClient {
+            timeout: Duration::from_secs(1),
+        }
+    }
+
     #[test]
     fn without_an_owner_everything_is_open_except_owning_as_root() {
-        assert!(gate(None, &LibCommand::Status, BOB).is_none());
-        assert!(gate(None, &LibCommand::StopClient, BOB).is_none());
-        assert!(gate(None, &LibCommand::StartClient(Duration::from_secs(1)), BOB).is_none());
-        assert!(matches!(
-            gate(None, &LibCommand::StartClient(Duration::from_secs(1)), 0),
-            Some(Response::RootCannotOwnWorker)
-        ));
+        assert!(gate(None, &Request::Status, BOB).is_none());
+        assert!(gate(None, &Request::StopClient, BOB).is_none());
+        assert!(gate(None, &start_client(), BOB).is_none());
+        assert_eq!(gate(None, &start_client(), 0), Some(ServiceError::RootCannotOwnWorker));
     }
 
     #[test]
     fn another_user_is_refused_everything_but_ping_and_info() {
-        for cmd in [
-            LibCommand::Status,
-            LibCommand::Destinations,
-            LibCommand::Connect("x".into()),
-            LibCommand::StopClient,
-            LibCommand::StartClient(Duration::from_secs(1)),
+        for request in [
+            Request::Status,
+            Request::Destinations,
+            Request::Connect {
+                destination: "x".into(),
+            },
+            Request::StopClient,
+            start_client(),
         ] {
-            assert!(
-                matches!(gate(Some(ALICE), &cmd, BOB), Some(Response::InUseByOtherUser)),
-                "{cmd:?}"
+            assert_eq!(
+                gate(Some(ALICE), &request, BOB),
+                Some(ServiceError::InUseByOtherUser),
+                "{request:?}"
             );
-            assert!(gate(Some(ALICE), &cmd, ALICE).is_none(), "{cmd:?}");
+            assert!(gate(Some(ALICE), &request, ALICE).is_none(), "{request:?}");
         }
-        assert!(gate(Some(ALICE), &LibCommand::Ping, BOB).is_none());
-        assert!(gate(Some(ALICE), &LibCommand::Info, BOB).is_none());
+        assert!(gate(Some(ALICE), &Request::Ping, BOB).is_none());
+        assert!(gate(Some(ALICE), &Request::Info, BOB).is_none());
     }
 
     #[test]
     fn root_reads_and_stops_but_never_owns() {
-        assert!(gate(Some(ALICE), &LibCommand::Status, 0).is_none());
-        assert!(gate(Some(ALICE), &LibCommand::StopClient, 0).is_none());
-        assert!(matches!(
-            gate(Some(ALICE), &LibCommand::StartClient(Duration::from_secs(1)), 0),
-            Some(Response::RootCannotOwnWorker)
-        ));
+        assert!(gate(Some(ALICE), &Request::Status, 0).is_none());
+        assert!(gate(Some(ALICE), &Request::StopClient, 0).is_none());
+        assert_eq!(
+            gate(Some(ALICE), &start_client(), 0),
+            Some(ServiceError::RootCannotOwnWorker)
+        );
     }
 
     #[test]

@@ -17,6 +17,7 @@ pub mod route_health;
 pub mod shell_command_ext;
 pub mod socket;
 pub mod wg_tunnel;
+pub mod wire;
 pub mod wireguard;
 pub mod worker;
 pub mod worker_params;
@@ -30,7 +31,6 @@ pub const IDENTIFIER: &str = "com.gnosisvpn.gnosisvpnclient";
 pub(crate) mod compat;
 pub(crate) mod gvpn_client;
 pub(crate) mod info;
-pub(crate) mod ticket_stats;
 
 mod log_output;
 mod peer;

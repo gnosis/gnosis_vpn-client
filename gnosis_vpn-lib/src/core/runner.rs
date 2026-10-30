@@ -21,7 +21,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::command::{self, Response};
 use crate::compat::SafeModule;
 use crate::connection::destination::{Destination, ExitKey};
 use crate::hopr::blokli_config::BlokliConfig;
@@ -31,6 +30,7 @@ use crate::probe;
 use crate::route_health::RouteWalk;
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, connection, event, peer, ping, remote_data};
+use gnosis_vpn_ipc::{Response, TicketStatsStatus};
 
 /// Announced peers only feed killswitch exemptions, which tolerate a slow refresh.
 const ANNOUNCED_PEERS_INTERVAL: Duration = Duration::from_secs(90);
@@ -129,7 +129,7 @@ pub(crate) enum Results {
     /// Periodic read of the strategy reactor's health verdict.
     StrategySampleTick,
     NerdStatsTicketStats {
-        res: command::TicketStatsStatus,
+        res: TicketStatsStatus,
         resp: oneshot::Sender<Response>,
     },
     /// A quick probe finished; Core records it and offers `session` to a probe of that exit.

@@ -1,6 +1,6 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, Currency};
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Deserializer, Serializer};
 
 pub mod address {
@@ -13,80 +13,6 @@ pub mod address {
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Address, D::Error> {
         let hex = String::deserialize(d)?;
         hex.parse::<Address>().map_err(serde::de::Error::custom)
-    }
-}
-
-/// `Vec<Address>` as a JSON array of checksum address strings.
-pub mod addresses {
-    use super::*;
-    use serde::ser::SerializeSeq;
-
-    pub fn serialize<S: Serializer>(addrs: &[Address], s: S) -> Result<S::Ok, S::Error> {
-        let mut seq = s.serialize_seq(Some(addrs.len()))?;
-        for addr in addrs {
-            seq.serialize_element(&addr.to_checksum())?;
-        }
-        seq.end()
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Address>, D::Error> {
-        let raw = Vec::<String>::deserialize(d)?;
-        raw.into_iter()
-            .map(|hex| hex.parse::<Address>().map_err(serde::de::Error::custom))
-            .collect()
-    }
-}
-
-/// `HashMap<Address, V>` as a JSON object keyed by checksum address strings.
-pub mod address_map {
-    use super::*;
-    use serde::Serialize;
-    use serde::ser::SerializeMap;
-    use std::collections::HashMap;
-
-    pub fn serialize<V: Serialize, S: Serializer>(map: &HashMap<Address, V>, s: S) -> Result<S::Ok, S::Error> {
-        let mut m = s.serialize_map(Some(map.len()))?;
-        for (addr, v) in map {
-            m.serialize_entry(&addr.to_checksum(), v)?;
-        }
-        m.end()
-    }
-
-    pub fn deserialize<'de, V: Deserialize<'de>, D: Deserializer<'de>>(d: D) -> Result<HashMap<Address, V>, D::Error> {
-        let raw = HashMap::<String, V>::deserialize(d)?;
-        raw.into_iter()
-            .map(|(k, v)| Ok((k.parse::<Address>().map_err(serde::de::Error::custom)?, v)))
-            .collect()
-    }
-}
-
-pub mod balance {
-    use super::*;
-
-    pub fn serialize<C: Currency, S: Serializer>(bal: &Balance<C>, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&bal.to_string())
-    }
-
-    pub fn deserialize<'de, C: Currency, D: Deserializer<'de>>(d: D) -> Result<Balance<C>, D::Error> {
-        let s = String::deserialize(d)?;
-        s.parse::<Balance<C>>().map_err(serde::de::Error::custom)
-    }
-}
-
-pub mod opt_balance {
-    use super::*;
-
-    pub fn serialize<C: Currency, S: Serializer>(bal: &Option<Balance<C>>, s: S) -> Result<S::Ok, S::Error> {
-        match bal {
-            None => s.serialize_none(),
-            Some(bal) => s.serialize_some(&bal.to_string()),
-        }
-    }
-
-    pub fn deserialize<'de, C: Currency, D: Deserializer<'de>>(d: D) -> Result<Option<Balance<C>>, D::Error> {
-        let s = Option::<String>::deserialize(d)?;
-        s.map(|s| s.parse::<Balance<C>>().map_err(serde::de::Error::custom))
-            .transpose()
     }
 }
 
@@ -104,64 +30,5 @@ pub mod system_time {
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<SystemTime, D::Error> {
         let ms = u64::deserialize(d)?;
         Ok(UNIX_EPOCH + Duration::from_millis(ms))
-    }
-}
-
-pub mod opt_system_time {
-    use super::*;
-
-    pub fn serialize<S: Serializer>(t: &Option<SystemTime>, s: S) -> Result<S::Ok, S::Error> {
-        match t {
-            None => s.serialize_none(),
-            Some(t) => {
-                let ms = t.duration_since(UNIX_EPOCH).unwrap_or(Duration::ZERO).as_millis() as u64;
-                s.serialize_some(&ms)
-            }
-        }
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<SystemTime>, D::Error> {
-        let ms = Option::<u64>::deserialize(d)?;
-        Ok(ms.map(|ms| UNIX_EPOCH + Duration::from_millis(ms)))
-    }
-}
-
-pub mod duration_ms {
-    use super::*;
-
-    pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_f64(d.as_secs_f64() * 1000.0)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
-        let ms = f64::deserialize(d)?;
-        let is_valid = ms.is_finite() && ms >= 0.0;
-        if !is_valid {
-            return Err(serde::de::Error::custom(format!("invalid duration: {ms} ms")));
-        }
-        Ok(Duration::from_secs_f64(ms / 1000.0))
-    }
-}
-
-pub mod opt_duration_ms {
-    use super::*;
-
-    pub fn serialize<S: Serializer>(d: &Option<Duration>, s: S) -> Result<S::Ok, S::Error> {
-        match d {
-            None => s.serialize_none(),
-            Some(d) => s.serialize_some(&(d.as_secs_f64() * 1000.0)),
-        }
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Duration>, D::Error> {
-        let ms = Option::<f64>::deserialize(d)?;
-        ms.map(|ms| {
-            let is_valid = ms.is_finite() && ms >= 0.0;
-            if !is_valid {
-                return Err(serde::de::Error::custom(format!("invalid duration: {ms} ms")));
-            }
-            Ok(Duration::from_secs_f64(ms / 1000.0))
-        })
-        .transpose()
     }
 }

@@ -9,6 +9,7 @@ version      = { workspace = true }
 anyhow.workspace             = true
 clap.workspace               = true
 exitcode.workspace           = true
+gnosis_vpn-ipc.workspace     = true
 gnosis_vpn-lib.workspace     = true
 rand.workspace               = true
 reqwest.workspace            = true

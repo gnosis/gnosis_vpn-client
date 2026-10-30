@@ -1,108 +1,12 @@
 //! Per-destination routability from Core's graph walks; exit health lives in [`crate::probe`].
-use serde::{Deserialize, Serialize};
+use std::time::SystemTime;
 
-use std::fmt::{self, Display};
-use std::time::{Duration, SystemTime};
-
-use edgli::hopr_lib::api::types::primitive::prelude::Address;
+pub use gnosis_vpn_ipc::{
+    ApiVersion, QuickProbeCheck, QuickProbeState, RouteHealthState, RouteHealthView, RouteWalk, UnrecoverableReason,
+};
 
 use crate::connection::destination::{Destination, ExitKey, HopRouting};
-use crate::log_output;
-use crate::probe::{Health, QuickProbeOutcome, Versions, select_api_version};
-use crate::serde_utils;
-
-/// Terminal failure modes. `NotAllowed` and `CannotOpenSession` need a config change; `IncompatibleApiVersion` an exit upgrade.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum UnrecoverableReason {
-    /// 0-hop without `--allow-insecure`, or 2+ hops without `--allow-experimental`.
-    NotAllowed,
-    /// The exit server only offers API versions we do not support.
-    IncompatibleApiVersion { server_versions: Vec<String> },
-    /// No session can be opened with this client's session config, so every retry aborts the same way.
-    CannotOpenSession { error: String },
-}
-
-/// Also the wire format shown by the CLI, so variant names are user-visible.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "state")]
-pub enum RouteHealthState {
-    Unrecoverable {
-        reason: UnrecoverableReason,
-    },
-    /// The graph holds no plannable path to the exit right now.
-    NotRoutable,
-    /// A path exists; connecting may proceed.
-    Routable,
-}
-
-/// The last graph walk for this exit; also the wire format shown by the CLI.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "found")]
-pub enum RouteWalk {
-    /// The exit's chain address maps to no packet key - it never announced itself.
-    NotAnnounced {
-        #[serde(with = "serde_utils::system_time")]
-        walked_at: SystemTime,
-    },
-    /// No path survived the planner's selection and chain validation in at least one direction.
-    NoPath {
-        #[serde(with = "serde_utils::system_time")]
-        walked_at: SystemTime,
-        forward_count: usize,
-        return_count: usize,
-    },
-    Paths {
-        #[serde(with = "serde_utils::system_time")]
-        walked_at: SystemTime,
-        /// Capped at the planner's own `max_cached_paths`.
-        count: usize,
-        /// Distinct first relays among them; 1 means a single point of failure.
-        distinct_first_relays: usize,
-        /// Relays of the best-valued path, in path order; empty on a 0-hop route.
-        #[serde(with = "serde_utils::addresses")]
-        best_relays: Vec<Address>,
-        /// The best path's value in (0.0, 1.0]; higher is better.
-        best_value: f64,
-        /// Paths `exit -> me`, also capped at `max_cached_paths`.
-        return_count: usize,
-        /// Relays of the best-valued return path, in path order from the exit.
-        #[serde(with = "serde_utils::addresses")]
-        return_best_relays: Vec<Address>,
-        return_best_value: f64,
-    },
-}
-
-/// What one quick probe measured on the exit.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuickProbeCheck {
-    #[serde(with = "serde_utils::system_time")]
-    pub checked_at: SystemTime,
-    pub versions: Versions,
-    /// The API version this client selected from `versions`; None means incompatible.
-    pub api_version: Option<String>,
-    pub load: Health,
-    /// Round-trip of the status request, so it carries the exit's status-generation time too.
-    #[serde(with = "serde_utils::duration_ms")]
-    pub status_rtt: Duration,
-}
-
-/// The last `quickprobe` of this exit; also the wire format shown by the CLI.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "state")]
-pub enum QuickProbeState {
-    Checking {
-        #[serde(with = "serde_utils::system_time")]
-        since: SystemTime,
-        /// The result this check refreshes; kept so a re-check does not blank the exit's data.
-        last: Option<QuickProbeCheck>,
-    },
-    Checked(QuickProbeCheck),
-    Failed {
-        #[serde(with = "serde_utils::system_time")]
-        checked_at: SystemTime,
-        error: String,
-    },
-}
+use crate::probe::{QuickProbeOutcome, select_api_version};
 
 pub(crate) struct RouteHealth {
     key: ExitKey,
@@ -120,6 +24,15 @@ impl RouteHealth {
             last_error: None,
             last_walk: None,
             quick_probe: None,
+        }
+    }
+
+    pub(crate) fn view(&self) -> RouteHealthView {
+        RouteHealthView {
+            state: self.state.clone(),
+            last_error: self.last_error().map(str::to_owned),
+            walk: self.walk().cloned(),
+            quick_probe: self.quick_probe().cloned(),
         }
     }
 
@@ -153,11 +66,11 @@ impl RouteHealth {
     pub(crate) fn apply_quick_probe(&mut self, outcome: &Result<QuickProbeOutcome, String>, now: SystemTime) {
         self.quick_probe = Some(match outcome {
             Ok(found) => {
-                self.apply_api_versions(&found.versions.versions);
+                self.apply_api_versions(&found.versions.api);
                 QuickProbeState::Checked(QuickProbeCheck {
                     checked_at: now,
                     versions: found.versions.clone(),
-                    api_version: found.api_version.clone(),
+                    api_version: found.api_version,
                     load: found.health.clone(),
                     status_rtt: found.status_rtt,
                 })
@@ -232,10 +145,10 @@ impl RouteHealth {
     }
 
     /// One rule for every probe kind: an exit's advertised API versions latch or unlatch the route.
-    pub(crate) fn apply_api_versions(&mut self, server_versions: &[String]) {
-        match select_api_version(server_versions) {
+    pub(crate) fn apply_api_versions(&mut self, offered: &[ApiVersion]) {
+        match select_api_version(offered) {
             Some(_) => self.clear_incompatible(),
-            None => self.set_incompatible(server_versions.to_vec()),
+            None => self.set_incompatible(offered.to_vec()),
         }
     }
 
@@ -251,13 +164,13 @@ impl RouteHealth {
     }
 
     /// Latch on an exit that speaks no API version we support. `NotAllowed` keeps precedence.
-    fn set_incompatible(&mut self, server_versions: Vec<String>) {
+    fn set_incompatible(&mut self, offered: Vec<ApiVersion>) {
         if self.is_unrecoverable() {
             return;
         }
-        tracing::warn!(destination = %self.key, ?server_versions, "exit offers no compatible API version");
+        tracing::warn!(destination = %self.key, ?offered, "exit offers no compatible API version");
         self.state = RouteHealthState::Unrecoverable {
-            reason: UnrecoverableReason::IncompatibleApiVersion { server_versions },
+            reason: UnrecoverableReason::IncompatibleApiVersion { offered },
         };
     }
 
@@ -291,145 +204,11 @@ fn derive_initial_state(routing: &HopRouting, allow_insecure: bool, allow_experi
     }
 }
 
-impl Display for UnrecoverableReason {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            UnrecoverableReason::NotAllowed => write!(
-                f,
-                "routing mode not allowed; use --allow-insecure for 0-hop or --allow-experimental for 2+ hops"
-            ),
-            UnrecoverableReason::IncompatibleApiVersion { server_versions } => write!(
-                f,
-                "exit server offers no compatible API version (server offers: {})",
-                server_versions.join(", ")
-            ),
-            UnrecoverableReason::CannotOpenSession { error } => {
-                write!(f, "cannot open a session with this connection config: {error}")
-            }
-        }
-    }
-}
-
-impl Display for RouteWalk {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            RouteWalk::NotAnnounced { walked_at } => {
-                write!(
-                    f,
-                    "exit not announced on chain - walked {} ago",
-                    log_output::elapsed(walked_at)
-                )
-            }
-            RouteWalk::NoPath {
-                walked_at,
-                forward_count,
-                return_count,
-            } => write!(
-                f,
-                "no path found (forward {forward_count}, return {return_count}) - walked {} ago",
-                log_output::elapsed(walked_at)
-            ),
-            RouteWalk::Paths {
-                walked_at,
-                count,
-                distinct_first_relays,
-                best_relays,
-                best_value,
-                return_count,
-                return_best_relays,
-                return_best_value,
-            } => {
-                let plural = if *count == 1 { "" } else { "s" };
-                write!(f, "{count} path{plural}, ")?;
-                // Only a 0-hop walk has no first relay; empty relays alone may just be unresolved.
-                let is_direct = *distinct_first_relays == 0;
-                if is_direct {
-                    write!(f, "direct")?;
-                } else {
-                    write!(
-                        f,
-                        "{distinct_first_relays} distinct first relays, {}",
-                        best_via(best_relays)
-                    )?;
-                }
-                write!(f, " (value {best_value:.3}); return {return_count}, ")?;
-                if is_direct {
-                    write!(f, "direct")?;
-                } else {
-                    write!(f, "{}", best_via(return_best_relays))?;
-                }
-                write!(
-                    f,
-                    " (value {return_best_value:.3}) - walked {} ago",
-                    log_output::elapsed(walked_at)
-                )
-            }
-        }
-    }
-}
-
-fn best_via(relays: &[Address]) -> String {
-    if relays.is_empty() {
-        return "unresolved relays".to_string();
-    }
-    let chain = relays.iter().map(log_output::address).collect::<Vec<_>>().join(" -> ");
-    format!("best via {chain}")
-}
-
-impl Display for QuickProbeCheck {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let QuickProbeCheck {
-            checked_at,
-            versions,
-            api_version,
-            load,
-            status_rtt,
-        } = self;
-        write!(
-            f,
-            "checked {} ago - status RTT {:.2} s, {load}",
-            log_output::elapsed(checked_at),
-            status_rtt.as_secs_f32()
-        )?;
-        match api_version {
-            Some(api) => write!(f, ", API {api} ({versions})"),
-            None => write!(f, ", no compatible API ({versions})"),
-        }
-    }
-}
-
-impl Display for QuickProbeState {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            QuickProbeState::Checking { since, last } => {
-                write!(f, "checking (since {})", log_output::elapsed(since))?;
-                match last {
-                    Some(check) => write!(f, " - last {check}"),
-                    None => Ok(()),
-                }
-            }
-            QuickProbeState::Checked(check) => write!(f, "{check}"),
-            QuickProbeState::Failed { checked_at, error } => {
-                write!(f, "failed {} ago: {error}", log_output::elapsed(checked_at))
-            }
-        }
-    }
-}
-
-impl Display for RouteHealthState {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            RouteHealthState::Unrecoverable { reason } => write!(f, "Unrecoverable: {reason}"),
-            RouteHealthState::NotRoutable => write!(f, "Not routable - no path in the network graph"),
-            RouteHealthState::Routable => write!(f, "Routable"),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::connection::destination::{Address, DestinationSource};
+    use std::time::Duration;
 
     fn destination(hops: usize) -> Destination {
         Destination::new(
@@ -443,15 +222,15 @@ mod tests {
         )
     }
 
-    fn outcome(server_versions: &[&str]) -> QuickProbeOutcome {
-        let versions = Versions {
-            versions: server_versions.iter().map(|v| v.to_string()).collect(),
-            latest: server_versions.last().unwrap_or(&"").to_string(),
+    fn outcome(offered: &[&str]) -> QuickProbeOutcome {
+        let versions = crate::probe::ExitVersions {
+            api: offered.iter().map(|v| v.parse().expect("api label")).collect(),
+            server: None,
         };
         QuickProbeOutcome {
-            api_version: select_api_version(&versions.versions).map(str::to_owned),
+            api_version: select_api_version(&versions.api),
             versions,
-            health: Health {
+            health: crate::probe::Health {
                 slots: crate::probe::Slots {
                     total: 10,
                     available: 9,
@@ -473,15 +252,15 @@ mod tests {
             walked_at: now,
             count: 3,
             distinct_first_relays: 2,
-            best_relays: vec![Address::from([2u8; 20])],
+            best_relays: vec![gnosis_vpn_ipc::Address::new([2u8; 20])],
             best_value: 0.75,
             return_count: 2,
-            return_best_relays: vec![Address::from([3u8; 20])],
+            return_best_relays: vec![gnosis_vpn_ipc::Address::new([3u8; 20])],
             return_best_value: 0.5,
         }
     }
 
-    fn no_path(forward_count: usize, return_count: usize) -> RouteWalk {
+    fn no_path(forward_count: u32, return_count: u32) -> RouteWalk {
         RouteWalk::NoPath {
             walked_at: SystemTime::now(),
             forward_count,
@@ -639,14 +418,14 @@ mod tests {
     fn api_versions_latch_and_unlatch_only_an_incompatible_api_version() {
         let mut rh = RouteHealth::new(&destination(1), false, false);
         rh.set_routable(true);
-        rh.apply_api_versions(&["v99".to_string()]);
+        rh.apply_api_versions(&[ApiVersion::new(99)]);
         assert!(rh.is_unrecoverable());
-        rh.apply_api_versions(&["v1".to_string()]);
+        rh.apply_api_versions(&[ApiVersion::new(1)]);
         assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
 
         let mut latched = RouteHealth::new(&destination(0), false, false);
-        latched.apply_api_versions(&["v99".to_string()]);
-        latched.apply_api_versions(&["v1".to_string()]);
+        latched.apply_api_versions(&[ApiVersion::new(99)]);
+        latched.apply_api_versions(&[ApiVersion::new(1)]);
         assert!(not_allowed(latched.state()), "NotAllowed keeps precedence");
     }
 
@@ -661,7 +440,7 @@ mod tests {
         assert!(!insecure.is_incompatible_api());
 
         let mut incompatible = RouteHealth::new(&destination(1), false, false);
-        incompatible.apply_api_versions(&["v99".to_string()]);
+        incompatible.apply_api_versions(&[ApiVersion::new(99)]);
         assert!(!incompatible.is_not_allowed(), "an upgrade can still lift this one");
         assert!(incompatible.is_incompatible_api());
     }
@@ -692,7 +471,7 @@ mod tests {
         rh.apply_quick_probe(&Ok(outcome(&["v1"])), now);
         assert!(!rh.is_quick_probing(), "a successful check is no longer in flight");
         assert!(
-            matches!(rh.quick_probe(), Some(QuickProbeState::Checked(check)) if check.api_version.as_deref() == Some("v1"))
+            matches!(rh.quick_probe(), Some(QuickProbeState::Checked(check)) if check.api_version == Some(ApiVersion::new(1)))
         );
     }
 
@@ -734,9 +513,9 @@ mod tests {
         rh.apply_quick_probe(&Ok(outcome(&["v1"])), SystemTime::now());
 
         let json = serde_json::to_string(rh.quick_probe().expect("a check was applied")).expect("serialize");
-        assert!(json.contains(r#""state":"Checked""#), "{json}");
+        assert!(json.contains(r#""type":"checked""#), "{json}");
 
         let back: QuickProbeState = serde_json::from_str(&json).expect("deserialize");
-        assert!(matches!(back, QuickProbeState::Checked(check) if check.api_version.as_deref() == Some("v1")));
+        assert!(matches!(back, QuickProbeState::Checked(check) if check.api_version == Some(ApiVersion::new(1))));
     }
 }

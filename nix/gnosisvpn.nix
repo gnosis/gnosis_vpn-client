@@ -197,8 +197,8 @@ let
         '';
     });
 
-  # Selects the `pix-test` deposit pool on every binary crate; `pix-curvy` is the default.
-  pixTestCargoArgs = "--no-default-features --features gnosis_vpn-root/pix-test,gnosis_vpn-worker/pix-test,gnosis_vpn-ctl/pix-test";
+  # Selects the `pix-test` deposit pool on the root and worker crates; `pix-curvy` is the default.
+  pixTestCargoArgs = "--no-default-features --features gnosis_vpn-root/pix-test,gnosis_vpn-worker/pix-test";
 
   mkGnosisvpnBuildArgs =
     {

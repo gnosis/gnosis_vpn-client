@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use gnosis_vpn_lib::dirs::UserDirs;
 use gnosis_vpn_lib::worker_params::{self, WorkerParams};
-use gnosis_vpn_lib::{config, hopr, logging, socket};
+use gnosis_vpn_lib::{config, hopr, logging};
 
 use crate::{ENV_VAR_PID_FILE, worker};
 
@@ -18,8 +18,8 @@ pub struct Cli {
     #[arg(
         short,
         long,
-        env = socket::root::ENV_VAR,
-        default_value = socket::root::DEFAULT_PATH
+        env = gnosis_vpn_ipc::ENV_VAR,
+        default_value = gnosis_vpn_ipc::DEFAULT_PATH
     )]
     pub socket_path: PathBuf,
 
