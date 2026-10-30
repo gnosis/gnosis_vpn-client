@@ -123,5 +123,18 @@ fn respond(request: Request, run_mode: RunMode) -> Response {
         Request::Probe { .. } => Response::Probe(ProbeResponse::DestinationNotFound),
         Request::Unprobe => Response::Unprobe(UnprobeResponse::NotProbing),
         Request::QuickProbe { .. } => Response::QuickProbe(QuickProbeResponse::DestinationNotFound),
+        Request::TrafficInterfaces => Response::TrafficInterfaces(vec![]),
+        Request::TrafficStart(request) => Response::TrafficStart(traffic::StartReply::Failed {
+            reason: format!("Interface {} is not available", request.interface_id),
+        }),
+        Request::TrafficRead(request) => Response::TrafficRead(traffic::ReadResponse {
+            session_id: request.session_id,
+            batches: vec![],
+            cursor: request.cursor,
+            gap: false,
+            active: false,
+            ended: None,
+        }),
+        Request::TrafficStop(_) => Response::TrafficStop(traffic::StopResponse { stopped: false }),
     }
 }

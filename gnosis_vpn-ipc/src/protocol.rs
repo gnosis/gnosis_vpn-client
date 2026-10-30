@@ -6,6 +6,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
+use crate::traffic;
 use crate::values::{
     Address, ApiVersion, Balance, CountryCode, DestinationId, FundingSecret, Hops, PeerId, SessionId, WgPublicKey,
     WxHopr, XDai, duration_ms, unix_ms,
@@ -49,6 +50,14 @@ pub enum Request {
     QuickProbe {
         destination: DestinationId,
     },
+    /// List interfaces the service may capture traffic on
+    TrafficInterfaces,
+    /// Begin capturing on one interface, replacing any current capture
+    TrafficStart(traffic::StartRequest),
+    /// Read aggregated traffic the consumer has not seen yet
+    TrafficRead(traffic::ReadRequest),
+    /// End the capture session
+    TrafficStop(traffic::StopRequest),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -97,6 +106,10 @@ pub enum Response {
     Probe(ProbeResponse),
     Unprobe(UnprobeResponse),
     QuickProbe(QuickProbeResponse),
+    TrafficInterfaces(Vec<traffic::Interface>),
+    TrafficStart(traffic::StartReply),
+    TrafficRead(traffic::ReadResponse),
+    TrafficStop(traffic::StopResponse),
 }
 
 // ---- status ----
