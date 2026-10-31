@@ -8,7 +8,9 @@
 //! - WireGuard tunnel interface — name-based matching (`meta oifname`/`iifname`)
 //!   so the rule safely no-ops when `wg0_gnosisvpn` doesn't yet exist
 //! - Outbound to each explicitly listed IP; inbound from each IP if ESTABLISHED
+//!   (named sets: per-IP rules overflow the netlink socket with ACKs, ENOBUFS)
 
+use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -19,6 +21,7 @@ use nftnl::{
     Batch, Chain, FinalizedBatch, Hook, MsgType, Policy, ProtoFamily, Rule, Table,
     expr::{self, Payload, Verdict},
     nft_expr,
+    set::Set,
 };
 use thiserror::Error;
 
@@ -32,6 +35,10 @@ const TABLE_NAME: &std::ffi::CStr = c"gnosis_vpn_ks";
 const IN_CHAIN_NAME: &std::ffi::CStr = c"input";
 const OUT_CHAIN_NAME: &std::ffi::CStr = c"output";
 const FORWARD_CHAIN_NAME: &std::ffi::CStr = c"forward";
+const ALLOWED_V4_SET_NAME: &std::ffi::CStr = c"allowed_v4";
+const ALLOWED_V6_SET_NAME: &std::ffi::CStr = c"allowed_v6";
+const ALLOWED_V4_SET_ID: u32 = 1;
+const ALLOWED_V6_SET_ID: u32 = 2;
 
 const DHCPV4_SERVER_PORT: u16 = 67;
 const DHCPV4_CLIENT_PORT: u16 = 68;
@@ -91,21 +98,25 @@ impl Firewall {
         allowed_ips: &[IpAddr],
         lan_lockdown: bool,
     ) -> Result<(), Error> {
-        let table = Table::new(TABLE_NAME, ProtoFamily::Inet);
-        let batch = PolicyBatch::new(&table).finalize(interface, allowed_ips, lan_lockdown);
-        send_batch(&batch)
+        let Err(error) = send_policy(interface, allowed_ips, lan_lockdown) else {
+            return Ok(());
+        };
+        // A lost ACK can hide a committed table; don't leave a lockdown root thinks failed.
+        if let Err(reset_error) = self.reset_policy() {
+            tracing::warn!(error = %reset_error, "failed to remove killswitch table after failed apply");
+        }
+        Err(error)
     }
 
     /// Re-assert an already applied policy (e.g. after a network change).
-    /// On Linux applying is an atomic table replace with no side effects on
-    /// existing connections, so this is identical to `apply_policy`.
+    /// Applying is an atomic table replace; on failure the armed lockdown is kept.
     pub fn reapply_policy(
         &mut self,
         interface: Option<&str>,
         allowed_ips: &[IpAddr],
         lan_lockdown: bool,
     ) -> Result<(), Error> {
-        self.apply_policy(interface, allowed_ips, lan_lockdown)
+        send_policy(interface, allowed_ips, lan_lockdown)
     }
 
     /// Remove the killswitch table, restoring normal networking.
@@ -125,7 +136,14 @@ impl Firewall {
     }
 }
 
+fn send_policy(interface: Option<&str>, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
+    let table = Table::new(TABLE_NAME, ProtoFamily::Inet);
+    let batch = PolicyBatch::new(&table).finalize(interface, allowed_ips, lan_lockdown);
+    send_batch(&batch)
+}
+
 struct PolicyBatch<'a> {
+    table: &'a Table,
     batch: Batch,
     in_chain: Chain<'a>,
     out_chain: Chain<'a>,
@@ -157,6 +175,7 @@ impl<'a> PolicyBatch<'a> {
         batch.add(&forward_chain, MsgType::Add);
 
         PolicyBatch {
+            table,
             batch,
             in_chain,
             out_chain,
@@ -171,9 +190,7 @@ impl<'a> PolicyBatch<'a> {
         if let Some(interface) = interface {
             self.add_tunnel_rules(interface);
         }
-        for &ip in allowed_ips {
-            self.add_allowed_ip_rules(ip);
-        }
+        self.add_allowed_ip_rules(allowed_ips);
         if !lan_lockdown {
             self.add_lan_rules();
         }
@@ -358,17 +375,58 @@ impl<'a> PolicyBatch<'a> {
         }
     }
 
-    fn add_allowed_ip_rules(&mut self, ip: IpAddr) {
-        // Allow all outgoing traffic to this IP
+    fn add_allowed_ip_rules(&mut self, allowed_ips: &[IpAddr]) {
+        // Set elements are created with NLM_F_EXCL, so a duplicate would fail the batch.
+        let unique_ips: BTreeSet<IpAddr> = allowed_ips.iter().copied().collect();
+
+        let mut v4_set =
+            Set::<Ipv4Addr>::new_named(ALLOWED_V4_SET_NAME, ALLOWED_V4_SET_ID, self.table, ProtoFamily::Inet);
+        let mut v6_set =
+            Set::<Ipv6Addr>::new_named(ALLOWED_V6_SET_NAME, ALLOWED_V6_SET_ID, self.table, ProtoFamily::Inet);
+        for ip in unique_ips {
+            match ip {
+                IpAddr::V4(addr) => v4_set.add(&addr),
+                IpAddr::V6(addr) => v6_set.add(&addr),
+            }
+        }
+        self.batch.add(&v4_set, MsgType::Add);
+        self.batch.add_iter(v4_set.elems_iter(), MsgType::Add);
+        self.batch.add(&v6_set, MsgType::Add);
+        self.batch.add_iter(v6_set.elems_iter(), MsgType::Add);
+
+        let v4_lookup = expr::Lookup::new(&v4_set);
+        self.add_set_rules(
+            libc::NFPROTO_IPV4 as u8,
+            &v4_lookup,
+            nft_expr!(payload ipv4 daddr),
+            nft_expr!(payload ipv4 saddr),
+        );
+        let v6_lookup = expr::Lookup::new(&v6_set);
+        self.add_set_rules(
+            libc::NFPROTO_IPV6 as u8,
+            &v6_lookup,
+            nft_expr!(payload ipv6 daddr),
+            nft_expr!(payload ipv6 saddr),
+        );
+    }
+
+    fn add_set_rules(&mut self, nfproto: u8, lookup: &expr::Lookup, daddr: Payload, saddr: Payload) {
+        // Allow all outgoing traffic to a listed IP
         let mut out_rule = Rule::new(&self.out_chain);
-        check_ip(&mut out_rule, End::Dst, ip);
+        out_rule.add_expr(&nft_expr!(meta nfproto));
+        out_rule.add_expr(&nft_expr!(cmp == nfproto));
+        out_rule.add_expr(&daddr);
+        out_rule.add_expr(lookup);
         out_rule.add_expr(&Verdict::Accept);
         self.batch.add(&out_rule, MsgType::Add);
 
-        // Allow incoming traffic from this IP only if ESTABLISHED (return traffic only)
+        // Allow incoming traffic from a listed IP only if ESTABLISHED (return traffic only)
         let established_bits = nftnl::expr::ct::States::ESTABLISHED.bits();
         let mut in_rule = Rule::new(&self.in_chain);
-        check_ip(&mut in_rule, End::Src, ip);
+        in_rule.add_expr(&nft_expr!(meta nfproto));
+        in_rule.add_expr(&nft_expr!(cmp == nfproto));
+        in_rule.add_expr(&saddr);
+        in_rule.add_expr(lookup);
         in_rule.add_expr(&nft_expr!(ct state));
         in_rule.add_expr(&nft_expr!(bitwise mask established_bits, xor 0u32));
         in_rule.add_expr(&nft_expr!(cmp != 0u32));
@@ -484,4 +542,44 @@ fn send_batch(batch: &FinalizedBatch) -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mixed_ips(count: u32) -> Vec<IpAddr> {
+        (0..count)
+            .map(|i| match i % 2 {
+                0 => IpAddr::V4(Ipv4Addr::from(0x0a00_0000 + i)),
+                _ => IpAddr::V6(Ipv6Addr::from(
+                    0x2001_0db8_0000_0000_0000_0000_0000_0000u128 + u128::from(i),
+                )),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn policy_batch_size_does_not_grow_with_allowed_ips() {
+        let table = Table::new(TABLE_NAME, ProtoFamily::Inet);
+        let without_ips = PolicyBatch::new(&table).finalize(Some("wg0_gnosisvpn"), &[], false);
+        let with_ips = PolicyBatch::new(&table).finalize(Some("wg0_gnosisvpn"), &mixed_ips(500), false);
+
+        let grown = with_ips.sequence_numbers().len() - without_ips.sequence_numbers().len();
+        assert!(grown <= 4, "batch grew by {grown} messages for 500 allowed IPs");
+    }
+
+    // Needs CAP_NET_ADMIN; a throwaway user+net namespace works: unshare -rn <test binary> --ignored
+    #[test]
+    #[ignore]
+    fn arms_with_500_allowed_ips() {
+        let mut firewall = Firewall::new().expect("firewall");
+        firewall
+            .apply_policy(Some("wg0_gnosisvpn"), &mixed_ips(500), true)
+            .expect("apply policy");
+        firewall
+            .reapply_policy(Some("wg0_gnosisvpn"), &mixed_ips(500), true)
+            .expect("reapply policy");
+        firewall.reset_policy().expect("reset policy");
+    }
 }
