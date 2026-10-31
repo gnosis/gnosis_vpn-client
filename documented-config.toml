@@ -169,19 +169,19 @@ path    = { hops = 1 }
 # enabled = false
 # buffer = "16 KB"
 # max_surb_upstream = "128 Kb/s"
-# always_max_out_surbs = false  # defaults to `enabled` - send only 1 SURB per request even if 2 would fit
+# always_max_out_surbs = false  # defaults to `enabled` - send only 1 SURB per request even if more would fit
 #
 # [connection.surb_balancing.ping]
 # enabled = true
 # buffer = "1 MB"
 # max_surb_upstream = "512 Kb/s"
-# always_max_out_surbs = true  # defaults to `enabled` - send 2 SURBs per request if 2 would fit
+# always_max_out_surbs = true  # defaults to `enabled` - send as many SURBs per request as fit, but none once the balancer's target is reached
 #
 # [connection.surb_balancing.main]
 # enabled = true
 # buffer = "10 MB"
 # max_surb_upstream = "16 Mb/s"
-# always_max_out_surbs = true  # defaults to `enabled` - send 2 SURBs per request if 2 would fit
+# always_max_out_surbs = true  # defaults to `enabled` - send as many SURBs per request as fit, but none once the balancer's target is reached
 #
 # [connection.surb_balancing.ramp] - after connecting, the SURB balancer is moved
 # from the ping tier to the main tier gradually instead of jumping (a jump floods
