@@ -20,7 +20,7 @@ bytesize = "~2.7.0"
 cfg-if = "~1.0.5"
 clap = { version = "~4.6.7", features = ["derive", "env"] }
 clap_complete = "~4.6.11"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "89c799f378f0d5c060a71f15b4f3fda47e2794f8", default-features = false, features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "d7d3440eba0f025653b8bb56efedbff396165b69", default-features = false, features = [
   # No PIX deposit pool here: edgli's `pix-test` and `pix-curvy` are mutually exclusive, and a
   # feature listed on a workspace dependency cannot be switched off by a member. Every crate
   # forwards one, `pix-curvy` by default; see the `pix-test` build in nix/gnosisvpn.nix.
@@ -88,3 +88,7 @@ lto           = "fat"
 opt-level     = 3
 panic         = "abort"
 strip         = true
+
+# TODO: remove once hopr-ticket-manager 0.9.0 is released from hoprnet/hopr-impls
+[patch.crates-io]
+hopr-ticket-manager = { git = "https://github.com/hoprnet/hopr-impls", branch = "fix/ticket-index-persistence" }

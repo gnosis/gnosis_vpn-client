@@ -3698,7 +3698,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "5.2.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=89c799f378f0d5c060a71f15b4f3fda47e2794f8#89c799f378f0d5c060a71f15b4f3fda47e2794f8"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=d7d3440eba0f025653b8bb56efedbff396165b69#d7d3440eba0f025653b8bb56efedbff396165b69"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -3712,7 +3712,7 @@ dependencies = [
  "hopr-lib",
  "hopr-network-graph",
  "hopr-strategy",
- "hopr-ticket-manager",
+ "hopr-ticket-manager 0.9.0",
  "hopr-transport-p2p",
  "mimalloc",
  "multiaddr",
@@ -5115,7 +5115,7 @@ dependencies = [
  "hopr-api",
  "hopr-crypto-packet",
  "hopr-protocol-pix",
- "hopr-ticket-manager",
+ "hopr-ticket-manager 0.8.0",
  "hopr-utilities",
  "humantime-serde",
  "lazy_static",
@@ -5255,6 +5255,28 @@ name = "hopr-ticket-manager"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2219a766732e0970cc3f31fcf55ca86619a37733c8db40e2f18b20ef8dbc852"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "clap",
+ "dashmap",
+ "futures",
+ "hashbrown 0.17.1",
+ "hopr-api",
+ "hopr-utilities",
+ "parking_lot",
+ "postcard",
+ "redb",
+ "strum",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
+name = "hopr-ticket-manager"
+version = "0.9.0"
+source = "git+https://github.com/hoprnet/hopr-impls?branch=fix%2Fticket-index-persistence#17a0b17d9e4a50b6a89b57e0bf4e9d4eb8116410"
 dependencies = [
  "ahash",
  "anyhow",
