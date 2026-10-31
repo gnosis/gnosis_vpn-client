@@ -7,8 +7,7 @@
 //! - NDP (IPv6 neighbor discovery)
 //! - WireGuard tunnel interface — name-based matching (`meta oifname`/`iifname`)
 //!   so the rule safely no-ops when `wg0_gnosisvpn` doesn't yet exist
-//! - Outbound to each explicitly listed IP; inbound from each IP if ESTABLISHED
-//!   (named sets: per-IP rules overflow the netlink socket with ACKs, ENOBUFS)
+//! - Outbound to each IP in the allowed sets; inbound from them if ESTABLISHED
 
 use std::collections::BTreeSet;
 use std::ffi::CString;
@@ -376,6 +375,7 @@ impl<'a> PolicyBatch<'a> {
     }
 
     fn add_allowed_ip_rules(&mut self, allowed_ips: &[IpAddr]) {
+        // Sets keep the batch size fixed; one ACKed rule per IP overflowed the netlink socket (ENOBUFS).
         // Set elements are created with NLM_F_EXCL, so a duplicate would fail the batch.
         let unique_ips: BTreeSet<IpAddr> = allowed_ips.iter().copied().collect();
 
