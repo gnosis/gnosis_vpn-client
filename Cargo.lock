@@ -3698,7 +3698,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "5.2.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=4248e23cc6c54506c839b61c247466c1d57af08d#4248e23cc6c54506c839b61c247466c1d57af08d"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=7a9af01d7e9e7d74a405b2f265ce85656ba07a75#7a9af01d7e9e7d74a405b2f265ce85656ba07a75"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -3713,6 +3713,7 @@ dependencies = [
  "hopr-network-graph",
  "hopr-strategy",
  "hopr-ticket-manager",
+ "hopr-transport-mixer",
  "hopr-transport-p2p",
  "mimalloc",
  "multiaddr",
@@ -4470,7 +4471,6 @@ dependencies = [
  "edgli",
  "futures-util",
  "gnosis_vpn-ipc",
- "hopr-transport-mixer",
  "hopr-utils-session",
  "human-bandwidth",
  "humantime",
