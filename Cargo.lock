@@ -3698,7 +3698,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "5.2.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=c9d819c09701ca5ff0e8bc49014018e917b04ed4#c9d819c09701ca5ff0e8bc49014018e917b04ed4"
+source = "git+https://github.com/hoprnet/edge-client.git?rev=762684878d7b375e8418424f735e9ddd3752ad1d#762684878d7b375e8418424f735e9ddd3752ad1d"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -3713,6 +3713,7 @@ dependencies = [
  "hopr-network-graph",
  "hopr-strategy",
  "hopr-ticket-manager",
+ "hopr-transport-mixer",
  "hopr-transport-p2p",
  "mimalloc",
  "multiaddr",
