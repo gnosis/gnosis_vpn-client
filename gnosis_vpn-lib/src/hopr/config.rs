@@ -1,3 +1,4 @@
+use hopr_transport_mixer::{MixerType, PoissonConfig};
 use serde_saphyr;
 use thiserror::Error;
 use tokio::fs;
@@ -88,6 +89,11 @@ pub async fn generate(
     cfg.protocol.probe.timeout = Duration::from_secs(3);
     cfg.protocol.probe.interval = Duration::from_secs(3);
     cfg.protocol.probe.recheck_threshold = Duration::from_secs(3);
+    // Poisson defaults, but a 1 ms delay cap keeps the tunnel's latency at VPN QoS.
+    cfg.protocol.mixer.mixer_type = MixerType::Poisson(PoissonConfig {
+        max_delay: Duration::from_millis(1),
+        ..Default::default()
+    });
     cfg.protocol.path_planner = edgli::latency_path_planner_config(options.path_planner_min_ack_rate);
     // Layer user overrides on top of the latency preset; unset fields keep the preset value.
     options.path_planner.apply(&mut cfg.protocol.path_planner);
@@ -130,6 +136,16 @@ mod tests {
     async fn default_keeps_the_preset_floor() {
         let cfg = generated(PathPlannerOptions::default(), PixDimensionOptions::default()).await;
         assert_eq!(cfg.protocol.path_planner.min_paths_anonymity_floor, 0);
+    }
+
+    #[tokio::test]
+    async fn mixer_is_poisson_capped_at_one_millisecond() {
+        let cfg = generated(PathPlannerOptions::default(), PixDimensionOptions::default()).await;
+        let expected = MixerType::Poisson(PoissonConfig {
+            max_delay: Duration::from_millis(1),
+            ..Default::default()
+        });
+        assert_eq!(cfg.protocol.mixer.mixer_type, expected);
     }
 
     #[tokio::test]

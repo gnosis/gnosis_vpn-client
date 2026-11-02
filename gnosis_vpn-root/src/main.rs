@@ -1576,8 +1576,6 @@ impl DaemonState {
             .env("HOME", &owner.home)
             .env("USER", &owner.name)
             .env("LOGNAME", &owner.name)
-            .env("HOPR_INTERNAL_MIXER_MINIMUM_DELAY_IN_MS", "0") // the client does not want to mix
-            .env("HOPR_INTERNAL_MIXER_DELAY_RANGE_IN_MS", "1") // the mix range must be minimal to retain the QoS of the client
             // std clears the supplementary groups on the uid drop; only the primary gid remains.
             .uid(owner.uid)
             .gid(owner.gid);

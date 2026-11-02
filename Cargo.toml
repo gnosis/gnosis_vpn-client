@@ -20,7 +20,7 @@ bytesize = "~2.7.0"
 cfg-if = "~1.0.5"
 clap = { version = "~4.6.7", features = ["derive", "env"] }
 clap_complete = "~4.6.11"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "762684878d7b375e8418424f735e9ddd3752ad1d", default-features = false, features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "4248e23cc6c54506c839b61c247466c1d57af08d", default-features = false, features = [
   # No PIX deposit pool here: edgli's `pix-test` and `pix-curvy` are mutually exclusive, and a
   # feature listed on a workspace dependency cannot be switched off by a member. Every crate
   # forwards one, `pix-curvy` by default; see the `pix-test` build in nix/gnosisvpn.nix.
@@ -36,6 +36,10 @@ futures-util = "~0.3.34"
 # `?rev=sha` as distinct sources, so mixing them vendors hoprnet twice and fails to compile.
 hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "master", features = [
   "runtime-tokio",
+] }
+# Same branch source as hopr-utils-session; hopr-lib re-exports MixerConfig but not the Poisson engine config.
+hopr-transport-mixer = { git = "https://github.com/hoprnet/hoprnet", branch = "master", default-features = false, features = [
+  "poisson",
 ] }
 human-bandwidth = "~0.1.4"
 humantime = "~2.4.0"
