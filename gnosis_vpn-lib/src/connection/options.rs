@@ -285,16 +285,6 @@ impl TryFrom<PixDimensionOptionsRaw> for PixDimensionOptions {
         in_range("ssa_part_size", raw.ssa_part_size, 2, 255)?;
         in_range("additional_shares", raw.additional_shares, 0, 255)?;
 
-        // Only compare explicit values; an unset threshold still means "use hopr-lib's default".
-        if let (Some(surplus), Some(threshold)) = (raw.additional_shares, raw.ssa_part_size)
-            && surplus > threshold
-        {
-            return Err(format!(
-                "additional_shares ({surplus}) must not exceed ssa_part_size ({threshold}) — the surplus is \
-                 billed, so this pays for more redundancy than payload"
-            ));
-        }
-
         Ok(Self {
             num_ssa_parts: raw.num_ssa_parts,
             ssa_part_size: raw.ssa_part_size,
