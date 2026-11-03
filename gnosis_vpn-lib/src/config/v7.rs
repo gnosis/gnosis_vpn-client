@@ -2186,25 +2186,17 @@ version = 7
     }
 
     #[test]
-    fn pix_surplus_may_not_exceed_the_threshold() {
-        // Only explicit values can be compared here.
+    fn pix_surplus_may_exceed_the_threshold() {
+        // The deployed piz-palu geometry, allowed since hoprnet#8519.
         let toml = r#####"
 version = 7
 
 [connection.pix.dimensions]
-ssa_part_size     = 2
-additional_shares = 3
+num_ssa_parts     = 4096
+ssa_part_size     = 32
+additional_shares = 79
 "#####;
-        assert!(toml::from_str::<Config>(toml).is_err());
-
-        let ok = r#####"
-version = 7
-
-[connection.pix.dimensions]
-ssa_part_size     = 2
-additional_shares = 2
-"#####;
-        assert!(toml::from_str::<Config>(ok).is_ok());
+        assert!(toml::from_str::<Config>(toml).is_ok());
     }
 
     #[test]
