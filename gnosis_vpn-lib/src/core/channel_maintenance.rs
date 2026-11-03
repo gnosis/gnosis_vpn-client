@@ -4,7 +4,7 @@ use edgli::StrategyState;
 
 use std::time::{Duration, SystemTime};
 
-use crate::command::ChannelMaintenance;
+use gnosis_vpn_ipc::ChannelMaintenance;
 
 pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(60);
 const FAILED_SAMPLES_TO_UNAVAILABLE: u32 = 3;

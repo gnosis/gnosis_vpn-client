@@ -1,6 +1,5 @@
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use gnosis_vpn_lib::command::Command as LibCommand;
-use gnosis_vpn_lib::socket;
+use gnosis_vpn_ipc::{self as ipc, FundingSecret, Request};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -21,8 +20,8 @@ pub struct Cli {
     #[arg(
         short,
         long,
-        env = socket::root::ENV_VAR,
-        default_value = socket::root::DEFAULT_PATH
+        env = ipc::ENV_VAR,
+        default_value = ipc::DEFAULT_PATH
     )]
     pub socket_path: PathBuf,
 
@@ -117,24 +116,28 @@ pub enum Command {
     Destinations {},
 }
 
-impl From<Command> for LibCommand {
+impl From<Command> for Request {
     fn from(val: Command) -> Self {
         match val {
-            Command::Status {} => LibCommand::Status,
-            Command::Connect { id } => LibCommand::Connect(id),
-            Command::Disconnect {} => LibCommand::Disconnect,
-            Command::Probe { id } => LibCommand::Probe(id),
-            Command::Unprobe {} => LibCommand::Unprobe,
-            Command::QuickProbe { id } => LibCommand::QuickProbe(id),
-            Command::Balance {} => LibCommand::Balance,
-            Command::FundingTool { secret } => LibCommand::FundingTool(secret),
-            Command::Ping {} => LibCommand::Ping,
-            Command::Telemetry {} => LibCommand::Telemetry,
-            Command::NerdStats {} => LibCommand::NerdStats,
-            Command::Info {} => LibCommand::Info,
-            Command::StartClient { keep_alive } => LibCommand::StartClient(keep_alive.into()),
-            Command::StopClient {} => LibCommand::StopClient,
-            Command::Destinations {} => LibCommand::Destinations,
+            Command::Status {} => Request::Status,
+            Command::Connect { id } => Request::Connect { destination: id.into() },
+            Command::Disconnect {} => Request::Disconnect,
+            Command::Probe { id } => Request::Probe { destination: id.into() },
+            Command::Unprobe {} => Request::Unprobe,
+            Command::QuickProbe { id } => Request::QuickProbe { destination: id.into() },
+            Command::Balance {} => Request::Balance,
+            Command::FundingTool { secret } => Request::FundingTool {
+                secret: FundingSecret::new(secret),
+            },
+            Command::Ping {} => Request::Ping,
+            Command::Telemetry {} => Request::Telemetry,
+            Command::NerdStats {} => Request::NerdStats,
+            Command::Info {} => Request::Info,
+            Command::StartClient { keep_alive } => Request::StartClient {
+                timeout: keep_alive.into(),
+            },
+            Command::StopClient {} => Request::StopClient,
+            Command::Destinations {} => Request::Destinations,
             Command::Completions { .. } => unreachable!("Completions is handled before socket dispatch"),
         }
     }

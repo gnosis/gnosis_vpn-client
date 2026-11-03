@@ -10,69 +10,10 @@ use std::fmt::{self, Display};
 use std::net::{Ipv4Addr, SocketAddr};
 
 use crate::geoip::{Geo, GeoIp};
-use crate::log_output;
 use crate::serde_utils;
+use crate::wire;
 
-/// Where a [`Destination`] came from - the registry knows this exit, or only your config does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DestinationSource {
-    Configured,
-    Discovered,
-    ConfiguredAndDiscovered,
-}
-
-impl DestinationSource {
-    /// The origin code rendered beside the title: c is configuration, d is discovery.
-    fn code(&self) -> &'static str {
-        match self {
-            DestinationSource::Configured => "c",
-            DestinationSource::Discovered => "d",
-            DestinationSource::ConfiguredAndDiscovered => "c+d",
-        }
-    }
-}
-
-/// Longest label value rendered before it is elided.
-const META_FIELD_MAX_CHARS: usize = 64;
-
-/// True for characters that would let metadata rewrite or spoof surrounding terminal output:
-/// controls plus the zero-width and bidi-override formatting characters.
-fn is_display_unsafe(c: char) -> bool {
-    c.is_control()
-        || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
-}
-
-/// Metadata is operator-published, free-form and unverified, so treat it as untrusted terminal
-/// input rather than printing it verbatim.
-fn sanitize_for_display(text: &str) -> String {
-    let cleaned: String = text.chars().filter(|c| !is_display_unsafe(*c)).collect();
-    if cleaned.chars().count() <= META_FIELD_MAX_CHARS {
-        return cleaned;
-    }
-    let kept: String = cleaned.chars().take(META_FIELD_MAX_CHARS).collect();
-    format!("{kept}…")
-}
-
-/// Operator-published labels: the keys we understand, plus everything else as published.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Meta {
-    /// The destination's title; for a discovered exit it is the only human-readable name there is.
-    pub name: Option<String>,
-    pub description: Option<String>,
-    /// Every unrecognized key, kept so nothing an operator publishes is lost.
-    pub other: HashMap<String, String>,
-}
-
-impl Meta {
-    /// The only place the recognized label names are known.
-    pub fn from_map(mut labels: HashMap<String, String>) -> Self {
-        Self {
-            name: labels.remove("name"),
-            description: labels.remove("description"),
-            other: labels,
-        }
-    }
-}
+pub use gnosis_vpn_ipc::{DestinationSource, Meta, Overrides, sanitize_for_display};
 
 /// Discovery publishes no path, so every discovered exit sits at this one.
 pub const DEFAULT_HOPS: usize = 1;
@@ -89,24 +30,9 @@ pub struct ExitKey {
 }
 
 impl ExitKey {
-    /// Pins a discovered id to its key so no later same-named exit can take it; FNV-1a by hand, as `DefaultHasher` drifts per rustc.
+    /// Pins a discovered id to its key so no later same-named exit can take it.
     fn discriminator(&self) -> String {
-        const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-        const PRIME: u64 = 0x0000_0100_0000_01b3;
-        const ALPHABET: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-
-        let mut hash = OFFSET;
-        for byte in self.to_string().as_bytes() {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(PRIME);
-        }
-        (0..4)
-            .map(|_| {
-                let c = ALPHABET[(hash % ALPHABET.len() as u64) as usize] as char;
-                hash /= ALPHABET.len() as u64;
-                c
-            })
-            .collect()
+        gnosis_vpn_ipc::exit_discriminator(&wire::address(&self.address), wire::hops(self.routing))
     }
 
     /// `HopRouting` is not `Ord`, and unstable key order would shuffle connect ids between ticks.
@@ -168,33 +94,23 @@ pub struct DefaultTargets {
 }
 
 /// What configuration pinned: the values it set itself, whatever discovery goes on to report.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Overrides {
-    /// The labels configuration set; every key present is a pin.
-    configured_meta: HashMap<String, String>,
-    configured_gnosis_vpn_server: Option<SocketAddr>,
-    configured_wireguard_server: Option<SocketAddr>,
+pub fn configured_overrides(
+    meta: HashMap<String, String>,
+    gnosis_vpn_server: Option<SocketAddr>,
+    wireguard_server: Option<SocketAddr>,
+) -> Overrides {
+    Overrides {
+        configured_meta: meta.into_iter().collect(),
+        configured_gnosis_vpn_server: gnosis_vpn_server,
+        configured_wireguard_server: wireguard_server,
+    }
 }
 
-impl Overrides {
-    pub fn from_config(
-        meta: HashMap<String, String>,
-        gnosis_vpn_server: Option<SocketAddr>,
-        wireguard_server: Option<SocketAddr>,
-    ) -> Self {
-        Self {
-            configured_meta: meta,
-            configured_gnosis_vpn_server: gnosis_vpn_server,
-            configured_wireguard_server: wireguard_server,
-        }
-    }
-
-    /// Configuration's labels where it pinned them, the discovered ones elsewhere, per key.
-    fn apply_meta(&self, discovered: &HashMap<String, String>) -> Meta {
-        let mut merged = discovered.clone();
-        merged.extend(self.configured_meta.clone());
-        Meta::from_map(merged)
-    }
+/// Configuration's labels where it pinned them, the discovered ones elsewhere, per key.
+fn apply_meta(overrides: &Overrides, discovered: &HashMap<String, String>) -> Meta {
+    let mut merged = discovered.clone();
+    merged.extend(overrides.configured_meta.clone());
+    Meta::from_labels(merged)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -248,7 +164,7 @@ impl Destination {
 
     /// Takes everything discovery reports that configuration did not pin.
     fn adopt(&mut self, info: &ExitNodeInfo) {
-        self.meta = self.overrides.apply_meta(&info.meta);
+        self.meta = apply_meta(&self.overrides, &info.meta);
         self.gnosis_vpn_server = self
             .overrides
             .configured_gnosis_vpn_server
@@ -261,7 +177,7 @@ impl Destination {
 
     /// Falls back to configuration and the global defaults once discovery stops reporting the exit.
     fn forget_discovered(&mut self, defaults: DefaultTargets) {
-        self.meta = Meta::from_map(self.overrides.configured_meta.clone());
+        self.meta = Meta::from_labels(self.overrides.configured_meta.clone());
         self.gnosis_vpn_server = self
             .overrides
             .configured_gnosis_vpn_server
@@ -305,75 +221,25 @@ impl Destination {
     }
 }
 
-/// Marks a value configuration set itself, where the rest of the entry comes from discovery.
-const CONFIG_VALUE: &str = " (c)";
-
-impl Destination {
-    /// The recognized labels, plus any target configuration pinned - never otherwise shown.
-    fn labels_str(&self) -> String {
-        // On a c-only or d-only entry the origin code already says who set every value.
-        let mixed_origins = self.source == DestinationSource::ConfiguredAndDiscovered;
-        let pinned = |key: &str| mixed_origins && self.overrides.configured_meta.contains_key(key);
-
-        let mut parts = Vec::new();
-        if let Some(name) = &self.meta.name {
-            let shown = sanitize_for_display(name);
-            // A discovered id is this name slugged plus the key hash, so only a name spelled like it says nothing new.
-            let key_hash = format!("-{}", self.key().discriminator());
-            let own_id = self.connect_id.strip_suffix(&key_hash).unwrap_or(&self.connect_id);
-            let adds_nothing = shown == own_id;
-            if pinned("name") || !adds_nothing {
-                let mark = if pinned("name") { CONFIG_VALUE } else { "" };
-                parts.push(format!("name: {shown}{mark}"));
-            }
-        }
-        // Derived, so it is never configuration's value and never marked as one.
-        if let Some(geo) = &self.geo {
-            parts.push(format!("country: {}", geo.country_code));
-        }
-        if let Some(description) = &self.meta.description {
-            let mark = if pinned("description") { CONFIG_VALUE } else { "" };
-            parts.push(format!("description: {}{mark}", sanitize_for_display(description)));
-        }
-        // Targets are parsed socket addresses rather than operator text, so they need no sanitizing.
-        for (key, value, configured) in [
-            (
-                "gnosis_vpn_server",
-                self.gnosis_vpn_server,
-                self.overrides.configured_gnosis_vpn_server,
-            ),
-            (
-                "wireguard_server",
-                self.wireguard_server,
-                self.overrides.configured_wireguard_server,
-            ),
-        ] {
-            if mixed_origins && configured.is_some() {
-                parts.push(format!("{key}: {value}{CONFIG_VALUE}"));
-            }
-        }
-        parts.join(", ")
+impl Display for Destination {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", gnosis_vpn_ipc::Destination::from(self))
     }
 }
 
-impl Display for Destination {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let short_addr = log_output::address(&self.address);
-        let labels = self.labels_str();
-        let labels = if labels.is_empty() {
-            String::new()
-        } else {
-            format!(", {labels}")
-        };
-        write!(
-            f,
-            "{id} [{source}] (Exit: {address}, Route: (entry){path}({short_addr}){labels})",
-            id = self.connect_id,
-            source = self.source.code(),
-            path = self.pretty_print_path(),
-            address = self.address.to_checksum(),
-            short_addr = short_addr,
-        )
+impl From<&Destination> for gnosis_vpn_ipc::Destination {
+    fn from(dest: &Destination) -> Self {
+        Self {
+            id: dest.connect_id.as_str().into(),
+            meta: dest.meta.clone(),
+            geo: dest.geo.clone(),
+            address: wire::address(&dest.address),
+            hops: wire::hops(dest.routing),
+            gnosis_vpn_server: dest.gnosis_vpn_server,
+            wireguard_server: dest.wireguard_server,
+            source: dest.source,
+            overrides: dest.overrides.clone(),
+        }
     }
 }
 
@@ -592,6 +458,7 @@ impl FromIterator<Destination> for Destinations {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gnosis_vpn_ipc::META_FIELD_MAX_CHARS;
     use std::time::SystemTime;
 
     fn address(byte: u8) -> Address {
@@ -641,12 +508,12 @@ mod tests {
             id.to_string(),
             addr,
             default_path(),
-            Meta::from_map(labels.clone()),
+            Meta::from_labels(labels.clone()),
             bridge.unwrap_or(defaults().gnosis_vpn_server),
             wg.unwrap_or(defaults().wireguard_server),
             DestinationSource::Configured,
         )
-        .with_overrides(Overrides::from_config(labels, bridge, wg))
+        .with_overrides(configured_overrides(labels, bridge, wg))
     }
 
     fn merged(dest: Destination, info: ExitNodeInfo) -> Destination {
@@ -987,7 +854,7 @@ mod tests {
         labels.insert("description".to_string(), "fast".to_string());
         labels.insert("operator".to_string(), "acme".to_string());
 
-        let meta = Meta::from_map(labels);
+        let meta = Meta::from_labels(labels);
 
         assert_eq!(Some("london-1".to_string()), meta.name);
         assert_eq!(Some("fast".to_string()), meta.description);
@@ -1004,7 +871,7 @@ mod tests {
         labels.insert("operator".to_string(), "acme".to_string());
         labels.insert("port".to_string(), "51820".to_string());
 
-        let meta = Meta::from_map(labels);
+        let meta = Meta::from_labels(labels);
 
         assert_eq!(None, meta.description);
         assert_eq!(2, meta.other.len());
@@ -1012,7 +879,7 @@ mod tests {
 
     #[test]
     fn meta_from_empty_map_is_default() {
-        assert_eq!(Meta::default(), Meta::from_map(HashMap::new()));
+        assert_eq!(Meta::default(), Meta::from_labels(HashMap::new()));
     }
 
     #[test]
@@ -1045,13 +912,13 @@ mod tests {
             "london-1".to_string(),
             address(1),
             HopRouting::try_from(1).unwrap(),
-            Meta::from_map(labels),
+            Meta::from_labels(labels),
             "127.0.0.1:8000".parse().unwrap(),
             "127.0.0.1:51820".parse().unwrap(),
             DestinationSource::Discovered,
         );
         dest.geo = Some(Geo {
-            country_code: "GB".to_string(),
+            country: "GB".parse().unwrap(),
             source: crate::geoip::GeoSource::AnnouncedIp,
         });
 
@@ -1074,7 +941,7 @@ mod tests {
             id.to_string(),
             address(1),
             HopRouting::try_from(1).unwrap(),
-            Meta::from_map(labels),
+            Meta::from_labels(labels),
             "127.0.0.1:8000".parse().unwrap(),
             "127.0.0.1:51820".parse().unwrap(),
             source,
@@ -1350,7 +1217,7 @@ mod tests {
 
         assert_eq!(
             json,
-            r#"{"id":"dest-1","meta":{"name":null,"description":null,"other":{}},"geo":null,"address":"0x0101010101010101010101010101010101010101","routing":1,"gnosis_vpn_server":"172.30.0.1:8000","wireguard_server":"172.30.0.1:51820","source":"Configured","overrides":{"configured_meta":{},"configured_gnosis_vpn_server":null,"configured_wireguard_server":null}}"#
+            r#"{"id":"dest-1","meta":{"name":null,"description":null,"other":{}},"geo":null,"address":"0x0101010101010101010101010101010101010101","routing":1,"gnosis_vpn_server":"172.30.0.1:8000","wireguard_server":"172.30.0.1:51820","source":{"type":"configured"},"overrides":{"configured_meta":{},"configured_gnosis_vpn_server":null,"configured_wireguard_server":null}}"#
         );
     }
 
@@ -1428,7 +1295,7 @@ mod tests {
             "d".to_string(),
             address(1),
             HopRouting::try_from(1).unwrap(),
-            Meta::from_map(meta),
+            Meta::from_labels(meta),
             "127.0.0.1:8000".parse().unwrap(),
             "127.0.0.1:51820".parse().unwrap(),
             DestinationSource::Discovered,
@@ -1452,7 +1319,7 @@ mod tests {
             "d".to_string(),
             address(1),
             HopRouting::try_from(1).unwrap(),
-            Meta::from_map(meta),
+            Meta::from_labels(meta),
             "127.0.0.1:8000".parse().unwrap(),
             "127.0.0.1:51820".parse().unwrap(),
             DestinationSource::Discovered,
@@ -1473,7 +1340,7 @@ mod tests {
             "d".to_string(),
             address(1),
             HopRouting::try_from(1).unwrap(),
-            Meta::from_map(meta),
+            Meta::from_labels(meta),
             "127.0.0.1:8000".parse().unwrap(),
             "127.0.0.1:51820".parse().unwrap(),
             DestinationSource::Discovered,
@@ -1495,7 +1362,7 @@ mod tests {
             .values()
             .find(|d| d.address == addr)
             .expect("destination exists");
-        dest.geo.as_ref().map(|g| g.country_code.clone())
+        dest.geo.as_ref().map(|g| g.country.to_string())
     }
 
     #[test]

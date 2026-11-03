@@ -26,12 +26,10 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.6#ce185155e1639403cc40e01260d0830065a49555" =
       "sha256-3Hjb/OdjLwy2N3QAF+e8XlZ2YPp+k53Xt17jtUUP1XQ=";
-    "git+https://github.com/hoprnet/edge-client.git?rev=d7d3440eba0f025653b8bb56efedbff396165b69#d7d3440eba0f025653b8bb56efedbff396165b69" =
-      "sha256-iEcF2z9oCx13OOTH+xongJRBFagEJa1Jy5khcNu50wk=";
-    "git+https://github.com/hoprnet/hopr-impls?branch=fix/ticket-index-persistence#17a0b17d9e4a50b6a89b57e0bf4e9d4eb8116410" =
-      "sha256-z7wm1g/kAp3lB5xd4rXfKy6SI8fo5zKtxndJsqerXH4=";
-    "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157" =
-      "sha256-obKTF/PUNrkM74oFSwOxaUZMs7ty2KJOaFc0I2Mrgy4=";
+    "git+https://github.com/hoprnet/edge-client.git?branch=main#7bddab66331ba2135bf0edf5d3cc08ec27a0e369" =
+      "sha256-aevjjMHrfyL4LUzfFsqvoItInluvfjZtesuPvtnHHeM=";
+    "git+https://github.com/hoprnet/hoprnet?branch=master#9b2c1df056edc6710aebd200c575c9c557f1c9d1" =
+      "sha256-YjJyiGtHD8QYuwe82FhROELq73r6qK/kKz4eOyH4sNM=";
   };
 
   builders = nixLib.mkRustBuilders {
@@ -199,8 +197,8 @@ let
         '';
     });
 
-  # Selects the `pix-test` deposit pool on every binary crate; `pix-curvy` is the default.
-  pixTestCargoArgs = "--no-default-features --features gnosis_vpn-root/pix-test,gnosis_vpn-worker/pix-test,gnosis_vpn-ctl/pix-test";
+  # Selects the `pix-test` deposit pool on the root and worker crates; `pix-curvy` is the default.
+  pixTestCargoArgs = "--no-default-features --features gnosis_vpn-root/pix-test,gnosis_vpn-worker/pix-test";
 
   mkGnosisvpnBuildArgs =
     {

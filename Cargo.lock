@@ -715,7 +715,7 @@ dependencies = [
  "futures",
  "futures-utils-wasm",
  "lru 0.16.4",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pin-project",
  "reqwest",
  "serde",
@@ -757,7 +757,7 @@ dependencies = [
  "futures-utils-wasm",
  "http",
  "lru 0.18.5",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pin-project",
  "reqwest",
  "serde",
@@ -1111,7 +1111,7 @@ dependencies = [
  "derive_more",
  "futures",
  "futures-utils-wasm",
- "parking_lot",
+ "parking_lot 0.12.5",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1134,7 +1134,7 @@ dependencies = [
  "derive_more",
  "futures",
  "futures-utils-wasm",
- "parking_lot",
+ "parking_lot 0.12.5",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -2310,9 +2310,9 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.35.0"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8478d012a20a01bd39c6b0033e6794f6a98d5ac2819d8c89264db02fc251e84c"
+checksum = "b0316ef1a89d3d089b8534c12fa77403702dbbbef24a64361f74f4b5ec7e2edd"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2330,6 +2330,7 @@ dependencies = [
  "serde_json",
  "smart-default",
  "thiserror 2.0.21",
+ "tokio",
  "tracing",
  "url",
 ]
@@ -2904,17 +2905,23 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "crossfire"
-version = "3.1.20"
+version = "3.1.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adb5e5c51e448ac2309883593482db91a5549c528d08a36aaa87bba13e5a40ae"
+checksum = "342783f90d75bfc49d9c7cff550d0a25d3b1b346b5964f3f22672d195cbb6b1f"
 dependencies = [
- "crossbeam-utils",
+ "crossfire-utils",
  "futures-core",
- "parking_lot",
+ "parking_lot 0.13.0",
  "pointers",
  "smallvec",
  "tokio",
 ]
+
+[[package]]
+name = "crossfire-utils"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3398c18f4a17fd2b156e19256dfd20666488d5bf9a0d111d3fa8088e12b62ae"
 
 [[package]]
 name = "crunchy"
@@ -3366,9 +3373,9 @@ dependencies = [
  "cfg-if",
  "crossbeam-utils",
  "hashbrown 0.14.5",
- "lock_api",
+ "lock_api 0.4.14",
  "once_cell",
- "parking_lot_core",
+ "parking_lot_core 0.9.12",
 ]
 
 [[package]]
@@ -3394,7 +3401,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -3698,7 +3705,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "5.2.0"
-source = "git+https://github.com/hoprnet/edge-client.git?rev=d7d3440eba0f025653b8bb56efedbff396165b69#d7d3440eba0f025653b8bb56efedbff396165b69"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=main#7bddab66331ba2135bf0edf5d3cc08ec27a0e369"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -3712,7 +3719,7 @@ dependencies = [
  "hopr-lib",
  "hopr-network-graph",
  "hopr-strategy",
- "hopr-ticket-manager 0.9.0",
+ "hopr-ticket-manager",
  "hopr-transport-p2p",
  "mimalloc",
  "multiaddr",
@@ -4435,12 +4442,26 @@ dependencies = [
  "clap",
  "clap_complete",
  "exitcode",
- "gnosis_vpn-lib",
+ "gnosis_vpn-ipc",
  "humantime",
+ "serde",
  "serde-saphyr",
  "serde_json",
  "tikv-jemallocator",
- "tokio",
+]
+
+[[package]]
+name = "gnosis_vpn-ipc"
+version = "0.101.1"
+dependencies = [
+ "base64 0.23.1",
+ "humantime",
+ "semver 1.0.28",
+ "serde",
+ "serde_json",
+ "sha3 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4455,12 +4476,13 @@ dependencies = [
  "cfg-if",
  "edgli",
  "futures-util",
+ "gnosis_vpn-ipc",
  "hopr-utils-session",
  "human-bandwidth",
  "humantime",
  "humantime-serde",
  "insta",
- "ipnetwork",
+ "ipnetwork 0.21.1",
  "libc",
  "maxminddb",
  "mnl",
@@ -4473,6 +4495,7 @@ dependencies = [
  "rand 0.10.3",
  "reqwest",
  "rustix",
+ "semver 1.0.28",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -4500,12 +4523,15 @@ dependencies = [
  "clap",
  "exitcode",
  "futures",
+ "gnosis_vpn-ipc",
  "gnosis_vpn-lib",
  "libc",
  "neptun",
  "notify",
+ "pnet_datalink",
  "rtnetlink 0.23.0",
  "rustix",
+ "semver 1.0.28",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -4523,6 +4549,7 @@ dependencies = [
  "anyhow",
  "clap",
  "exitcode",
+ "gnosis_vpn-ipc",
  "gnosis_vpn-lib",
  "rand 0.10.3",
  "reqwest",
@@ -4837,7 +4864,7 @@ dependencies = [
  "ipconfig",
  "moka",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rand 0.9.5",
  "resolv-conf",
  "smallvec",
@@ -4862,7 +4889,7 @@ dependencies = [
  "moka",
  "ndk-context",
  "once_cell",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rand 0.10.3",
  "resolv-conf",
  "smallvec",
@@ -4910,9 +4937,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-api"
-version = "4.3.2"
+version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20b3701bf6462bff1b49a5f37d148e79b73174ae111046c65d3c723c6372f29a"
+checksum = "fa64c5a401c0c7db4ad9a0688d11e59bc4566f92c0661e8ef97e4008816509ad"
 dependencies = [
  "async-trait",
  "atomic_enum",
@@ -4949,9 +4976,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-chain-connector"
-version = "0.28.0"
+version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3aa0ec8acc3a19e49b7e5b7eac42a4cd1edb9225cfc3655a29fb21074f4bcb73"
+checksum = "3fb6f363700957a383f5be7c6fcda692206e468e1a2b38bb0d4e9921a286754f"
 dependencies = [
  "ahash",
  "anyhow",
@@ -4967,7 +4994,7 @@ dependencies = [
  "hopr-api",
  "hopr-utilities",
  "moka",
- "parking_lot",
+ "parking_lot 0.12.5",
  "petgraph",
  "postcard",
  "redb",
@@ -4981,8 +5008,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-crypto-packet"
-version = "2.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157"
+version = "2.2.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#9b2c1df056edc6710aebd200c575c9c557f1c9d1"
 dependencies = [
  "bimap",
  "const-hex",
@@ -5000,9 +5027,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-ct-full-network"
-version = "0.7.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95cfe06f2b8a510183e0da5d12a7fb5063711274e31a19411ecd0a4e4fe7f9c6"
+checksum = "105dbbbaddcff05658a073b40b849658a8cc91d47513cc8fcfcfc28b6713d035"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -5018,8 +5045,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-lib"
-version = "5.0.0-rc.5"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157"
+version = "5.0.0-rc.6"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#9b2c1df056edc6710aebd200c575c9c557f1c9d1"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -5036,22 +5063,23 @@ dependencies = [
  "hopr-utilities",
  "humantime-serde",
  "lazy_static",
- "parking_lot",
+ "parking_lot 0.12.5",
  "serde",
  "serde_with",
  "smart-default",
  "strum",
  "thiserror 2.0.21",
  "tokio",
+ "toml_edit",
  "tracing",
  "validator",
 ]
 
 [[package]]
 name = "hopr-network-graph"
-version = "0.8.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "009f463e7c597f55aa8fda7b5a4c5df5d28cec3f119e9cc13b94628c7cc2c386"
+checksum = "a5521c74b022c255d71df222a319506606910d0edc2611c972606b540368056d"
 dependencies = [
  "anyhow",
  "bimap",
@@ -5060,7 +5088,7 @@ dependencies = [
  "hopr-utilities",
  "indexmap 2.14.2",
  "lazy_static",
- "parking_lot",
+ "parking_lot 0.12.5",
  "petgraph",
  "rand 0.10.3",
  "smallvec",
@@ -5071,7 +5099,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-app"
 version = "1.2.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#9b2c1df056edc6710aebd200c575c9c557f1c9d1"
 dependencies = [
  "hopr-crypto-packet",
  "hopr-types",
@@ -5083,8 +5111,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-protocol-hopr"
-version = "6.4.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157"
+version = "6.5.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#9b2c1df056edc6710aebd200c575c9c557f1c9d1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5095,12 +5123,12 @@ dependencies = [
  "hopr-api",
  "hopr-crypto-packet",
  "hopr-protocol-pix",
- "hopr-ticket-manager 0.8.0",
+ "hopr-ticket-manager",
  "hopr-utilities",
  "humantime-serde",
  "lazy_static",
  "moka",
- "parking_lot",
+ "parking_lot 0.12.5",
  "serde",
  "serde_with",
  "smart-default",
@@ -5113,7 +5141,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-pix"
 version = "0.3.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#9b2c1df056edc6710aebd200c575c9c557f1c9d1"
 dependencies = [
  "ahash",
  "auto_impl",
@@ -5122,7 +5150,7 @@ dependencies = [
  "hopr-types",
  "hopr-utilities",
  "moka",
- "parking_lot",
+ "parking_lot 0.12.5",
  "serde",
  "serde_bytes",
  "smart-default",
@@ -5135,8 +5163,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-protocol-session"
-version = "1.6.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157"
+version = "1.6.1"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#9b2c1df056edc6710aebd200c575c9c557f1c9d1"
 dependencies = [
  "aquamarine",
  "asynchronous-codec",
@@ -5152,7 +5180,7 @@ dependencies = [
  "hopr-types",
  "hopr-utilities",
  "lazy_static",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pin-project",
  "ringbuffer",
  "serde",
@@ -5167,7 +5195,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-start"
 version = "3.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#9b2c1df056edc6710aebd200c575c9c557f1c9d1"
 dependencies = [
  "aquamarine",
  "flagset",
@@ -5182,9 +5210,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-strategy"
-version = "5.4.0"
+version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04a149e034ebd1a28923fba717a324b9011d7f64a03db59256eff9d631e87d51"
+checksum = "c2bdbfbf66b80603224267fbf2da4c205a4d16457d5ecf93ce9ba699ff69e92e"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5212,7 +5240,7 @@ dependencies = [
  "lazy_static",
  "moka",
  "num_enum",
- "parking_lot",
+ "parking_lot 0.13.0",
  "redb",
  "reqwest",
  "scrypt",
@@ -5232,9 +5260,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-ticket-manager"
-version = "0.8.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2219a766732e0970cc3f31fcf55ca86619a37733c8db40e2f18b20ef8dbc852"
+checksum = "45c6071f3da29beaa7137fbe6dbf621e595e9c268c45c847dbfbed7ac1a33a4a"
 dependencies = [
  "ahash",
  "anyhow",
@@ -5244,29 +5272,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "hopr-api",
  "hopr-utilities",
- "parking_lot",
- "postcard",
- "redb",
- "strum",
- "tempfile",
- "thiserror 2.0.21",
- "tracing",
-]
-
-[[package]]
-name = "hopr-ticket-manager"
-version = "0.9.0"
-source = "git+https://github.com/hoprnet/hopr-impls?branch=fix%2Fticket-index-persistence#17a0b17d9e4a50b6a89b57e0bf4e9d4eb8116410"
-dependencies = [
- "ahash",
- "anyhow",
- "clap",
- "dashmap",
- "futures",
- "hashbrown 0.17.1",
- "hopr-api",
- "hopr-utilities",
- "parking_lot",
+ "parking_lot 0.12.5",
  "postcard",
  "redb",
  "strum",
@@ -5277,8 +5283,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport"
-version = "0.52.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157"
+version = "0.52.3"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#9b2c1df056edc6710aebd200c575c9c557f1c9d1"
 dependencies = [
  "ahash",
  "anyhow",
@@ -5308,6 +5314,7 @@ dependencies = [
  "libp2p",
  "moka",
  "multiaddr",
+ "parking_lot 0.12.5",
  "proc-macro-regex",
  "rand 0.10.3",
  "rand_distr",
@@ -5323,26 +5330,27 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport-mixer"
-version = "0.5.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157"
+version = "1.0.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#9b2c1df056edc6710aebd200c575c9c557f1c9d1"
 dependencies = [
  "futures",
  "futures-timer",
  "hopr-types",
  "humantime-serde",
  "lazy_static",
- "parking_lot",
+ "parking_lot 0.12.5",
  "serde",
  "smart-default",
  "thiserror 2.0.21",
  "tracing",
+ "validator",
 ]
 
 [[package]]
 name = "hopr-transport-p2p"
-version = "0.12.3"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "058cd92ee5ebc5da71d301fe44300c17f9e81645862d918cd1edcfa8799183d5"
+checksum = "9acc9b3048e50fdb326b95ce343d55849dd2b742f0a747acf5c7d371c1aa309a"
 dependencies = [
  "async-broadcast",
  "async-trait",
@@ -5354,7 +5362,6 @@ dependencies = [
  "hopr-utilities",
  "libp2p",
  "libp2p-stream",
- "multiaddr",
  "pin-project",
  "quinn-udp 0.6.3",
  "thiserror 2.0.21",
@@ -5364,7 +5371,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-probe"
 version = "0.9.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#9b2c1df056edc6710aebd200c575c9c557f1c9d1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5389,8 +5396,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport-session"
-version = "0.33.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157"
+version = "0.33.1"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#9b2c1df056edc6710aebd200c575c9c557f1c9d1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5408,7 +5415,7 @@ dependencies = [
  "humantime-serde",
  "lazy_static",
  "moka",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pid",
  "pin-project",
  "serde",
@@ -5424,7 +5431,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-tag-allocator"
 version = "0.2.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#9b2c1df056edc6710aebd200c575c9c557f1c9d1"
 dependencies = [
  "hopr-protocol-app",
  "serde",
@@ -5435,9 +5442,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-types"
-version = "4.1.0"
+version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9edbc7eef689f0dde57fb481404f15b671f0877dd75ff1e88c125f19a09efaf7"
+checksum = "d4e349732219ccec165d89c6c0c49905a0016240c0af6eb4b32452a9d3545363"
 dependencies = [
  "aes 0.9.3",
  "anyhow",
@@ -5499,9 +5506,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-utilities"
-version = "0.17.3"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72da17af86817eee527335feb09887ae1bd506f690bf8ffb787f54808f590203"
+checksum = "a47d87130566d650aea8a10c3614c3ea3ddde51fb23df9ef10792deaab38531a"
 dependencies = [
  "arrayvec",
  "auto_impl",
@@ -5535,7 +5542,7 @@ dependencies = [
 [[package]]
 name = "hopr-utils-session"
 version = "1.3.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#1462e4a019db9babd14f32f941c3762563d57157"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#9b2c1df056edc6710aebd200c575c9c557f1c9d1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5550,7 +5557,7 @@ dependencies = [
  "hopr-utilities",
  "human-bandwidth",
  "lazy_static",
- "parking_lot",
+ "parking_lot 0.12.5",
  "serde",
  "serde_with",
  "thiserror 2.0.21",
@@ -6082,6 +6089,15 @@ dependencies = [
 
 [[package]]
 name = "ipnetwork"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf466541e9d546596ee94f9f69590f89473455f88372423e0008fc1a7daf100e"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "ipnetwork"
 version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf370abdafd54d13e54a620e8c3e1145f28e46cc9d704bc6d94414559df41763"
@@ -6374,9 +6390,9 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "libc"
-version = "0.2.190"
+version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libm"
@@ -6487,7 +6503,7 @@ dependencies = [
  "multiaddr",
  "multihash",
  "multistream-select",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pin-project",
  "quick-protobuf",
  "rand 0.8.8",
@@ -6509,7 +6525,7 @@ dependencies = [
  "hickory-resolver 0.25.2",
  "libp2p-core",
  "libp2p-identity",
- "parking_lot",
+ "parking_lot 0.12.5",
  "smallvec",
  "tracing",
 ]
@@ -6786,6 +6802,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lock_api"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65d91b22da179613dcf4d6ec8349563f52a363f6849e03b00dd0a185ec4a59af"
+dependencies = [
+ "scopeguard",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6895,7 +6920,7 @@ version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b43d2458d977b610b04a3858e6504f06133663d303a1a0606601b530bfc9bc6"
 dependencies = [
- "ipnetwork",
+ "ipnetwork 0.21.1",
  "memchr",
  "serde",
  "thiserror 2.0.21",
@@ -7005,7 +7030,7 @@ dependencies = [
  "equivalent",
  "event-listener 5.4.2",
  "futures-util",
- "parking_lot",
+ "parking_lot 0.12.5",
  "portable-atomic",
  "smallvec",
  "tagptr",
@@ -7117,7 +7142,7 @@ dependencies = [
  "libc",
  "nix 0.31.3",
  "num_cpus",
- "parking_lot",
+ "parking_lot 0.12.5",
  "rand_core 0.6.4",
  "ring",
  "socket2 0.6.5",
@@ -7273,6 +7298,12 @@ dependencies = [
  "libc",
  "memoffset",
 ]
+
+[[package]]
+name = "no-std-net"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43794a0ace135be66a25d3ae77d41b91615fb68ae937f904090203e81f755b65"
 
 [[package]]
 name = "nohash-hasher"
@@ -7664,8 +7695,18 @@ version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
 dependencies = [
- "lock_api",
- "parking_lot_core",
+ "lock_api 0.4.14",
+ "parking_lot_core 0.9.12",
+]
+
+[[package]]
+name = "parking_lot"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9cf937ca4e1d0b7578784559063422fc39ae7c5a00f02471f2614d5486fd226"
+dependencies = [
+ "lock_api 0.5.0",
+ "parking_lot_core 0.10.0",
 ]
 
 [[package]]
@@ -7676,7 +7717,19 @@ checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
 dependencies = [
  "cfg-if",
  "libc",
- "redox_syscall",
+ "redox_syscall 0.5.18",
+ "smallvec",
+ "windows-link",
+]
+
+[[package]]
+name = "parking_lot_core"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cfff060068cc18aa7815010fcaf80c68c7fb9e85fc7f5c0f9bf142c21d19826"
+dependencies = [
+ "libc",
+ "redox_syscall 0.9.5",
  "smallvec",
  "windows-link",
 ]
@@ -7754,7 +7807,7 @@ checksum = "944d2c073758b6bda57f517cff54cf69d74eae3593fe1e9aa9918666543456a9"
 dependencies = [
  "derive_builder",
  "ioctl-sys",
- "ipnetwork",
+ "ipnetwork 0.21.1",
  "libc",
 ]
 
@@ -7864,6 +7917,38 @@ name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
+
+[[package]]
+name = "pnet_base"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffc190d4067df16af3aba49b3b74c469e611cad6314676eaf1157f31aa0fb2f7"
+dependencies = [
+ "no-std-net",
+]
+
+[[package]]
+name = "pnet_datalink"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e79e70ec0be163102a332e1d2d5586d362ad76b01cec86f830241f2b6452a7b7"
+dependencies = [
+ "ipnetwork 0.20.0",
+ "libc",
+ "pnet_base",
+ "pnet_sys",
+ "winapi",
+]
+
+[[package]]
+name = "pnet_sys"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d4643d3d4db6b08741050c2f3afa9a892c4244c085a72fcda93c9c2c9a00f4b"
+dependencies = [
+ "libc",
+ "winapi",
+]
 
 [[package]]
 name = "pointers"
@@ -8126,7 +8211,7 @@ checksum = "cf41c1a7c32ed72abe5082fb19505b969095c12da9f5732a4bc9878757fd087c"
 dependencies = [
  "dtoa",
  "itoa",
- "parking_lot",
+ "parking_lot 0.12.5",
  "prometheus-client-derive-encode",
 ]
 
@@ -8465,9 +8550,9 @@ dependencies = [
 
 [[package]]
 name = "redb"
-version = "4.3.0"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb338a6c67830a61bed824b78c2bb034ab1ff401a20616bd7957524f4fdc2f22"
+checksum = "39178e0a867f9e3eaa6292a4ab1dd3613f2519c5b564341e1e7b29b270736cc4"
 dependencies = [
  "libc",
 ]
@@ -8477,6 +8562,15 @@ name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
+dependencies = [
+ "bitflags 2.13.2",
+]
+
+[[package]]
+name = "redox_syscall"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "580c875845b41ecb1564ad1ae4703044cef774145e3d7a94dc2b3fa7c97868fd"
 dependencies = [
  "bitflags 2.13.2",
 ]
@@ -9076,6 +9170,10 @@ name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+dependencies = [
+ "serde",
+ "serde_core",
+]
 
 [[package]]
 name = "semver-parser"
@@ -9155,9 +9253,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.151"
+version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
  "itoa",
  "memchr",
@@ -9496,7 +9594,7 @@ version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 dependencies = [
- "lock_api",
+ "lock_api 0.4.14",
 ]
 
 [[package]]
@@ -9736,7 +9834,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -9868,14 +9966,14 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.53.2"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2 0.6.5",
@@ -9919,9 +10017,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.19"
+version = "0.7.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "494815d09bf52b5548659851081238f0ca39ff638363907596da739561c62c52"
+checksum = "e464cf451ba96ebfc6f9b6542f17ee8b8956e33f1e40d9690624e59d7a7f8a4b"
 dependencies = [
  "bytes",
  "futures-core",
@@ -9935,9 +10033,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "1.1.7+spec-1.1.0"
+version = "1.1.8+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7874cd34dd99040fc24e30923aa64a60a81ff3ddfe2b8129ccc84ba24949deed"
+checksum = "20489e00e4d8741d6be680764cc12e270655e375a20d1011e844a9c3379e678d"
 dependencies = [
  "indexmap 2.14.2",
  "serde_core",
@@ -9971,9 +10069,9 @@ dependencies = [
 
 [[package]]
 name = "toml_parser"
-version = "1.1.4+spec-1.1.0"
+version = "1.1.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bed810ee007d8e7f9cf20b4774e7198142fa27186e0f805871da7f3c39eaf333"
+checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
  "winnow",
 ]
@@ -10516,7 +10614,7 @@ checksum = "1c598d6b99ea013e35844697fc4670d08339d5cda15588f193c6beedd12f644b"
 dependencies = [
  "futures",
  "js-sys",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pin-utils",
  "slab",
  "wasm-bindgen",
@@ -10568,6 +10666,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
 
 [[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10575,6 +10689,12 @@ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows"
@@ -10948,7 +11068,7 @@ dependencies = [
  "futures",
  "log",
  "nohash-hasher",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pin-project",
  "rand 0.8.8",
  "static_assertions",
@@ -10963,7 +11083,7 @@ dependencies = [
  "futures",
  "log",
  "nohash-hasher",
- "parking_lot",
+ "parking_lot 0.12.5",
  "pin-project",
  "rand 0.9.5",
  "static_assertions",

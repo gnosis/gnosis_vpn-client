@@ -24,7 +24,8 @@ use std::vec::Vec;
 
 use crate::config;
 use crate::connection::destination::{
-    DEFAULT_HOPS, DefaultTargets, Destination as ConnDestination, DestinationSource, Destinations, Meta, Overrides,
+    DEFAULT_HOPS, DefaultTargets, Destination as ConnDestination, DestinationSource, Destinations, Meta,
+    configured_overrides,
 };
 use crate::connection::options;
 use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
@@ -183,6 +184,8 @@ pub(super) struct BlokliConfig {
     pub(super) sync_tolerance: Option<usize>,
     #[serde(default, with = "humantime_serde::option")]
     pub(super) request_timeout: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) resolve_timeout: Option<Duration>,
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -461,10 +464,15 @@ impl From<Option<BlokliConfig>> for HoprBlokliConfig {
             .as_ref()
             .and_then(|b| b.request_timeout)
             .unwrap_or_else(|| HoprBlokliConfig::default().request_timeout);
+        let resolve_timeout = value
+            .as_ref()
+            .and_then(|b| b.resolve_timeout)
+            .unwrap_or_else(|| HoprBlokliConfig::default().resolve_timeout);
         HoprBlokliConfig {
             connection_sync_timeout,
             sync_tolerance,
             request_timeout,
+            resolve_timeout,
         }
     }
 }
@@ -659,7 +667,11 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
         if key == "blokli" {
             if let Some(blokli) = value.as_table() {
                 for (k, _) in blokli.iter() {
-                    if k == "connection_sync_timeout" || k == "sync_tolerance" || k == "request_timeout" {
+                    let is_known = k == "connection_sync_timeout"
+                        || k == "sync_tolerance"
+                        || k == "request_timeout"
+                        || k == "resolve_timeout";
+                    if is_known {
                         continue;
                     }
                     wrong.push(format!("blokli.{k}"));
@@ -973,8 +985,8 @@ pub fn convert_destinations(
         };
 
         let labels = dest.meta.clone().unwrap_or_default();
-        let meta = Meta::from_map(labels.clone());
-        let overrides = Overrides::from_config(labels, dest.gnosis_vpn_server, dest.wireguard_server);
+        let meta = Meta::from_labels(labels.clone());
+        let overrides = configured_overrides(labels, dest.gnosis_vpn_server, dest.wireguard_server);
         let dest = ConnDestination::new(
             id.to_string(),
             dest.address,
@@ -1071,6 +1083,20 @@ request_timeout = "45s"
     }
 
     #[test]
+    fn absent_blokli_resolve_timeout_falls_back_to_the_default() {
+        let cfg = parse("version = 7\n\n[blokli]\nsync_tolerance = 50\n");
+        let blokli: HoprBlokliConfig = cfg.blokli.into();
+        assert_eq!(blokli.resolve_timeout, HoprBlokliConfig::default().resolve_timeout);
+    }
+
+    #[test]
+    fn configured_blokli_resolve_timeout_wins_over_the_default() {
+        let cfg = parse("version = 7\n\n[blokli]\nresolve_timeout = \"7s\"\n");
+        let blokli: HoprBlokliConfig = cfg.blokli.into();
+        assert_eq!(blokli.resolve_timeout, Duration::from_secs(7));
+    }
+
+    #[test]
     fn blokli_request_timeout_is_a_supported_key() {
         let table = r#####"
 version = 7
@@ -1079,6 +1105,7 @@ version = 7
 connection_sync_timeout = "30s"
 sync_tolerance = 50
 request_timeout = "10s"
+resolve_timeout = "3s"
 nonsense = 1
 "#####
             .parse::<toml::Table>()
@@ -2159,25 +2186,17 @@ version = 7
     }
 
     #[test]
-    fn pix_surplus_may_not_exceed_the_threshold() {
-        // Only explicit values can be compared here.
+    fn pix_surplus_may_exceed_the_threshold() {
+        // The deployed piz-palu geometry, allowed since hoprnet#8519.
         let toml = r#####"
 version = 7
 
 [connection.pix.dimensions]
-ssa_part_size     = 2
-additional_shares = 3
+num_ssa_parts     = 4096
+ssa_part_size     = 32
+additional_shares = 79
 "#####;
-        assert!(toml::from_str::<Config>(toml).is_err());
-
-        let ok = r#####"
-version = 7
-
-[connection.pix.dimensions]
-ssa_part_size     = 2
-additional_shares = 2
-"#####;
-        assert!(toml::from_str::<Config>(ok).is_ok());
+        assert!(toml::from_str::<Config>(toml).is_ok());
     }
 
     #[test]
