@@ -230,6 +230,37 @@ fn surb_stats(telemetry: &str, session_id: &str) -> Option<ipc::SurbStats> {
     has_any.then_some(stats)
 }
 
+/// Strategy counters from hopr telemetry next to the channel-lifecycle health edgli reports live.
+pub fn strategy_stats(telemetry: &str, channel_lifecycle: edgli::StrategyState) -> ipc::StrategyStats {
+    use crate::hopr::metrics::{unlabeled_u64, unlabeled_value};
+    let health = match channel_lifecycle {
+        edgli::StrategyState::Running => ipc::StrategyHealth::Running,
+        edgli::StrategyState::Degraded => ipc::StrategyHealth::Degraded,
+        edgli::StrategyState::Failed => ipc::StrategyHealth::Failed,
+    };
+    // exported as an f64 count of wei
+    let required_safe_balance =
+        unlabeled_value(telemetry, "hopr_strategy_channel_lifecycle_required_safe_balance_hopr")
+            .filter(|wei| (0.0..u128::MAX as f64).contains(wei))
+            .map(|wei| ipc::Balance::from_wei(wei as u128));
+    ipc::StrategyStats {
+        channel_lifecycle: ipc::ChannelLifecycleStats {
+            health,
+            opens: unlabeled_u64(telemetry, "hopr_strategy_channel_lifecycle_opens"),
+            closes: unlabeled_u64(telemetry, "hopr_strategy_channel_lifecycle_closes"),
+            fundings: unlabeled_u64(telemetry, "hopr_strategy_channel_lifecycle_fundings"),
+            finalizations: unlabeled_u64(telemetry, "hopr_strategy_channel_lifecycle_finalizations"),
+            required_safe_balance,
+        },
+        pix: ipc::PixStats {
+            deposits: unlabeled_u64(telemetry, "hopr_strategy_pix_deposits_total"),
+            deposits_rejected: unlabeled_u64(telemetry, "hopr_strategy_pix_deposits_rejected_total"),
+            deposits_over_budget: unlabeled_u64(telemetry, "hopr_strategy_pix_deposits_over_budget_total"),
+            deposits_failed: unlabeled_u64(telemetry, "hopr_strategy_pix_deposits_failed_total"),
+        },
+    }
+}
+
 fn active_session(kind: ipc::SessionKind, meta: &SessionClientMetadata) -> Option<ipc::ActiveSession> {
     let id = meta.active_clients.first()?.to_string();
     Some(ipc::ActiveSession {

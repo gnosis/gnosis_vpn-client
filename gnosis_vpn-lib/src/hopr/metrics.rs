@@ -31,9 +31,28 @@ pub(crate) fn gauge_u64(text: &str, metric: &str, session_id: &str) -> Option<u6
     (0.0..u64::MAX as f64).contains(&value).then_some(value as u64)
 }
 
+/// Value of a metric exported without labels, like the strategy counters.
+pub(crate) fn unlabeled_value(text: &str, metric: &str) -> Option<f64> {
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        // exact name: `..._deposits_total` must not match `..._deposits_rejected_total`
+        if fields.next() != Some(metric) {
+            continue;
+        }
+        let value: f64 = fields.next()?.parse().ok()?;
+        return value.is_finite().then_some(value);
+    }
+    None
+}
+
+pub(crate) fn unlabeled_u64(text: &str, metric: &str) -> Option<u64> {
+    let value = unlabeled_value(text, metric)?;
+    (0.0..u64::MAX as f64).contains(&value).then_some(value as u64)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{gauge_u64, gauge_value};
+    use super::{gauge_u64, gauge_value, unlabeled_u64, unlabeled_value};
 
     const FIXTURE: &str = r#"
 # HELP hopr_session_surb_buffer_estimate Estimated SURB buffer size
@@ -108,5 +127,48 @@ o{session_id="s"} +Inf
         assert_eq!(gauge_u64(BAD, "m", "s"), None);
         assert_eq!(gauge_u64(BAD, "n", "s"), None);
         assert_eq!(gauge_u64(BAD, "o", "s"), None);
+    }
+
+    const UNLABELED: &str = r#"
+# HELP hopr_strategy_pix_deposits_total Count of SSA deposits successfully sent by the Entry
+# TYPE hopr_strategy_pix_deposits_total counter
+hopr_strategy_pix_deposits_total 12
+hopr_strategy_pix_deposits_rejected_total 3
+hopr_strategy_channel_lifecycle_required_safe_balance_hopr 2500000000000000000
+hopr_strategy_pix_sweeps_total NaN
+hopr_strategy_channel_lifecycle_opens 4 1730707200000
+"#;
+
+    #[test]
+    fn unlabeled_matches_the_exact_name() {
+        assert_eq!(unlabeled_u64(UNLABELED, "hopr_strategy_pix_deposits_total"), Some(12));
+        assert_eq!(
+            unlabeled_u64(UNLABELED, "hopr_strategy_pix_deposits_rejected_total"),
+            Some(3)
+        );
+        assert_eq!(unlabeled_u64(UNLABELED, "hopr_strategy_pix_deposits"), None);
+    }
+
+    #[test]
+    fn unlabeled_ignores_a_trailing_timestamp() {
+        assert_eq!(
+            unlabeled_u64(UNLABELED, "hopr_strategy_channel_lifecycle_opens"),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn unlabeled_rejects_missing_and_non_finite() {
+        assert_eq!(
+            unlabeled_value(UNLABELED, "hopr_strategy_pix_deposits_failed_total"),
+            None
+        );
+        assert_eq!(unlabeled_value(UNLABELED, "hopr_strategy_pix_sweeps_total"), None);
+    }
+
+    #[test]
+    fn unlabeled_reads_large_gauges() {
+        let v = unlabeled_value(UNLABELED, "hopr_strategy_channel_lifecycle_required_safe_balance_hopr");
+        assert_eq!(v, Some(2.5e18));
     }
 }
