@@ -235,7 +235,7 @@ path    = { hops = 1 }
 # raise it on high-latency links where requests time out during startup
 # (distinct from connection_sync_timeout, which bounds the whole initial sync, and from
 # connection.http_timeout, which applies to exit node requests)
-# request_timeout = "30s"
+# request_timeout = "10s"
 # bound on the lookup of the blokli host before the first killswitch arm of a connection;
 # on timeout the address resolved at startup is kept
 # resolve_timeout = "3s"
