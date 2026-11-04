@@ -3,10 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use std::time::Duration;
 
-/// Timeout for a single Blokli request.
-///
-/// Wider than the connector's own default because this client runs on consumer links, where
-/// the TLS handshake alone can take several round trips, and a loaded Blokli answers in seconds.
+/// Wider than edgli's default: consumer links need several TLS round trips, and a loaded Blokli answers in seconds.
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Only looked up while DNS is still open, so a slow answer is a broken resolver; the startup pin covers it.
