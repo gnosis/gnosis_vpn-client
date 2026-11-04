@@ -7,6 +7,8 @@ use tokio::net;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
 
+use crate::hopr::blokli_config::BlokliConfig;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Host not found in the provided URL")]
@@ -55,7 +57,11 @@ pub async fn resolve_blokli_ip(url: &url::Url) -> Result<Ipv4Addr, Error> {
 
 /// Blokli's `chainInfo.network`, through the already pinned address.
 pub async fn query_blokli_network(url: &url::Url, ip: Ipv4Addr) -> Result<String, Error> {
-    let endpoint = BlokliEndpoint::new(url.clone()).with_dns_override(BlokliDnsOverride::new(IpAddr::V4(ip), None));
+    // Root queries before reading the config, so it takes the default rather than edgli's tighter one.
+    let request_timeout = BlokliConfig::default().request_timeout;
+    let endpoint = BlokliEndpoint::new(url.clone())
+        .with_request_timeout(request_timeout)
+        .with_dns_override(BlokliDnsOverride::new(IpAddr::V4(ip), None));
     edgli::query_network(&endpoint)
         .await
         .map_err(|e| Error::Blokli(format!("{e:#}")))

@@ -6,8 +6,8 @@ use std::time::Duration;
 /// Timeout for a single Blokli request.
 ///
 /// Wider than the connector's own default because this client runs on consumer links, where
-/// the TLS handshake alone can take several round trips before the request goes out.
-const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// the TLS handshake alone can take several round trips, and a loaded Blokli answers in seconds.
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Only looked up while DNS is still open, so a slow answer is a broken resolver; the startup pin covers it.
 const DEFAULT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -56,8 +56,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_request_timeout_is_ten_seconds() {
-        assert_eq!(BlokliConfig::default().request_timeout, Duration::from_secs(10));
+    fn default_request_timeout_is_thirty_seconds() {
+        assert_eq!(BlokliConfig::default().request_timeout, Duration::from_secs(30));
     }
 
     /// The connector's own default is deliberately tighter than ours; if upstream ever
