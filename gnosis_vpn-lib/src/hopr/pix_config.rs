@@ -55,8 +55,7 @@ pub struct PixConfig {
     #[serde(default = "PixConfig::default_relayer_url")]
     pub relayer_url: Url,
 
-    /// wxHOPR shielded from the Safe into the Curvy float on the first deposit; the pool never tops it up.
-    /// Unset keeps the pool's default; `HOPRD_CURVY_INITIAL_FUNDING` still overrides it. Curvy pool only.
+    /// Curvy float shielded from the Safe once, never topped up; `HOPRD_CURVY_INITIAL_FUNDING` overrides it.
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(default)]
     pub initial_funding: Option<HoprBalance>,
