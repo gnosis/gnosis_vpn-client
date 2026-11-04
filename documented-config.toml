@@ -294,3 +294,6 @@ path    = { hops = 1 }
 # min_safe_hopr_reserve = "0 wxHOPR"
 # Curvy relayer that submits deposit proofs; the client never submits them itself; default: https://api.curvy.box
 # relayer_url = "https://api.curvy.box"
+# wxHOPR shielded from the Safe into the Curvy float on the first deposit, never topped up;
+# HOPRD_CURVY_INITIAL_FUNDING overrides it; default: 100 wxHOPR
+# initial_funding = "100 wxHOPR"
