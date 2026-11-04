@@ -488,7 +488,7 @@ fn print_nerd_stats(nerd_stats: &ipc::NerdStats) {
 fn print_strategy_stats(strategies: Option<&ipc::StrategyStats>) {
     println!("---");
     let Some(strategies) = strategies else {
-        println!("Strategies: not running");
+        println!("Strategies: unavailable");
         return;
     };
     let fmt = |v: Option<u64>| v.map(|v| v.to_string()).unwrap_or("--".to_string());

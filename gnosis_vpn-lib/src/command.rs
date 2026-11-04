@@ -457,4 +457,69 @@ mod tests {
         assert!(surb_stats(telemetry, "unknown").is_none());
         assert!(surb_stats("", "aabbcc").is_none());
     }
+
+    #[test]
+    fn strategy_stats_read_the_strategy_counters() {
+        let telemetry = concat!(
+            "# TYPE hopr_strategy_channel_lifecycle_opens counter\n",
+            "hopr_strategy_channel_lifecycle_opens 4\n",
+            "hopr_strategy_channel_lifecycle_closes 1\n",
+            "hopr_strategy_channel_lifecycle_fundings 7\n",
+            "hopr_strategy_channel_lifecycle_finalizations 2\n",
+            "hopr_strategy_channel_lifecycle_required_safe_balance_hopr 2500000000000000000\n",
+            "hopr_strategy_pix_deposits_total 12\n",
+            "hopr_strategy_pix_deposits_rejected_total 3\n",
+            "hopr_strategy_pix_deposits_over_budget_total 5\n",
+            "hopr_strategy_pix_deposits_failed_total 6\n",
+        );
+        let stats = strategy_stats(telemetry, edgli::StrategyState::Running);
+        let lc = stats.channel_lifecycle;
+        assert_eq!(lc.opens, Some(4));
+        assert_eq!(lc.closes, Some(1));
+        assert_eq!(lc.fundings, Some(7));
+        assert_eq!(lc.finalizations, Some(2));
+        assert_eq!(
+            lc.required_safe_balance,
+            Some(ipc::Balance::from_wei(2_500_000_000_000_000_000))
+        );
+        let pix = stats.pix;
+        assert_eq!(pix.deposits, Some(12));
+        assert_eq!(pix.deposits_rejected, Some(3));
+        assert_eq!(pix.deposits_over_budget, Some(5));
+        assert_eq!(pix.deposits_failed, Some(6));
+    }
+
+    #[test]
+    fn strategy_stats_on_an_empty_scrape() {
+        let stats = strategy_stats("", edgli::StrategyState::Degraded);
+        let expected = ipc::StrategyStats {
+            channel_lifecycle: ipc::ChannelLifecycleStats {
+                health: ipc::StrategyHealth::Degraded,
+                opens: None,
+                closes: None,
+                fundings: None,
+                finalizations: None,
+                required_safe_balance: None,
+            },
+            pix: ipc::PixStats {
+                deposits: None,
+                deposits_rejected: None,
+                deposits_over_budget: None,
+                deposits_failed: None,
+            },
+        };
+        assert_eq!(stats, expected);
+    }
+
+    #[test]
+    fn strategy_health_follows_channel_lifecycle() {
+        let cases = [
+            (edgli::StrategyState::Running, ipc::StrategyHealth::Running),
+            (edgli::StrategyState::Degraded, ipc::StrategyHealth::Degraded),
+            (edgli::StrategyState::Failed, ipc::StrategyHealth::Failed),
+        ];
+        for (state, health) in cases {
+            assert_eq!(strategy_stats("", state).channel_lifecycle.health, health);
+        }
+    }
 }
