@@ -35,6 +35,8 @@ pub struct Config {
     pub pix_strategy: PixConfig,
     /// The country database, at the installer's location unless a v7 file points elsewhere.
     pub geoip_db: PathBuf,
+    /// The Curvy proving files, at the installer's location unless a v7 file points elsewhere.
+    pub curvy_zk_dir: PathBuf,
 }
 
 #[derive(Debug, Error)]
@@ -51,6 +53,8 @@ pub enum Error {
     VersionMismatch(u8),
     #[error("geoip_db is not a file: {}", .0.display())]
     GeoIpDbNotFound(PathBuf),
+    #[error("curvy_zk_dir is not a directory: {}", .0.display())]
+    CurvyZkDirNotFound(PathBuf),
     #[error("ping and main sessions must both have surb_balancing enabled or both disabled")]
     SurbBalancingMismatch,
     #[error("surb_balancing.ramp interval and duration must both be greater than zero")]
@@ -78,6 +82,7 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
     })?;
     let config = parse(&content)?;
     validate_geoip_db(&config.geoip_db)?;
+    validate_curvy_zk_dir(&config.curvy_zk_dir)?;
     Ok(config)
 }
 
@@ -87,6 +92,14 @@ fn validate_geoip_db(path: &Path) -> Result<(), Error> {
         return Ok(());
     }
     Err(Error::GeoIpDbNotFound(path.to_path_buf()))
+}
+
+/// Directory only: curvy-witnesscalc checks each file's digest when it proves.
+fn validate_curvy_zk_dir(path: &Path) -> Result<(), Error> {
+    if path.is_dir() {
+        return Ok(());
+    }
+    Err(Error::CurvyZkDirNotFound(path.to_path_buf()))
 }
 
 pub fn parse(content: &str) -> Result<Config, Error> {
@@ -163,12 +176,16 @@ mod tests {
 
     #[tokio::test]
     async fn a_v7_file_names_an_existing_geoip_database() {
-        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/geoip-country.mmdb");
-        let config = read_file(&format!("version = 7\ngeoip_db = {fixture:?}\n"))
-            .await
-            .expect("valid config");
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let fixture = fixtures.join("geoip-country.mmdb");
+        let config = read_file(&format!(
+            "version = 7\ngeoip_db = {fixture:?}\ncurvy_zk_dir = {fixtures:?}\n"
+        ))
+        .await
+        .expect("valid config");
 
         assert_eq!(fixture, config.geoip_db);
+        assert_eq!(fixtures, config.curvy_zk_dir);
     }
 
     #[test]
@@ -183,6 +200,27 @@ mod tests {
         let result = read_file("version = 7\ngeoip_db = \"/nonexistent/geoip.mmdb\"\n").await;
 
         assert!(matches!(result, Err(Error::GeoIpDbNotFound(_))), "{result:?}");
+    }
+
+    #[test]
+    fn a_v7_file_without_curvy_zk_dir_falls_back_to_the_installer_path() {
+        let config = parse("version = 7\n").expect("valid config");
+
+        assert_eq!(
+            PathBuf::from(crate::hopr::pix_config::DEFAULT_CURVY_ZK_DIR),
+            config.curvy_zk_dir
+        );
+    }
+
+    #[tokio::test]
+    async fn a_curvy_zk_dir_that_is_not_a_directory_is_rejected() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/geoip-country.mmdb");
+        let result = read_file(&format!(
+            "version = 7\ngeoip_db = {fixture:?}\ncurvy_zk_dir = {fixture:?}\n"
+        ))
+        .await;
+
+        assert!(matches!(result, Err(Error::CurvyZkDirNotFound(_))), "{result:?}");
     }
 
     fn with_blokli_section(blokli: &str) -> String {

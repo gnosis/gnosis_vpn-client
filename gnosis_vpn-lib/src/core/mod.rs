@@ -2582,8 +2582,9 @@ mod tests {
     async fn fresh_core() -> TestCore {
         let state_home = tempfile::tempdir().expect("temp dir");
         let path = state_home.path().join("config.toml");
-        let geoip_db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/geoip-country.mmdb");
-        let toml = format!("version = 7\ngeoip_db = {:?}\n", geoip_db);
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let geoip_db = fixtures.join("geoip-country.mmdb");
+        let toml = format!("version = 7\ngeoip_db = {geoip_db:?}\ncurvy_zk_dir = {fixtures:?}\n");
         tokio::fs::write(&path, toml).await.expect("write config");
         let config = crate::config::read(&path).await.expect("valid config");
         let worker_params = crate::worker_params::WorkerParams::new(

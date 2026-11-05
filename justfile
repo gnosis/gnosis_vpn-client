@@ -160,6 +160,13 @@ system-tests test_binary="gnosis_vpn-system_tests":
     sudo install -D -m 0644 "${geoip_tmp}" /usr/share/gnosisvpn/geoip.mmdb
     rm -f "${geoip_tmp}"
 
+    # The Curvy proving files the installer ships, at the client's default curvy_zk_dir
+    curvy_zk_tmp="$(mktemp -d)"
+    "{{ justfile_directory() }}/scripts/fetch-curvy-zk.sh" "${curvy_zk_tmp}"
+    sudo install -d -m 0755 /usr/share/gnosisvpn/curvy-zk
+    sudo install -m 0644 "${curvy_zk_tmp}"/* /usr/share/gnosisvpn/curvy-zk/
+    rm -rf "${curvy_zk_tmp}"
+
     # Moves the ID and password into the worker's per-network directory
     printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_network_dir}/hopr.id" > /dev/null
     printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_network_dir}/hopr.pass" > /dev/null

@@ -15,6 +15,12 @@ version = 7
 # applies must exist, or the config is rejected.
 # geoip_db = "/usr/share/gnosisvpn/geoip.mmdb"
 
+# curvy_zk_dir - the directory with the Curvy pix-aggregation proving files PIX deposits are built
+# with, as shipped by the installer. Defaults to the installer's location,
+# /usr/share/gnosisvpn/curvy-zk on Linux and /usr/local/share/gnosisvpn/curvy-zk on macOS; set it
+# to use another directory. Whichever applies must exist, or the config is rejected.
+# curvy_zk_dir = "/usr/share/gnosisvpn/curvy-zk"
+
 ###
 ## destinations section - configure available target destinations
 #
