@@ -6,6 +6,15 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use url::Url;
 
+/// Where the installer puts the Curvy proving files; only a v7 config can point elsewhere.
+#[cfg(target_os = "linux")]
+pub const DEFAULT_CURVY_ZK_DIR: &str = "/usr/share/gnosisvpn/curvy-zk";
+#[cfg(target_os = "macos")]
+pub const DEFAULT_CURVY_ZK_DIR: &str = "/usr/local/share/gnosisvpn/curvy-zk";
+
+/// curvy-witnesscalc reads the proving files' directory from this variable only.
+pub const CURVY_ZK_DIR_ENV: &str = "CURVY_ZK_KEYS_DIR";
+
 /// Operator-tunable parameters for the PIX exit-incentivization strategy; unset fields fall back to upstream defaults.
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

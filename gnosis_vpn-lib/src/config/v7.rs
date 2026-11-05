@@ -617,6 +617,7 @@ pub struct Config {
     pub(super) strategy: Option<Strategy>,
     pub(super) pix_strategy: Option<PixStrategy>,
     pub(super) geoip_db: Option<PathBuf>,
+    pub(super) curvy_zk_dir: Option<PathBuf>,
 }
 
 #[serde_as]
@@ -643,7 +644,7 @@ pub(super) enum DestinationPath {
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong = Vec::new();
     for (key, value) in table.iter() {
-        if key == "version" || key == "geoip_db" {
+        if key == "version" || key == "geoip_db" || key == "curvy_zk_dir" {
             continue;
         }
         if key == "wireguard" {
@@ -971,6 +972,9 @@ impl TryFrom<Config> for config::Config {
             strategy,
             pix_strategy,
             geoip_db: value.geoip_db.unwrap_or_else(|| crate::geoip::DEFAULT_DB_PATH.into()),
+            curvy_zk_dir: value
+                .curvy_zk_dir
+                .unwrap_or_else(|| crate::hopr::pix_config::DEFAULT_CURVY_ZK_DIR.into()),
         })
     }
 }
@@ -2026,6 +2030,7 @@ enabled = false
         let table = r#####"
 version = 7
 geoip_db = "/usr/share/gnosisvpn/geoip.mmdb"
+curvy_zk_dir = "/usr/share/gnosisvpn/curvy-zk"
 "#####
             .parse::<toml::Table>()
             .expect("valid TOML");

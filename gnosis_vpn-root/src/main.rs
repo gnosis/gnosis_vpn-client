@@ -29,7 +29,7 @@ use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::worker::{self, WorkerOwner};
-use gnosis_vpn_lib::{dirs, logging, ping, remote_data, socket};
+use gnosis_vpn_lib::{dirs, hopr, logging, ping, remote_data, socket};
 
 mod cli;
 mod device_monitor;
@@ -1577,6 +1577,7 @@ impl DaemonState {
             .env("HOME", &owner.home)
             .env("USER", &owner.name)
             .env("LOGNAME", &owner.name)
+            .env(hopr::CURVY_ZK_DIR_ENV, &self.config.curvy_zk_dir)
             // std clears the supplementary groups on the uid drop; only the primary gid remains.
             .uid(owner.uid)
             .gid(owner.gid);

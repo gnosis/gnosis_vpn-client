@@ -184,7 +184,8 @@ let
         lib.optionalString (prev ? postInstall && prev.postInstall != null) prev.postInstall
         + ''
           for bin in $(find "$out/bin" -type f); do
-            linked_iconv=$(otool -L "$bin" | grep "/nix/store/.*libiconv.*dylib" | awk '{print $1}')
+            # awk, not grep: no match must not fail the build under pipefail
+            linked_iconv=$(otool -L "$bin" | awk '/\/nix\/store\/.*libiconv.*dylib/ {print $1}')
 
             if [ -n "$linked_iconv" ]; then
               echo "Rewriting $bin - found nix libiconv reference: $linked_iconv"
