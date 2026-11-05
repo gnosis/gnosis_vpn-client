@@ -80,7 +80,10 @@ pub async fn read(path: &Path) -> Result<Config, Error> {
             Error::IO(e)
         }
     })?;
-    let config = parse(&content)?;
+    let mut config = parse(&content)?;
+    // The worker runs in the owner's home, so a relative path would resolve elsewhere there.
+    config.geoip_db = std::path::absolute(&config.geoip_db)?;
+    config.curvy_zk_dir = std::path::absolute(&config.curvy_zk_dir)?;
     validate_geoip_db(&config.geoip_db)?;
     validate_curvy_zk_dir(&config.curvy_zk_dir)?;
     Ok(config)
@@ -185,6 +188,19 @@ mod tests {
         .expect("valid config");
 
         assert_eq!(fixture, config.geoip_db);
+        assert_eq!(fixtures, config.curvy_zk_dir);
+    }
+
+    #[tokio::test]
+    async fn relative_paths_resolve_against_the_reading_process() {
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let config = read_file(
+            "version = 7\ngeoip_db = \"tests/fixtures/geoip-country.mmdb\"\ncurvy_zk_dir = \"tests/fixtures\"\n",
+        )
+        .await
+        .expect("valid config");
+
+        assert_eq!(fixtures.join("geoip-country.mmdb"), config.geoip_db);
         assert_eq!(fixtures, config.curvy_zk_dir);
     }
 
