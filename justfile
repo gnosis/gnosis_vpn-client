@@ -160,6 +160,13 @@ system-tests test_binary="gnosis_vpn-system_tests":
     sudo install -D -m 0644 "${geoip_tmp}" /usr/share/gnosisvpn/geoip.mmdb
     rm -f "${geoip_tmp}"
 
+    # The Curvy proving files the installer ships, at the client's default curvy_zk_dir
+    curvy_zk_url="https://github.com/0xCurvy/rs-sdk/releases/download/v0.2.0"
+    sudo install -d -m 0755 /usr/share/gnosisvpn/curvy-zk
+    for f in pix-aggregation-bound-2-9-30.signet.zst verifyPixAggregationBound_2_9_30-final.zkey; do
+        sudo curl -fsSL --retry 3 -o "/usr/share/gnosisvpn/curvy-zk/${f}" "${curvy_zk_url}/${f}"
+    done
+
     # Moves the ID and password into the worker's per-network directory
     printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_network_dir}/hopr.id" > /dev/null
     printf %s "${SYSTEM_TEST_HOPRD_ID_PASSWORD}" | sudo tee "${worker_network_dir}/hopr.pass" > /dev/null
