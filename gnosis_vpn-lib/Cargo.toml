@@ -16,6 +16,7 @@ cfg-if.workspace             = true
 edgli.workspace              = true
 futures-util.workspace       = true
 gnosis_vpn-ipc.workspace     = true
+hopr-strategy.workspace      = true
 hopr-utils-session.workspace = true
 human-bandwidth              = { workspace = true, features = ["serde"] }
 humantime.workspace          = true

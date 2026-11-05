@@ -569,6 +569,9 @@ pub(super) struct PixStrategy {
     pub(super) min_safe_hopr_reserve: Option<HoprBalance>,
     #[serde(default)]
     pub(super) relayer_url: Option<url::Url>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) initial_funding: Option<HoprBalance>,
 }
 
 impl From<Option<PixStrategy>> for PixConfig {
@@ -595,6 +598,7 @@ impl From<Option<PixStrategy>> for PixConfig {
                 .unwrap_or(def.max_deposit_tracking_time),
             max_deposit_retries: v.as_ref().and_then(|p| p.max_deposit_retries),
             min_safe_hopr_reserve: v.as_ref().and_then(|p| p.min_safe_hopr_reserve),
+            initial_funding: v.as_ref().and_then(|p| p.initial_funding),
             relayer_url: v.and_then(|p| p.relayer_url).unwrap_or(def.relayer_url),
         }
     }
@@ -911,6 +915,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                             | "max_deposit_retries"
                             | "min_safe_hopr_reserve"
                             | "relayer_url"
+                            | "initial_funding"
                     ) {
                         continue;
                     }
@@ -1890,6 +1895,7 @@ max_deposit_tracking_time = "30s"
 max_deposit_retries = 5
 min_safe_hopr_reserve = "10 wxHOPR"
 relayer_url = "https://api.curvy.dev"
+initial_funding = "0.000001 wxHOPR"
 "#####,
         );
         let pix_strategy = cfg.pix_strategy.expect("pix_strategy section present");
@@ -1901,6 +1907,7 @@ relayer_url = "https://api.curvy.dev"
         assert_eq!(converted.max_deposit_retries, Some(5));
         assert_eq!(converted.min_safe_hopr_reserve, Some("10 wxHOPR".parse().unwrap()));
         assert_eq!(converted.relayer_url.as_str(), "https://api.curvy.dev/");
+        assert_eq!(converted.initial_funding, Some("0.000001 wxHOPR".parse().unwrap()));
     }
 
     #[test]
@@ -1938,6 +1945,7 @@ max_deposit_retries = 7
         assert_eq!(converted.max_deposit_tracking_time, def.max_deposit_tracking_time);
         assert_eq!(converted.min_safe_hopr_reserve, def.min_safe_hopr_reserve);
         assert_eq!(converted.relayer_url, def.relayer_url);
+        assert_eq!(converted.initial_funding, def.initial_funding);
     }
 
     #[test]
@@ -1955,6 +1963,7 @@ max_deposit_tracking_time = "30s"
 max_deposit_retries = 5
 min_safe_hopr_reserve = "10 wxHOPR"
 relayer_url = "https://api.curvy.box"
+initial_funding = "0.000001 wxHOPR"
 "#####
             .parse::<toml::Table>()
             .expect("valid TOML");

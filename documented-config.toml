@@ -292,5 +292,7 @@ path    = { hops = 1 }
 # max_deposit_retries = 3
 # wxHOPR the Safe must still hold after a deposit, refused if a deposit would breach it; default: 0
 # min_safe_hopr_reserve = "0 wxHOPR"
-# Curvy relayer that submits deposit proofs; the client never submits them itself; default: https://api.curvy.box
+# Curvy relayer that submits deposit proofs; the client never submits them itself; Curvy staging is https://api.curvy.dev; default: https://api.curvy.box
 # relayer_url = "https://api.curvy.box"
+# Curvy float shielded from the Safe once, never topped up; HOPRD_CURVY_INITIAL_FUNDING overrides it; default: 100 wxHOPR
+# initial_funding = "100 wxHOPR"
