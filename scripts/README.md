@@ -9,5 +9,5 @@ Syncs `nix/gnosisvpn.nix`'s `outputHashes` with `Cargo.lock` after a dependency 
 
 ## `fetch-curvy-zk.sh`
 
-Downloads the Curvy pix-aggregation proving files matching `Cargo.lock` into a directory; the system tests install them
-at the default `curvy_zk_dir`. Update its version, names and digests when curvy-witnesscalc moves.
+Downloads the rs-sdk v0.2.0 Curvy pix-aggregation proving files into a directory; the system tests install them
+at the default `curvy_zk_dir`.

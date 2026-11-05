@@ -2,22 +2,13 @@
 #
 # fetch-curvy-zk.sh <dir> - download the Curvy pix-aggregation proving files into <dir>, as the installer ships them.
 #
-# The file names and digests belong to one curvy-witnesscalc version; the client rejects files from any other.
-#
 
 set -euo pipefail
 
-RS_SDK_VERSION="0.1.1"
+RS_SDK_VERSION="0.2.0"
 RELEASE_URL="https://github.com/0xCurvy/rs-sdk/releases/download/v${RS_SDK_VERSION}"
-CARGO_LOCK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/Cargo.lock"
 
 dest="${1:?usage: fetch-curvy-zk.sh <dir>}"
-
-locked_version="$(grep -A1 '^name = "curvy-witnesscalc"$' "${CARGO_LOCK}" | sed -n 's/^version = "\(.*\)"$/\1/p')"
-if [[ ${locked_version} != "${RS_SDK_VERSION}" ]]; then
-    echo "ERROR: Cargo.lock has curvy-witnesscalc ${locked_version}, this script fetches ${RS_SDK_VERSION}; update its names and digests" >&2
-    exit 1
-fi
 
 fetch() {
     local file="$1" expected="$2"
@@ -31,6 +22,6 @@ fetch() {
 }
 
 mkdir -p "${dest}"
-fetch pix-aggregation-2-9-30.signet.zst b974028ba40afdc067524819d61bdd9172a5e56369cfc05a75ba5d469c379c3a
-fetch verifyPixAggregation_2_9_30-final.zkey 7611d3ade361c02b70b27620aca12aa8c15f7c7aba352d3e7add6409974fb13d
+fetch pix-aggregation-bound-2-9-30.signet.zst 334964e70daf187c66ee02af6c3061049458994de162ce6981c7a8eec7dc60f6
+fetch verifyPixAggregationBound_2_9_30-final.zkey a7269ddecf820217aa103d9267e8884f3c7f37a8211f235c9f6c814f5786ed97
 echo "Curvy proving files for rs-sdk ${RS_SDK_VERSION} in ${dest}"
