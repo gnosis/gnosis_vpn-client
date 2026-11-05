@@ -404,12 +404,15 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::NerdStats(stats) => match stats.as_ref() {
             ipc::NerdStats::NoInfo {
                 tickets: ipc::TicketStatsStatus::Available(_),
+                ..
             } => exitcode::OK,
             ipc::NerdStats::NoInfo {
                 tickets: ipc::TicketStatsStatus::Waiting,
+                ..
             } => exitcode::UNAVAILABLE,
             ipc::NerdStats::NoInfo {
                 tickets: ipc::TicketStatsStatus::Error { .. },
+                ..
             } => exitcode::SOFTWARE,
             ipc::NerdStats::Connecting { .. } => exitcode::OK,
             ipc::NerdStats::Connected { .. } => exitcode::OK,
@@ -454,21 +457,66 @@ fn print_ticket_stats_status(status: &ipc::TicketStatsStatus) {
 
 fn print_nerd_stats(nerd_stats: &ipc::NerdStats) {
     match nerd_stats {
-        ipc::NerdStats::NoInfo { tickets } => {
+        ipc::NerdStats::NoInfo { tickets, strategies } => {
             print_ticket_stats_status(tickets);
+            print_strategy_stats(strategies.as_ref());
             println!("(connect to a destination to see more stats)");
         }
-        ipc::NerdStats::Connecting { tickets, conn } => {
+        ipc::NerdStats::Connecting {
+            tickets,
+            strategies,
+            conn,
+        } => {
             print_ticket_stats_status(tickets);
+            print_strategy_stats(strategies.as_ref());
             println!("---");
             print_connecting_stats(conn);
         }
-        ipc::NerdStats::Connected { tickets, conn } => {
+        ipc::NerdStats::Connected {
+            tickets,
+            strategies,
+            conn,
+        } => {
             print_ticket_stats_status(tickets);
+            print_strategy_stats(strategies.as_ref());
             println!("---");
             print_connected_stats(conn);
         }
     }
+}
+
+fn print_strategy_stats(strategies: Option<&ipc::StrategyStats>) {
+    println!("---");
+    let Some(strategies) = strategies else {
+        println!("Strategies: unavailable");
+        return;
+    };
+    let fmt = |v: Option<u64>| v.map(|v| v.to_string()).unwrap_or("--".to_string());
+    let lc = &strategies.channel_lifecycle;
+    let health = match lc.health {
+        ipc::StrategyHealth::Running => "running",
+        ipc::StrategyHealth::Degraded => "degraded",
+        ipc::StrategyHealth::Failed => "failed",
+    };
+    let required = lc
+        .required_safe_balance
+        .map(|b| format!("{b}{}", ipc::scientific_suffix(&b)))
+        .unwrap_or("--".to_string());
+    println!(
+        "Channel lifecycle: {health}\nChannel opens: {}, closes: {}, fundings: {}, finalizations: {}\nRequired safe balance: {required}",
+        fmt(lc.opens),
+        fmt(lc.closes),
+        fmt(lc.fundings),
+        fmt(lc.finalizations),
+    );
+    let pix = &strategies.pix;
+    println!(
+        "PIX deposits: {}, rejected: {}, over budget: {}, failed: {}",
+        fmt(pix.deposits),
+        fmt(pix.deposits_rejected),
+        fmt(pix.deposits_over_budget),
+        fmt(pix.deposits_failed),
+    );
 }
 
 fn print_connecting_stats(stats: &ipc::ConnStats) {

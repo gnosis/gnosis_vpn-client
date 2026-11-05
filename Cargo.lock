@@ -4477,6 +4477,7 @@ dependencies = [
  "edgli",
  "futures-util",
  "gnosis_vpn-ipc",
+ "hopr-strategy",
  "hopr-utils-session",
  "human-bandwidth",
  "humantime",

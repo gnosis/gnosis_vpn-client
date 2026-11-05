@@ -102,6 +102,7 @@ fn respond(request: Request, run_mode: RunMode) -> Response {
         })),
         Request::NerdStats => Response::NerdStats(Box::new(NerdStats::NoInfo {
             tickets: TicketStatsStatus::Waiting,
+            strategies: None,
         })),
         Request::Connect { .. } => Response::Connect(ConnectResponse::DestinationNotFound),
         Request::Disconnect => Response::Disconnect(DisconnectResponse::NotConnected),
