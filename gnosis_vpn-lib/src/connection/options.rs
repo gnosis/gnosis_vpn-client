@@ -345,7 +345,13 @@ impl Default for SurbBalancing {
             ping: SessionSurbOptions::new(true, ByteSize::mb(1), Bandwidth::from_kbps(512)),
             // maximum allowed buffer size is 10 MB
             main: SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(16)),
-            bridge: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
+            // On, for the reason gnosis_vpn#748 gives: the bridge Session runs `NoRateControl`, and
+            // hoprnet's Exit sends a SURB-level keep-alive every `surb_balance_notify_period` on every
+            // Session that has one configured. Each of those spends a return SURB, and with no
+            // balancer here nothing replaces it, so the Exit's buffer drains and then every report —
+            // and, once starved, the client's own status request — is dropped for want of one.
+            // The buffer stays small because the bridge only carries registration and probe traffic.
+            bridge: SessionSurbOptions::new(true, ByteSize::kb(16), Bandwidth::from_kbps(128)),
             ramp: SurbRampOptions::default(),
         }
     }

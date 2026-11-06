@@ -10,9 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::connection::destination::{Destination, ExitKey};
-use crate::connection::options::{
-    HealthCheckIntervals, Options, SessionPixOptions, SessionSurbOptions, SurbParams, surb_config_for,
-};
+use crate::connection::options::{HealthCheckIntervals, Options, SessionPixOptions, SurbParams, surb_config_for};
 use crate::core::runner::Results;
 use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
@@ -55,8 +53,13 @@ pub(crate) fn select_api_version(offered: &[ApiVersion]) -> Option<ApiVersion> {
 }
 
 /// hopr-lib fixes SURB balancing and PIX at open, so only an identically opened session can be adopted.
-pub(crate) fn quick_session_matches_bridge(bridge: &SessionSurbOptions, pix: &SessionPixOptions) -> bool {
-    !bridge.enabled && !bridge.always_max_out_surbs && !pix.enabled
+///
+/// The quick probe opens with the bridge's own SURB settings (gnosis_vpn#748), so SURB balancing no
+/// longer separates the two — whatever the bridge is configured with, the quick session carries the
+/// same. PIX still does: the quick check always opens without it, so a probe is only adoptable when the
+/// bridge does not want it either.
+pub(crate) fn quick_session_matches_bridge(pix: &SessionPixOptions) -> bool {
+    !pix.enabled
 }
 
 fn reopen_backoff(attempt: u32) -> Duration {
@@ -430,10 +433,20 @@ async fn run_quick_probe(
     destination: &Destination,
     options: &Options,
 ) -> (Result<QuickProbeOutcome, String>, Option<ProbeSession>) {
-    // No balancing and no PIX: the session lives for two requests unless a probe adopts it.
-    let surb = SurbParams {
-        management: None,
-        max_surbs_per_data_packet: 1,
+    // Opened with the bridge's own SURB settings, because that is what a probe adopts it as when the
+    // quick check succeeds. No PIX: the session lives for two requests unless a probe adopts it.
+    //
+    // Balancing it is what gnosis_vpn#748 needs: the Exit sends a SURB-level report every
+    // `surb_balance_notify_period` on any Session that has one configured, and each report spends a
+    // return SURB. Without a balancer on this side nothing replaces them, so a long-lived adopted
+    // session starves the Exit's buffer and then loses its own requests to it. Adopting an unbalanced
+    // session into a balanced probe would reintroduce exactly that.
+    let surb = match surb_config_for(&options.surb_balancing.bridge) {
+        Ok(surb) => surb,
+        Err(err) => {
+            tracing::error!(%destination, %err, "quick probe cannot open a session with this surb config");
+            return (Err(format!("surb config: {err}")), None);
+        }
     };
     tracing::debug!(%destination, "opening quick probe session");
     let session = match ProbeSession::open(hopr, destination, options, surb, false).await {
@@ -441,7 +454,7 @@ async fn run_quick_probe(
         Err(err) => return (Err(format!("opening session failed: {err}")), None),
     };
     let outcome = quick_checks(session.meta.bound_host).await;
-    let adoptable = quick_session_matches_bridge(&options.surb_balancing.bridge, &options.pix.bridge);
+    let adoptable = quick_session_matches_bridge(&options.pix.bridge);
     if outcome.is_ok() && adoptable {
         return (outcome, Some(session));
     }
@@ -876,24 +889,19 @@ mod tests {
         assert_eq!(select_api_version(&[ApiVersion::new(2), ApiVersion::new(99)]), None);
     }
 
+    /// SURB balancing no longer separates a quick session from the bridge it is adopted as: the quick
+    /// probe opens with the bridge's own settings (gnosis_vpn#748), so only PIX can still differ.
     #[test]
-    fn quick_session_matches_the_default_bridge_only() {
-        use crate::connection::options::{PixOptions, SurbBalancing};
+    fn quick_session_matches_the_bridge_unless_pix_is_on() {
+        use crate::connection::options::PixOptions;
 
-        let bridge = SurbBalancing::default().bridge;
         let pix = PixOptions::default().bridge;
-        assert!(quick_session_matches_bridge(&bridge, &pix));
+        assert!(quick_session_matches_bridge(&pix));
 
-        let mut balanced = bridge.clone();
-        balanced.enabled = true;
-        assert!(!quick_session_matches_bridge(&balanced, &pix));
-
-        let mut maxed_out = bridge.clone();
-        maxed_out.always_max_out_surbs = true;
-        assert!(!quick_session_matches_bridge(&maxed_out, &pix));
-
-        let pix_on = SessionPixOptions { enabled: true };
-        assert!(!quick_session_matches_bridge(&bridge, &pix_on));
+        assert!(
+            !quick_session_matches_bridge(&SessionPixOptions { enabled: true }),
+            "the quick check never opens with PIX, so a PIX bridge session is not adoptable"
+        );
     }
 
     #[test]
