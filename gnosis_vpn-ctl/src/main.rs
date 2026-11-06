@@ -24,7 +24,10 @@ async fn main() {
     let format = args.output.unwrap_or(OutputFormat::Plain);
 
     if let cli::Command::Completions { shell } = args.command {
-        cli::generate_completions(shell);
+        if let Err(e) = cli::generate_completions(shell, &mut std::io::stdout()) {
+            eprintln!("Error writing completions: {e}");
+            process::exit(exitcode::IOERR);
+        }
         process::exit(exitcode::OK);
     }
 
