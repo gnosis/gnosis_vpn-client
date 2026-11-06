@@ -1,11 +1,7 @@
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-<<<<<<< HEAD
 use gnosis_vpn_lib::command::Command as LibCommand;
 use gnosis_vpn_lib::socket;
-=======
-use gnosis_vpn_ipc::{self as ipc, FundingSecret, Request};
 use std::io::Write;
->>>>>>> c24a7d1 (fix(ctl): match clap's escaped bash completion function name (GNO-1170) (#991))
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
