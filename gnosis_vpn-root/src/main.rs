@@ -522,6 +522,20 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     // without tearing down its tunnel.
     routing::sweep::startup_sweep().await;
 
+    // Before blokli, whose startup query honors the configured request timeout.
+    let config_path = match args.config_path.canonicalize() {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::error!(config_path = %args.config_path.display(), error = %e, "error during canonicalization");
+            return Err(exitcode::IOERR);
+        }
+    };
+
+    let config = config::read(config_path.as_path()).await.map_err(|err| {
+        tracing::error!(error = ?err, "unable to read initial configuration file");
+        exitcode::NOINPUT
+    })?;
+
     // Once, while DNS still works (the killswitch blocks it later); without blokli nothing works, so exit and get restarted.
     let blokli_url = hopr::blokli_url(args.hopr_blokli_url.clone());
     let blokli_ip = (|| remote_data::resolve_blokli_ip(&blokli_url))
@@ -535,7 +549,8 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     tracing::info!(%blokli_url, %blokli_ip, "resolved blokli host - pinning it for this session");
 
     // The chain says which network this is; the name keys every user's identity, so it also has to be a safe dir name.
-    let network = (|| remote_data::query_blokli_network(&blokli_url, blokli_ip))
+    let request_timeout = config.blokli.request_timeout;
+    let network = (|| remote_data::query_blokli_network(&blokli_url, blokli_ip, request_timeout))
         .retry(remote_data::backoff_expo_long_delay().with_max_times(5))
         .notify(|error, delay| tracing::warn!(%error, ?delay, %blokli_url, "blokli network not queryable - retrying"))
         .await
@@ -551,20 +566,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
 
     // Write root pidfile for the newsyslog service to send signals to
     write_pidfile(&args.pid_file).await?;
-
-    // prepare worker resources
-    let config_path = match args.config_path.canonicalize() {
-        Ok(path) => path,
-        Err(e) => {
-            tracing::error!(config_path = %args.config_path.display(), error = %e, "error during canonicalization");
-            return Err(exitcode::IOERR);
-        }
-    };
-
-    let config = config::read(config_path.as_path()).await.map_err(|err| {
-        tracing::error!(error = ?err, "unable to read initial configuration file");
-        exitcode::NOINPUT
-    })?;
 
     // set up signal handlers
     let (cancel_signal_handlers, signal_receiver) = signal_channel().await?;
