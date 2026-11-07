@@ -887,9 +887,12 @@ pub struct PixChunkStats {
     pub chunk_bytes: u64,
     pub bytes_bought: u64,
     pub cost: Balance<WxHopr>,
-    /// Estimated from SURBs minted since the first chunk; each carries one PIX share.
-    pub bytes_used: Option<u64>,
+    /// Shares handed out with SURBs since the first chunk, delivered or not; drives the next chunk.
+    pub bytes_spent: Option<u64>,
     pub bytes_left: Option<u64>,
+    /// Session data the exit sent since the first chunk; its keep-alives and PIX fill spend shares too but aren't counted.
+    #[serde(default)]
+    pub bytes_received: Option<u64>,
     /// At the current SURB rate, ignoring chunks not yet asked for.
     #[serde(default, with = "duration_ms::option")]
     pub empty_in: Option<Duration>,

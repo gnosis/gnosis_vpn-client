@@ -462,13 +462,14 @@ fn format_pix_chunk_stats(pix: &ipc::PixChunkStats) -> String {
         .map(|d| humantime::format_duration(Duration::from_secs(d.as_secs())).to_string())
         .unwrap_or("--".to_string());
     format!(
-        "PIX: {phase}, chunks {} committed / {} paid / {} failed\nPIX data: {} left of {} bought, {} used, empty in {empty_in}, cost {}{}\n",
+        "PIX: {phase}, chunks {} committed / {} paid / {} failed\nPIX data: {} left of {} bought, {} spent, {} received, empty in {empty_in}, cost {}{}\n",
         pix.chunks_committed,
         pix.chunks_paid,
         pix.chunks_failed,
         bytes(pix.bytes_left),
         ByteSize(pix.bytes_bought),
-        bytes(pix.bytes_used),
+        bytes(pix.bytes_spent),
+        bytes(pix.bytes_received),
         pix.cost,
         ipc::scientific_suffix(&pix.cost),
     )

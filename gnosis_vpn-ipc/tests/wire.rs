@@ -314,8 +314,9 @@ fn pix_chunk_stats_ride_on_the_connection() {
                 chunk_bytes: 900,
                 bytes_bought: 900,
                 cost: Balance::from_wei(900),
-                bytes_used: Some(100),
+                bytes_spent: Some(100),
                 bytes_left: Some(800),
+                bytes_received: Some(10),
                 empty_in: Some(Duration::from_secs(8)),
             }),
         },
@@ -332,8 +333,9 @@ fn pix_chunk_stats_ride_on_the_connection() {
                 "chunk_bytes": 900,
                 "bytes_bought": 900,
                 "cost": serde_json::to_value(Balance::<WxHopr>::from_wei(900)).expect("serialize"),
-                "bytes_used": 100,
+                "bytes_spent": 100,
                 "bytes_left": 800,
+                "bytes_received": 10,
                 "empty_in": 8_000
             }
         }),

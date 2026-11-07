@@ -20,6 +20,7 @@ const MAX_SESSIONS: usize = 16;
 const TELEMETRY_MAX_AGE: Duration = Duration::from_secs(5);
 
 const SURBS_PRODUCED: &str = "hopr_session_surb_produced_total";
+const SURBS_CONSUMED: &str = "hopr_session_surb_consumed_total";
 const SURB_RATE: &str = "hopr_session_surb_rate_per_sec";
 
 #[derive(Clone, Default)]
@@ -33,8 +34,9 @@ struct SessionChunks {
     session_id: String,
     committed: u32,
     chunk_bytes: u64,
-    /// SURBs minted before the first chunk carried no share, so they are not used quota.
+    /// SURBs minted before the first chunk carried no share, so they are not spent quota.
     surbs_before_first_chunk: u64,
+    replies_before_first_chunk: u64,
     deposits_before_first_chunk: Deposits,
 }
 
@@ -99,6 +101,7 @@ impl PixChunks {
             committed: chunk_index,
             chunk_bytes,
             surbs_before_first_chunk: gauge_u64(telemetry, SURBS_PRODUCED, session_id).unwrap_or(0),
+            replies_before_first_chunk: gauge_u64(telemetry, SURBS_CONSUMED, session_id).unwrap_or(0),
             deposits_before_first_chunk: Deposits::read(telemetry),
         });
     }
@@ -142,8 +145,9 @@ fn free() -> ipc::PixChunkStats {
         chunk_bytes: 0,
         bytes_bought: 0,
         cost: wire::wxhopr(HoprBalance::zero()),
-        bytes_used: None,
+        bytes_spent: None,
         bytes_left: None,
+        bytes_received: None,
         empty_in: None,
     }
 }
@@ -164,9 +168,11 @@ fn derive(session: &SessionChunks, telemetry: &str, price_per_byte: HoprBalance)
     };
 
     let bytes_bought = committed * session.chunk_bytes;
-    let bytes_used = gauge_u64(telemetry, SURBS_PRODUCED, session_id)
+    let bytes_spent = gauge_u64(telemetry, SURBS_PRODUCED, session_id)
         .map(|produced| produced.saturating_sub(session.surbs_before_first_chunk) * PIX_QUOTA_BYTES_PER_SHARE);
-    let bytes_left = bytes_used.map(|used| bytes_bought.saturating_sub(used));
+    let bytes_left = bytes_spent.map(|spent| bytes_bought.saturating_sub(spent));
+    let bytes_received = gauge_u64(telemetry, SURBS_CONSUMED, session_id)
+        .map(|consumed| consumed.saturating_sub(session.replies_before_first_chunk) * PIX_QUOTA_BYTES_PER_SHARE);
     let bytes_per_sec = gauge_value(telemetry, SURB_RATE, session_id)
         .map(|surbs| surbs * PIX_QUOTA_BYTES_PER_SHARE as f64)
         .filter(|rate| *rate > 0.0);
@@ -183,8 +189,9 @@ fn derive(session: &SessionChunks, telemetry: &str, price_per_byte: HoprBalance)
         chunk_bytes: session.chunk_bytes,
         bytes_bought,
         cost: wire::wxhopr(price_per_byte * bytes_bought),
-        bytes_used,
+        bytes_spent,
         bytes_left,
+        bytes_received,
         empty_in,
     }
 }
@@ -250,16 +257,36 @@ mod tests {
     }
 
     #[test]
-    fn usage_counts_only_surbs_minted_after_the_first_chunk() {
+    fn spending_counts_only_surbs_minted_after_the_first_chunk() {
         let chunks = PixChunks::default();
         chunks.record("s1", 1, CHUNK, &telemetry(1_000, 0.0, 0, 0));
 
         let stats = stats_with(&chunks, "s1", &telemetry(1_100, 100.0, 1, 0));
-        let used = 100 * PIX_QUOTA_BYTES_PER_SHARE;
-        assert_eq!(stats.bytes_used, Some(used));
-        assert_eq!(stats.bytes_left, Some(CHUNK - used));
-        let secs = (CHUNK - used) as f64 / (100.0 * PIX_QUOTA_BYTES_PER_SHARE as f64);
+        let spent = 100 * PIX_QUOTA_BYTES_PER_SHARE;
+        assert_eq!(stats.bytes_spent, Some(spent));
+        assert_eq!(stats.bytes_left, Some(CHUNK - spent));
+        let secs = (CHUNK - spent) as f64 / (100.0 * PIX_QUOTA_BYTES_PER_SHARE as f64);
         assert_eq!(stats.empty_in, Some(Duration::from_secs_f64(secs)));
+    }
+
+    #[test]
+    fn received_counts_replies_since_the_first_chunk_apart_from_spending() {
+        let chunks = PixChunks::default();
+        let replies = |n: u64| format!("{SURBS_CONSUMED}{{session_id=\"s1\"}} {n}\n");
+        chunks.record(
+            "s1",
+            1,
+            CHUNK,
+            &format!("{}{}", telemetry(1_000, 0.0, 0, 0), replies(40)),
+        );
+
+        let stats = stats_with(
+            &chunks,
+            "s1",
+            &format!("{}{}", telemetry(5_000, 0.0, 1, 0), replies(50)),
+        );
+        assert_eq!(stats.bytes_spent, Some(4_000 * PIX_QUOTA_BYTES_PER_SHARE));
+        assert_eq!(stats.bytes_received, Some(10 * PIX_QUOTA_BYTES_PER_SHARE));
     }
 
     #[test]
