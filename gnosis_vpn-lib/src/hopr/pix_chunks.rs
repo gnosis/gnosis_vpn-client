@@ -1,7 +1,4 @@
-//! PIX chunks the exits asked this node to pay for, per session, read from hopr's PIX events.
-//!
-//! An exit asks for one chunk at a time (`NewDepositAddress`); the strategy pays it independently.
-//! Payment outcome and usage are derived from telemetry against baselines taken at the first chunk.
+//! PIX chunks per session from hopr's events; payment and usage are telemetry deltas since the first chunk.
 
 use edgli::hopr_lib::api::node::{HasExitIncentivization, PixEvent};
 use edgli::hopr_lib::api::types::primitive::prelude::HoprBalance;
