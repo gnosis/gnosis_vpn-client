@@ -1,7 +1,7 @@
 //! What root forwards to the worker, and how worker state becomes protocol responses.
 use edgli::EdgliInitState;
 use edgli::hopr_lib::api::node::HoprState;
-use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR};
+use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, HoprBalance, WxHOPR};
 use gnosis_vpn_ipc as ipc;
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +12,7 @@ use std::time::Duration;
 use crate::balance;
 use crate::connection;
 use crate::connection::destination::{Destination, Destinations};
+use crate::hopr::pix_chunks::PixChunks;
 use crate::hopr::types::SessionClientMetadata;
 use crate::info::Info;
 use crate::wire;
@@ -276,6 +277,7 @@ pub fn conn_stats(
     node_address: Address,
     telemetry: Option<&str>,
     bridge: Option<&SessionClientMetadata>,
+    pix: Option<(&PixChunks, HoprBalance)>,
 ) -> ipc::ConnStats {
     use connection::up::SessionKind;
     let bridge_session = bridge.and_then(|meta| active_session(ipc::SessionKind::Bridge, meta));
@@ -291,6 +293,12 @@ pub fn conn_stats(
         .as_ref()
         .and_then(|s| surb_stats(telemetry, s.id.as_str()));
     let main_surb = main_session.as_ref().and_then(|s| surb_stats(telemetry, s.id.as_str()));
+    let main_pix = match (&main_session, pix) {
+        (Some(session), Some((chunks, price_per_byte))) => {
+            Some(chunks.stats(session.id.as_str(), telemetry, price_per_byte))
+        }
+        _ => None,
+    };
     let setpoint = |cfg: &edgli::hopr_lib::exports::transport::SurbBalancerConfig| ipc::SurbBalancerSetpoint {
         target_surb_buffer_size: cfg.target_surb_buffer_size,
         max_surbs_per_sec: cfg.max_surbs_per_sec,
@@ -319,6 +327,7 @@ pub fn conn_stats(
         main_surb,
         surb_setpoint_applied: conn.surb_applied.as_ref().map(setpoint),
         surb_setpoint_target: conn.surb_target.as_ref().map(setpoint),
+        main_pix,
     }
 }
 

@@ -1114,10 +1114,12 @@ impl Core {
                     .strategy_state
                     .as_ref()
                     .map(|h| command::strategy_stats(telemetry.as_deref().unwrap_or_default(), h.state()));
+                let price_per_byte = self.config.pix_strategy.price_per_byte;
+                let pix = self.hopr.as_deref().map(|hopr| (hopr.pix_chunks(), price_per_byte));
                 let stats = match &self.phase {
                     Phase::Connecting(conn) => {
                         let bridge = self.probe_session_for(conn);
-                        let conn = command::conn_stats(conn, self.node_address, telemetry.as_deref(), bridge);
+                        let conn = command::conn_stats(conn, self.node_address, telemetry.as_deref(), bridge, pix);
                         ipc::NerdStats::Connecting {
                             tickets: ticket_stats_status,
                             strategies,
@@ -1126,7 +1128,7 @@ impl Core {
                     }
                     Phase::Connected(conn) => {
                         let bridge = self.probe_session_for(conn);
-                        let conn = command::conn_stats(conn, self.node_address, telemetry.as_deref(), bridge);
+                        let conn = command::conn_stats(conn, self.node_address, telemetry.as_deref(), bridge, pix);
                         ipc::NerdStats::Connected {
                             tickets: ticket_stats_status,
                             strategies,

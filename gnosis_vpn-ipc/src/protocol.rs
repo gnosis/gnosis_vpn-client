@@ -867,6 +867,39 @@ pub struct ConnStats {
     pub main_surb: Option<SurbStats>,
     pub surb_setpoint_applied: Option<SurbBalancerSetpoint>,
     pub surb_setpoint_target: Option<SurbBalancerSetpoint>,
+    /// What the main session's exit charged us so far; none until there is a main session.
+    pub main_pix: Option<PixChunkStats>,
+}
+
+/// PIX chunks of one session; a deposit never outlives its session, so this is the whole balance.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PixChunkStats {
+    pub phase: PixPhase,
+    /// Chunks the exit asked for and this node agreed to pay.
+    pub chunks_committed: u32,
+    /// Payments sent; strategy counters are node-wide, but only the main session pays.
+    pub chunks_paid: u64,
+    /// Payments failed, rejected or over budget.
+    pub chunks_failed: u64,
+    pub chunk_bytes: u64,
+    pub bytes_bought: u64,
+    pub cost: Balance<WxHopr>,
+    /// Estimated from SURBs minted since the first chunk; each carries one PIX share.
+    pub bytes_used: Option<u64>,
+    pub bytes_left: Option<u64>,
+    /// At the current SURB rate, ignoring chunks not yet asked for.
+    #[serde(default, with = "duration_ms::option")]
+    pub empty_in: Option<Duration>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PixPhase {
+    /// The exit has not asked for a chunk yet; traffic runs on its free allowance.
+    Free,
+    PaymentPending,
+    PaymentFailed,
+    Funded,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
