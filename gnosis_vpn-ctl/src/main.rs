@@ -178,8 +178,12 @@ fn pretty_print(resp: &Response) {
                 connection,
                 disconnecting,
                 probe,
+                pix_chunk_bytes,
             } = status.as_ref();
             let mut str_resp = format!("{run_mode}\n");
+            if let Some(bytes) = pix_chunk_bytes {
+                str_resp.push_str(&format!("PIX chunk per exit: {}\n", ByteSize(*bytes)));
+            }
             if let Some(id) = target {
                 let is_active = connection.destination() == Some(id);
                 if !is_active {
@@ -188,6 +192,11 @@ fn pretty_print(resp: &Response) {
             }
             if *connection != ipc::Connection::Disconnected {
                 str_resp.push_str(&format!("---\n{connection}\n"));
+            }
+            if let ipc::Connection::Connecting { pix: Some(pix), .. }
+            | ipc::Connection::Connected { pix: Some(pix), .. } = connection
+            {
+                str_resp.push_str(&format_pix_chunk_stats(pix));
             }
             for info in disconnecting {
                 str_resp.push_str(&format!("---\n{info}\n"));
@@ -440,6 +449,31 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
     }
 }
 
+fn format_pix_chunk_stats(pix: &ipc::PixChunkStats) -> String {
+    let phase = match pix.phase {
+        ipc::PixPhase::Free => "free allowance",
+        ipc::PixPhase::PaymentPending => "payment pending",
+        ipc::PixPhase::PaymentFailed => "payment failed",
+        ipc::PixPhase::Funded => "funded",
+    };
+    let bytes = |v: Option<u64>| v.map(|b| ByteSize(b).to_string()).unwrap_or("--".to_string());
+    let empty_in = pix
+        .empty_in
+        .map(|d| humantime::format_duration(Duration::from_secs(d.as_secs())).to_string())
+        .unwrap_or("--".to_string());
+    format!(
+        "PIX: {phase}, chunks {} committed / {} paid / {} failed\nPIX data: {} left of {} bought, {} used, empty in {empty_in}, cost {}{}\n",
+        pix.chunks_committed,
+        pix.chunks_paid,
+        pix.chunks_failed,
+        bytes(pix.bytes_left),
+        ByteSize(pix.bytes_bought),
+        bytes(pix.bytes_used),
+        pix.cost,
+        ipc::scientific_suffix(&pix.cost),
+    )
+}
+
 fn print_ticket_stats_status(status: &ipc::TicketStatsStatus) {
     match status {
         ipc::TicketStatsStatus::Available(ts) => {
@@ -564,37 +598,7 @@ fn print_connecting_stats(stats: &ipc::ConnStats) {
     );
     str_resp.push_str(&print_wg_tunnel_stats(stats));
     str_resp.push_str(&print_surb_stats(stats));
-    str_resp.push_str(&print_pix_chunk_stats(stats));
     println!("{str_resp}");
-}
-
-fn print_pix_chunk_stats(stats: &ipc::ConnStats) -> String {
-    let Some(pix) = &stats.main_pix else {
-        return String::new();
-    };
-    let phase = match pix.phase {
-        ipc::PixPhase::Free => "free allowance",
-        ipc::PixPhase::PaymentPending => "payment pending",
-        ipc::PixPhase::PaymentFailed => "payment failed",
-        ipc::PixPhase::Funded => "funded",
-    };
-    let bytes = |v: Option<u64>| v.map(|b| ByteSize(b).to_string()).unwrap_or("--".to_string());
-    let empty_in = pix
-        .empty_in
-        .map(|d| humantime::format_duration(Duration::from_secs(d.as_secs())).to_string())
-        .unwrap_or("--".to_string());
-    format!(
-        "---\nPIX: {phase}\nPIX chunks: {} committed, {} paid, {} failed ({} each)\nPIX data: {} bought, {} used, {} left, empty in {empty_in}\nPIX cost: {}{}\n",
-        pix.chunks_committed,
-        pix.chunks_paid,
-        pix.chunks_failed,
-        ByteSize(pix.chunk_bytes),
-        ByteSize(pix.bytes_bought),
-        bytes(pix.bytes_used),
-        bytes(pix.bytes_left),
-        pix.cost,
-        ipc::scientific_suffix(&pix.cost),
-    )
 }
 
 fn print_connected_stats(stats: &ipc::ConnStats) {
@@ -615,7 +619,6 @@ fn print_connected_stats(stats: &ipc::ConnStats) {
     }
     str_resp.push_str(&print_wg_tunnel_stats(stats));
     str_resp.push_str(&print_surb_stats(stats));
-    str_resp.push_str(&print_pix_chunk_stats(stats));
     println!("{str_resp}");
 }
 

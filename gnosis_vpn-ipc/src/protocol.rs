@@ -124,6 +124,8 @@ pub struct Status {
     /// Teardowns run in the background and may overlap a new connection.
     pub disconnecting: Vec<Disconnecting>,
     pub probe: Option<ProbeView>,
+    /// Data an exit sells per PIX chunk; none until the node runs.
+    pub pix_chunk_bytes: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -135,6 +137,8 @@ pub enum Connection {
         #[serde(with = "unix_ms")]
         since: SystemTime,
         phase: ConnectPhase,
+        /// Chunks are bought while connecting; none until the session opens.
+        pix: Option<PixChunkStats>,
     },
     /// Between attempts a reconnect has no phase: it waits for route health.
     Reconnecting {
@@ -150,6 +154,7 @@ pub enum Connection {
         #[serde(with = "duration_ms::option")]
         tunnel_ping_rtt: Option<Duration>,
         stall: Option<TunnelStall>,
+        pix: Option<PixChunkStats>,
     },
 }
 
@@ -867,8 +872,6 @@ pub struct ConnStats {
     pub main_surb: Option<SurbStats>,
     pub surb_setpoint_applied: Option<SurbBalancerSetpoint>,
     pub surb_setpoint_target: Option<SurbBalancerSetpoint>,
-    /// What the main session's exit charged us so far; none until there is a main session.
-    pub main_pix: Option<PixChunkStats>,
 }
 
 /// PIX chunks of one session; a deposit never outlives its session, so this is the whole balance.

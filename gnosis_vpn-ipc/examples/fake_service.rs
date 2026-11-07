@@ -99,6 +99,7 @@ fn respond(request: Request, run_mode: RunMode) -> Response {
             connection: Connection::Disconnected,
             disconnecting: vec![],
             probe: None,
+            pix_chunk_bytes: None,
         })),
         Request::NerdStats => Response::NerdStats(Box::new(NerdStats::NoInfo {
             tickets: TicketStatsStatus::Waiting,

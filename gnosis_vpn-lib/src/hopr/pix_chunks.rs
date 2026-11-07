@@ -8,7 +8,7 @@ use gnosis_vpn_ipc as ipc;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::hopr::metrics::{gauge_u64, gauge_value, unlabeled_u64};
 use crate::wire;
@@ -16,11 +16,17 @@ use crate::wire;
 /// Only the live main session is ever looked up; older ones linger until pushed out.
 const MAX_SESSIONS: usize = 16;
 
+/// Status is polled every few seconds and a scrape serializes the whole metrics registry.
+const TELEMETRY_MAX_AGE: Duration = Duration::from_secs(5);
+
 const SURBS_PRODUCED: &str = "hopr_session_surb_produced_total";
 const SURB_RATE: &str = "hopr_session_surb_rate_per_sec";
 
 #[derive(Clone, Default)]
-pub struct PixChunks(Arc<Mutex<VecDeque<SessionChunks>>>);
+pub struct PixChunks {
+    sessions: Arc<Mutex<VecDeque<SessionChunks>>>,
+    telemetry: Arc<Mutex<Option<(Instant, String)>>>,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 struct SessionChunks {
@@ -79,7 +85,7 @@ impl PixChunks {
 
     fn record(&self, session_id: &str, chunk_index: u32, chunk_bytes: u64, telemetry: &str) {
         tracing::debug!(%session_id, chunk_index, chunk_bytes, "exit asked for a PIX chunk");
-        let mut sessions = self.0.lock().expect("pix chunks lock poisoned");
+        let mut sessions = self.sessions.lock().expect("pix chunks lock poisoned");
         if let Some(known) = sessions.iter_mut().find(|s| s.session_id == session_id) {
             known.committed = known.committed.max(chunk_index);
             known.chunk_bytes = chunk_bytes;
@@ -97,60 +103,89 @@ impl PixChunks {
         });
     }
 
-    pub fn stats(&self, session_id: &str, telemetry: &str, price_per_byte: HoprBalance) -> ipc::PixChunkStats {
-        let sessions = self.0.lock().expect("pix chunks lock poisoned");
-        let Some(session) = sessions.iter().find(|s| s.session_id == session_id) else {
-            return ipc::PixChunkStats {
-                phase: ipc::PixPhase::Free,
-                chunks_committed: 0,
-                chunks_paid: 0,
-                chunks_failed: 0,
-                chunk_bytes: 0,
-                bytes_bought: 0,
-                cost: wire::wxhopr(HoprBalance::zero()),
-                bytes_used: None,
-                bytes_left: None,
-                empty_in: None,
-            };
-        };
-
-        let committed = u64::from(session.committed);
-        let now = Deposits::read(telemetry);
-        let before = session.deposits_before_first_chunk;
-        let paid = now.sent.saturating_sub(before.sent).min(committed);
-        let failed = now.failed.saturating_sub(before.failed);
-        let phase = if failed > 0 {
-            ipc::PixPhase::PaymentFailed
-        } else if paid < committed {
-            ipc::PixPhase::PaymentPending
-        } else {
-            ipc::PixPhase::Funded
-        };
-
-        let bytes_bought = committed * session.chunk_bytes;
-        let bytes_used = gauge_u64(telemetry, SURBS_PRODUCED, session_id)
-            .map(|produced| produced.saturating_sub(session.surbs_before_first_chunk) * PIX_QUOTA_BYTES_PER_SHARE);
-        let bytes_left = bytes_used.map(|used| bytes_bought.saturating_sub(used));
-        let bytes_per_sec = gauge_value(telemetry, SURB_RATE, session_id)
-            .map(|surbs| surbs * PIX_QUOTA_BYTES_PER_SHARE as f64)
-            .filter(|rate| *rate > 0.0);
-        let empty_in = match (bytes_left, bytes_per_sec) {
-            (Some(left), Some(rate)) => Some(Duration::from_secs_f64(left as f64 / rate)),
-            _ => None,
-        };
-
-        ipc::PixChunkStats {
-            phase,
-            chunks_committed: session.committed,
-            chunks_paid: paid,
-            chunks_failed: failed,
-            chunk_bytes: session.chunk_bytes,
-            bytes_bought,
-            cost: wire::wxhopr(price_per_byte * bytes_bought),
-            bytes_used,
-            bytes_left,
-            empty_in,
+    /// Reads telemetry only once the session has chunks, and at most every `TELEMETRY_MAX_AGE`.
+    pub fn stats(&self, session_id: &str, price_per_byte: HoprBalance) -> ipc::PixChunkStats {
+        let session = self
+            .sessions
+            .lock()
+            .expect("pix chunks lock poisoned")
+            .iter()
+            .find(|s| s.session_id == session_id)
+            .cloned();
+        match session {
+            Some(session) => derive(&session, &self.recent_telemetry(), price_per_byte),
+            None => free(),
         }
+    }
+
+    fn recent_telemetry(&self) -> String {
+        let mut cached = self.telemetry.lock().expect("pix telemetry lock poisoned");
+        if let Some((at, text)) = cached.as_ref()
+            && at.elapsed() < TELEMETRY_MAX_AGE
+        {
+            return text.clone();
+        }
+        let text = super::telemetry()
+            .inspect_err(|err| tracing::warn!(%err, "no telemetry for PIX chunk stats"))
+            .unwrap_or_default();
+        *cached = Some((Instant::now(), text.clone()));
+        text
+    }
+}
+
+fn free() -> ipc::PixChunkStats {
+    ipc::PixChunkStats {
+        phase: ipc::PixPhase::Free,
+        chunks_committed: 0,
+        chunks_paid: 0,
+        chunks_failed: 0,
+        chunk_bytes: 0,
+        bytes_bought: 0,
+        cost: wire::wxhopr(HoprBalance::zero()),
+        bytes_used: None,
+        bytes_left: None,
+        empty_in: None,
+    }
+}
+
+fn derive(session: &SessionChunks, telemetry: &str, price_per_byte: HoprBalance) -> ipc::PixChunkStats {
+    let session_id = session.session_id.as_str();
+    let committed = u64::from(session.committed);
+    let now = Deposits::read(telemetry);
+    let before = session.deposits_before_first_chunk;
+    let paid = now.sent.saturating_sub(before.sent).min(committed);
+    let failed = now.failed.saturating_sub(before.failed);
+    let phase = if failed > 0 {
+        ipc::PixPhase::PaymentFailed
+    } else if paid < committed {
+        ipc::PixPhase::PaymentPending
+    } else {
+        ipc::PixPhase::Funded
+    };
+
+    let bytes_bought = committed * session.chunk_bytes;
+    let bytes_used = gauge_u64(telemetry, SURBS_PRODUCED, session_id)
+        .map(|produced| produced.saturating_sub(session.surbs_before_first_chunk) * PIX_QUOTA_BYTES_PER_SHARE);
+    let bytes_left = bytes_used.map(|used| bytes_bought.saturating_sub(used));
+    let bytes_per_sec = gauge_value(telemetry, SURB_RATE, session_id)
+        .map(|surbs| surbs * PIX_QUOTA_BYTES_PER_SHARE as f64)
+        .filter(|rate| *rate > 0.0);
+    let empty_in = match (bytes_left, bytes_per_sec) {
+        (Some(left), Some(rate)) => Some(Duration::from_secs_f64(left as f64 / rate)),
+        _ => None,
+    };
+
+    ipc::PixChunkStats {
+        phase,
+        chunks_committed: session.committed,
+        chunks_paid: paid,
+        chunks_failed: failed,
+        chunk_bytes: session.chunk_bytes,
+        bytes_bought,
+        cost: wire::wxhopr(price_per_byte * bytes_bought),
+        bytes_used,
+        bytes_left,
+        empty_in,
     }
 }
 
@@ -173,9 +208,18 @@ mod tests {
         HoprBalance::from(1u64)
     }
 
+    /// `PixChunks::stats` with a given scrape instead of the live registry.
+    fn stats_with(chunks: &PixChunks, session_id: &str, telemetry: &str) -> ipc::PixChunkStats {
+        let sessions = chunks.sessions.lock().expect("pix chunks lock poisoned");
+        match sessions.iter().find(|s| s.session_id == session_id) {
+            Some(session) => derive(session, telemetry, price()),
+            None => free(),
+        }
+    }
+
     #[test]
     fn a_session_without_chunks_is_free() {
-        let stats = PixChunks::default().stats("s1", &telemetry(500, 10.0, 0, 0), price());
+        let stats = PixChunks::default().stats("s1", price());
         assert_eq!(stats.phase, ipc::PixPhase::Free);
         assert_eq!(stats.bytes_bought, 0);
     }
@@ -185,10 +229,10 @@ mod tests {
         let chunks = PixChunks::default();
         chunks.record("s1", 1, CHUNK, &telemetry(1_000, 10.0, 4, 0));
 
-        let pending = chunks.stats("s1", &telemetry(1_100, 10.0, 4, 0), price());
+        let pending = stats_with(&chunks, "s1", &telemetry(1_100, 10.0, 4, 0));
         assert_eq!(pending.phase, ipc::PixPhase::PaymentPending);
 
-        let funded = chunks.stats("s1", &telemetry(1_100, 10.0, 5, 0), price());
+        let funded = stats_with(&chunks, "s1", &telemetry(1_100, 10.0, 5, 0));
         assert_eq!(funded.phase, ipc::PixPhase::Funded);
         assert_eq!(funded.chunks_paid, 1);
     }
@@ -199,7 +243,7 @@ mod tests {
         chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
         chunks.record("s1", 2, CHUNK, &telemetry(0, 0.0, 0, 0));
 
-        let stats = chunks.stats("s1", &telemetry(0, 0.0, 1, 1), price());
+        let stats = stats_with(&chunks, "s1", &telemetry(0, 0.0, 1, 1));
         assert_eq!(stats.phase, ipc::PixPhase::PaymentFailed);
         assert_eq!(stats.chunks_committed, 2);
         assert_eq!((stats.chunks_paid, stats.chunks_failed), (1, 1));
@@ -210,7 +254,7 @@ mod tests {
         let chunks = PixChunks::default();
         chunks.record("s1", 1, CHUNK, &telemetry(1_000, 0.0, 0, 0));
 
-        let stats = chunks.stats("s1", &telemetry(1_100, 100.0, 1, 0), price());
+        let stats = stats_with(&chunks, "s1", &telemetry(1_100, 100.0, 1, 0));
         let used = 100 * PIX_QUOTA_BYTES_PER_SHARE;
         assert_eq!(stats.bytes_used, Some(used));
         assert_eq!(stats.bytes_left, Some(CHUNK - used));
@@ -225,7 +269,7 @@ mod tests {
         chunks.record("s1", 3, CHUNK, &telemetry(0, 0.0, 0, 0));
         chunks.record("s1", 2, CHUNK, &telemetry(0, 0.0, 0, 0));
 
-        let stats = chunks.stats("s1", &telemetry(0, 0.0, 3, 0), price());
+        let stats = stats_with(&chunks, "s1", &telemetry(0, 0.0, 3, 0));
         assert_eq!(stats.chunks_committed, 3);
         assert_eq!(stats.bytes_bought, 3 * CHUNK);
         assert_eq!(stats.cost, wire::wxhopr(HoprBalance::from(3 * CHUNK)));
@@ -237,9 +281,9 @@ mod tests {
         for i in 0..=MAX_SESSIONS {
             chunks.record(&format!("old{i}"), 1, CHUNK, "");
         }
-        assert_eq!(chunks.stats("old0", "", price()).phase, ipc::PixPhase::Free);
+        assert_eq!(stats_with(&chunks, "old0", "").phase, ipc::PixPhase::Free);
         assert_ne!(
-            chunks.stats(&format!("old{MAX_SESSIONS}"), "", price()).phase,
+            stats_with(&chunks, &format!("old{MAX_SESSIONS}"), "").phase,
             ipc::PixPhase::Free
         );
     }

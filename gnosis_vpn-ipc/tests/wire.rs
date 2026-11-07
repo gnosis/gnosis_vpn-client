@@ -127,13 +127,15 @@ fn the_connection_is_one_tagged_state() {
                 failed_pings: 2,
                 reconnect_at: 3,
             }),
+            pix: None,
         },
         json!({
             "type": "connected",
             "destination": "berlin",
             "since": 2_000,
             "tunnel_ping_rtt": 90,
-            "stall": {"since": 3_000, "failed_pings": 2, "reconnect_at": 3}
+            "stall": {"since": 3_000, "failed_pings": 2, "reconnect_at": 3},
+            "pix": null
         }),
     );
 }
@@ -298,12 +300,67 @@ fn slots_name_the_ones_a_registration_still_holds() {
 }
 
 #[test]
+fn pix_chunk_stats_ride_on_the_connection() {
+    round_trips(
+        &Connection::Connecting {
+            destination: "berlin".into(),
+            since: at(1_000),
+            phase: ConnectPhase::VerifyPing,
+            pix: Some(PixChunkStats {
+                phase: PixPhase::PaymentPending,
+                chunks_committed: 1,
+                chunks_paid: 0,
+                chunks_failed: 0,
+                chunk_bytes: 900,
+                bytes_bought: 900,
+                cost: Balance::from_wei(900),
+                bytes_used: Some(100),
+                bytes_left: Some(800),
+                empty_in: Some(Duration::from_secs(8)),
+            }),
+        },
+        json!({
+            "type": "connecting",
+            "destination": "berlin",
+            "since": 1_000,
+            "phase": {"type": "verify_ping"},
+            "pix": {
+                "phase": {"type": "payment_pending"},
+                "chunks_committed": 1,
+                "chunks_paid": 0,
+                "chunks_failed": 0,
+                "chunk_bytes": 900,
+                "bytes_bought": 900,
+                "cost": serde_json::to_value(Balance::<WxHopr>::from_wei(900)).expect("serialize"),
+                "bytes_used": 100,
+                "bytes_left": 800,
+                "empty_in": 8_000
+            }
+        }),
+    );
+}
+
+#[test]
+fn a_status_from_a_client_without_pix_still_reads() {
+    let connected: Connection = serde_json::from_value(json!({
+        "type": "connected",
+        "destination": "berlin",
+        "since": 2_000,
+        "tunnel_ping_rtt": null,
+        "stall": null
+    }))
+    .expect("deserialize");
+    assert!(matches!(connected, Connection::Connected { pix: None, .. }));
+}
+
+#[test]
 fn a_stall_shows_only_while_pings_fail() {
     let connected = |stall| Connection::Connected {
         destination: "berlin".into(),
         since: UNIX_EPOCH,
         tunnel_ping_rtt: Some(Duration::from_millis(90)),
         stall,
+        pix: None,
     };
     let healthy = connected(None).to_string();
     assert!(!healthy.contains("stalled"), "{healthy}");
