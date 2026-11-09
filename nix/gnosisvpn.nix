@@ -28,8 +28,8 @@ let
       "sha256-3Hjb/OdjLwy2N3QAF+e8XlZ2YPp+k53Xt17jtUUP1XQ=";
     "git+https://github.com/hoprnet/edge-client.git?branch=main#075da6a2f720c5efc4bcbc9d1e3d45721109d779" =
       "sha256-SwxtLtR1XpcaFrCf/O1R8SWhIg+nalcnIINlxps7Mi8=";
-    "git+https://github.com/hoprnet/hoprnet?branch=master#13c4c81611e472e874484c1f21a083c3840629dc" =
-      "sha256-r1RJP93LF8NEVf7rGNTjAelVjIjwG1HfycB0doVXOJs=";
+    "git+https://github.com/hoprnet/hoprnet?branch=master#ebe22219687de09dbc87d93fac8c1363b17d0483" =
+      "sha256-xBW9UlzWIG2EDZKI2VQfU6/VheTjWM+EdOwAqT/S6ik=";
   };
 
   builders = nixLib.mkRustBuilders {
