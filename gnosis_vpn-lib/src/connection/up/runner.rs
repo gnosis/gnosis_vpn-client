@@ -217,7 +217,12 @@ async fn register(
     public_key: String,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<Registration, gvpn_client::Error> {
-    let input = gvpn_client::Input::new(public_key, session_client_metadata.bound_host, options.timeouts.http);
+    // A lost reply must not cost the long HTTP timeout - a retry answers in milliseconds.
+    let input = gvpn_client::Input::new(
+        public_key,
+        session_client_metadata.bound_host,
+        options.timeouts.register,
+    );
     (|| async {
         tracing::debug!(?input, "attempting to register gvpn client public key");
         let client = reqwest::Client::new();
