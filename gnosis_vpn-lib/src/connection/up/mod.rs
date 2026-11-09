@@ -111,7 +111,6 @@ pub(crate) fn slew_towards(
             rate.rate_per_sec,
             elapsed,
         ),
-        // The fields the ramp does not slew are taken from the target.
         ..target
     }
 }
