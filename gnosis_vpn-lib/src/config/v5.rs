@@ -165,7 +165,10 @@ impl From<Option<Connection>> for options::Options {
             .and_then(|c| c.http_timeout)
             .unwrap_or(Connection::default_http_timeout());
 
-        let timeouts = options::Timeouts { http: http_timeout };
+        let timeouts = options::Timeouts {
+            http: http_timeout,
+            register: super::v6::Connection::default_register_timeout(),
+        };
 
         let def_intervals = options::HealthCheckIntervals::default();
         let health_check_intervals = connection
