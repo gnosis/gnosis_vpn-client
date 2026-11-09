@@ -569,6 +569,9 @@ pub(super) struct PixStrategy {
     pub(super) min_safe_hopr_reserve: Option<HoprBalance>,
     #[serde(default)]
     pub(super) relayer_url: Option<url::Url>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub(super) initial_funding: Option<HoprBalance>,
 }
 
 impl From<Option<PixStrategy>> for PixConfig {
@@ -595,6 +598,7 @@ impl From<Option<PixStrategy>> for PixConfig {
                 .unwrap_or(def.max_deposit_tracking_time),
             max_deposit_retries: v.as_ref().and_then(|p| p.max_deposit_retries),
             min_safe_hopr_reserve: v.as_ref().and_then(|p| p.min_safe_hopr_reserve),
+            initial_funding: v.as_ref().and_then(|p| p.initial_funding),
             relayer_url: v.and_then(|p| p.relayer_url).unwrap_or(def.relayer_url),
         }
     }
@@ -613,6 +617,7 @@ pub struct Config {
     pub(super) strategy: Option<Strategy>,
     pub(super) pix_strategy: Option<PixStrategy>,
     pub(super) geoip_db: Option<PathBuf>,
+    pub(super) curvy_zk_dir: Option<PathBuf>,
 }
 
 #[serde_as]
@@ -639,7 +644,7 @@ pub(super) enum DestinationPath {
 pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong = Vec::new();
     for (key, value) in table.iter() {
-        if key == "version" || key == "geoip_db" {
+        if key == "version" || key == "geoip_db" || key == "curvy_zk_dir" {
             continue;
         }
         if key == "wireguard" {
@@ -911,6 +916,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                             | "max_deposit_retries"
                             | "min_safe_hopr_reserve"
                             | "relayer_url"
+                            | "initial_funding"
                     ) {
                         continue;
                     }
@@ -966,6 +972,9 @@ impl TryFrom<Config> for config::Config {
             strategy,
             pix_strategy,
             geoip_db: value.geoip_db.unwrap_or_else(|| crate::geoip::DEFAULT_DB_PATH.into()),
+            curvy_zk_dir: value
+                .curvy_zk_dir
+                .unwrap_or_else(|| crate::hopr::pix_config::DEFAULT_CURVY_ZK_DIR.into()),
         })
     }
 }
@@ -1890,6 +1899,7 @@ max_deposit_tracking_time = "30s"
 max_deposit_retries = 5
 min_safe_hopr_reserve = "10 wxHOPR"
 relayer_url = "https://api.curvy.dev"
+initial_funding = "0.000001 wxHOPR"
 "#####,
         );
         let pix_strategy = cfg.pix_strategy.expect("pix_strategy section present");
@@ -1901,6 +1911,7 @@ relayer_url = "https://api.curvy.dev"
         assert_eq!(converted.max_deposit_retries, Some(5));
         assert_eq!(converted.min_safe_hopr_reserve, Some("10 wxHOPR".parse().unwrap()));
         assert_eq!(converted.relayer_url.as_str(), "https://api.curvy.dev/");
+        assert_eq!(converted.initial_funding, Some("0.000001 wxHOPR".parse().unwrap()));
     }
 
     #[test]
@@ -1938,6 +1949,7 @@ max_deposit_retries = 7
         assert_eq!(converted.max_deposit_tracking_time, def.max_deposit_tracking_time);
         assert_eq!(converted.min_safe_hopr_reserve, def.min_safe_hopr_reserve);
         assert_eq!(converted.relayer_url, def.relayer_url);
+        assert_eq!(converted.initial_funding, def.initial_funding);
     }
 
     #[test]
@@ -1955,6 +1967,7 @@ max_deposit_tracking_time = "30s"
 max_deposit_retries = 5
 min_safe_hopr_reserve = "10 wxHOPR"
 relayer_url = "https://api.curvy.box"
+initial_funding = "0.000001 wxHOPR"
 "#####
             .parse::<toml::Table>()
             .expect("valid TOML");
@@ -2017,6 +2030,7 @@ enabled = false
         let table = r#####"
 version = 7
 geoip_db = "/usr/share/gnosisvpn/geoip.mmdb"
+curvy_zk_dir = "/usr/share/gnosisvpn/curvy-zk"
 "#####
             .parse::<toml::Table>()
             .expect("valid TOML");
@@ -2186,25 +2200,17 @@ version = 7
     }
 
     #[test]
-    fn pix_surplus_may_not_exceed_the_threshold() {
-        // Only explicit values can be compared here.
+    fn pix_surplus_may_exceed_the_threshold() {
+        // The deployed piz-palu geometry, allowed since hoprnet#8519.
         let toml = r#####"
 version = 7
 
 [connection.pix.dimensions]
-ssa_part_size     = 2
-additional_shares = 3
+num_ssa_parts     = 4096
+ssa_part_size     = 32
+additional_shares = 79
 "#####;
-        assert!(toml::from_str::<Config>(toml).is_err());
-
-        let ok = r#####"
-version = 7
-
-[connection.pix.dimensions]
-ssa_part_size     = 2
-additional_shares = 2
-"#####;
-        assert!(toml::from_str::<Config>(ok).is_ok());
+        assert!(toml::from_str::<Config>(toml).is_ok());
     }
 
     #[test]

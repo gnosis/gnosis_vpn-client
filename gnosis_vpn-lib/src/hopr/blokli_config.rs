@@ -32,6 +32,7 @@ impl From<BlokliConfig> for BlockchainConnectorConfig {
             connection_sync_timeout: config.connection_sync_timeout,
             sync_tolerance: config.sync_tolerance,
             tx_timeout_multiplier: defaults.tx_timeout_multiplier,
+            nonce_gap_tolerance: defaults.nonce_gap_tolerance,
         }
     }
 }

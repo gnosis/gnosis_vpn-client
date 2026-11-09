@@ -186,6 +186,52 @@ fn balances_are_wei_strings() {
 }
 
 #[test]
+fn nerd_stats_carry_tagged_strategy_health_and_optional_counters() {
+    let stats = NerdStats::NoInfo {
+        tickets: TicketStatsStatus::Waiting,
+        strategies: Some(StrategyStats {
+            channel_lifecycle: ChannelLifecycleStats {
+                health: StrategyHealth::Degraded,
+                opens: Some(4),
+                closes: Some(1),
+                fundings: None,
+                finalizations: Some(0),
+                required_safe_balance: Some(Balance::from_wei(2_500_000_000_000_000_000)),
+            },
+            pix: PixStats {
+                deposits: Some(12),
+                deposits_rejected: None,
+                deposits_over_budget: Some(0),
+                deposits_failed: Some(1),
+            },
+        }),
+    };
+    round_trips(
+        &stats,
+        json!({
+            "type": "no_info",
+            "tickets": {"type": "waiting"},
+            "strategies": {
+                "channel_lifecycle": {
+                    "health": {"type": "degraded"},
+                    "opens": 4,
+                    "closes": 1,
+                    "fundings": null,
+                    "finalizations": 0,
+                    "required_safe_balance": "2500000000000000000"
+                },
+                "pix": {
+                    "deposits": 12,
+                    "deposits_rejected": null,
+                    "deposits_over_budget": 0,
+                    "deposits_failed": 1
+                }
+            }
+        }),
+    );
+}
+
+#[test]
 fn an_incompatible_exit_names_its_api_labels() {
     round_trips(
         &RouteHealthState::Unrecoverable {

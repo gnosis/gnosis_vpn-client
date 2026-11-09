@@ -15,6 +15,10 @@ version = 7
 # applies must exist, or the config is rejected.
 # geoip_db = "/usr/share/gnosisvpn/geoip.mmdb"
 
+# curvy_zk_dir - Curvy proving files for PIX deposits; must exist. Defaults to the installer's
+# location (/usr/local/share/gnosisvpn/curvy-zk on macOS).
+# curvy_zk_dir = "/usr/share/gnosisvpn/curvy-zk"
+
 ###
 ## destinations section - configure available target destinations
 #
@@ -203,13 +207,13 @@ path    = { hops = 1 }
 # enabled = true
 
 # Entry-side PIX share-generator overrides; leave unset unless matching an Exit's advertised quota window.
-# Quota is num_ssa_parts x (ssa_part_size + additional_shares) x 1038 bytes; defaults are ~649 MiB.
-# The Exit must accept these exactly; `hoprd-localcluster --enable-pix` uses 8 x (2 + 2).
-# num_ssa_parts: 8..=16192, ssa_part_size: 2..=255, additional_shares: 0..=255 and <= ssa_part_size.
+# Quota is num_ssa_parts x (ssa_part_size + additional_shares) x 1452 bytes; defaults are 660 160 512 bytes (~630 MiB).
+# The quota must fall inside the Exit's accepted range; `hoprd-localcluster --enable-pix` uses 8 x (2 + 2).
+# num_ssa_parts: 8..=16192, ssa_part_size: 2..=255, additional_shares: 0..=255 (unset derives it from the other two).
 # [connection.pix.dimensions]
-# num_ssa_parts = 8192
-# ssa_part_size = 64
-# additional_shares = 16
+# num_ssa_parts = 4096
+# ssa_part_size = 32
+# additional_shares = 79
 
 ###
 ## wireguard section - specific VPN-related settings
@@ -292,5 +296,7 @@ path    = { hops = 1 }
 # max_deposit_retries = 3
 # wxHOPR the Safe must still hold after a deposit, refused if a deposit would breach it; default: 0
 # min_safe_hopr_reserve = "0 wxHOPR"
-# Curvy relayer that submits deposit proofs; the client never submits them itself; default: https://api.curvy.box
+# Curvy relayer that submits deposit proofs; the client never submits them itself; Curvy staging is https://api.curvy.dev; default: https://api.curvy.box
 # relayer_url = "https://api.curvy.box"
+# Curvy float shielded from the Safe once, never topped up; HOPRD_CURVY_INITIAL_FUNDING overrides it; default: 100 wxHOPR
+# initial_funding = "100 wxHOPR"

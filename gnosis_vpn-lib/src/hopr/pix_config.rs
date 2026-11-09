@@ -6,6 +6,15 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use url::Url;
 
+/// Where the installer puts the Curvy proving files; only a v7 config can point elsewhere.
+#[cfg(target_os = "linux")]
+pub const DEFAULT_CURVY_ZK_DIR: &str = "/usr/share/gnosisvpn/curvy-zk";
+#[cfg(target_os = "macos")]
+pub const DEFAULT_CURVY_ZK_DIR: &str = "/usr/local/share/gnosisvpn/curvy-zk";
+
+/// curvy-witnesscalc reads the proving files' directory from this variable only.
+pub const CURVY_ZK_DIR_ENV: &str = "CURVY_ZK_KEYS_DIR";
+
 /// Operator-tunable parameters for the PIX exit-incentivization strategy; unset fields fall back to upstream defaults.
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -54,6 +63,11 @@ pub struct PixConfig {
     /// Curvy pool only; the `pix-test` pool has no relayer.
     #[serde(default = "PixConfig::default_relayer_url")]
     pub relayer_url: Url,
+
+    /// Curvy float shielded from the Safe once, never topped up; `HOPRD_CURVY_INITIAL_FUNDING` overrides it.
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[serde(default)]
+    pub initial_funding: Option<HoprBalance>,
 }
 
 impl Default for PixConfig {
@@ -69,6 +83,7 @@ impl Default for PixConfig {
             max_deposit_retries: None, // Applies to pix-test pool only.
             min_safe_hopr_reserve: None,
             relayer_url: Self::default_relayer_url(),
+            initial_funding: None,
         }
     }
 }
@@ -115,6 +130,7 @@ impl PixConfig {
         #[cfg(feature = "pix-curvy")]
         let pool = edgli::strategy::PixEntryPool {
             submission: edgli::strategy::PixCurvySubmission::Relayer(self.relayer_url.clone()),
+            initial_funding: self.initial_funding.unwrap_or(pool.initial_funding),
             ..pool
         };
         edgli::strategy::PixEntryConfig {
@@ -148,6 +164,7 @@ mod tests {
         assert_eq!(parsed.max_deposit_tracking_time, def.max_deposit_tracking_time);
         assert_eq!(parsed.min_safe_hopr_reserve, def.min_safe_hopr_reserve);
         assert_eq!(parsed.relayer_url, def.relayer_url);
+        assert_eq!(parsed.initial_funding, def.initial_funding);
     }
 
     #[test]
@@ -167,5 +184,24 @@ mod tests {
             cfg.pool.submission,
             edgli::strategy::PixCurvySubmission::Relayer(PixConfig::default_relayer_url())
         );
+    }
+
+    #[cfg(feature = "pix-curvy")]
+    #[test]
+    fn to_entry_config_carries_initial_funding() {
+        let pix_dir = PathBuf::from("/home/alice/.local/share/gnosisvpn/networks/jura-dev/pix");
+        let unset = PixConfig::default().to_entry_config(pix_dir.clone());
+        assert_eq!(
+            unset.pool.initial_funding,
+            edgli::strategy::PixEntryPool::default().initial_funding
+        );
+
+        let funding: HoprBalance = "0.000001 wxHOPR".parse().expect("valid balance");
+        let set = PixConfig {
+            initial_funding: Some(funding),
+            ..PixConfig::default()
+        }
+        .to_entry_config(pix_dir);
+        assert_eq!(set.pool.initial_funding, funding);
     }
 }

@@ -645,6 +645,7 @@ async fn run_hopr(
         blokli_endpoint,
         blokli_config.into(),
         probe_local_addresses,
+        worker_params.ticket_store_file(),
         visitor,
     )
     .await

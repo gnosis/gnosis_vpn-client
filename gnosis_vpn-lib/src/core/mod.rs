@@ -412,6 +412,7 @@ impl Core {
                         let Some(ops) = self.incentive_operations.clone() else {
                             let _ = resp.send(Response::NerdStats(Box::new(ipc::NerdStats::NoInfo {
                                 tickets: ipc::TicketStatsStatus::Waiting,
+                                strategies: None,
                             })));
                             return true;
                         };
@@ -1107,31 +1108,38 @@ impl Core {
             Results::NerdStatsTicketStats {
                 res: ticket_stats_status,
                 resp,
-            } => match &self.phase {
-                Phase::Connecting(conn) => {
-                    let bridge = self.probe_session_for(conn);
-                    let telemetry = nerd_stats_telemetry(conn, bridge);
-                    let conn = command::conn_stats(conn, self.node_address, telemetry.as_deref(), bridge);
-                    let _ = resp.send(Response::NerdStats(Box::new(ipc::NerdStats::Connecting {
+            } => {
+                let telemetry = nerd_stats_telemetry();
+                let strategies = self
+                    .strategy_state
+                    .as_ref()
+                    .map(|h| command::strategy_stats(telemetry.as_deref().unwrap_or_default(), h.state()));
+                let stats = match &self.phase {
+                    Phase::Connecting(conn) => {
+                        let bridge = self.probe_session_for(conn);
+                        let conn = command::conn_stats(conn, self.node_address, telemetry.as_deref(), bridge);
+                        ipc::NerdStats::Connecting {
+                            tickets: ticket_stats_status,
+                            strategies,
+                            conn,
+                        }
+                    }
+                    Phase::Connected(conn) => {
+                        let bridge = self.probe_session_for(conn);
+                        let conn = command::conn_stats(conn, self.node_address, telemetry.as_deref(), bridge);
+                        ipc::NerdStats::Connected {
+                            tickets: ticket_stats_status,
+                            strategies,
+                            conn,
+                        }
+                    }
+                    _ => ipc::NerdStats::NoInfo {
                         tickets: ticket_stats_status,
-                        conn,
-                    })));
-                }
-                Phase::Connected(conn) => {
-                    let bridge = self.probe_session_for(conn);
-                    let telemetry = nerd_stats_telemetry(conn, bridge);
-                    let conn = command::conn_stats(conn, self.node_address, telemetry.as_deref(), bridge);
-                    let _ = resp.send(Response::NerdStats(Box::new(ipc::NerdStats::Connected {
-                        tickets: ticket_stats_status,
-                        conn,
-                    })));
-                }
-                _ => {
-                    let _ = resp.send(Response::NerdStats(Box::new(ipc::NerdStats::NoInfo {
-                        tickets: ticket_stats_status,
-                    })));
-                }
-            },
+                        strategies,
+                    },
+                };
+                let _ = resp.send(Response::NerdStats(Box::new(stats)));
+            }
         };
         return true;
     }
@@ -2411,11 +2419,8 @@ fn connection_view(
     }
 }
 
-/// Best-effort SURB telemetry for nerd stats; the expensive scrape is skipped when no session uses it.
-fn nerd_stats_telemetry(conn: &connection::up::Up, bridge: Option<&SessionClientMetadata>) -> Option<String> {
-    if bridge.is_none() && conn.ping_session.is_none() {
-        return None;
-    }
+/// Best-effort telemetry for nerd stats; one scrape feeds both the strategy counters and the SURB gauges.
+fn nerd_stats_telemetry() -> Option<String> {
     match hopr::telemetry() {
         Ok(t) => Some(t),
         Err(err) => {
@@ -2577,8 +2582,9 @@ mod tests {
     async fn fresh_core() -> TestCore {
         let state_home = tempfile::tempdir().expect("temp dir");
         let path = state_home.path().join("config.toml");
-        let geoip_db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/geoip-country.mmdb");
-        let toml = format!("version = 7\ngeoip_db = {:?}\n", geoip_db);
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let geoip_db = fixtures.join("geoip-country.mmdb");
+        let toml = format!("version = 7\ngeoip_db = {geoip_db:?}\ncurvy_zk_dir = {fixtures:?}\n");
         tokio::fs::write(&path, toml).await.expect("write config");
         let config = crate::config::read(&path).await.expect("valid config");
         let worker_params = crate::worker_params::WorkerParams::new(

@@ -790,15 +790,52 @@ pub enum FundingLevel {
 pub enum NerdStats {
     NoInfo {
         tickets: TicketStatsStatus,
+        strategies: Option<StrategyStats>,
     },
     Connecting {
         tickets: TicketStatsStatus,
+        strategies: Option<StrategyStats>,
         conn: ConnStats,
     },
     Connected {
         tickets: TicketStatsStatus,
+        strategies: Option<StrategyStats>,
         conn: ConnStats,
     },
+}
+
+/// What the edge node's strategies report; counters are none until hopr telemetry exports them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StrategyStats {
+    pub channel_lifecycle: ChannelLifecycleStats,
+    pub pix: PixStats,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChannelLifecycleStats {
+    pub health: StrategyHealth,
+    pub opens: Option<u64>,
+    pub closes: Option<u64>,
+    pub fundings: Option<u64>,
+    pub finalizations: Option<u64>,
+    pub required_safe_balance: Option<Balance<WxHopr>>,
+}
+
+/// Entry-side PIX counters; the Exit-side ones never move on a client.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PixStats {
+    pub deposits: Option<u64>,
+    pub deposits_rejected: Option<u64>,
+    pub deposits_over_budget: Option<u64>,
+    pub deposits_failed: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StrategyHealth {
+    Running,
+    Degraded,
+    Failed,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

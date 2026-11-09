@@ -20,7 +20,7 @@ bytesize = "~2.7.0"
 cfg-if = "~1.0.5"
 clap = { version = "~4.6.7", features = ["derive", "env"] }
 clap_complete = "~4.6.11"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "89c799f378f0d5c060a71f15b4f3fda47e2794f8", default-features = false, features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", branch = "main", default-features = false, features = [
   # No PIX deposit pool here: edgli's `pix-test` and `pix-curvy` are mutually exclusive, and a
   # feature listed on a workspace dependency cannot be switched off by a member. Every crate
   # forwards one, `pix-curvy` by default; see the `pix-test` build in nix/gnosisvpn.nix.
@@ -32,6 +32,10 @@ edgli = { git = "https://github.com/hoprnet/edge-client.git", rev = "89c799f378f
 exitcode = "~1.1.2"
 futures = "~0.3.34"
 futures-util = "~0.3.34"
+# only for the feature: edgli's `telemetry` doesn't forward `hopr-strategy/telemetry`
+hopr-strategy = { version = "~7.0.0", default-features = false, features = [
+  "telemetry",
+] }
 # Pinned by BRANCH to match edgli's own `hopr-lib` pin: cargo treats `?branch=X#sha` and
 # `?rev=sha` as distinct sources, so mixing them vendors hoprnet twice and fails to compile.
 hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "master", features = [
@@ -59,11 +63,11 @@ serde = { version = "~1.0.229", features = ["derive"] }
 serde-saphyr = "~1.3.0"
 serde_json = "~1.0.151"
 serde_with = "~3.24.0"
-sha3 = "~0.10.9"
+sha3 = "~0.12.0"
 tempfile = "~3.27.0"
 thiserror = "~2.0.21"
 tikv-jemallocator = "~0.7.0"
-tokio = { version = "~1.53.3", features = ["full"] }
+tokio = { version = "~1.54.1", features = ["full"] }
 tokio-util = { version = "~0.7.19", features = ["rt"] }
 toml = "~1.1.6"
 tracing = { version = "~0.1.44", features = ["release_max_level_debug"] }
