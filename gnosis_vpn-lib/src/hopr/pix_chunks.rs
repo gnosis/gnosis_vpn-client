@@ -13,14 +13,14 @@ use std::time::{Duration, Instant};
 use crate::hopr::metrics::{gauge_u64, gauge_value, unlabeled_u64};
 use crate::wire;
 
-/// Only the live main session is ever looked up; older ones linger until pushed out.
+/// Only the live main session is ever looked up, which keeps it from being pushed out.
 const MAX_SESSIONS: usize = 16;
 
 /// Status is polled every few seconds and a scrape serializes the whole metrics registry.
 const TELEMETRY_MAX_AGE: Duration = Duration::from_secs(5);
 
 const SURBS_PRODUCED: &str = "hopr_session_surb_produced_total";
-const SURBS_CONSUMED: &str = "hopr_session_surb_consumed_total";
+const BYTES_IN: &str = "hopr_session_transport_bytes_in_total";
 const SURB_RATE: &str = "hopr_session_surb_rate_per_sec";
 
 #[derive(Clone, Default)]
@@ -36,7 +36,7 @@ struct SessionChunks {
     chunk_bytes: u64,
     /// SURBs minted before the first chunk carried no share, so they are not spent quota.
     surbs_before_first_chunk: u64,
-    replies_before_first_chunk: u64,
+    bytes_in_before_first_chunk: u64,
     deposits_before_first_chunk: Deposits,
 }
 
@@ -88,9 +88,10 @@ impl PixChunks {
     fn record(&self, session_id: &str, chunk_index: u32, chunk_bytes: u64, telemetry: &str) {
         tracing::debug!(%session_id, chunk_index, chunk_bytes, "exit asked for a PIX chunk");
         let mut sessions = self.sessions.lock().expect("pix chunks lock poisoned");
-        if let Some(known) = sessions.iter_mut().find(|s| s.session_id == session_id) {
+        if let Some(mut known) = take(&mut sessions, session_id) {
             known.committed = known.committed.max(chunk_index);
             known.chunk_bytes = chunk_bytes;
+            sessions.push_back(known);
             return;
         }
         if sessions.len() == MAX_SESSIONS {
@@ -101,20 +102,21 @@ impl PixChunks {
             committed: chunk_index,
             chunk_bytes,
             surbs_before_first_chunk: gauge_u64(telemetry, SURBS_PRODUCED, session_id).unwrap_or(0),
-            replies_before_first_chunk: gauge_u64(telemetry, SURBS_CONSUMED, session_id).unwrap_or(0),
+            bytes_in_before_first_chunk: gauge_u64(telemetry, BYTES_IN, session_id).unwrap_or(0),
             deposits_before_first_chunk: Deposits::read(telemetry),
         });
     }
 
     /// Reads telemetry only once the session has chunks, and at most every `TELEMETRY_MAX_AGE`.
     pub fn stats(&self, session_id: &str, price_per_byte: HoprBalance) -> ipc::PixChunkStats {
-        let session = self
-            .sessions
-            .lock()
-            .expect("pix chunks lock poisoned")
-            .iter()
-            .find(|s| s.session_id == session_id)
-            .cloned();
+        let session = {
+            let mut sessions = self.sessions.lock().expect("pix chunks lock poisoned");
+            let session = take(&mut sessions, session_id);
+            if let Some(session) = &session {
+                sessions.push_back(session.clone());
+            }
+            session
+        };
         match session {
             Some(session) => derive(&session, &self.recent_telemetry(), price_per_byte),
             None => free(),
@@ -134,6 +136,12 @@ impl PixChunks {
         *cached = Some((Instant::now(), text.clone()));
         text
     }
+}
+
+/// Removes the session so the caller can push it back as the most recently used.
+fn take(sessions: &mut VecDeque<SessionChunks>, session_id: &str) -> Option<SessionChunks> {
+    let index = sessions.iter().position(|s| s.session_id == session_id)?;
+    sessions.remove(index)
 }
 
 fn free() -> ipc::PixChunkStats {
@@ -171,8 +179,8 @@ fn derive(session: &SessionChunks, telemetry: &str, price_per_byte: HoprBalance)
     let bytes_spent = gauge_u64(telemetry, SURBS_PRODUCED, session_id)
         .map(|produced| produced.saturating_sub(session.surbs_before_first_chunk) * PIX_QUOTA_BYTES_PER_SHARE);
     let bytes_left = bytes_spent.map(|spent| bytes_bought.saturating_sub(spent));
-    let bytes_received = gauge_u64(telemetry, SURBS_CONSUMED, session_id)
-        .map(|consumed| consumed.saturating_sub(session.replies_before_first_chunk) * PIX_QUOTA_BYTES_PER_SHARE);
+    let bytes_received = gauge_u64(telemetry, BYTES_IN, session_id)
+        .map(|bytes_in| bytes_in.saturating_sub(session.bytes_in_before_first_chunk));
     let bytes_per_sec = gauge_value(telemetry, SURB_RATE, session_id)
         .map(|surbs| surbs * PIX_QUOTA_BYTES_PER_SHARE as f64)
         .filter(|rate| *rate > 0.0);
@@ -270,23 +278,23 @@ mod tests {
     }
 
     #[test]
-    fn received_counts_replies_since_the_first_chunk_apart_from_spending() {
+    fn received_counts_bytes_since_the_first_chunk_apart_from_spending() {
         let chunks = PixChunks::default();
-        let replies = |n: u64| format!("{SURBS_CONSUMED}{{session_id=\"s1\"}} {n}\n");
+        let bytes_in = |n: u64| format!("{BYTES_IN}{{session_id=\"s1\"}} {n}\n");
         chunks.record(
             "s1",
             1,
             CHUNK,
-            &format!("{}{}", telemetry(1_000, 0.0, 0, 0), replies(40)),
+            &format!("{}{}", telemetry(1_000, 0.0, 0, 0), bytes_in(40)),
         );
 
         let stats = stats_with(
             &chunks,
             "s1",
-            &format!("{}{}", telemetry(5_000, 0.0, 1, 0), replies(50)),
+            &format!("{}{}", telemetry(5_000, 0.0, 1, 0), bytes_in(50)),
         );
         assert_eq!(stats.bytes_spent, Some(4_000 * PIX_QUOTA_BYTES_PER_SHARE));
-        assert_eq!(stats.bytes_received, Some(10 * PIX_QUOTA_BYTES_PER_SHARE));
+        assert_eq!(stats.bytes_received, Some(10));
     }
 
     #[test]
@@ -313,5 +321,16 @@ mod tests {
             stats_with(&chunks, &format!("old{MAX_SESSIONS}"), "").phase,
             ipc::PixPhase::Free
         );
+    }
+
+    #[test]
+    fn a_polled_session_is_not_pushed_out() {
+        let chunks = PixChunks::default();
+        chunks.record("main", 1, CHUNK, "");
+        for i in 0..MAX_SESSIONS {
+            chunks.record(&format!("bridge{i}"), 1, CHUNK, "");
+            chunks.stats("main", price());
+        }
+        assert_ne!(stats_with(&chunks, "main", "").phase, ipc::PixPhase::Free);
     }
 }
