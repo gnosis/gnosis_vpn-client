@@ -14,7 +14,7 @@ use crate::{
     },
     report::{ReportTable, RowStatus},
 };
-use gnosis_vpn_ipc::{Address, Destination};
+use gnosis_vpn_ipc::{Address, Destination, PixPhase};
 
 const SERVICE_TIMEOUT: Duration = Duration::from_secs(30);
 const SAFE_TIMEOUT: Duration = Duration::from_mins(1);
@@ -26,6 +26,8 @@ const READY_DESTINATIONS_TIMEOUT: Duration = Duration::from_mins(10);
 const CONNECTION_TIMEOUT: Duration = Duration::from_mins(10);
 const FINAL_CONNECTION_TIMEOUT: Duration = Duration::from_mins(10);
 const DISCONNECTION_TIMEOUT: Duration = Duration::from_secs(15);
+// A dev deposit flush took 35-48 s; leaves room for one reconnect
+const PIX_FUNDED_TIMEOUT: Duration = Duration::from_mins(5);
 
 #[derive(Debug, Deserialize)]
 struct ExpectedExits {
@@ -103,6 +105,10 @@ impl SystemTestWorkflow {
             None => info!("no additional commands to run"),
         };
 
+        if self.cli.shared.expect_pix {
+            self.verify_pix_funded(&destination).await?;
+        }
+
         self.close_connection(DISCONNECTION_TIMEOUT).await?;
         self.client.stop().await?;
 
@@ -173,6 +179,39 @@ impl SystemTestWorkflow {
             return Err(anyhow!("{mislocated} of {} expected exits mislocated", expected.len()));
         }
 
+        Ok(())
+    }
+
+    async fn verify_pix_funded(&self, destination: &Destination) -> Result<()> {
+        let stats = self.client.wait_for_pix_funded(destination, PIX_FUNDED_TIMEOUT).await?;
+
+        let mut report = ReportTable::new(
+            "destination",
+            &["phase", "committed", "paid", "failed", "bytes bought", "cost"],
+        );
+        let is_funded = stats.as_ref().is_some_and(|s| s.phase == PixPhase::Funded);
+        let row_status = if is_funded {
+            RowStatus::Success
+        } else {
+            RowStatus::Failure("not funded".to_string())
+        };
+        let values = match &stats {
+            Some(s) => vec![
+                format!("{:?}", s.phase),
+                s.chunks_committed.to_string(),
+                s.chunks_paid.to_string(),
+                s.chunks_failed.to_string(),
+                s.bytes_bought.to_string(),
+                s.cost.to_string(),
+            ],
+            None => vec!["no session".to_string()],
+        };
+        report.add_row(destination.id.to_string(), row_status, values);
+        info!("\n\n{}", report.render());
+
+        if !is_funded {
+            return Err(anyhow!("pix chunks not paid within {PIX_FUNDED_TIMEOUT:?}"));
+        }
         Ok(())
     }
 

@@ -60,6 +60,10 @@ pub struct SharedArgs {
     /// Exits the network must discover, with their expected countries; discovery checks are skipped without it.
     #[arg(long = "expectedExits", env = "SYSTEM_TEST_EXPECTED_EXITS", value_name = "PATH")]
     pub expected_exits: Option<PathBuf>,
+
+    /// Exits sell PIX chunks; the final connection must pay for one.
+    #[arg(long = "expectPix", env = "SYSTEM_TEST_EXPECT_PIX", default_value_t = false)]
+    pub expect_pix: bool,
 }
 
 #[derive(Debug, Clone, Copy, Args)]

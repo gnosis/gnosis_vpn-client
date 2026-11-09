@@ -1,7 +1,7 @@
 use gnosis_vpn_ipc::{
     self as ipc, Address, Balances, CallError, ConnectResponse, Connection, Destination, DestinationId,
-    DestinationSource, DestinationStatus, DisconnectResponse, Request, Response, RouteHealthState, RunMode,
-    StartClientResponse, Status, StopClientResponse,
+    DestinationSource, DestinationStatus, DisconnectResponse, PixChunkStats, PixPhase, Request, Response,
+    RouteHealthState, RunMode, StartClientResponse, Status, StopClientResponse,
 };
 use rand::seq::SliceRandom;
 use std::{path::PathBuf, time::Duration};
@@ -277,6 +277,47 @@ impl ControlClient {
         })
         .await?;
         Ok(())
+    }
+
+    /// Polls until the destination's session paid for every chunk the exit asked for; on timeout returns the last snapshot.
+    pub async fn wait_for_pix_funded(
+        &self,
+        destination: &Destination,
+        timeout: Duration,
+    ) -> anyhow::Result<Option<PixChunkStats>> {
+        lib::wait_for_condition("pix funded", timeout, Duration::from_secs(5), || async {
+            let Ok(Some(status)) = self.status().await else {
+                return Ok(ConditionCheck::Pending);
+            };
+            let pix = match status.connection {
+                Connection::Connecting {
+                    destination: dest, pix, ..
+                }
+                | Connection::Connected {
+                    destination: dest, pix, ..
+                } if dest == destination.id => pix,
+                _ => None,
+            };
+            let Some(stats) = pix else {
+                warn!(dest_id = %destination.id, "no pix session yet");
+                return Ok(ConditionCheck::PendingWithValue(None));
+            };
+            match stats.phase {
+                PixPhase::Funded => Ok(ConditionCheck::Ready(Some(stats))),
+                // A failed deposit never recovers within its session
+                PixPhase::PaymentFailed => Err(anyhow::anyhow!("pix payment failed: {stats:?}")),
+                PixPhase::Free | PixPhase::PaymentPending => {
+                    warn!(
+                        phase = ?stats.phase,
+                        committed = stats.chunks_committed,
+                        paid = stats.chunks_paid,
+                        "waiting for pix chunks to be paid"
+                    );
+                    Ok(ConditionCheck::PendingWithValue(Some(stats)))
+                }
+            }
+        })
+        .await
     }
 
     /// Ensures there is no active VPN connection.
