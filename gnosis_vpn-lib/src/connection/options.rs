@@ -1,7 +1,9 @@
 pub const DEFAULT_PATH_PLANNER_MIN_ACK_RATE: f64 = 0.1;
 
 use bytesize::ByteSize;
-use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionTarget, SurbBalancerConfig};
+use edgli::hopr_lib::exports::transport::{
+    PACKET_PAYLOAD_SIZE, SESSION_MTU, SURB_SIZE, SessionCapabilities, SessionTarget, SurbBalancerConfig,
+};
 use edgli::{PathPlannerConfig, PixGlobalConfig};
 use human_bandwidth::re::bandwidth::Bandwidth;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -200,7 +202,7 @@ pub struct SessionSurbOptions {
     pub enabled: bool,
     pub buffer: ByteSize,
     pub max_surb_upstream: Bandwidth,
-    /// When the balancer is inactive, send only 1 SURB per HTTP request even if 2 would fit.
+    /// Send every SURB that fits per request instead of 1; either count stops at the balancer's target.
     pub always_max_out_surbs: bool,
 }
 
@@ -374,10 +376,15 @@ pub(crate) enum SurbConfigError {
 #[derive(Clone, Debug)]
 pub(crate) struct SurbParams {
     pub(crate) management: Option<SurbBalancerConfig>,
-    /// hopr-lib's `max_surbs_per_data_packet`: `1` follows the balancer's target, anything above
-    /// bypasses that gate, and the value saturates at what the packet can carry.
+    /// hopr-lib clamps it to what fits; must stay finite, as `usize::MAX` bypasses the balancer's target.
     pub(crate) max_surbs_per_data_packet: usize,
 }
+
+/// Finite so the Exit's stock stays near the target and a SURB generation wipe stays within the PIX surplus.
+pub(crate) const MAXED_OUT_SURBS_PER_PACKET: usize = PACKET_PAYLOAD_SIZE / SURB_SIZE;
+
+// Fails the build if a hopr-lib size change makes "max out" fewer than fit beside a full segment.
+const _: () = assert!(MAXED_OUT_SURBS_PER_PACKET >= (PACKET_PAYLOAD_SIZE - SESSION_MTU) / SURB_SIZE);
 
 pub(crate) fn surb_config_for(opts: &SessionSurbOptions) -> Result<SurbParams, SurbConfigError> {
     let management = if opts.enabled {
@@ -387,10 +394,11 @@ pub(crate) fn surb_config_for(opts: &SessionSurbOptions) -> Result<SurbParams, S
     };
     Ok(SurbParams {
         management,
-        // `always_max_out_surbs` predates hopr-lib's count: "max out" is every SURB that fits
-        // (`usize::MAX` saturates, as hopr-lib's own sessions use it), otherwise the one per
-        // packet the balancer's target allows.
-        max_surbs_per_data_packet: if opts.always_max_out_surbs { usize::MAX } else { 1 },
+        max_surbs_per_data_packet: if opts.always_max_out_surbs {
+            MAXED_OUT_SURBS_PER_PACKET
+        } else {
+            1
+        },
     })
 }
 
@@ -398,21 +406,57 @@ pub(crate) fn to_surb_balancer_config(
     response_buffer: ByteSize,
     max_surb_upstream: Bandwidth,
 ) -> Result<SurbBalancerConfig, SurbConfigError> {
-    if response_buffer.as_u64() < 2 * edgli::hopr_lib::exports::transport::SESSION_MTU as u64 {
+    if response_buffer.as_u64() < 2 * SESSION_MTU as u64 {
         return Err(SurbConfigError::ResponseBufferTooSmall);
     }
     if max_surb_upstream.is_zero() {
         return Err(SurbConfigError::MaxSurbUpstreamCannotBeZero);
     }
-    let max_surbs_per_sec_u128 =
-        max_surb_upstream.as_bps() / (8 * edgli::hopr_lib::exports::transport::SURB_SIZE as u128);
+    let max_surbs_per_sec_u128 = max_surb_upstream.as_bps() / (8 * SURB_SIZE as u128);
     let max_surbs_per_sec =
         u64::try_from(max_surbs_per_sec_u128).map_err(|_| SurbConfigError::MaxSurbsPerSecOverflow)?;
     let config = SurbBalancerConfig {
-        target_surb_buffer_size: response_buffer.as_u64() / edgli::hopr_lib::exports::transport::SESSION_MTU as u64,
+        target_surb_buffer_size: response_buffer.as_u64() / SESSION_MTU as u64,
         max_surbs_per_sec,
-        sustain_on_return_path_loss: true, // keep producing SURBs when return-path loss hides consumed replies (GNO-713)
         ..Default::default()
     };
     Ok(config)
+}
+
+#[cfg(test)]
+mod surb_params_tests {
+    use super::*;
+
+    fn surb_options(enabled: bool, always_max_out_surbs: bool) -> SessionSurbOptions {
+        SessionSurbOptions {
+            enabled,
+            buffer: ByteSize::mb(10),
+            max_surb_upstream: Bandwidth::from_mbps(16),
+            always_max_out_surbs,
+        }
+    }
+
+    #[test]
+    fn maxing_out_surbs_is_a_finite_count_that_the_balancer_target_gates() {
+        let params = surb_config_for(&surb_options(true, true)).expect("a valid SURB configuration");
+        assert_eq!(params.max_surbs_per_data_packet, MAXED_OUT_SURBS_PER_PACKET);
+        assert!(
+            params.max_surbs_per_data_packet > 1,
+            "maxing out must send more than the one SURB per packet the default does"
+        );
+        assert_ne!(
+            params.max_surbs_per_data_packet,
+            usize::MAX,
+            "usize::MAX is the one count hoprnet#8576's gate leaves alone"
+        );
+    }
+
+    #[test]
+    fn not_maxing_out_surbs_sends_one_per_packet() {
+        let params = surb_config_for(&surb_options(true, false)).expect("a valid SURB configuration");
+        assert_eq!(params.max_surbs_per_data_packet, 1);
+        let unbalanced = surb_config_for(&surb_options(false, false)).expect("a valid SURB configuration");
+        assert_eq!(unbalanced.max_surbs_per_data_packet, 1);
+        assert!(unbalanced.management.is_none());
+    }
 }
