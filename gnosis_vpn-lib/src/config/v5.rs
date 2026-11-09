@@ -118,7 +118,6 @@ fn build_surb_balancing(buf: Option<BufferOptions>, surbs: Option<MaxSurbUpstrea
 
 impl From<Option<Connection>> for options::Options {
     fn from(conn: Option<Connection>) -> Self {
-<<<<<<< HEAD
         let connection = conn.as_ref();
         let bridge_target = connection
             .and_then(|c| c.bridge.as_ref())
@@ -166,7 +165,10 @@ impl From<Option<Connection>> for options::Options {
             .and_then(|c| c.http_timeout)
             .unwrap_or(Connection::default_http_timeout());
 
-        let timeouts = options::Timeouts { http: http_timeout };
+        let timeouts = options::Timeouts {
+            http: http_timeout,
+            register: super::v6::Connection::default_register_timeout(),
+        };
 
         let def_intervals = options::HealthCheckIntervals::default();
         let health_check_intervals = connection
@@ -193,31 +195,6 @@ impl From<Option<Connection>> for options::Options {
             probe_local_addresses: false,
             path_planner_min_ack_rate: options::DEFAULT_PATH_PLANNER_MIN_ACK_RATE,
             path_planner: options::PathPlannerOptions::default(),
-=======
-        let conn = conn.as_ref();
-        super::v7::Connection {
-            http_timeout: conn.and_then(|c| c.http_timeout),
-            register_timeout: None,
-            bridge: conn.and_then(|c| c.bridge.clone()),
-            wg: conn.and_then(|c| c.wg.clone()),
-            ping: conn.and_then(|c| c.ping.clone()),
-            surb_balancing: Some(to_surb_balancing_config(
-                conn.and_then(|c| c.buffer.clone()),
-                conn.and_then(|c| c.max_surb_upstream.clone()),
-            )),
-            pix: None, // PIX is v7 schema; legacy configs inherit the defaults, they do not opt out
-            // Reported as unsupported by `wrong_keys`, so the shared struct must not apply it either.
-            health_check_intervals: conn.and_then(|c| c.health_check_intervals.clone()).map(|h| {
-                HealthCheckIntervalOptions {
-                    tunnel_ping_max_rtt: None,
-                    ..h
-                }
-            }),
-            lan_lockdown: None,
-            probe_local_addresses: None,
-            path_planner_min_ack_rate: None,
-            path_planner: None,
->>>>>>> 644f04f (fix(connection): give wg register its own 10 s timeout (GNO-901) (#1003))
         }
     }
 }

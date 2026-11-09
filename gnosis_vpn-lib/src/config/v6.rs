@@ -34,6 +34,8 @@ pub(super) const MAX_HOPS: u8 = 3;
 pub(super) struct Connection {
     #[serde(default, with = "humantime_serde::option")]
     pub(super) http_timeout: Option<Duration>,
+    #[serde(default, with = "humantime_serde::option")]
+    pub(super) register_timeout: Option<Duration>,
     pub(super) bridge: Option<ConnectionProtocol>,
     pub(super) wg: Option<ConnectionProtocol>,
     pub(super) ping: Option<PingOptions>,
@@ -236,6 +238,10 @@ impl Connection {
     pub fn default_http_timeout() -> Duration {
         Duration::from_secs(60)
     }
+
+    pub fn default_register_timeout() -> Duration {
+        Duration::from_secs(10)
+    }
 }
 
 /// Zero intervals feed `time::sleep(0)` and hammer the exit; a zero RTT ceiling calls every reply slow.
@@ -334,7 +340,14 @@ impl From<Option<Connection>> for options::Options {
             .and_then(|c| c.http_timeout)
             .unwrap_or(Connection::default_http_timeout());
 
-        let timeouts = options::Timeouts { http: http_timeout };
+        let register_timeout = connection
+            .and_then(|c| c.register_timeout)
+            .unwrap_or(Connection::default_register_timeout());
+
+        let timeouts = options::Timeouts {
+            http: http_timeout,
+            register: register_timeout,
+        };
 
         let def_intervals = options::HealthCheckIntervals::default();
         let health_check_intervals = connection
@@ -462,6 +475,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             if let Some(connection) = value.as_table() {
                 for (k, v) in connection.iter() {
                     if k == "http_timeout"
+                        || k == "register_timeout"
                         || k == "announced_peer_minimum_score"
                         || k == "lan_lockdown"
                         || k == "probe_local_addresses"
@@ -792,7 +806,9 @@ pub fn convert_destinations(
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelAllowlistConfig, Config, Strategy, WireGuardConfig, convert_destinations, wrong_keys};
+    use super::{
+        ChannelAllowlistConfig, Config, Connection, Strategy, WireGuardConfig, convert_destinations, wrong_keys,
+    };
     use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
     use crate::hopr::strategy_config::StrategyConfig;
     use edgli::hopr_lib::HopRouting;
@@ -871,6 +887,28 @@ request_timeout = "45s"
         let cfg = parse("version = 6\n\n[blokli]\nresolve_timeout = \"7s\"\n");
         let blokli: HoprBlokliConfig = cfg.blokli.into();
         assert_eq!(blokli.resolve_timeout, Duration::from_secs(7));
+    }
+
+    #[test]
+    fn absent_register_timeout_falls_back_to_the_default() {
+        let cfg = parse("version = 6\n\n[connection]\nhttp_timeout = \"60s\"\n");
+        let options: crate::connection::options::Options = cfg.connection.into();
+        assert_eq!(options.timeouts.register, Connection::default_register_timeout());
+    }
+
+    #[test]
+    fn configured_register_timeout_wins_over_the_default() {
+        let cfg = parse("version = 6\n\n[connection]\nregister_timeout = \"5s\"\n");
+        let options: crate::connection::options::Options = cfg.connection.into();
+        assert_eq!(options.timeouts.register, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn register_timeout_is_a_supported_key() {
+        let table = "version = 6\n\n[connection]\nregister_timeout = \"5s\"\n"
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+        assert!(wrong_keys(&table).is_empty());
     }
 
     #[test]
