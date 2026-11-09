@@ -99,14 +99,14 @@ system-tests test_binary="gnosis_vpn-system_tests":
     # Refresh the sudo credential timestamp to avoid password prompt by expiration during long builds
     sudo -v
 
-    worker_user="gnosisvpn"
+    # Stands in for the desktop user, since the worker runs as whoever starts the client
+    worker_user="gvpn-test"
 
     worker_home="/var/lib/${worker_user}"
     # The worker's per-user, per-network identity directory
     worker_network_dir="${worker_home}/.local/share/gnosisvpn/networks/${SYSTEM_TEST_NETWORK}"
-    state_dir="/var/lib/${worker_user}"
-    config_dir="/etc/${worker_user}"
-    runtime_dir="/run/${worker_user}"
+    config_dir="/etc/gnosisvpn"
+    runtime_dir="/run/gnosisvpn"
     worker_binary="${worker_home}/gnosis_vpn-worker"
     ctl_binary="${worker_home}/gnosis_vpn-ctl"
 
@@ -132,7 +132,7 @@ system-tests test_binary="gnosis_vpn-system_tests":
     fi
 
     # Create worker home directory
-    sudo mkdir -p "${worker_network_dir}" "${config_dir}" "${state_dir}" "${runtime_dir}"
+    sudo mkdir -p "${worker_network_dir}" "${config_dir}" "${runtime_dir}"
 
     # Moves the ID and password into the worker's per-network directory
     printf %s "${SYSTEM_TEST_HOPRD_ID}" | sudo tee "${worker_network_dir}/hopr.id" > /dev/null

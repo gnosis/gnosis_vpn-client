@@ -52,7 +52,7 @@ pub struct SharedArgs {
         long = "workerUser",
         env = "SYSTEM_TEST_WORKER_USER",
         value_name = "NAME",
-        default_value = "gnosisvpn"
+        default_value = "gvpn-test"
     )]
     pub worker_user: String,
 }
