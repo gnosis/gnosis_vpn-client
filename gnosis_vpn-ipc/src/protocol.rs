@@ -124,6 +124,8 @@ pub struct Status {
     /// Teardowns run in the background and may overlap a new connection.
     pub disconnecting: Vec<Disconnecting>,
     pub probe: Option<ProbeView>,
+    /// Data an exit sells per PIX chunk; none until the node runs.
+    pub pix_chunk_bytes: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -135,6 +137,8 @@ pub enum Connection {
         #[serde(with = "unix_ms")]
         since: SystemTime,
         phase: ConnectPhase,
+        /// Chunks are bought while connecting; none until the session opens.
+        pix: Option<PixChunkStats>,
     },
     /// Between attempts a reconnect has no phase: it waits for route health.
     Reconnecting {
@@ -150,6 +154,7 @@ pub enum Connection {
         #[serde(with = "duration_ms::option")]
         tunnel_ping_rtt: Option<Duration>,
         stall: Option<TunnelStall>,
+        pix: Option<PixChunkStats>,
     },
 }
 
@@ -867,6 +872,40 @@ pub struct ConnStats {
     pub main_surb: Option<SurbStats>,
     pub surb_setpoint_applied: Option<SurbBalancerSetpoint>,
     pub surb_setpoint_target: Option<SurbBalancerSetpoint>,
+}
+
+/// PIX chunks of one session; a deposit never outlives its session, so this is the whole balance.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PixChunkStats {
+    pub phase: PixPhase,
+    /// Chunks the exit asked for and this node agreed to pay.
+    pub chunks_committed: u32,
+    /// Payments sent; strategy counters are node-wide, but only the main session pays.
+    pub chunks_paid: u64,
+    /// Payments failed, rejected or over budget.
+    pub chunks_failed: u64,
+    pub chunk_bytes: u64,
+    pub bytes_bought: u64,
+    pub cost: Balance<WxHopr>,
+    /// Shares handed out with SURBs since the first chunk, delivered or not; drives the next chunk.
+    pub bytes_spent: Option<u64>,
+    pub bytes_left: Option<u64>,
+    /// Session data the exit sent since the first chunk; its keep-alives and PIX fill spend shares too but aren't counted.
+    #[serde(default)]
+    pub bytes_received: Option<u64>,
+    /// At the current SURB rate, ignoring chunks not yet asked for.
+    #[serde(default, with = "duration_ms::option")]
+    pub empty_in: Option<Duration>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PixPhase {
+    /// The exit has not asked for a chunk yet; traffic runs on its free allowance.
+    Free,
+    PaymentPending,
+    PaymentFailed,
+    Funded,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

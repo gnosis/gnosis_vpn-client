@@ -2127,11 +2127,13 @@ impl Core {
         };
 
         let reconnect_at = self.config.connection.health_check_intervals.tunnel_ping_max_failures;
+        let pix = self.main_session_pix();
         let connection = connection_view(
             &self.phase,
             self.reconnecting_since,
             self.target.as_deref(),
             reconnect_at,
+            pix,
         );
         let disconnecting = self
             .ongoing_disconnections
@@ -2158,7 +2160,21 @@ impl Core {
             connection,
             disconnecting,
             probe: self.probe.as_ref().map(Probe::view),
+            pix_chunk_bytes: self.hopr.as_ref().map(|h| h.pix_chunk_bytes()),
         }
+    }
+
+    /// The ping session becomes the main one, so it is the session that pays the exit.
+    fn main_session_pix(&self) -> Option<ipc::PixChunkStats> {
+        let conn = match &self.phase {
+            Phase::Connecting(conn) | Phase::Connected(conn) => conn,
+            _ => return None,
+        };
+        let hopr = self.hopr.as_ref()?;
+        let (_, session) = conn.ping_session.as_ref()?;
+        let session_id = session.active_clients.first()?;
+        let price_per_byte = self.config.pix_strategy.price_per_byte;
+        Some(hopr.pix_chunks().stats(session_id, price_per_byte))
     }
 
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
@@ -2383,6 +2399,7 @@ fn connection_view(
     reconnecting_since: Option<SystemTime>,
     target_dest_id: Option<&str>,
     reconnect_at: u32,
+    pix: Option<ipc::PixChunkStats>,
 ) -> ipc::Connection {
     if let Some(since) = reconnecting_since {
         let reconnecting = match phase {
@@ -2404,6 +2421,7 @@ fn connection_view(
             destination: conn.destination.connect_id.as_str().into(),
             since: conn.phase.0,
             phase: conn.phase.1.clone(),
+            pix,
         },
         Phase::Connected(conn) => ipc::Connection::Connected {
             destination: conn.destination.connect_id.as_str().into(),
@@ -2414,6 +2432,7 @@ fn connection_view(
                 failed_pings: conn.tunnel_ping.failures,
                 reconnect_at,
             }),
+            pix,
         },
         _ => ipc::Connection::Disconnected,
     }
@@ -2900,7 +2919,7 @@ mod tests {
     }
 
     fn view(phase: &Phase, reconnecting_since: Option<SystemTime>, target: Option<&str>) -> ipc::Connection {
-        connection_view(phase, reconnecting_since, target, 3)
+        connection_view(phase, reconnecting_since, target, 3, None)
     }
 
     #[test]
