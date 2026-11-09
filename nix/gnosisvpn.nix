@@ -26,10 +26,12 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.6#ce185155e1639403cc40e01260d0830065a49555" =
       "sha256-3Hjb/OdjLwy2N3QAF+e8XlZ2YPp+k53Xt17jtUUP1XQ=";
-    "git+https://github.com/hoprnet/edge-client.git?branch=main#075da6a2f720c5efc4bcbc9d1e3d45721109d779" =
-      "sha256-SwxtLtR1XpcaFrCf/O1R8SWhIg+nalcnIINlxps7Mi8=";
-    "git+https://github.com/hoprnet/hoprnet?branch=master#ebe22219687de09dbc87d93fac8c1363b17d0483" =
-      "sha256-xBW9UlzWIG2EDZKI2VQfU6/VheTjWM+EdOwAqT/S6ik=";
+    "git+https://github.com/hoprnet/edge-client.git?branch=kauki/test/graph/loopback-first-hop-patch#431fe5ab165923e95b1c1328b336c9c24ee570f8" =
+      "sha256-ZYtUDUGkLSHTR5P73BxVsFWegb3lGa5kjemqsME1m4U=";
+    "git+https://github.com/hoprnet/hopr-impls?branch=kauki/fix/graph/starvation-config#9e61ca152ca3e4f0328d97934e19eb5cfcae7448" =
+      "sha256-yJaBiwQnm5ZbjAmfIZ3qfCCfHTfFSJjQ6WdJTAQR3A0=";
+    "git+https://github.com/hoprnet/hoprnet?branch=kauki/fix/transport/min-loopback-rate#42daffa8d9c0e28d9ad02cc9f099ce3eca832ecf" =
+      "sha256-j7BmnOO2h4XRG2VouXZPDQQMMApi/nXKsf9+VrlZLCY=";
   };
 
   builders = nixLib.mkRustBuilders {
