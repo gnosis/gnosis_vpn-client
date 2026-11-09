@@ -54,6 +54,20 @@ pub async fn resolve_blokli_ip(url: &url::Url) -> Result<Ipv4Addr, Error> {
     resolve_ips(url).await?.first().copied().ok_or(Error::NoIpv4)
 }
 
+/// Every distinct IPv4 address the host in `url` resolves to, in resolver order.
+///
+/// Hosts behind a load balancer or global accelerator answer with several addresses and the
+/// resolver picks one per connection, so the killswitch has to exempt all of them, not just the
+/// first one.
+pub async fn resolve_ipv4s(url: &url::Url) -> Result<Vec<Ipv4Addr>, Error> {
+    let mut ips = resolve_ips(url).await?;
+    ips.dedup();
+    if ips.is_empty() {
+        return Err(Error::NoIpv4);
+    }
+    Ok(ips)
+}
+
 /// Blokli's `chainInfo.network`, through the already pinned address.
 pub async fn query_blokli_network(url: &url::Url, ip: Ipv4Addr, request_timeout: Duration) -> Result<String, Error> {
     let endpoint = BlokliEndpoint::new(url.clone())
@@ -77,4 +91,31 @@ async fn resolve_ips(url: &url::Url) -> Result<Vec<Ipv4Addr>, Error> {
         }
     }
     Ok(ips)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An IP literal needs no DNS, which is the one case a resolver test can assert offline.
+    #[tokio::test]
+    async fn ip_literal_host_resolves_to_itself() {
+        let url = url::Url::parse("https://203.0.113.7:8443").expect("valid url");
+        assert_eq!(resolve_ipv4s(&url).await.unwrap(), vec![Ipv4Addr::new(203, 0, 113, 7)]);
+    }
+
+    #[tokio::test]
+    async fn blokli_and_relayer_resolution_agree_for_a_single_address() {
+        let url = url::Url::parse("https://203.0.113.7:8443").expect("valid url");
+        assert_eq!(
+            resolve_blokli_ip(&url).await.unwrap(),
+            resolve_ipv4s(&url).await.unwrap()[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn url_without_a_known_port_is_rejected() {
+        let url = url::Url::parse("foo://relayer.example/paymaster").expect("valid url");
+        assert!(matches!(resolve_ipv4s(&url).await, Err(Error::UnknownPort)));
+    }
 }

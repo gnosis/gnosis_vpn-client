@@ -57,6 +57,12 @@ pub(crate) const RFC1918_BYPASS_NETS: &[(&str, u8)] = &[
 /// so it takes precedence and ensures VPN server traffic uses the tunnel.
 pub(crate) const VPN_TUNNEL_SUBNET: (&str, u8) = ("10.128.0.0", 9);
 
+/// Loopback must keep a route of its own whatever the tunnel's split defaults do: when a VPN route
+/// becomes the best match for `127.0.0.0/8`, every in-process call to a HOPR session listener (the
+/// exit registration, probe checks) fails with `EADDRNOTAVAIL` ("Can't assign requested address") for
+/// as long as the tunnel is installed - exactly when a reconnect needs it.
+pub(crate) const LOOPBACK_NET: (&str, u8) = ("127.0.0.0", 8);
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]

@@ -136,7 +136,14 @@ pub struct Core {
     ongoing_disconnections: Vec<connection::down::Down>,
     pending_unregisters: Vec<PendingUnregister>,
     reconnecting_since: Option<SystemTime>,
+    /// Consecutive connection failures this host caused (not the exit). Bounds the in-place retries
+    /// that keep the worker alive before falling back to a worker restart.
+    host_side_failures: u32,
 }
+
+/// How often a host-side connection failure is retried in place before the worker is rotated.
+/// Each retry tears the tunnel down and re-registers, so this is generous already.
+const HOST_SIDE_FAILURE_RETRIES: u32 = 3;
 
 /// A disconnect whose unregister failed; re-run against its own destination snapshot on the next connect to this exit.
 struct PendingUnregister {
@@ -262,6 +269,7 @@ impl Core {
             next_request_id: 0,
             responders: HashMap::new(),
             reconnecting_since: None,
+            host_side_failures: 0,
         };
         Ok((core, incoming_sender))
     }
@@ -851,6 +859,7 @@ impl Core {
                 (Ok(_session), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     self.reconnecting_since = None;
+                    self.host_side_failures = 0;
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
                     let route = format!(
@@ -877,7 +886,21 @@ impl Core {
                     }
                     // By identity: a dropped target must still restart the worker, not stick in Connecting.
                     let failed_the_target = self.target.as_deref() == Some(conn.destination.connect_id.as_str());
-                    if failed_the_target {
+                    if failed_the_target && err.is_host_side() && self.host_side_failures < HOST_SIDE_FAILURE_RETRIES {
+                        // The exit never saw the attempt; rotating the worker would rebuild the whole
+                        // HOPR node. Tear the tunnel (device, routes, DNS) down instead - the very
+                        // state that broke the loopback path - and reconnect on a fresh one.
+                        self.host_side_failures += 1;
+                        tracing::warn!(
+                            ?err,
+                            %conn,
+                            attempt = self.host_side_failures,
+                            max = HOST_SIDE_FAILURE_RETRIES,
+                            "connection failed on the host side - rebuilding the tunnel and reconnecting"
+                        );
+                        self.reconnecting_since = Some(SystemTime::now());
+                        self.reconnect_in_place(conn, false, results_sender).await;
+                    } else if failed_the_target {
                         tracing::info!(id = %conn.destination.connect_id, "restarting connection worker process due to final connection error");
                         return false;
                     }

@@ -24,7 +24,10 @@ use std::os::fd::{AsFd, BorrowedFd};
 
 use super::route_ops::{RouteOps, WanRoute};
 use super::route_ops_macos::DarwinRouteOps;
-use super::{Error, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET, dns, ipv6_blackhole, sweep, tun};
+use super::{Error, LOOPBACK_NET, RFC1918_BYPASS_NETS, Routing, VPN_TUNNEL_SUBNET, dns, ipv6_blackhole, sweep, tun};
+
+/// BSD loopback device.
+const LOOPBACK_DEVICE: &str = "lo0";
 
 /// VPN split routes: two /1 halves cover all IPv4 space.
 /// More specific than the WAN /0 default, routing all non-bypass internet traffic into the tunnel.
@@ -105,6 +108,7 @@ impl StaticRouter {
     }
 
     async fn setup_vpn_routes(&self, iface: &str) -> Result<(), Error> {
+        self.ensure_loopback_route().await;
         for (net, prefix) in VPN_SPLIT_ROUTES {
             let cidr = format!("{}/{}", net, prefix);
             let _ = self.route_ops.route_del(&cidr, iface).await;
@@ -114,6 +118,17 @@ impl StaticRouter {
         let cidr = format!("{}/{}", net, prefix);
         let _ = self.route_ops.route_del(&cidr, iface).await;
         self.route_ops.route_add(&cidr, None, iface).await
+    }
+
+    /// Add-only loopback pin: the split defaults must never be the best match for `127.0.0.0/8`.
+    /// The kernel owns this route already, so "File exists" is the normal outcome. It is never
+    /// removed again, which also means a crash cannot leave the host without loopback.
+    async fn ensure_loopback_route(&self) {
+        let (net, prefix) = LOOPBACK_NET;
+        let cidr = format!("{}/{}", net, prefix);
+        if let Err(e) = self.route_ops.route_add(&cidr, None, LOOPBACK_DEVICE).await {
+            tracing::debug!(%e, cidr = %cidr, "loopback route already present");
+        }
     }
 
     async fn remove_vpn_routes(&self) {

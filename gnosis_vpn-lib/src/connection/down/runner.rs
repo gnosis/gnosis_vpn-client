@@ -2,8 +2,6 @@
 //! It handles all state transitions and forwards transition events though its channel.
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backon::Retryable;
-use edgli::FlowControlConfig;
-use edgli::hopr_lib::HoprSessionClientConfig;
 use tokio::sync::mpsc;
 
 use std::fmt::{self, Display};
@@ -11,11 +9,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::connection;
+use crate::connection::bridge;
 use crate::connection::options::Options;
-use crate::connection::options::{SurbParams, surb_config_for};
+use crate::connection::options::surb_config_for;
 use crate::core::runner::Results;
 use crate::hopr::types::SessionClientMetadata;
-use crate::hopr::{Hopr, HoprError};
+use crate::hopr::Hopr;
 use crate::{gvpn_client, remote_data};
 
 use super::{Error, Event};
@@ -70,7 +69,7 @@ impl Runner {
                     })
                     .await;
                 let bridge_surb = surb_config_for(&self.options.surb_balancing.bridge)?;
-                open_bridge_session(&self.hopr, &self.down, &self.options, bridge_surb).await?
+                bridge::open(&self.hopr, &self.down.destination, &self.options, bridge_surb).await?
             }
         };
 
@@ -110,37 +109,6 @@ impl Runner {
     }
 }
 
-async fn open_bridge_session(
-    hopr: &Hopr,
-    down: &connection::down::Down,
-    options: &Options,
-    surb: SurbParams,
-) -> Result<SessionClientMetadata, HoprError> {
-    let cfg = HoprSessionClientConfig {
-        capabilities: options.sessions.bridge.capabilities,
-        forward_path: down.destination.routing,
-        return_path: down.destination.routing,
-        max_surbs_per_data_packet: surb.max_surbs_per_data_packet,
-        surb_management: surb.management,
-        // Robust tail-tolerance profile for the down-direction data session.
-        flow_control: Some(FlowControlConfig::robust()),
-        ..Default::default()
-    };
-    let cfg = if options.pix.bridge.enabled {
-        hopr.pix_aware_session_cfg(cfg)?
-    } else {
-        cfg
-    };
-    hopr.open_session(
-        down.destination.address,
-        down.destination.bridge_target(),
-        Some(1),
-        Some(1),
-        cfg.clone(),
-    )
-    .await
-}
-
 async fn unregister(
     options: &Options,
     session_client_metadata: &SessionClientMetadata,
@@ -160,18 +128,8 @@ async fn unregister(
     .await
 }
 
-async fn close_bridge_session(hopr: &Hopr, session_client_metadata: &SessionClientMetadata) -> Result<(), HoprError> {
-    let res = hopr
-        .close_session(session_client_metadata.bound_host, session_client_metadata.protocol)
-        .await;
-    match res {
-        Ok(_) => Ok(()),
-        Err(HoprError::SessionNotFound) => {
-            tracing::warn!(bound_host = ?session_client_metadata.bound_host, "attempted to close bridge session but it was not found, possibly already closed");
-            Ok(())
-        }
-        Err(e) => Err(e),
-    }
+async fn close_bridge_session(hopr: &Hopr, session_client_metadata: &SessionClientMetadata) -> Result<(), crate::hopr::HoprError> {
+    bridge::close(hopr, session_client_metadata).await
 }
 
 impl Display for Runner {

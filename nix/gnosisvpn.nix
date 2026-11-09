@@ -28,8 +28,12 @@ let
       "sha256-3Hjb/OdjLwy2N3QAF+e8XlZ2YPp+k53Xt17jtUUP1XQ=";
     "git+https://github.com/hoprnet/edge-client.git?branch=main#075da6a2f720c5efc4bcbc9d1e3d45721109d779" =
       "sha256-SwxtLtR1XpcaFrCf/O1R8SWhIg+nalcnIINlxps7Mi8=";
-    "git+https://github.com/hoprnet/hoprnet?branch=master#13c4c81611e472e874484c1f21a083c3840629dc" =
-      "sha256-r1RJP93LF8NEVf7rGNTjAelVjIjwG1HfycB0doVXOJs=";
+    "git+https://github.com/hoprnet/hopr-api?branch=kauki/fix/graph/first-hop-loopback-gate#74224b0585373b27c711b862f33ae31f6a53938f" =
+      "sha256-l3mCGgPfcAlQ1n6a0IdhiPkiikhREJTkZTPG5jHP4SE=";
+    "git+https://github.com/hoprnet/hopr-impls?branch=kauki/fix/graph/zero-delivery-surb-evidence#54b5607948b40ad7700aeb282c525e777db1c5ac" =
+      "sha256-s+iOLq3d//YeeJDbaVy2bl6VorS6x+oSiDGvEp5a/1I=";
+    "git+https://github.com/hoprnet/hoprnet?branch=master#ebe22219687de09dbc87d93fac8c1363b17d0483" =
+      "sha256-xBW9UlzWIG2EDZKI2VQfU6/VheTjWM+EdOwAqT/S6ik=";
   };
 
   builders = nixLib.mkRustBuilders {

@@ -73,6 +73,9 @@ struct DaemonState {
     killswitch_holder: Option<u32>,
     /// Resolved at startup and again before every first arm; frozen while the killswitch blocks DNS.
     blokli_ip: Ipv4Addr,
+    /// The PIX deposit relayer's addresses (`pix_strategy.relayer_url`), resolved and refreshed like
+    /// `blokli_ip`. Empty when the host did not resolve: deposits then stay blocked while armed.
+    relayer_ips: Vec<Ipv4Addr>,
     /// Mirrors the routing actor's policy: a lookup is only possible while this is false.
     killswitch_armed: bool,
     /// The next spawn follows a Blokli move, so its first arm trusts the address just resolved.
@@ -552,6 +555,12 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
     }
     tracing::info!(%network, "blokli network");
 
+    // The PIX deposit relayer is only ever reached over the WAN, so its addresses must be exempt
+    // from the killswitch exactly like Blokli's - otherwise the deposit that funds a session needs
+    // the tunnel the deposit is paying for. Resolution happens once here, while DNS still works,
+    // and again before every first arm (see `refresh_relayer_ips`).
+    let relayer_ips = resolve_relayer_ips(&config.pix_strategy.relayer_url, config.blokli.resolve_timeout).await;
+
     // Write root pidfile for the newsyslog service to send signals to
     write_pidfile(&args.pid_file).await?;
 
@@ -584,6 +593,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         worker_owner: None,
         killswitch_holder: None,
         blokli_ip,
+        relayer_ips,
         killswitch_armed: false,
         blokli_just_resolved: false,
         network,
@@ -748,6 +758,47 @@ async fn spawn_ping(options: ping::Options) -> Result<Duration, String> {
 fn valid_network_name(name: &str) -> bool {
     let safe_char = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-';
     !name.is_empty() && name.bytes().all(safe_char)
+}
+
+/// What the killswitch must leave on the WAN: the HOPR peers alive right now, Blokli, and the PIX
+/// deposit relayer. The latter two are only reachable outside the tunnel, so exempting them keeps
+/// chain access and deposits working while the tunnel itself is still unverified.
+fn killswitch_allowlist(peer_ips: Vec<Ipv4Addr>, blokli_ip: Ipv4Addr, relayer_ips: &[Ipv4Addr]) -> Vec<IpAddr> {
+    peer_ips
+        .into_iter()
+        .chain(std::iter::once(blokli_ip))
+        .chain(relayer_ips.iter().copied())
+        .map(IpAddr::V4)
+        .collect()
+}
+
+/// Startup lookup of the PIX deposit relayer.
+///
+/// Unlike Blokli it is not fatal, so it is a single bounded attempt: the refresh before every first
+/// arm (`refresh_relayer_ips`) is the point that has to succeed, this one only gets the addresses
+/// in place before the first arm.
+async fn resolve_relayer_ips(url: &url::Url, timeout: Duration) -> Vec<Ipv4Addr> {
+    let ips = match time::timeout(timeout, remote_data::resolve_ipv4s(url)).await {
+        Ok(Ok(ips)) => ips,
+        Ok(Err(error)) => {
+            tracing::warn!(
+                %error,
+                %url,
+                "cannot resolve curvy relayer host - pix deposits stay on the tunnel side while the killswitch is armed"
+            );
+            return Vec::new();
+        }
+        Err(_) => {
+            tracing::warn!(
+                %url,
+                ?timeout,
+                "curvy relayer host lookup timed out - pix deposits stay on the tunnel side while the killswitch is armed"
+            );
+            return Vec::new();
+        }
+    };
+    tracing::info!(%url, ?ips, "resolved curvy relayer host - pinning it for this session");
+    ips
 }
 
 /// A failed lookup with DNS open is unexpected but not fatal: the last known address still works until Blokli moves.
@@ -1019,6 +1070,13 @@ impl DaemonState {
         match config::read(self.config_path.as_path()).await {
             Ok(new_config) => {
                 self.config = new_config;
+                // A reload may point at another relayer; the killswitch allowlist is rebuilt on the
+                // next arm, which re-resolves anyway, so only seed it here.
+                self.relayer_ips = resolve_relayer_ips(
+                    &self.config.pix_strategy.relayer_url,
+                    self.config.blokli.resolve_timeout,
+                )
+                .await;
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
@@ -1314,9 +1372,13 @@ impl DaemonState {
                     self.restart_worker_on_new_blokli().await;
                     return Ok(());
                 }
-                let mut ips: Vec<IpAddr> = peer_ips.into_iter().map(IpAddr::V4).collect();
-                ips.push(IpAddr::V4(self.blokli_ip));
-                let res = self.apply_killswitch(interface, ips).await;
+                self.refresh_relayer_ips().await;
+                let res = self
+                    .apply_killswitch(
+                        interface,
+                        killswitch_allowlist(peer_ips, self.blokli_ip, &self.relayer_ips),
+                    )
+                    .await;
                 self.killswitch_armed |= res.is_ok();
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
@@ -1336,8 +1398,10 @@ impl DaemonState {
                 dns,
                 mut peer_ips,
             } => {
-                // Blokli stays on the WAN like the peers, or the worker's chain access would depend on its own tunnel.
+                // Blokli and the Curvy relayer stay on the WAN like the peers, or the worker's chain access
+                // and its PIX deposits would depend on the tunnel they pay for.
                 peer_ips.push(self.blokli_ip);
+                peer_ips.extend(self.relayer_ips.iter().copied());
                 let res = match self.setup_static_routing(interface_address, mtu, dns, peer_ips).await {
                     Ok((interface, tun_fd)) => match self.worker_child {
                         // Pass the fd out-of-band first; the worker recv_fd's it only
@@ -1735,6 +1799,40 @@ impl DaemonState {
         self.blokli_ip != worker_ip
     }
 
+    /// The relayer has to be reachable over the WAN for the PIX entry pool to submit deposits.
+    /// Like Blokli, its addresses are only re-resolved while the killswitch keeps DNS closed.
+    async fn refresh_relayer_ips(&mut self) {
+        if self.killswitch_armed {
+            return;
+        }
+        let url = self.config.pix_strategy.relayer_url.clone();
+        let timeout = self.config.blokli.resolve_timeout;
+        match time::timeout(timeout, remote_data::resolve_ipv4s(&url)).await {
+            Ok(Ok(ips)) if ips == self.relayer_ips => tracing::debug!(%url, ?ips, "curvy relayer addresses unchanged"),
+            Ok(Ok(ips)) => {
+                tracing::info!(
+                    %url,
+                    old = ?self.relayer_ips,
+                    new = ?ips,
+                    "curvy relayer addresses changed - pinning the new ones"
+                );
+                self.relayer_ips = ips;
+            }
+            // Keep the last known addresses: a stale exemption still lets deposits through.
+            Ok(Err(error)) => tracing::warn!(
+                %error,
+                %url,
+                fallback = ?self.relayer_ips,
+                "curvy relayer host not resolvable before connect - keeping the current addresses"
+            ),
+            Err(_) => tracing::warn!(
+                %url,
+                fallback = ?self.relayer_ips,
+                "curvy relayer host resolution timed out before connect - keeping the current addresses"
+            ),
+        }
+    }
+
     /// edgli keeps its spawn-time Blokli address, so only a respawn moves the worker; same path as a config reload.
     async fn restart_worker_on_new_blokli(&mut self) {
         let Some(ref mut child) = self.worker_child else {
@@ -1851,6 +1949,33 @@ mod tests {
     #[test]
     fn unresolvable_blokli_host_keeps_the_current_address() {
         assert_eq!(choose_blokli_ip(Err("no answer".to_string()), CURRENT), CURRENT);
+    }
+
+    #[test]
+    fn killswitch_exempts_blokli_and_every_relayer_address() {
+        let peer = Ipv4Addr::new(198, 51, 100, 1);
+        let relayer_a = Ipv4Addr::new(203, 0, 113, 20);
+        let relayer_b = Ipv4Addr::new(203, 0, 113, 21);
+
+        let ips = killswitch_allowlist(vec![peer], CURRENT, &[relayer_a, relayer_b]);
+
+        assert_eq!(
+            ips,
+            vec![
+                IpAddr::V4(peer),
+                IpAddr::V4(CURRENT),
+                IpAddr::V4(relayer_a),
+                IpAddr::V4(relayer_b)
+            ]
+        );
+    }
+
+    // An unresolvable relayer must not shrink the allowlist below Blokli and the peers.
+    #[test]
+    fn killswitch_without_relayer_addresses_still_exempts_blokli() {
+        let peer = Ipv4Addr::new(198, 51, 100, 1);
+        let ips = killswitch_allowlist(vec![peer], CURRENT, &[]);
+        assert_eq!(ips, vec![IpAddr::V4(peer), IpAddr::V4(CURRENT)]);
     }
 
     // The caller is blocked on this oneshot; dropping it is what produced the EOF.

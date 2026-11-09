@@ -56,6 +56,16 @@ pub enum Error {
     RegistrationNotFound,
 }
 
+impl Error {
+    /// The exit is not at fault: the host could not even reach its own session listener over
+    /// loopback (`Can't assign requested address` and friends). Retrying over the same listener is
+    /// pointless, and it is no reason to rotate the whole worker - the local session/routing state
+    /// has to be rebuilt instead.
+    pub fn is_host_side(&self) -> bool {
+        matches!(self, Error::SocketConnect(_))
+    }
+}
+
 impl Input {
     pub fn new(public_key: String, socket_addr: SocketAddr, timeout: Duration) -> Self {
         Input {

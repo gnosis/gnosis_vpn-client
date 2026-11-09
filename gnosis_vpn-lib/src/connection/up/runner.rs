@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time;
 
+use crate::connection::bridge;
 use crate::connection::destination::Destination;
 use crate::connection::options::{Options, SurbParams, surb_config_for};
 use crate::core::runner::Results;
@@ -120,9 +121,18 @@ impl Runner {
 
         let _ = results_sender.send(progress(Progress::WgGenerated(wg.clone()))).await;
 
-        // 4. register wg public key over the probe's bridge session
+        // 4. register wg public key over the probe's bridge session (or one of our own if that
+        //    session's loopback listener turns out to be unreachable)
         let _ = results_sender.send(progress(Progress::RegisterWg)).await;
-        let registration = register(&self.options, &self.bridge_session, public_key, &results_sender).await?;
+        let registration = register(
+            &self.hopr,
+            &self.destination,
+            &self.options,
+            &self.bridge_session,
+            public_key,
+            &results_sender,
+        )
+        .await?;
 
         // 5. signal ping phase (carries registration)
         let _ = results_sender
@@ -211,7 +221,44 @@ impl Display for Runner {
     }
 }
 
+/// Register the WireGuard public key over the bridge session handed in by `core` (the probe's
+/// long-lived one), falling back to a bridge session of our own when the host cannot reach that
+/// session's loopback listener.
+///
+/// The fallback exists because a loopback connect can fail for purely local reasons - a session
+/// listener closed under us, or the host's tunnel routing shadowing `127.0.0.1` while the
+/// WireGuard data path is down - which the exit never sees and no retry over the same listener can
+/// fix. Such a failure used to fail the whole connection attempt, and with it the worker.
 async fn register(
+    hopr: &Hopr,
+    destination: &Destination,
+    options: &Options,
+    bridge_session: &SessionClientMetadata,
+    public_key: String,
+    results_sender: &mpsc::Sender<Results>,
+) -> Result<Registration, Error> {
+    match register_over(options, bridge_session, public_key.clone(), results_sender).await {
+        Ok(registration) => Ok(registration),
+        Err(err) if err.is_host_side() => {
+            tracing::warn!(
+                error = ?err,
+                bound_host = %bridge_session.bound_host,
+                "bridge session unreachable over loopback - registering over a bridge session of our own"
+            );
+            let surb = surb_config_for(&options.surb_balancing.bridge)?;
+            let own_bridge = bridge::open(hopr, destination, options, surb).await?;
+            let res = register_over(options, &own_bridge, public_key, results_sender).await;
+            // Only the session we opened; the probe keeps its own.
+            if let Err(err) = bridge::close(hopr, &own_bridge).await {
+                tracing::warn!(error = %err, "failed to close the bridge session opened for registration");
+            }
+            res.map_err(Error::from)
+        }
+        Err(err) => Err(Error::from(err)),
+    }
+}
+
+async fn register_over(
     options: &Options,
     session_client_metadata: &SessionClientMetadata,
     public_key: String,
@@ -224,6 +271,8 @@ async fn register(
         gvpn_client::register(&client, &input).await
     })
     .retry(remote_data::backoff_expo_short_delay())
+    // A local connect failure is not the exit's fault: retrying over the same listener cannot help.
+    .when(|err: &gvpn_client::Error| !err.is_host_side())
     .notify(|err: &gvpn_client::Error, dur: Duration| {
         tracing::warn!(error = ?err, "register wg pubkey failed - will retry after {:?}", dur);
         let tx = results_sender.clone();

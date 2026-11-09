@@ -92,3 +92,10 @@ lto           = "fat"
 opt-level     = 3
 panic         = "abort"
 strip         = true
+
+# TEST ONLY: hopr-network-graph 0.10.2 and hopr-api 5.1.0 are not published yet. Patch in the
+# branches of hoprnet/hopr-impls#82 (stacked on #78) and hoprnet/hopr-api#158. Drop this block,
+# and repin, once released.
+[patch.crates-io]
+hopr-api           = { git = "https://github.com/hoprnet/hopr-api", branch = "kauki/fix/graph/first-hop-loopback-gate" }
+hopr-network-graph = { git = "https://github.com/hoprnet/hopr-impls", branch = "kauki/fix/graph/zero-delivery-surb-evidence" }

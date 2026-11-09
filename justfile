@@ -2,7 +2,7 @@ default:
     just --list
 
 # run root binary locally with a config file and Blokli URL
-run-local config_file blokli_url binary="./target/release/gnosis_vpn-root" worker_binary="./target/release/gnosis_vpn-worker" rust_log="info":
+run-local config_file blokli_url binary="./target/release/gnosis_vpn-root" worker_binary="./target/release/gnosis_vpn-worker" rust_log="debug":
     sudo RUST_LOG="{{ rust_log }}" "{{ binary }}" --config-path "{{ config_file }}" --hopr-blokli-url "{{ blokli_url }}" --worker-binary "{{ worker_binary }}"
 
 # build static linux binary (x86_64)

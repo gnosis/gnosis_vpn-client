@@ -6,6 +6,8 @@ multiple-versions = 'allow'
 allow-git = [
   "https://github.com/NordSecurity/neptun.git",
   "https://github.com/hoprnet/edge-client.git",
+  "https://github.com/hoprnet/hopr-api",
+  "https://github.com/hoprnet/hopr-impls",
   "https://github.com/hoprnet/hoprnet",
 ]
 
