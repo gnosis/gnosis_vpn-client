@@ -189,6 +189,7 @@ pub struct Sessions {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Timeouts {
     pub http: Duration,
+    pub register: Duration,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
