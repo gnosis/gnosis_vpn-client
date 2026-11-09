@@ -3692,7 +3692,24 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "tikv-jemallocator",
+<<<<<<< HEAD
  "tokio",
+=======
+]
+
+[[package]]
+name = "gnosis_vpn-ipc"
+version = "0.101.1"
+dependencies = [
+ "base64 0.23.1",
+ "humantime",
+ "semver 1.0.28",
+ "serde",
+ "serde_json",
+ "sha3 0.12.0",
+ "tempfile",
+ "thiserror 2.0.21",
+>>>>>>> d64d43a (chore(deps): update rust crate sha3 to ~0.12.0 (#997))
 ]
 
 [[package]]
