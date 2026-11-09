@@ -4460,7 +4460,7 @@ dependencies = [
  "semver 1.0.28",
  "serde",
  "serde_json",
- "sha3 0.10.9",
+ "sha3 0.12.0",
  "tempfile",
  "thiserror 2.0.21",
 ]
