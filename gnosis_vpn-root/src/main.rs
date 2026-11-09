@@ -1099,6 +1099,7 @@ impl DaemonState {
             connection: ipc::Connection::Disconnected,
             disconnecting: vec![],
             probe: None,
+            pix_chunk_bytes: None,
         }))
     }
 

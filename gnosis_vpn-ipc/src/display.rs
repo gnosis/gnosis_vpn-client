@@ -238,6 +238,7 @@ impl Display for Connection {
                 destination,
                 since,
                 phase,
+                pix: _,
             } => write!(
                 f,
                 "Connecting to {destination} (since {}, phase {phase})",
@@ -263,6 +264,7 @@ impl Display for Connection {
                 since,
                 tunnel_ping_rtt,
                 stall,
+                pix: _,
             } => {
                 write!(f, "Connected to {destination} (since {})", elapsed(since))?;
                 if let Some(rtt) = tunnel_ping_rtt {

@@ -46,6 +46,7 @@ use crate::{
     balance::{self, Balances},
     hopr::{
         HoprError,
+        pix_chunks::PixChunks,
         types::{SessionClientMetadata, SplicedWgSession},
     },
     info::Info,
@@ -55,6 +56,8 @@ use crate::{
 pub struct Hopr {
     edgli: Arc<edgli::Edgli>,
     open_listeners: Arc<ListenerJoinHandles>,
+    pix_chunks: PixChunks,
+    pix_chunk_bytes: u64,
 }
 
 impl Hopr {
@@ -82,10 +85,25 @@ impl Hopr {
         .map_err(|e| HoprError::Construction(e.to_string()))?;
 
         tracing::debug!("hopr edge node finished setup");
+        let pix_params = edge_node
+            .pix_ssa_quota()
+            .map_err(|e| HoprError::Construction(format!("invalid PIX dimensions: {e}")))?;
+        let pix_chunks = PixChunks::listen(edge_node.as_hopr().as_ref());
         Ok(Self {
             edgli: Arc::new(edge_node),
             open_listeners: Default::default(),
+            pix_chunks,
+            pix_chunk_bytes: edgli::strategy::quota_per_ssa(&pix_params),
         })
+    }
+
+    pub fn pix_chunks(&self) -> &PixChunks {
+        &self.pix_chunks
+    }
+
+    /// What one deposit buys; exits ask for chunks of this size.
+    pub fn pix_chunk_bytes(&self) -> u64 {
+        self.pix_chunk_bytes
     }
 
     /// `cfg` with PIX applied. Callers opt in per session kind — see `options::PixOptions`.
