@@ -93,11 +93,11 @@ impl SystemTestWorkflow {
         self.establish_connection(&destination, CONNECTION_TIMEOUT).await?;
 
         info!(size_bytes = DOWNLOAD_SIZE_BYTES, "downloading through the tunnel");
-        lib::download_file(DOWNLOAD_SIZE_BYTES, self.cli.shared.proxy.as_ref()).await?;
+        lib::download_file(DOWNLOAD_SIZE_BYTES).await?;
         info!(size_bytes = DOWNLOAD_SIZE_BYTES, "download finished");
 
         match &self.cli.command {
-            Some(Command::Download(args)) => download::run_downloads(&self.cli.shared, args).await?,
+            Some(Command::Download(args)) => download::run_downloads(args).await?,
             None => info!("no additional commands to run"),
         };
 
