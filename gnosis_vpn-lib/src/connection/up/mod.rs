@@ -192,12 +192,7 @@ pub struct TunnelPing {
 /// Inbound flat this long after outbound grew is a stalled path, whatever a late reply says.
 const INBOUND_STALL: Duration = Duration::from_secs(8);
 
-/// How much rx must grow over a ping's window before it counts as data flowing.
-///
-/// Growth alone is not enough: a WireGuard handshake retry is 148 B and the Exit keeps sending them
-/// while the uplink is dead, so a wedge produced a steady trickle that excused every ping timeout -
-/// the one signal that would have reconnected the session. Real traffic moves kilobytes per 4 s
-/// sample, so a floor of 1 KiB separates the two without demanding a download.
+/// rx growth over a ping's window that counts as flow; 148 B handshake retries on a dead uplink stay below it.
 const MIN_INBOUND_FLOW_BYTES: u64 = 1024;
 
 /// Stall runs past this are logged when they end: the false positives a lower trigger would have produced.
@@ -346,9 +341,10 @@ impl Up {
                 current_stall = Duration::ZERO;
             }
         }
+        let rx_flowing = rx_grew_every_step && rx_growth >= MIN_INBOUND_FLOW_BYTES;
         if longest_stall >= INBOUND_STALL {
             Inbound::Stalled
-        } else if rx_grew_every_step && rx_growth >= MIN_INBOUND_FLOW_BYTES {
+        } else if rx_flowing {
             Inbound::Flowing
         } else {
             Inbound::Unclear
@@ -773,8 +769,7 @@ mod tunnel_ping_tests {
     #[test]
     fn a_handshake_trickle_is_not_inbound_flow() {
         let mut up = up();
-        // While the uplink is dead the Exit keeps retrying WireGuard handshakes: 148 B per sample.
-        // Treating that as flow excuses every timeout and the session never reconnects.
+        // A dead uplink leaves only the Exit's 148 B handshake retries per sample.
         record_samples_step(&mut up, 3, 148);
         assert_eq!(up.inbound_over_ping_window(), Inbound::Unclear);
         assert_eq!(up.tunnel_ping_result(TIMEOUT, MAX_RTT), 1);
@@ -783,7 +778,7 @@ mod tunnel_ping_tests {
     #[test]
     fn a_slow_but_real_flow_still_excuses_a_timeout() {
         let mut up = up();
-        // 1 KiB/s is not a download, but it is data: a timeout under it is load, not an outage.
+        // 1 KiB/s is no download, but a timeout under it is still load, not an outage.
         record_samples_step(&mut up, 3, 4_096);
         assert_eq!(up.inbound_over_ping_window(), Inbound::Flowing);
         assert_eq!(up.tunnel_ping_result(TIMEOUT, MAX_RTT), 0);
