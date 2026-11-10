@@ -23,18 +23,9 @@ pub struct SharedArgs {
         long = "blokliUrl",
         env = "SYSTEM_TEST_BLOKLI_URL",
         value_name = "URL",
-        default_value = "https://blokli-piz-palu.dev.hoprnet.link/"
+        default_value = "https://blokli.piz-palu.dev.gnosisvpn.io/"
     )]
     pub blokli_url: Url,
-
-    /// Optional HTTP proxy used for download/upload requests.
-    #[arg(
-        long = "proxy",
-        env = "SYSTEM_TEST_PROXY",
-        value_name = "URL",
-        default_value = None
-    )]
-    pub proxy: Option<Url>,
 
     /// Allow insecure connections (e.g., self-signed certificates).
     #[arg(long = "allowInsecure", env = "SYSTEM_TEST_ALLOW_INSECURE", default_value_t = false)]
@@ -60,6 +51,10 @@ pub struct SharedArgs {
     /// Exits the network must discover, with their expected countries; discovery checks are skipped without it.
     #[arg(long = "expectedExits", env = "SYSTEM_TEST_EXPECTED_EXITS", value_name = "PATH")]
     pub expected_exits: Option<PathBuf>,
+
+    /// Exits sell PIX chunks; the connection must pay for one.
+    #[arg(long = "expectPix", env = "SYSTEM_TEST_EXPECT_PIX", default_value_t = false)]
+    pub expect_pix: bool,
 }
 
 #[derive(Debug, Clone, Copy, Args)]

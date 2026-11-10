@@ -869,6 +869,16 @@ impl Core {
                 (Ok(_), phase) => {
                     tracing::warn!(?phase, "unawaited connection established successfully");
                 }
+                (Err(connection::up::Error::GvpnClient(err)), Phase::Connecting(conn)) if err.is_listener_gone() => {
+                    tracing::warn!(error = ?err, %conn, "probe session listener gone during registration - replacing the probe and restarting the attempt");
+                    // Replaced even if a disconnect still unregisters over it: that session is dead for everyone.
+                    let requested = self
+                        .probe
+                        .as_ref()
+                        .is_some_and(|p| p.key() == conn.destination.key() && p.is_requested());
+                    self.start_probe(&conn.destination, requested, results_sender);
+                    self.reconnect_in_place(conn, true, results_sender).await;
+                }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(?err, %conn, "connection failed");
                     self.reconnecting_since = None;
@@ -2703,6 +2713,28 @@ mod tests {
 
         assert!(teardown_requested(&mut from_core));
         assert!(core.resume.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_dead_probe_listener_restarts_the_attempt_instead_of_the_worker() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        let conn = connected_with_key("exit");
+        core.target = Some(conn.destination.connect_id.clone());
+        core.phase = Phase::Connecting(conn);
+        let err = crate::gvpn_client::tests::closed_listener_error().await;
+
+        let keep_worker = core
+            .on_results(
+                Results::ConnectionResult {
+                    res: Err(connection::up::Error::GvpnClient(err)),
+                },
+                &results,
+            )
+            .await;
+
+        assert!(keep_worker);
+        assert!(matches!(core.phase, Phase::HoprRunning));
+        assert!(core.resume.is_some(), "key kept");
     }
 
     #[tokio::test]
