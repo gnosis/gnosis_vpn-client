@@ -56,58 +56,23 @@ pub enum Error {
     RegistrationNotFound,
 }
 
-/// What a connect-level failure says about the host, which decides whether another session listener
-/// can help at all.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LocalConnectCause {
-    /// The host could not assign a local address/port for the connection (macOS errno 49,
-    /// `AddrNotAvailable`). A fresh listener port does not help: the state that broke the local
-    /// address selection has to be rebuilt (the tunnel and its routes), then retried.
-    AddressUnavailable,
-    /// The listener refused the connection (`ConnectionRefused`): that particular session is gone,
-    /// so a new session does help.
-    ListenerGone,
-    /// No usable syscall detail: treat like a dead listener, a new session is harmless there.
-    Unknown,
-}
-
 impl Error {
-    /// A connect-level failure: the request never reached the exit's server because the host could
-    /// not reach its own session listener. Every other variant means the request itself went wrong.
+    /// The request never reached the exit: the host could not connect to its own session listener.
     pub fn is_local_connect(&self) -> bool {
         matches!(self, Error::SocketConnect(_))
     }
 
-    /// Which kind of local connect failure this is; only meaningful when [`Self::is_local_connect`].
-    pub fn local_cause(&self) -> LocalConnectCause {
-        let Error::SocketConnect(err) = self else {
-            return LocalConnectCause::Unknown;
-        };
-        let Some(io_error) = io_error_of(err) else {
-            return LocalConnectCause::Unknown;
-        };
-        // `ErrorKind` is std's portable mapping of the platform errnos (macOS 49/61, Linux 99/111).
-        // reqwest's `Display` hides the source chain, so matching on the message cannot work.
-        cause_of_kind(io_error.kind()).unwrap_or(LocalConnectCause::Unknown)
-    }
-
-    /// The session listener is gone, so the request has to go over a new session.
+    /// `AddrNotAvailable` is a host fault a new session cannot fix.
     pub fn is_listener_gone(&self) -> bool {
-        self.is_local_connect() && self.local_cause() != LocalConnectCause::AddressUnavailable
+        let Error::SocketConnect(err) = self else {
+            return false;
+        };
+        let addr_unavailable = io_error_of(err).is_some_and(|e| e.kind() == std::io::ErrorKind::AddrNotAvailable);
+        !addr_unavailable
     }
 }
 
-/// The connect failures whose handling differs, if this is one of them.
-fn cause_of_kind(kind: std::io::ErrorKind) -> Option<LocalConnectCause> {
-    match kind {
-        // macOS: "Can't assign requested address".
-        std::io::ErrorKind::AddrNotAvailable => Some(LocalConnectCause::AddressUnavailable),
-        std::io::ErrorKind::ConnectionRefused => Some(LocalConnectCause::ListenerGone),
-        _ => None,
-    }
-}
-
-/// The first `io::Error` behind a reqwest failure, if the chain exposes one.
+/// reqwest's `Display` hides the source chain, so the io error has to be dug out.
 fn io_error_of(err: &reqwest::Error) -> Option<&std::io::Error> {
     let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(err);
     while let Some(current) = source {
@@ -346,13 +311,11 @@ pub(crate) mod tests {
         assert!(!printed.contains("secret-psk"), "{printed}");
     }
 
-    /// A listener that is gone refuses the connection: the session is dead, a fresh listener helps.
     #[tokio::test]
-    async fn a_closed_listener_is_a_local_connect_failure_of_the_listener_gone_kind() {
+    async fn a_closed_listener_is_gone() {
         let err = closed_listener_error().await;
 
         assert!(err.is_local_connect(), "{err:?}");
-        assert_eq!(err.local_cause(), LocalConnectCause::ListenerGone, "{err:?}");
         assert!(err.is_listener_gone(), "{err:?}");
     }
 
@@ -379,28 +342,7 @@ pub(crate) mod tests {
         let _ = held.join();
     }
 
-    /// The kind mapping is what separates "rebuild the tunnel" from "open another listener".
-    #[test]
-    fn local_cause_maps_the_error_kinds_we_can_name() {
-        use std::io::ErrorKind;
-
-        assert_eq!(
-            cause_of_kind(ErrorKind::AddrNotAvailable),
-            Some(LocalConnectCause::AddressUnavailable)
-        );
-        assert_eq!(
-            cause_of_kind(ErrorKind::ConnectionRefused),
-            Some(LocalConnectCause::ListenerGone)
-        );
-        // Anything else is not a case we act on differently.
-        assert_eq!(cause_of_kind(ErrorKind::TimedOut), None);
-        assert_eq!(cause_of_kind(ErrorKind::ConnectionReset), None);
-    }
-
-    /// A real `SocketConnect` from a request to a port nothing listens on, for other modules' tests.
-    ///
-    /// The port is free again before connecting, so a parallel test (or the connect's own ephemeral
-    /// source port) can take it; retry until the kernel actually refuses.
+    /// The freed port can be taken again by a parallel test, so retry until the connect is refused.
     pub(crate) async fn closed_listener_error() -> Error {
         for _ in 0..16 {
             let port = {
@@ -415,7 +357,7 @@ pub(crate) mod tests {
             let err = register(&Client::new(), &input)
                 .await
                 .expect_err("closed listener fails");
-            if err.local_cause() == LocalConnectCause::ListenerGone {
+            if err.is_listener_gone() {
                 return err;
             }
         }
