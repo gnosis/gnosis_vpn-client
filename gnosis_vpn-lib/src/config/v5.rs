@@ -86,6 +86,7 @@ impl From<Option<Connection>> for super::v7::Connection {
         let conn = conn.as_ref();
         super::v7::Connection {
             http_timeout: conn.and_then(|c| c.http_timeout),
+            register_timeout: None,
             bridge: conn.and_then(|c| c.bridge.clone()),
             wg: conn.and_then(|c| c.wg.clone()),
             ping: conn.and_then(|c| c.ping.clone()),
