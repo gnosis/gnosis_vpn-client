@@ -56,6 +56,64 @@ pub enum Error {
     RegistrationNotFound,
 }
 
+/// What a connect-level failure says about the host, which decides whether another session listener
+/// can help at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LocalConnectCause {
+    /// The host could not assign a local address/port for the connection (macOS errno 49,
+    /// `AddrNotAvailable`). A fresh listener port does not help: the state that broke the local
+    /// address selection has to be rebuilt (the tunnel and its routes), then retried.
+    AddressUnavailable,
+    /// The listener refused the connection (`ConnectionRefused`): that particular session is gone,
+    /// so a bridge session of our own does help.
+    ListenerGone,
+    /// No usable syscall detail: treat like a dead listener, the fallback is harmless there.
+    Unknown,
+}
+
+impl Error {
+    /// A connect-level failure: the request never reached the exit's server because the host could
+    /// not reach its own session listener. Every other variant means the request itself went wrong.
+    pub fn is_local_connect(&self) -> bool {
+        matches!(self, Error::SocketConnect(_))
+    }
+
+    /// Which kind of local connect failure this is; only meaningful when [`Self::is_local_connect`].
+    pub fn local_cause(&self) -> LocalConnectCause {
+        let Error::SocketConnect(err) = self else {
+            return LocalConnectCause::Unknown;
+        };
+        let Some(io_error) = io_error_of(err) else {
+            return LocalConnectCause::Unknown;
+        };
+        // `ErrorKind` is std's portable mapping of the platform errnos (macOS 49/61, Linux 99/111).
+        // reqwest's `Display` hides the source chain, so matching on the message cannot work.
+        cause_of_kind(io_error.kind()).unwrap_or(LocalConnectCause::Unknown)
+    }
+}
+
+/// The connect failures whose handling differs, if this is one of them.
+fn cause_of_kind(kind: std::io::ErrorKind) -> Option<LocalConnectCause> {
+    match kind {
+        // macOS: "Can't assign requested address".
+        std::io::ErrorKind::AddrNotAvailable => Some(LocalConnectCause::AddressUnavailable),
+        std::io::ErrorKind::ConnectionRefused => Some(LocalConnectCause::ListenerGone),
+        _ => None,
+    }
+}
+
+/// The first `io::Error` behind a reqwest failure, if the chain exposes one.
+fn io_error_of(err: &reqwest::Error) -> Option<&std::io::Error> {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(err);
+    while let Some(current) = source {
+        if let Some(io_error) = current.downcast_ref::<std::io::Error>() {
+            return Some(io_error);
+        }
+        source = current.source();
+    }
+    None
+}
+
 impl Input {
     pub fn new(public_key: String, socket_addr: SocketAddr, timeout: Duration) -> Self {
         Input {
@@ -265,6 +323,9 @@ impl Display for Registration {
 mod tests {
     use super::*;
 
+    use std::net::TcpListener;
+    use std::time::Duration;
+
     #[test]
     fn registration_debug_hides_the_preshared_key() {
         let registration: Registration = serde_json::from_value(json!({
@@ -278,5 +339,79 @@ mod tests {
         let printed = format!("{registration:?}");
         assert!(printed.contains("pub"));
         assert!(!printed.contains("secret-psk"), "{printed}");
+    }
+
+    /// A listener that is gone refuses the connection: the session is dead, a fresh listener helps.
+    #[tokio::test]
+    async fn a_closed_listener_is_a_local_connect_failure_of_the_listener_gone_kind() {
+        let err = closed_listener_error().await;
+
+        assert!(err.is_local_connect(), "{err:?}");
+        assert_eq!(err.local_cause(), LocalConnectCause::ListenerGone, "{err:?}");
+    }
+
+    /// A listener that accepts but never answers is a request failure, not a local connect one.
+    #[tokio::test]
+    async fn a_silent_listener_is_not_a_local_connect_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        // Hold the accepted connection open; the response never comes. The request times out after
+        // 300 ms; a full second leaves headroom on a loaded machine without slowing the suite much.
+        let held = std::thread::spawn(move || {
+            let _accepted = listener.accept().map(|(stream, _)| stream);
+            std::thread::sleep(Duration::from_secs(1));
+        });
+        let input = Input::new("pub".to_string(), addr, Duration::from_millis(300));
+
+        let err = register(&Client::new(), &input)
+            .await
+            .expect_err("silent listener times out");
+
+        assert!(!err.is_local_connect(), "{err:?}");
+        assert!(matches!(err, Error::Timeout(_)), "{err:?}");
+        let _ = held.join();
+    }
+
+    /// The kind mapping is what separates "rebuild the tunnel" from "open another listener".
+    #[test]
+    fn local_cause_maps_the_error_kinds_we_can_name() {
+        use std::io::ErrorKind;
+
+        assert_eq!(
+            cause_of_kind(ErrorKind::AddrNotAvailable),
+            Some(LocalConnectCause::AddressUnavailable)
+        );
+        assert_eq!(
+            cause_of_kind(ErrorKind::ConnectionRefused),
+            Some(LocalConnectCause::ListenerGone)
+        );
+        // Anything else is not a case we act on differently.
+        assert_eq!(cause_of_kind(ErrorKind::TimedOut), None);
+        assert_eq!(cause_of_kind(ErrorKind::ConnectionReset), None);
+    }
+
+    /// A real `SocketConnect` from a request to a port nothing listens on, for other modules' tests.
+    ///
+    /// The port is free again before connecting, so a parallel test (or the connect's own ephemeral
+    /// source port) can take it; retry until the kernel actually refuses.
+    pub(crate) async fn closed_listener_error() -> Error {
+        for _ in 0..16 {
+            let port = {
+                let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+                listener.local_addr().expect("local addr").port()
+            };
+            let input = Input::new(
+                "pub".to_string(),
+                format!("127.0.0.1:{port}").parse().unwrap(),
+                Duration::from_secs(5),
+            );
+            let err = register(&Client::new(), &input)
+                .await
+                .expect_err("closed listener fails");
+            if err.local_cause() == LocalConnectCause::ListenerGone {
+                return err;
+            }
+        }
+        panic!("no loopback connect was refused in 16 attempts");
     }
 }
