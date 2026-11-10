@@ -23,7 +23,7 @@ pub struct SharedArgs {
         long = "blokliUrl",
         env = "SYSTEM_TEST_BLOKLI_URL",
         value_name = "URL",
-        default_value = "https://blokli-piz-palu.dev.hoprnet.link/"
+        default_value = "https://blokli.piz-palu.dev.gnosisvpn.io/"
     )]
     pub blokli_url: Url,
 
