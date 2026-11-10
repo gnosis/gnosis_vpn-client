@@ -1,13 +1,6 @@
 use anyhow::{Result, anyhow};
-<<<<<<< HEAD
-use rand::seq::IndexedRandom;
 use std::time::Duration;
-use tracing::{error, info};
-=======
-use serde::Deserialize;
-use std::{path::Path, time::Duration};
 use tracing::info;
->>>>>>> ca3f297 (test(system-tests): require a paid PIX chunk on networks with a pix_strategy (GNO-1072) (#1002))
 
 use crate::{
     cli::{Cli, Command},
@@ -19,11 +12,7 @@ use crate::{
     },
     report::{ReportTable, RowStatus},
 };
-<<<<<<< HEAD
 use gnosis_vpn_lib::connection::destination::Destination;
-=======
-use gnosis_vpn_ipc::{Address, Destination, PixPhase};
->>>>>>> ca3f297 (test(system-tests): require a paid PIX chunk on networks with a pix_strategy (GNO-1072) (#1002))
 
 const SERVICE_TIMEOUT: Duration = Duration::from_secs(30);
 const SAFE_TIMEOUT: Duration = Duration::from_mins(1);
@@ -35,7 +24,6 @@ const QUICK_PROBE_COUNT: usize = 2;
 const CONNECTION_TIMEOUT: Duration = Duration::from_mins(10);
 const DOWNLOAD_SIZE_BYTES: u64 = 250_000;
 const DISCONNECTION_TIMEOUT: Duration = Duration::from_secs(15);
-const PIX_FUNDED_TIMEOUT: Duration = Duration::from_mins(10);
 
 pub struct SystemTestWorkflow {
     cli: Cli,
@@ -93,17 +81,13 @@ impl SystemTestWorkflow {
         self.establish_connection(&destination, CONNECTION_TIMEOUT).await?;
 
         info!(size_bytes = DOWNLOAD_SIZE_BYTES, "downloading through the tunnel");
-        lib::download_file(DOWNLOAD_SIZE_BYTES).await?;
+        lib::download_file(DOWNLOAD_SIZE_BYTES, self.cli.shared.proxy.as_ref()).await?;
         info!(size_bytes = DOWNLOAD_SIZE_BYTES, "download finished");
 
         match &self.cli.command {
-            Some(Command::Download(args)) => download::run_downloads(args).await?,
+            Some(Command::Download(args)) => download::run_downloads(&self.cli.shared, args).await?,
             None => info!("no additional commands to run"),
         };
-
-        if self.cli.shared.expect_pix {
-            self.verify_pix_funded(&destination).await?;
-        }
 
         self.close_connection(DISCONNECTION_TIMEOUT).await?;
         self.client.stop().await?;
@@ -123,121 +107,6 @@ impl SystemTestWorkflow {
         Ok(())
     }
 
-<<<<<<< HEAD
-    async fn verify_all_destinations(
-        &self,
-        destinations: &[Destination],
-        report: &mut ReportTable,
-    ) -> Result<Vec<Destination>> {
-        let mut successful = Vec::new();
-        for destination in destinations {
-            match self.try_connect(destination, CONNECTION_TIMEOUT).await {
-                Ok(_) => {
-                    info!(dest = %destination, "connection established");
-                    report.add_row(
-                        destination.get_meta("location").unwrap_or("<unknown>".to_string()),
-                        RowStatus::Success,
-                        Vec::new(),
-                    );
-                    successful.push(destination.clone());
-                }
-                Err(error) => {
-                    error!(dest = %destination, ?error, "failed to establish connection");
-                    report.add_row(
-                        destination.get_meta("location").unwrap_or("<unknown>".to_string()),
-                        RowStatus::Failure(format!("{error:?}")),
-                        Vec::new(),
-                    );
-                }
-=======
-    /// Every expected exit must be discovered from the registry and placed in its expected country.
-    async fn verify_exit_discovery(&self, path: &Path) -> Result<()> {
-        let content = std::fs::read_to_string(path)?;
-        let expected = toml::from_str::<ExpectedExits>(&content)?.exit;
-        let addresses = expected
-            .iter()
-            .map(|exit| exit.address.parse::<Address>())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| anyhow!("invalid expected exit address in {}: {error}", path.display()))?;
-
-        let discovered = self
-            .client
-            .wait_for_discovered_exits(&addresses, DISCOVERY_TIMEOUT)
-            .await?;
-        let mut discovery_report = ReportTable::new("exit", &[]);
-        for (exit, destination) in expected.iter().zip(&discovered) {
-            let status = match destination {
-                Some(_) => RowStatus::Success,
-                None => RowStatus::Failure("not discovered".to_string()),
-            };
-            discovery_report.add_row(exit.address.clone(), status, Vec::new());
-        }
-        info!("\n\n{}", discovery_report.render());
-        let undiscovered = discovered.iter().filter(|dest| dest.is_none()).count();
-        if undiscovered > 0 {
-            return Err(anyhow!(
-                "{undiscovered} of {} expected exits not discovered",
-                expected.len()
-            ));
-        }
-
-        let countries = self
-            .client
-            .wait_for_exit_countries(&addresses, GEOLOCATION_TIMEOUT)
-            .await?;
-        let mut location_report = ReportTable::new("exit", &["expected", "resolved"]);
-        let mut mislocated = 0;
-        for (exit, country) in expected.iter().zip(&countries) {
-            let resolved = country.clone().unwrap_or_else(|| "-".to_string());
-            let status = if resolved == exit.country {
-                RowStatus::Success
-            } else {
-                mislocated += 1;
-                RowStatus::Failure("country mismatch".to_string())
-            };
-            location_report.add_row(exit.address.clone(), status, vec![exit.country.clone(), resolved]);
-        }
-        info!("\n\n{}", location_report.render());
-        if mislocated > 0 {
-            return Err(anyhow!("{mislocated} of {} expected exits mislocated", expected.len()));
-        }
-
-        Ok(())
-    }
-
-    async fn verify_pix_funded(&self, destination: &Destination) -> Result<()> {
-        let stats = self.client.wait_for_pix_funded(destination, PIX_FUNDED_TIMEOUT).await?;
-
-        let mut report = ReportTable::new(
-            "destination",
-            &["phase", "committed", "paid", "failed", "bytes bought", "cost"],
-        );
-        let is_funded = stats.as_ref().is_some_and(|s| s.phase == PixPhase::Funded);
-        let row_status = if is_funded {
-            RowStatus::Success
-        } else {
-            RowStatus::Failure("not funded".to_string())
-        };
-        let values = match &stats {
-            Some(s) => vec![
-                format!("{:?}", s.phase),
-                s.chunks_committed.to_string(),
-                s.chunks_paid.to_string(),
-                s.chunks_failed.to_string(),
-                s.bytes_bought.to_string(),
-                s.cost.to_string(),
-            ],
-            None => vec!["no session".to_string()],
-        };
-        report.add_row(destination.id.to_string(), row_status, values);
-        info!("\n\n{}", report.render());
-
-        if !is_funded {
-            return Err(anyhow!("pix chunks not paid within {PIX_FUNDED_TIMEOUT:?}"));
-        }
-        Ok(())
-    }
-
     /// Quick-probes random ready destinations and picks the one with the fastest status round trip.
     async fn select_best_probed(&self, ready: &[Destination]) -> Result<Destination> {
         let candidates = ready.get(..QUICK_PROBE_COUNT).ok_or_else(|| {
@@ -253,7 +122,7 @@ impl SystemTestWorkflow {
             let check = self.client.quick_probe(destination, QUICK_PROBE_TIMEOUT).await?;
             info!(dest = %destination, rtt = ?check.status_rtt, "quick probe succeeded");
             report.add_row(
-                destination.id.to_string(),
+                destination.get_meta("location").unwrap_or("<unknown>".to_string()),
                 RowStatus::Success,
                 vec![format!("{:?}", check.status_rtt)],
             );
@@ -261,7 +130,6 @@ impl SystemTestWorkflow {
             let is_fastest = best.is_none_or(|(_, rtt)| check.status_rtt < rtt);
             if is_fastest {
                 best = Some((destination, check.status_rtt));
->>>>>>> ca3f297 (test(system-tests): require a paid PIX chunk on networks with a pix_strategy (GNO-1072) (#1002))
             }
         }
         info!("\n\n{}", report.render());

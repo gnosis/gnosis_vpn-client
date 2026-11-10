@@ -8,7 +8,7 @@ use crate::{
     report::{ReportTable, RowStatus},
 };
 
-pub async fn run_downloads(args: &DownloadArgs) -> Result<()> {
+pub async fn run_downloads(cli: &crate::cli::SharedArgs, args: &DownloadArgs) -> Result<()> {
     let mut report = ReportTable::new("file size", &["avg (s)", "min (s)", "max (s)", "successes", "failures"]);
     let mut had_total_failure = false;
 
@@ -25,7 +25,7 @@ pub async fn run_downloads(args: &DownloadArgs) -> Result<()> {
             );
 
             let start = Instant::now();
-            match lib::download_file(file_size).await {
+            match lib::download_file(file_size, cli.proxy.as_ref()).await {
                 Ok(_) => {
                     let elapsed = start.elapsed();
                     info!(%file_size, elapsed = ?elapsed, "sample download succeeded");

@@ -56,8 +56,8 @@ where
     }
 }
 
-/// Downloads a file of the provided size.
-pub async fn download_file(size_bytes: u64) -> anyhow::Result<()> {
+/// Downloads a file of the provided size, optionally routing traffic through a proxy.
+pub async fn download_file(size_bytes: u64, proxy: Option<&Url>) -> anyhow::Result<()> {
     let mut download_url = Url::parse(BASE_DOWNLOAD_URL)?;
 
     let existing_pairs = download_url
@@ -77,9 +77,15 @@ pub async fn download_file(size_bytes: u64) -> anyhow::Result<()> {
     let query = serializer.finish();
     download_url.set_query(Some(&query));
 
-    debug!(url = %download_url, size_bytes, "downloading random file");
-    let mut resp = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
+    let mut client = reqwest::Client::builder().timeout(Duration::from_secs(60));
+    if let Some(proxy_url) = proxy {
+        client = client.proxy(reqwest::Proxy::all(proxy_url.as_str())?);
+        debug!(url = %download_url, size_bytes, "downloading random file through proxy");
+    } else {
+        debug!(url = %download_url, size_bytes, "downloading random file");
+    }
+
+    let mut resp = client
         .build()?
         .get(download_url.clone())
         .send()
