@@ -20,7 +20,7 @@ bytesize = "~2.7.0"
 cfg-if = "~1.0.5"
 clap = { version = "~4.6.7", features = ["derive", "env"] }
 clap_complete = "~4.6.11"
-edgli = { git = "https://github.com/hoprnet/edge-client.git", branch = "kauki/test/graph/loopback-first-hop-patch", default-features = false, features = [
+edgli = { git = "https://github.com/hoprnet/edge-client.git", branch = "main", default-features = false, features = [
   # No PIX deposit pool here: edgli's `pix-test` and `pix-curvy` are mutually exclusive, and a
   # feature listed on a workspace dependency cannot be switched off by a member. Every crate
   # forwards one, `pix-curvy` by default; see the `pix-test` build in nix/gnosisvpn.nix.
@@ -38,7 +38,7 @@ hopr-strategy = { version = "~7.0.0", default-features = false, features = [
 ] }
 # Pinned by BRANCH to match edgli's own `hopr-lib` pin: cargo treats `?branch=X#sha` and
 # `?rev=sha` as distinct sources, so mixing them vendors hoprnet twice and fails to compile.
-hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "kauki/fix/transport/min-loopback-rate", features = [
+hopr-utils-session = { git = "https://github.com/hoprnet/hoprnet", branch = "master", features = [
   "runtime-tokio",
 ] }
 human-bandwidth = "~0.1.4"
@@ -92,7 +92,3 @@ lto           = "fat"
 opt-level     = 3
 panic         = "abort"
 strip         = true
-
-# Unreleased graph fix (GNO-1183, hopr-impls#86); cargo ignores edgli's own [patch], so the host carries it. Drop once released.
-[patch.crates-io]
-hopr-network-graph = { git = "https://github.com/hoprnet/hopr-impls", branch = "kauki/fix/graph/starvation-config" }
