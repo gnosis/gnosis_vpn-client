@@ -4546,6 +4546,7 @@ dependencies = [
  "gnosis_vpn-lib",
  "rand 0.10.3",
  "reqwest",
+ "rustix",
  "serde",
  "serde_json",
  "tokio",
