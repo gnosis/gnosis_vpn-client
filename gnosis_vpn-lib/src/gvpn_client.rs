@@ -71,6 +71,9 @@ pub enum LocalConnectCause {
     Unknown,
 }
 
+#[cfg(test)]
+pub(crate) use tests::closed_listener_error;
+
 impl Error {
     /// A connect-level failure: the request never reached the exit's server because the host could
     /// not reach its own session listener. Every other variant means the request itself went wrong.

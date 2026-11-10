@@ -89,6 +89,9 @@ pub struct Core {
     cancel_on_shutdown: CancellationToken,
     cancel_presafe_queries: CancellationToken,
     cancel_balances: CancellationToken,
+    /// Cancels the pending host-side retry tick. Separate from `cancel_connection` so that ending a
+    /// cool-off never cancels the attempt the cool-off belongs to.
+    cancel_retry: CancellationToken,
     // Tracks the connection's NepTUN pump task so teardown can wait for it to
     // stop (dropping its TUN fd) before asking root to tear down routing;
     // replaced together with cancel_connection.
@@ -136,6 +139,53 @@ pub struct Core {
     ongoing_disconnections: Vec<connection::down::Down>,
     pending_unregisters: Vec<PendingUnregister>,
     reconnecting_since: Option<SystemTime>,
+    /// Consecutive connection failures this host caused (not the exit). Bounds the in-place retries
+    /// that keep the worker alive before falling back to a worker restart.
+    host_side_failures: u32,
+    /// End of the current host-side cool-off: no reconnect before it elapses. On tokio's clock, the
+    /// same one the retry tick sleeps on, so the gate can never outlive its timer.
+    retry_not_before: Option<time::Instant>,
+}
+
+/// How often a host-side connection failure is retried in place before the worker is rotated.
+/// Each retry tears the tunnel down and re-registers, so this is generous already.
+const HOST_SIDE_FAILURE_RETRIES: u32 = 3;
+
+/// How a failed connection attempt is handled, by whose fault it failed and how often it already did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FailureAction {
+    /// Not the target's attempt any more (its target was dropped or replaced): just record and forget.
+    Ignore,
+    /// The host failed before reaching the exit: rebuild the tunnel and try again after a cool-off.
+    RetryHostSide,
+    /// Rotate the worker - the escape hatch for everything the host-side retries could not fix.
+    RestartWorker,
+}
+
+fn connection_failure_action(failed_the_target: bool, host_side: bool, host_side_failures: u32) -> FailureAction {
+    if !failed_the_target {
+        return FailureAction::Ignore;
+    }
+    if host_side && host_side_failures < HOST_SIDE_FAILURE_RETRIES {
+        return FailureAction::RetryHostSide;
+    }
+    FailureAction::RestartWorker
+}
+
+/// Where a host-side retry tick may re-drive the target: only while it still waits, i.e. before any
+/// attempt for it started (an attempt moves the phase out of `HoprRunning`).
+fn retry_is_due(target: Option<&str>, phase: &Phase) -> bool {
+    target.is_some() && matches!(phase, Phase::HoprRunning)
+}
+
+/// Cool-off before retrying a host-side failure. Long enough for a transient local condition (port
+/// pressure, a device coming back, DNS restored) to clear, short enough to stay a fast recovery.
+fn host_side_retry_delay(host_side_failures: u32) -> Duration {
+    match host_side_failures {
+        0 | 1 => Duration::from_secs(2),
+        2 => Duration::from_secs(5),
+        _ => Duration::from_secs(10),
+    }
 }
 
 /// A disconnect whose unregister failed; re-run against its own destination snapshot on the next connect to this exit.
@@ -231,6 +281,7 @@ impl Core {
             cancel_on_shutdown: cancel_on_shutdown.clone(),
             cancel_presafe_queries: cancel_on_shutdown.child_token(),
             cancel_balances: cancel_on_shutdown.child_token(),
+            cancel_retry: cancel_on_shutdown.child_token(),
             wg_pump_tasks: TaskTracker::new(),
             cancel_routability: cancel_on_shutdown.child_token(),
             announced_peers_loop_running: false,
@@ -262,6 +313,8 @@ impl Core {
             next_request_id: 0,
             responders: HashMap::new(),
             reconnecting_since: None,
+            host_side_failures: 0,
+            retry_not_before: None,
         };
         Ok((core, incoming_sender))
     }
@@ -452,19 +505,48 @@ impl Core {
                     WorkerCommand::Connect { destination: token } => {
                         match self.config.destinations.resolve(token.as_str()).cloned() {
                             Ok(dest) => {
-                                self.reconnecting_since = None;
-                                self.abandon_resume(results_sender).await;
+                                // Decided before `abandon_resume`: a pending exit still holds its
+                                // kept key, which a repeated Connect must not throw away.
                                 let is_already_active = match &self.phase {
                                     Phase::Connected(conn) | Phase::Connecting(conn) => {
                                         conn.destination.same_exit(&dest)
                                     }
+                                    // The exit is still the pending target while its cool-off runs,
+                                    // and while its probe is opened once the gate is spent. The
+                                    // gate alone is not enough: `act_on_target` clears it before the
+                                    // probe checks, which leaves the kept key without one.
+                                    Phase::HoprRunning => {
+                                        self.pending_target_exit()
+                                            .is_some_and(|pending| pending.same_exit(&dest))
+                                            && (self.retry_not_before.is_some()
+                                                || self
+                                                    .resume
+                                                    .as_ref()
+                                                    .is_some_and(|resume| resume.destination.same_exit(&dest)))
+                                    }
                                     _ => false,
                                 };
                                 if is_already_active {
-                                    let _ = resp.send(Response::Connect(ipc::ConnectResponse::AlreadyConnected {
-                                        destination: command::destination(&dest),
-                                    }));
-                                } else if let Some(rh) = self.route_healths.get(&dest.key()) {
+                                    // Name the entry that is actually in use, not the one asked for:
+                                    // another path to the same exit is not the pending target.
+                                    let active = match &self.phase {
+                                        Phase::Connected(conn) | Phase::Connecting(conn) => conn.destination.clone(),
+                                        _ => self.pending_target_exit().cloned().unwrap_or_else(|| dest.clone()),
+                                    };
+                                    // Only an established connection is "already connected"; a pending
+                                    // retry is still connecting, even though nothing new starts.
+                                    let response = match &self.phase {
+                                        Phase::Connected(_) => ipc::ConnectResponse::AlreadyConnected {
+                                            destination: command::destination(&active),
+                                        },
+                                        _ => ipc::ConnectResponse::Connecting {
+                                            destination: command::destination(&active),
+                                        },
+                                    };
+                                    let _ = resp.send(Response::Connect(response));
+                                    return true;
+                                }
+                                if let Some(rh) = self.route_healths.get(&dest.key()) {
                                     if rh.is_unrecoverable() {
                                         let _ = resp.send(Response::Connect(ipc::ConnectResponse::UnableToConnect {
                                             destination: command::destination(&dest),
@@ -475,14 +557,19 @@ impl Core {
                                         let _ = resp.send(Response::Connect(ipc::ConnectResponse::Connecting {
                                             destination: command::destination(&dest),
                                         }));
+                                        // Accepted: an earlier attempt's kept key is what this replaces.
+                                        self.abandon_resume(results_sender).await;
                                         self.target = Some(dest.connect_id.clone());
+                                        self.start_user_attempt();
                                         self.act_on_target(results_sender);
                                     } else {
                                         let _ = resp.send(Response::Connect(ipc::ConnectResponse::WaitingToConnect {
                                             destination: command::destination(&dest),
                                             route_health: rh.state().clone(),
                                         }));
+                                        self.abandon_resume(results_sender).await;
                                         self.target = Some(dest.connect_id.clone());
+                                        self.start_user_attempt();
                                     }
                                 } else {
                                     tracing::warn!(key = %dest.key(), "no route health found for destination - this should not happen");
@@ -505,6 +592,9 @@ impl Core {
                     WorkerCommand::Disconnect => {
                         self.target = None;
                         self.reconnecting_since = None;
+                        self.host_side_failures = 0;
+                        // A cool-off without a target must not re-drive anything: drop its tick too.
+                        self.cancel_pending_retry();
                         self.abandon_resume(results_sender).await;
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
@@ -851,6 +941,7 @@ impl Core {
                 (Ok(_session), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     self.reconnecting_since = None;
+                    self.host_side_failures = 0;
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
                     let route = format!(
@@ -871,15 +962,44 @@ impl Core {
                 }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(?err, %conn, "connection failed");
-                    self.reconnecting_since = None;
-                    if let Some(rh) = self.route_healths.get_mut(&conn.destination.key()) {
-                        rh.with_error(err.to_string());
-                    }
                     // By identity: a dropped target must still restart the worker, not stick in Connecting.
                     let failed_the_target = self.target.as_deref() == Some(conn.destination.connect_id.as_str());
-                    if failed_the_target {
-                        tracing::info!(id = %conn.destination.connect_id, "restarting connection worker process due to final connection error");
-                        return false;
+                    match connection_failure_action(failed_the_target, err.is_host_side(), self.host_side_failures) {
+                        FailureAction::Ignore => {
+                            self.reconnecting_since = None;
+                            if let Some(rh) = self.route_healths.get_mut(&conn.destination.key()) {
+                                rh.with_error(err.to_string());
+                            }
+                        }
+                        // The exit never saw the attempt, so its route is not at fault.
+                        FailureAction::RetryHostSide => {
+                            self.host_side_failures += 1;
+                            let delay = host_side_retry_delay(self.host_side_failures);
+                            // One absolute deadline for the gate and the timer, taken before the
+                            // teardown so the cool-off starts now, not once the teardown finished.
+                            let retry_at = time::Instant::now() + delay;
+                            tracing::warn!(
+                                ?err,
+                                %conn,
+                                attempt = self.host_side_failures,
+                                max = HOST_SIDE_FAILURE_RETRIES,
+                                ?delay,
+                                "connection failed on the host side - rebuilding the tunnel, then retrying"
+                            );
+                            // Kept across the cool-off so status keeps reporting a reconnect.
+                            self.reconnecting_since.get_or_insert_with(SystemTime::now);
+                            self.retry_not_before = Some(retry_at);
+                            self.begin_reconnect(conn, false).await;
+                            self.spawn_retry_connection(retry_at, results_sender);
+                        }
+                        FailureAction::RestartWorker => {
+                            self.reconnecting_since = None;
+                            if let Some(rh) = self.route_healths.get_mut(&conn.destination.key()) {
+                                rh.with_error(err.to_string());
+                            }
+                            tracing::info!(id = %conn.destination.connect_id, "restarting connection worker process due to final connection error");
+                            return false;
+                        }
                     }
                 }
                 (Err(err), phase) => {
@@ -975,6 +1095,26 @@ impl Core {
                     tracing::warn!(?phase, "received surb ramp tick outside a connected phase");
                 }
             },
+
+            Results::RetryConnection { not_before } => {
+                // The timer is authoritative for its own cool-off: it clears the gate and re-drives,
+                // but only if no newer cool-off replaced the deadline it was scheduled for.
+                // A tick that was already queued when a newer cool-off was armed must not end it.
+                if self.retry_not_before == Some(not_before) {
+                    self.retry_not_before = None;
+                }
+                if retry_is_due(self.target.as_deref(), &self.phase) {
+                    tracing::info!("retrying the connection after a host-side failure");
+                    self.act_on_target(results_sender);
+                } else {
+                    tracing::debug!(
+                        target = ?self.target,
+                        phase = ?self.phase,
+                        gate = ?self.retry_not_before,
+                        "host-side retry tick outside a waiting phase or superseded"
+                    );
+                }
+            }
 
             Results::ConnectionRequestToRoot(respondable_request) => match respondable_request {
                 RunnerToRoot::KillswitchLockdown {
@@ -2177,6 +2317,29 @@ impl Core {
         Some(hopr.pix_chunks().stats(session_id, price_per_byte))
     }
 
+    /// A user-requested attempt starts with a fresh host-side budget and no cool-off; a repeated
+    /// Connect against an attempt that is already running must not refill it.
+    fn start_user_attempt(&mut self) {
+        self.host_side_failures = 0;
+        self.reconnecting_since = None;
+        // Also drops the previous target's retry tick, so it cannot re-drive this one.
+        self.cancel_pending_retry();
+    }
+
+    /// The exit the pending target names, if discovery still knows it.
+    fn pending_target_exit(&self) -> Option<&Destination> {
+        self.target
+            .as_deref()
+            .and_then(|id| self.config.destinations.by_connect_id(id))
+    }
+
+    /// End a scheduled host-side retry: the gate goes and the pending tick loses its token.
+    fn cancel_pending_retry(&mut self) {
+        self.retry_not_before = None;
+        self.cancel_retry.cancel();
+        self.cancel_retry = self.cancel_on_shutdown.child_token();
+    }
+
     #[tracing::instrument(skip(self, results_sender), level = "debug", ret)]
     fn act_on_target(&mut self, results_sender: &mpsc::Sender<Results>) {
         tracing::debug!(target = ?self.target, phase = ?self.phase, "acting on target destination");
@@ -2206,6 +2369,15 @@ impl Core {
         match self.phase.clone() {
             // Connecting from ready
             Phase::HoprRunning => {
+                // A host-side failure holds the next attempt back; `Results::RetryConnection` re-runs
+                // this once the cool-off elapsed, so anything else arriving meanwhile just waits.
+                if let Some(not_before) = self.retry_not_before
+                    && time::Instant::now() < not_before
+                {
+                    tracing::debug!(?not_before, %dest, "waiting for the host-side cool-off before reconnecting");
+                    return;
+                }
+                self.retry_not_before = None;
                 let Some(rh) = self.route_healths.get(&dest.key()) else {
                     tracing::warn!(destination = %dest, "refusing connection: destination has no route health tracker");
                     return;
@@ -2285,6 +2457,13 @@ impl Core {
         keep_device: bool,
         results_sender: &mpsc::Sender<Results>,
     ) {
+        self.begin_reconnect(conn, keep_device).await;
+        self.act_on_target(results_sender);
+    }
+
+    /// Abandon the running attempt and, unless the device is kept, tear the tunnel down. Does not
+    /// dispatch the next attempt - callers choose whether to reconnect now or after a cool-off.
+    async fn begin_reconnect(&mut self, conn: connection::up::Up, keep_device: bool) {
         self.cancel_connection.cancel();
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
@@ -2311,7 +2490,26 @@ impl Core {
             }
             Err(reason) => tracing::debug!(reason, "reconnecting with a fresh key"),
         }
-        self.act_on_target(results_sender);
+    }
+
+    /// Retry the target once the host-side cool-off elapsed.
+    ///
+    /// Bound to its own token, not the attempt's: a newer failure rotates it, a user Connect or
+    /// Disconnect cancels it, so the tick never outlives the cool-off it belongs to. The
+    /// `not_before` equality check is the second line of defence.
+    fn spawn_retry_connection(&mut self, retry_at: time::Instant, results_sender: &mpsc::Sender<Results>) {
+        // A newer failure supersedes the older tick: rotate the token so the old sleep is cancelled.
+        self.cancel_retry.cancel();
+        self.cancel_retry = self.cancel_on_shutdown.child_token();
+        let sender = results_sender.clone();
+        let cancel = self.cancel_retry.clone();
+        tokio::spawn(async move {
+            let tick = async move {
+                time::sleep_until(retry_at).await;
+                let _ = sender.send(Results::RetryConnection { not_before: retry_at }).await;
+            };
+            let _ = cancel.run_until_cancelled(tick).await;
+        });
     }
 
     /// A user action rotates the key: the kept registration is removed at the exit and the device torn down.
@@ -2599,6 +2797,11 @@ mod tests {
     }
 
     async fn fresh_core() -> TestCore {
+        fresh_core_observable().await.0
+    }
+
+    /// Same as [`fresh_core`], but hands out the results receiver so a test can see scheduled ticks.
+    async fn fresh_core_observable() -> (TestCore, mpsc::Receiver<Results>) {
         let state_home = tempfile::tempdir().expect("temp dir");
         let path = state_home.path().join("config.toml");
         let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -2620,13 +2823,42 @@ mod tests {
         let (core, _) = Core::init(config, worker_params, None, outgoing)
             .await
             .expect("core init");
-        let (results, _) = mpsc::channel(32);
-        TestCore {
-            core,
-            from_core,
-            results,
-            _state_home: state_home,
-        }
+        let (results, results_receiver) = mpsc::channel(32);
+        (
+            TestCore {
+                core,
+                from_core,
+                results,
+                _state_home: state_home,
+            },
+            results_receiver,
+        )
+    }
+
+    /// Install a routable destination the way discovery would, so `act_on_target` gets past its guards.
+    fn with_destination(core: &mut Core, id: &str) -> Destination {
+        let dest = destination(id);
+        let mut rh = tracker(&dest);
+        // Routable, as a completed graph walk would leave it, so `act_on_target` gets to the probe.
+        rh.set_routable(true);
+        core.route_healths.insert(dest.key(), rh);
+        core.config.destinations.insert(dest.clone());
+        dest
+    }
+
+    /// A real host-side connection failure, produced on its own unpaused runtime: a paused test clock
+    /// would otherwise auto-advance into reqwest's timeout before the refused connect surfaces.
+    fn host_side_failure() -> connection::up::Error {
+        let err = std::thread::spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(crate::gvpn_client::closed_listener_error())
+        })
+        .join()
+        .expect("no panic in the helper thread");
+        connection::up::Error::GvpnClient(err)
     }
 
     fn connected_with_key(id: &str) -> Up {
@@ -2882,6 +3114,433 @@ mod tests {
         let mut moved = probed.clone();
         moved.gnosis_vpn_server = "172.30.0.2:8000".parse().expect("valid socket address");
         assert!(probe_is_stale(Some(&moved), &probed));
+    }
+
+    /// The host-side budget decides between rebuilding the tunnel, rotating the worker, and nothing.
+    #[test]
+    fn a_connection_failure_is_routed_by_fault_and_budget() {
+        // Not the target's attempt any more: a replacement connection is already running.
+        assert_eq!(connection_failure_action(false, true, 0), FailureAction::Ignore);
+        assert_eq!(connection_failure_action(false, false, 0), FailureAction::Ignore);
+        // Host-side failures rebuild the tunnel while the budget lasts ...
+        assert_eq!(connection_failure_action(true, true, 0), FailureAction::RetryHostSide);
+        assert_eq!(
+            connection_failure_action(true, true, HOST_SIDE_FAILURE_RETRIES - 1),
+            FailureAction::RetryHostSide
+        );
+        // ... and only then rotate the worker, which is the escape hatch.
+        assert_eq!(
+            connection_failure_action(true, true, HOST_SIDE_FAILURE_RETRIES),
+            FailureAction::RestartWorker
+        );
+        // A failure the exit caused is never retried in place: the worker holds the node state.
+        assert_eq!(connection_failure_action(true, false, 0), FailureAction::RestartWorker);
+    }
+
+    #[test]
+    fn host_side_retries_back_off_and_stay_bounded() {
+        // One delay per retry the budget allows; the last one is the cap.
+        let delays: Vec<Duration> = (1..=HOST_SIDE_FAILURE_RETRIES).map(host_side_retry_delay).collect();
+        assert!(delays.windows(2).all(|pair| pair[0] <= pair[1]), "{delays:?}");
+        assert_eq!(delays[0], Duration::from_secs(2));
+        assert_eq!(delays.last().copied(), Some(Duration::from_secs(10)), "{delays:?}");
+    }
+
+    /// A host-side failure must rebuild the tunnel and wait, not rotate the worker - and must not blame
+    /// the exit's route for a local problem.
+    #[tokio::test]
+    async fn a_host_side_failure_rebuilds_the_tunnel_and_cools_off() {
+        let TestCore {
+            mut core,
+            mut from_core,
+            results,
+            ..
+        } = fresh_core().await;
+        core.target = Some("exit".to_string());
+        core.phase = Phase::Connecting(attempt("exit", UpPhase::RegisterWg));
+        let host_side = host_side_failure();
+
+        let keep_running = core
+            .on_results(Results::ConnectionResult { res: Err(host_side) }, &results)
+            .await;
+
+        assert!(keep_running, "the worker must survive a host-side failure");
+        assert!(teardown_requested(&mut from_core), "the dead device must be torn down");
+        assert!(matches!(core.phase, Phase::HoprRunning));
+        assert_eq!(core.host_side_failures, 1);
+        assert!(core.retry_not_before.is_some(), "the retry must wait for the cool-off");
+        assert!(core.reconnecting_since.is_some(), "status keeps reporting a reconnect");
+    }
+
+    /// Once the budget is spent the worker is rotated: that stays the escape hatch.
+    #[tokio::test]
+    async fn a_host_side_failure_past_the_budget_restarts_the_worker() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        core.target = Some("exit".to_string());
+        core.phase = Phase::Connecting(attempt("exit", UpPhase::RegisterWg));
+        core.host_side_failures = HOST_SIDE_FAILURE_RETRIES;
+        let host_side = host_side_failure();
+
+        let keep_running = core
+            .on_results(Results::ConnectionResult { res: Err(host_side) }, &results)
+            .await;
+
+        assert!(!keep_running, "the worker rotation is the last resort");
+    }
+
+    /// The cool-off gate defers a reconnect that another trigger would otherwise start.
+    #[tokio::test]
+    async fn the_cool_off_holds_back_reconnects_until_it_elapsed() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        let dest = with_destination(&mut core, "exit");
+        core.target = Some(dest.connect_id.clone());
+        core.phase = Phase::HoprRunning;
+        core.retry_not_before = Some(time::Instant::now() + Duration::from_secs(60));
+
+        // Without the gate this starts a probe at once; routability/probe events land here too.
+        core.act_on_target(&results);
+
+        assert!(core.probe.is_none(), "still waiting for the cool-off");
+        assert!(core.retry_not_before.is_some(), "the gate stays armed");
+
+        // Once the deadline passed, the very next drive gets through and spends the gate.
+        core.retry_not_before = Some(time::Instant::now());
+        core.act_on_target(&results);
+
+        assert!(
+            core.retry_not_before.is_none(),
+            "the attempt starts once the cool-off elapsed"
+        );
+    }
+
+    /// The host-side failure schedules the retry tick; the tick is what ends the cool-off, and a
+    /// newer failure supersedes an older tick.
+    #[tokio::test(start_paused = true)]
+    async fn a_host_side_failure_schedules_exactly_one_retry_tick() {
+        let (TestCore { mut core, results, .. }, mut ticks) = fresh_core_observable().await;
+        let dest = with_destination(&mut core, "exit");
+        core.target = Some(dest.connect_id.clone());
+
+        // Two failures in a row: the second supersedes the first tick and its shorter cool-off.
+        for _ in 0..2 {
+            core.phase = Phase::Connecting(attempt("exit", UpPhase::RegisterWg));
+            let host_side = host_side_failure();
+            assert!(
+                core.on_results(Results::ConnectionResult { res: Err(host_side) }, &results)
+                    .await,
+                "the worker survives host-side failures"
+            );
+        }
+        let deadline = time::Instant::now() + host_side_retry_delay(2);
+        assert_eq!(
+            core.retry_not_before,
+            Some(deadline),
+            "the gate and the timer share one deadline"
+        );
+
+        // The superseded 2 s tick must not fire. A bounded wait, not `try_recv`: delivery needs a
+        // poll, and `advance` only yields once.
+        time::advance(Duration::from_secs(4)).await;
+        assert!(
+            time::timeout(Duration::from_millis(100), ticks.recv()).await.is_err(),
+            "the superseded tick must be gone"
+        );
+
+        // Its own deadline does.
+        time::advance(Duration::from_secs(2)).await;
+        let tick = time::timeout(Duration::from_secs(1), ticks.recv())
+            .await
+            .expect("a tick at the second deadline")
+            .expect("the tick channel stays open");
+        assert!(
+            matches!(tick, Results::RetryConnection { not_before } if not_before == deadline),
+            "unexpected tick: {tick}"
+        );
+        assert!(ticks.try_recv().is_err(), "exactly one tick");
+    }
+
+    /// A tick that was already queued when a newer cool-off was armed must not end that cool-off.
+    #[tokio::test(start_paused = true)]
+    async fn a_superseded_tick_leaves_a_newer_cool_off_alone() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        let dest = with_destination(&mut core, "exit");
+        core.target = Some(dest.connect_id.clone());
+        core.phase = Phase::HoprRunning;
+        let stale = time::Instant::now();
+        let newer = stale + Duration::from_secs(5);
+        core.retry_not_before = Some(newer);
+
+        assert!(
+            core.on_results(Results::RetryConnection { not_before: stale }, &results)
+                .await
+        );
+
+        assert_eq!(core.retry_not_before, Some(newer), "the newer deadline survives");
+        assert!(core.probe.is_none(), "and nothing reconnected early");
+    }
+
+    /// Only a waiting target in `HoprRunning` may be re-driven by a tick.
+    #[test]
+    fn a_retry_tick_is_only_due_for_a_waiting_target() {
+        assert!(retry_is_due(Some("exit"), &Phase::HoprRunning));
+        assert!(!retry_is_due(None, &Phase::HoprRunning));
+        assert!(!retry_is_due(
+            Some("exit"),
+            &Phase::Connecting(attempt("exit", UpPhase::RegisterWg))
+        ));
+        assert!(!retry_is_due(
+            Some("exit"),
+            &Phase::Connected(connected_with_key("exit"))
+        ));
+    }
+
+    /// A host-side failure must not be recorded against the exit's route: the exit never saw it.
+    #[tokio::test]
+    async fn a_host_side_failure_leaves_the_route_health_alone() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        let dest = with_destination(&mut core, "exit");
+        core.target = Some(dest.connect_id.clone());
+        core.phase = Phase::Connecting(attempt("exit", UpPhase::RegisterWg));
+
+        assert!(
+            core.on_results(
+                Results::ConnectionResult {
+                    res: Err(host_side_failure())
+                },
+                &results
+            )
+            .await
+        );
+
+        assert!(
+            core.route_healths
+                .get(&dest.key())
+                .expect("tracker")
+                .last_error()
+                .is_none(),
+            "a local failure is not the exit's fault"
+        );
+    }
+
+    /// A disconnect during the cool-off must take the pending tick with it.
+    #[tokio::test(start_paused = true)]
+    async fn a_disconnect_drops_the_pending_retry() {
+        let (TestCore { mut core, results, .. }, mut ticks) = fresh_core_observable().await;
+        let dest = with_destination(&mut core, "exit");
+        core.target = Some(dest.connect_id.clone());
+        core.phase = Phase::Connecting(attempt("exit", UpPhase::RegisterWg));
+        assert!(
+            core.on_results(
+                Results::ConnectionResult {
+                    res: Err(host_side_failure())
+                },
+                &results
+            )
+            .await
+        );
+
+        let (resp, _rx) = oneshot::channel();
+        assert!(
+            core.on_event(
+                WorkerToCore::WorkerCommand {
+                    cmd: WorkerCommand::Disconnect,
+                    resp,
+                },
+                &results,
+            )
+            .await
+        );
+
+        assert!(core.retry_not_before.is_none(), "no gate left behind");
+        time::advance(Duration::from_secs(30)).await;
+        assert!(
+            time::timeout(Duration::from_millis(100), ticks.recv()).await.is_err(),
+            "the tick was cancelled"
+        );
+    }
+
+    /// An attempt that already waits for its probe is still pending: a re-Connect keeps its key.
+    #[tokio::test]
+    async fn a_repeated_connect_while_waiting_for_the_probe_keeps_the_key() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        let dest = with_destination(&mut core, "exit");
+        core.target = Some(dest.connect_id.clone());
+        core.phase = Phase::HoprRunning;
+        // Waiting for the probe: no gate, but the key of the attempt is kept.
+        core.resume =
+            Some(connection::up::Resume::try_from(&connected_with_key("exit")).expect("a key to resume with"));
+
+        let (resp, rx) = oneshot::channel();
+        assert!(
+            core.on_event(
+                WorkerToCore::WorkerCommand {
+                    cmd: WorkerCommand::Connect {
+                        destination: dest.connect_id.clone().into()
+                    },
+                    resp,
+                },
+                &results,
+            )
+            .await
+        );
+
+        assert!(core.resume.is_some(), "the kept key survives");
+        assert!(matches!(
+            rx.await.expect("reply"),
+            Response::Connect(ipc::ConnectResponse::Connecting { .. })
+        ));
+    }
+
+    /// A Connect that is not accepted leaves the pending target's kept key alone.
+    #[tokio::test]
+    async fn a_rejected_connect_keeps_the_pending_targets_key() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        // The pending target is an exit discovery no longer publishes.
+        core.target = Some("gone".to_string());
+        core.phase = Phase::HoprRunning;
+        core.resume =
+            Some(connection::up::Resume::try_from(&connected_with_key("gone")).expect("a key to resume with"));
+        core.host_side_failures = 2;
+
+        // Unrecoverable is a refusal; not-routable is only a wait, and a wait is accepted.
+        let refused = with_destination(&mut core, "other");
+        core.route_healths
+            .get_mut(&refused.key())
+            .expect("tracker")
+            .set_cannot_open_session("no session".to_string());
+
+        let (resp, rx) = oneshot::channel();
+        assert!(
+            core.on_event(
+                WorkerToCore::WorkerCommand {
+                    cmd: WorkerCommand::Connect {
+                        destination: refused.connect_id.clone().into()
+                    },
+                    resp,
+                },
+                &results,
+            )
+            .await
+        );
+
+        assert_eq!(core.target.as_deref(), Some("gone"), "the pending target stays");
+        assert_eq!(core.host_side_failures, 2, "and its budget");
+        assert!(core.resume.is_some(), "and its kept key");
+        assert!(matches!(
+            rx.await.expect("reply"),
+            Response::Connect(ipc::ConnectResponse::UnableToConnect { .. })
+        ));
+    }
+
+    /// A Connect that only waits for its route must not cancel the connection it waits behind.
+    #[tokio::test]
+    async fn a_waiting_connect_keeps_the_live_connection_running() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        let active = with_destination(&mut core, "active");
+        core.target = Some(active.connect_id.clone());
+        core.phase = Phase::Connected(connected_with_key("active"));
+
+        // A different exit, not another entry for the active one: the helper's fixed address would
+        // make `same_exit` true.
+        let mut waiting = destination("waiting");
+        waiting.address = Address::from([2u8; 20]);
+        let mut waiting_health = tracker(&waiting);
+        waiting_health.set_routable(false);
+        core.route_healths.insert(waiting.key(), waiting_health);
+        core.config.destinations.insert(waiting.clone());
+
+        let (resp, rx) = oneshot::channel();
+        assert!(
+            core.on_event(
+                WorkerToCore::WorkerCommand {
+                    cmd: WorkerCommand::Connect {
+                        destination: waiting.connect_id.clone().into()
+                    },
+                    resp,
+                },
+                &results,
+            )
+            .await
+        );
+
+        assert!(matches!(
+            rx.await.expect("reply"),
+            Response::Connect(ipc::ConnectResponse::WaitingToConnect { .. })
+        ));
+        assert_eq!(core.target.as_deref(), Some("waiting"), "the new target is pending");
+        assert!(
+            !core.cancel_connection.is_cancelled(),
+            "the connection it waits behind keeps running"
+        );
+    }
+
+    /// A repeated Connect to the cooling-off exit answers "connecting": it keeps the waiting
+    /// attempt's budget, its cool-off and the WireGuard key it will resume with.
+    #[tokio::test]
+    async fn a_repeated_connect_during_the_cool_off_keeps_budget_gate_and_key() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        let dest = with_destination(&mut core, "exit");
+        core.target = Some(dest.connect_id.clone());
+        core.phase = Phase::Connecting(connected_with_key("exit"));
+        assert!(
+            core.on_results(
+                Results::ConnectionResult {
+                    res: Err(host_side_failure())
+                },
+                &results
+            )
+            .await
+        );
+        let gate = core.retry_not_before.expect("cooling off");
+        let budget = core.host_side_failures;
+        assert!(core.resume.is_some(), "the key is kept for the retry");
+
+        let (resp, rx) = oneshot::channel();
+        assert!(
+            core.on_event(
+                WorkerToCore::WorkerCommand {
+                    cmd: WorkerCommand::Connect {
+                        destination: dest.connect_id.clone().into()
+                    },
+                    resp,
+                },
+                &results,
+            )
+            .await
+        );
+
+        assert_eq!(core.host_side_failures, budget, "no refilled budget");
+        assert_eq!(core.retry_not_before, Some(gate), "the cool-off still runs");
+        assert!(core.resume.is_some(), "the kept key survives");
+        assert!(
+            matches!(
+                rx.await.expect("reply"),
+                Response::Connect(ipc::ConnectResponse::Connecting { .. })
+            ),
+            "reported as still connecting"
+        );
+    }
+
+    /// A retry tick that lands after the user disconnected must not reconnect.
+    #[tokio::test]
+    async fn a_retry_tick_without_a_target_is_a_no_op() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        with_destination(&mut core, "exit");
+        core.phase = Phase::HoprRunning;
+        core.target = None;
+
+        assert!(
+            core.on_results(
+                Results::RetryConnection {
+                    not_before: time::Instant::now()
+                },
+                &results
+            )
+            .await
+        );
+
+        assert!(matches!(core.phase, Phase::HoprRunning));
+        assert!(core.probe.is_none(), "nothing to connect to, nothing to probe");
     }
 
     #[test]

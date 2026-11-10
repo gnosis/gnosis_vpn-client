@@ -125,6 +125,11 @@ pub(crate) enum Results {
     },
     /// The SURB ramp ticker fired; Core nudges the active session's setpoint toward its target.
     SurbRampTick,
+    /// The cool-off after a host-side connection failure elapsed; try the target again.
+    /// `not_before` is the deadline it was scheduled for, so a superseded tick can be ignored.
+    RetryConnection {
+        not_before: tokio::time::Instant,
+    },
     RetryReactor,
     /// Periodic read of the strategy reactor's health verdict.
     StrategySampleTick,
@@ -789,6 +794,7 @@ impl Display for Results {
                 write!(f, "WgStatsSample: tx={} rx={}", sample.tx_bytes, sample.rx_bytes)
             }
             Results::SurbRampTick => write!(f, "SurbRampTick"),
+            Results::RetryConnection { not_before } => write!(f, "RetryConnection: due at {not_before:?}"),
             Results::QuerySafe { res } => match res {
                 Ok(Some(_)) => write!(f, "QuerySafe: Safe found"),
                 Ok(None) => write!(f, "QuerySafe: No safe found"),

@@ -215,6 +215,13 @@ impl Error {
     pub fn is_ping_error(&self) -> bool {
         matches!(self, Error::Ping(_))
     }
+
+    /// The connection failed on this host, not at the exit: the local session listener or the
+    /// routing in front of it could not be used. A worker rotation rebuilds the whole HOPR node,
+    /// which is far more than this needs - rebuilding the tunnel is enough.
+    pub(crate) fn is_host_side(&self) -> bool {
+        matches!(self, Error::GvpnClient(err) if err.is_local_connect())
+    }
 }
 
 impl Up {
