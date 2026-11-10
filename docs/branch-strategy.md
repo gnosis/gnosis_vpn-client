@@ -10,7 +10,7 @@
 | ----------------- | -------------------------- | ----- | ------------------- | ------------------------------------------- |
 | `release/hoprdv4` | `0.9x.y`, kept `< 0.100.0` | v4    | jura-prod (shipped) | `https://blokli-jura.prod.hoprnet.link/`    |
 |                   |                            |       | jura-dev (CI)       | `https://blokli-jura.dev.hoprnet.link/`     |
-| `main`            | `0.100.0` and up           | v5    | piz-palu-dev (CI)   | `https://blokli-piz-palu.dev.hoprnet.link/` |
+| `main`            | `0.100.0` and up           | v5    | piz-palu-dev (CI)   | `https://blokli.piz-palu.dev.gnosisvpn.io/` |
 
 `pr.yml` picks the CI network from the PR's target branch via `SYSTEM_TEST_NETWORK`, which selects
 the non-secret fixture in `gnosis_vpn-system_tests/networks/<network>/` — blokli endpoint and the
