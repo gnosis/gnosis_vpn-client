@@ -1,9 +1,6 @@
 //! Bridge sessions to the exit's gnosis-vpn server.
 //!
-//! Both runners talk HTTP to the exit's server through a HOPR session bound to a loopback port:
-//! the connection runner registers the WireGuard key, the disconnection runner unregisters it.
-//! Most of the time they borrow the probe's long-lived session; when that one turns out to be
-//! unusable they open their own, which [`Owned`] keeps from leaking if the runner is cancelled.
+//! Opened for an unregister when there is no probe session; [`Owned`] closes it even if the runner is cancelled.
 
 use std::sync::Arc;
 

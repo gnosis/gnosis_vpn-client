@@ -15,12 +15,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time;
 
-use crate::connection::bridge;
 use crate::connection::destination::Destination;
 use crate::connection::options::{Options, SurbParams, surb_config_for};
 use crate::core::runner::Results;
 use crate::event::RunnerToRoot;
-use crate::gvpn_client::{self, LocalConnectCause, Registration};
+use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::{SessionClientMetadata, SplicedWgSession};
 use crate::hopr::{Hopr, HoprError};
 use crate::wireguard::{self, WireGuard};
@@ -121,18 +120,9 @@ impl Runner {
 
         let _ = results_sender.send(progress(Progress::WgGenerated(wg.clone()))).await;
 
-        // 4. register wg public key over the probe's bridge session (or one of our own if that
-        //    session's loopback listener turns out to be gone)
+        // 4. register wg public key over the probe's bridge session
         let _ = results_sender.send(progress(Progress::RegisterWg)).await;
-        let registration = register(
-            self.hopr.clone(),
-            &self.destination,
-            &self.options,
-            &self.bridge_session,
-            public_key,
-            &results_sender,
-        )
-        .await?;
+        let registration = register(&self.options, &self.bridge_session, public_key, &results_sender).await?;
 
         // 5. signal ping phase (carries registration)
         let _ = results_sender
@@ -221,60 +211,8 @@ impl Display for Runner {
     }
 }
 
-/// Register the WireGuard public key over the bridge session handed in by `core` (the probe's
-/// long-lived one).
-///
-/// If the host cannot reach that session's loopback listener because the listener is gone, one bridge
-/// session of our own is opened and the registration repeated there: the exit never saw the first
-/// attempt, so nothing is registered twice.
-///
-/// `AddrNotAvailable` is *not* retried over a fresh port: the host failed to assign a local address
-/// for the connection, which a new listener cannot change. That error is handed back as a host-side
-/// failure so `core` rebuilds the tunnel (device, routes, DNS) and tries again on a clean one.
+/// A dead probe listener fails fast so `core` replaces the probe and restarts the attempt.
 async fn register(
-    hopr: Arc<Hopr>,
-    destination: &Destination,
-    options: &Options,
-    bridge_session: &SessionClientMetadata,
-    public_key: String,
-    results_sender: &mpsc::Sender<Results>,
-) -> Result<Registration, Error> {
-    let err = match register_over(options, bridge_session, public_key.clone(), results_sender).await {
-        Ok(registration) => return Ok(registration),
-        Err(err) => err,
-    };
-    if !err.is_local_connect() || err.local_cause() == LocalConnectCause::AddressUnavailable {
-        return Err(Error::from(err));
-    }
-    // A broken bridge config is not a host-side fault: fail with it so the worker is rotated at once
-    // instead of burning the host-side retry budget over the same dead probe listener.
-    let surb = surb_config_for(&options.surb_balancing.bridge)?;
-    tracing::warn!(
-        error = ?err,
-        bound_host = %bridge_session.bound_host,
-        "cannot reach the bridge session listener - registering over a bridge session of our own"
-    );
-    let mut own_bridge = match bridge::Owned::open(hopr, destination, options, surb).await {
-        Ok(own_bridge) => own_bridge,
-        // The loopback path was not the only problem, so this is no longer a host-side failure to
-        // retry in place: hand the session-open error up, as a fresh worker does.
-        Err(open_error) => {
-            tracing::warn!(
-                %open_error,
-                original = ?err,
-                "cannot open a bridge session of our own - failing the attempt"
-            );
-            return Err(Error::from(open_error));
-        }
-    };
-    let res = register_over(options, own_bridge.session(), public_key, results_sender).await;
-    if let Err(close_error) = own_bridge.close().await {
-        tracing::warn!(%close_error, "failed to close the bridge session opened for registration");
-    }
-    res.map_err(Error::from)
-}
-
-async fn register_over(
     options: &Options,
     session_client_metadata: &SessionClientMetadata,
     public_key: String,

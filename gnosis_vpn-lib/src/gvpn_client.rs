@@ -65,9 +65,9 @@ pub enum LocalConnectCause {
     /// address selection has to be rebuilt (the tunnel and its routes), then retried.
     AddressUnavailable,
     /// The listener refused the connection (`ConnectionRefused`): that particular session is gone,
-    /// so a bridge session of our own does help.
+    /// so a new session does help.
     ListenerGone,
-    /// No usable syscall detail: treat like a dead listener, the fallback is harmless there.
+    /// No usable syscall detail: treat like a dead listener, a new session is harmless there.
     Unknown,
 }
 
@@ -89,6 +89,11 @@ impl Error {
         // `ErrorKind` is std's portable mapping of the platform errnos (macOS 49/61, Linux 99/111).
         // reqwest's `Display` hides the source chain, so matching on the message cannot work.
         cause_of_kind(io_error.kind()).unwrap_or(LocalConnectCause::Unknown)
+    }
+
+    /// The session listener is gone, so the request has to go over a new session.
+    pub fn is_listener_gone(&self) -> bool {
+        self.is_local_connect() && self.local_cause() != LocalConnectCause::AddressUnavailable
     }
 }
 
@@ -320,7 +325,7 @@ impl Display for Registration {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     use std::net::TcpListener;
@@ -348,6 +353,7 @@ mod tests {
 
         assert!(err.is_local_connect(), "{err:?}");
         assert_eq!(err.local_cause(), LocalConnectCause::ListenerGone, "{err:?}");
+        assert!(err.is_listener_gone(), "{err:?}");
     }
 
     /// A listener that accepts but never answers is a request failure, not a local connect one.
@@ -368,6 +374,7 @@ mod tests {
             .expect_err("silent listener times out");
 
         assert!(!err.is_local_connect(), "{err:?}");
+        assert!(!err.is_listener_gone(), "{err:?}");
         assert!(matches!(err, Error::Timeout(_)), "{err:?}");
         let _ = held.join();
     }

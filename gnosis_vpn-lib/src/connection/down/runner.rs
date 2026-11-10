@@ -59,7 +59,7 @@ impl Runner {
         // 0. disconnect wg tunnel done from root - already happens in spawning process
 
         // 1. reuse the probe session or open a bridge of our own
-        let (mut own_bridge, mut bridge_session) = match self.reuse.clone() {
+        let (mut own_bridge, bridge_session) = match self.reuse.clone() {
             Some(reused) => (None, reused),
             None => {
                 let _ = results_sender
@@ -82,26 +82,16 @@ impl Runner {
             })
             .await;
         // Only the unregister is bounded: the bridge session opened above must be closed on every path.
-        let mut unregister_res = self.unregister_over(&bridge_session).await;
-        // The probe's listener can be gone (the same failure the connect side works around); the
-        // exit never saw the request, so retrying over a bridge of our own is still one unregister.
-        if let Err(Error::GvpnClient(err)) = &unregister_res
-            && err.is_local_connect()
-            && err.local_cause() != gvpn_client::LocalConnectCause::AddressUnavailable
-            && own_bridge.is_none()
-        {
-            tracing::warn!(error = ?err, "cannot reach the probe bridge session listener - unregistering over a bridge session of our own");
-            match self.open_bridge().await {
-                Ok(own) => {
-                    bridge_session = own.session().clone();
-                    own_bridge = Some(own);
-                    unregister_res = self.unregister_over(&bridge_session).await;
-                }
-                Err(open_error) => {
-                    tracing::warn!(%open_error, "cannot open a bridge session of our own - keeping the original failure");
-                }
+        let unregister_fut = unregister(&self.options, &bridge_session, self.down.wg_public_key.clone());
+        let unregister_res = match tokio::time::timeout(UNREGISTER_BUDGET, unregister_fut).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(gvpn_client::Error::RegistrationNotFound)) => {
+                tracing::warn!(wg_public_key = %self.down.wg_public_key, "trying to unregister already removed registration");
+                Ok(())
             }
-        }
+            Ok(Err(error)) => Err(Error::from(error)),
+            Err(_elapsed) => Err(Error::Timeout(UNREGISTER_BUDGET)),
+        };
 
         // 3. close only a bridge we opened ourselves - also after a failed unregister, so it does not linger
         let _ = results_sender
@@ -122,20 +112,6 @@ impl Runner {
     async fn open_bridge(&self) -> Result<bridge::Owned, Error> {
         let bridge_surb = surb_config_for(&self.options.surb_balancing.bridge)?;
         Ok(bridge::Owned::open(self.hopr.clone(), &self.down.destination, &self.options, bridge_surb).await?)
-    }
-
-    /// One bounded unregister over `bridge_session`.
-    async fn unregister_over(&self, bridge_session: &SessionClientMetadata) -> Result<(), Error> {
-        let unregister_fut = unregister(&self.options, bridge_session, self.down.wg_public_key.clone());
-        match tokio::time::timeout(UNREGISTER_BUDGET, unregister_fut).await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(gvpn_client::Error::RegistrationNotFound)) => {
-                tracing::warn!(wg_public_key = %self.down.wg_public_key, "trying to unregister already removed registration");
-                Ok(())
-            }
-            Ok(Err(error)) => Err(Error::from(error)),
-            Err(_elapsed) => Err(Error::Timeout(UNREGISTER_BUDGET)),
-        }
     }
 }
 
