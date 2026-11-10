@@ -185,7 +185,8 @@ fn derive(session: &SessionChunks, telemetry: &str, price_per_byte: HoprBalance)
         .map(|surbs| surbs * PIX_QUOTA_BYTES_PER_SHARE as f64)
         .filter(|rate| *rate > 0.0);
     let empty_in = match (bytes_left, bytes_per_sec) {
-        (Some(left), Some(rate)) => Some(Duration::from_secs_f64(left as f64 / rate)),
+        // a near-zero rate overflows Duration; that is "not draining", not a panic
+        (Some(left), Some(rate)) => Duration::try_from_secs_f64(left as f64 / rate).ok(),
         _ => None,
     };
 
@@ -275,6 +276,16 @@ mod tests {
         assert_eq!(stats.bytes_left, Some(CHUNK - spent));
         let secs = (CHUNK - spent) as f64 / (100.0 * PIX_QUOTA_BYTES_PER_SHARE as f64);
         assert_eq!(stats.empty_in, Some(Duration::from_secs_f64(secs)));
+    }
+
+    #[test]
+    fn a_near_zero_rate_leaves_empty_in_unknown() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(1_000, 0.0, 0, 0));
+
+        // hopr's delta-summed gauge reads ~1e-14 instead of 0 once production stops (GNO-1216)
+        let stats = stats_with(&chunks, "s1", &telemetry(1_100, 1.42e-14, 1, 0));
+        assert_eq!(stats.empty_in, None);
     }
 
     #[test]
