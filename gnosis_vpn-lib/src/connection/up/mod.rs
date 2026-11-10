@@ -192,6 +192,14 @@ pub struct TunnelPing {
 /// Inbound flat this long after outbound grew is a stalled path, whatever a late reply says.
 const INBOUND_STALL: Duration = Duration::from_secs(8);
 
+/// How much rx must grow over a ping's window before it counts as data flowing.
+///
+/// Growth alone is not enough: a WireGuard handshake retry is 148 B and the Exit keeps sending them
+/// while the uplink is dead, so a wedge produced a steady trickle that excused every ping timeout -
+/// the one signal that would have reconnected the session. Real traffic moves kilobytes per 4 s
+/// sample, so a floor of 1 KiB separates the two without demanding a download.
+const MIN_INBOUND_FLOW_BYTES: u64 = 1024;
+
 /// Stall runs past this are logged when they end: the false positives a lower trigger would have produced.
 const COUNTER_STALL_MARKER: Duration = Duration::from_secs(16);
 
@@ -203,7 +211,7 @@ pub(crate) const COUNTER_STALL_RECONNECT: Duration = Duration::from_secs(20);
 enum Inbound {
     /// rx flat for at least `INBOUND_STALL` since tx grew.
     Stalled,
-    /// rx grew between every pair of samples.
+    /// rx grew between every pair of samples, by at least [`MIN_INBOUND_FLOW_BYTES`] over the window.
     Flowing,
     /// Too few samples, or an idle tunnel: the ping result stands on its own.
     Unclear,
@@ -320,12 +328,14 @@ impl Up {
         let mut longest_stall = Duration::ZERO;
         let mut current_stall = Duration::ZERO;
         let mut rx_grew_every_step = true;
+        let mut rx_growth: u64 = 0;
         let mut awaiting_rx = false;
         for pair in window.windows(2) {
             let (before, after) = (pair[0], pair[1]);
             let rx_grew = after.rx_bytes > before.rx_bytes;
             let tx_grew = after.tx_bytes > before.tx_bytes;
             rx_grew_every_step &= rx_grew;
+            rx_growth += after.rx_bytes.saturating_sub(before.rx_bytes);
             // A lone ping sends once and then waits, so the stall runs until rx answers.
             awaiting_rx = !rx_grew && (tx_grew || awaiting_rx);
             if awaiting_rx {
@@ -338,7 +348,7 @@ impl Up {
         }
         if longest_stall >= INBOUND_STALL {
             Inbound::Stalled
-        } else if rx_grew_every_step {
+        } else if rx_grew_every_step && rx_growth >= MIN_INBOUND_FLOW_BYTES {
             Inbound::Flowing
         } else {
             Inbound::Unclear
@@ -720,12 +730,17 @@ mod tunnel_ping_tests {
 
     /// Records `count` samples one gap apart; tx always grows, rx grows only when `rx_flowing`.
     fn record_samples(up: &mut Up, count: usize, rx_flowing: bool) {
+        record_samples_step(up, count, if rx_flowing { 100_000 } else { 0 });
+    }
+
+    /// Records `count` samples one gap apart; tx always grows, rx grows by `rx_step` each sample.
+    fn record_samples_step(up: &mut Up, count: usize, rx_step: u64) {
         for _ in 0..count {
             let previous = up.wg_stats.back().cloned().unwrap_or_default();
             up.record_wg_stats(TunnelStatsSample {
                 at: previous.at + SAMPLE_GAP,
                 tx_bytes: previous.tx_bytes + 1_000,
-                rx_bytes: previous.rx_bytes + if rx_flowing { 100_000 } else { 0 },
+                rx_bytes: previous.rx_bytes + rx_step,
                 ..Default::default()
             });
         }
@@ -753,6 +768,25 @@ mod tunnel_ping_tests {
         let mut up = up();
         let sequence = [TIMEOUT, Ok(Duration::from_secs(8)), TIMEOUT, TIMEOUT];
         assert_eq!(drive(&mut up, &sequence, true), vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_handshake_trickle_is_not_inbound_flow() {
+        let mut up = up();
+        // While the uplink is dead the Exit keeps retrying WireGuard handshakes: 148 B per sample.
+        // Treating that as flow excuses every timeout and the session never reconnects.
+        record_samples_step(&mut up, 3, 148);
+        assert_eq!(up.inbound_over_ping_window(), Inbound::Unclear);
+        assert_eq!(up.tunnel_ping_result(TIMEOUT, MAX_RTT), 1);
+    }
+
+    #[test]
+    fn a_slow_but_real_flow_still_excuses_a_timeout() {
+        let mut up = up();
+        // 1 KiB/s is not a download, but it is data: a timeout under it is load, not an outage.
+        record_samples_step(&mut up, 3, 4_096);
+        assert_eq!(up.inbound_over_ping_window(), Inbound::Flowing);
+        assert_eq!(up.tunnel_ping_result(TIMEOUT, MAX_RTT), 0);
     }
 
     #[test]
