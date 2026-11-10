@@ -1,8 +1,7 @@
 use anyhow::{Result, anyhow};
-use rand::seq::IndexedRandom;
 use serde::Deserialize;
 use std::{path::Path, time::Duration};
-use tracing::{error, info};
+use tracing::info;
 
 use crate::{
     cli::{Cli, Command},
@@ -23,11 +22,12 @@ const NODE_FUNDING_TIMEOUT: Duration = Duration::from_secs(30);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_mins(5);
 const GEOLOCATION_TIMEOUT: Duration = Duration::from_mins(2);
 const READY_DESTINATIONS_TIMEOUT: Duration = Duration::from_mins(10);
+const QUICK_PROBE_TIMEOUT: Duration = Duration::from_mins(1);
+const QUICK_PROBE_COUNT: usize = 2;
 const CONNECTION_TIMEOUT: Duration = Duration::from_mins(10);
-const FINAL_CONNECTION_TIMEOUT: Duration = Duration::from_mins(10);
+const DOWNLOAD_SIZE_BYTES: u64 = 250_000;
 const DISCONNECTION_TIMEOUT: Duration = Duration::from_secs(15);
-// A dev deposit flush took 35-48 s; leaves room for one reconnect
-const PIX_FUNDED_TIMEOUT: Duration = Duration::from_mins(5);
+const PIX_FUNDED_TIMEOUT: Duration = Duration::from_mins(10);
 
 #[derive(Debug, Deserialize)]
 struct ExpectedExits {
@@ -89,18 +89,12 @@ impl SystemTestWorkflow {
         }
         info!("\n\n{}", readiness_report.render());
 
-        let mut connection_report = ReportTable::new("destination", &[]);
-        let successful_destinations = self
-            .verify_all_destinations(readiness.ready(), &mut connection_report)
-            .await?;
+        let destination = self.select_best_probed(readiness.ready()).await?;
+        self.establish_connection(&destination, CONNECTION_TIMEOUT).await?;
 
-        info!("\n\n{}", connection_report.render());
-
-        let destination = self.select_destination(&successful_destinations)?;
-        // A fresh session pays on a stable tunnel; the hopping above cut its deposit flushes mid-request
-        self.close_connection(DISCONNECTION_TIMEOUT).await?;
-        self.establish_connection(&destination, FINAL_CONNECTION_TIMEOUT)
-            .await?;
+        info!(size_bytes = DOWNLOAD_SIZE_BYTES, "downloading through the tunnel");
+        lib::download_file(DOWNLOAD_SIZE_BYTES, self.cli.shared.proxy.as_ref()).await?;
+        info!(size_bytes = DOWNLOAD_SIZE_BYTES, "download finished");
 
         match &self.cli.command {
             Some(Command::Download(args)) => download::run_downloads(&self.cli.shared, args).await?,
@@ -217,31 +211,35 @@ impl SystemTestWorkflow {
         Ok(())
     }
 
-    async fn verify_all_destinations(
-        &self,
-        destinations: &[Destination],
-        report: &mut ReportTable,
-    ) -> Result<Vec<Destination>> {
-        let mut successful = Vec::new();
-        for destination in destinations {
-            match self.try_connect(destination, CONNECTION_TIMEOUT).await {
-                Ok(_) => {
-                    info!(dest = %destination, "connection established");
-                    report.add_row(destination.id.to_string(), RowStatus::Success, Vec::new());
-                    successful.push(destination.clone());
-                }
-                Err(error) => {
-                    error!(dest = %destination, ?error, "failed to establish connection");
-                    report.add_row(
-                        destination.id.to_string(),
-                        RowStatus::Failure(format!("{error:?}")),
-                        Vec::new(),
-                    );
-                }
+    /// Quick-probes random ready destinations and picks the one with the fastest status round trip.
+    async fn select_best_probed(&self, ready: &[Destination]) -> Result<Destination> {
+        let candidates = ready.get(..QUICK_PROBE_COUNT).ok_or_else(|| {
+            anyhow!(
+                "need {QUICK_PROBE_COUNT} ready destinations to probe, have {}",
+                ready.len()
+            )
+        })?;
+
+        let mut report = ReportTable::new("destination", &["status rtt"]);
+        let mut best: Option<(&Destination, Duration)> = None;
+        for destination in candidates {
+            let check = self.client.quick_probe(destination, QUICK_PROBE_TIMEOUT).await?;
+            info!(dest = %destination, rtt = ?check.status_rtt, "quick probe succeeded");
+            report.add_row(
+                destination.id.to_string(),
+                RowStatus::Success,
+                vec![format!("{:?}", check.status_rtt)],
+            );
+
+            let is_fastest = best.is_none_or(|(_, rtt)| check.status_rtt < rtt);
+            if is_fastest {
+                best = Some((destination, check.status_rtt));
             }
         }
+        info!("\n\n{}", report.render());
 
-        Ok(successful)
+        best.map(|(destination, _)| destination.clone())
+            .ok_or_else(|| anyhow!("no destination was probed"))
     }
 
     async fn try_connect(&self, destination: &Destination, timeout: Duration) -> Result<()> {
@@ -252,13 +250,6 @@ impl SystemTestWorkflow {
         );
 
         self.client.wait_for_connection_established(destination, timeout).await
-    }
-
-    fn select_destination(&self, successful_destinations: &[Destination]) -> Result<Destination> {
-        successful_destinations
-            .choose(&mut rand::rng())
-            .cloned()
-            .ok_or_else(|| anyhow!("no destinations available to select from"))
     }
 
     async fn establish_connection(&self, destination: &Destination, timeout: Duration) -> Result<()> {

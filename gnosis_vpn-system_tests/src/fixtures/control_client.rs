@@ -1,10 +1,14 @@
 use gnosis_vpn_ipc::{
     self as ipc, Address, Balances, CallError, ConnectResponse, Connection, Destination, DestinationId,
-    DestinationSource, DestinationStatus, DisconnectResponse, PixChunkStats, PixPhase, Request, Response,
-    RouteHealthState, RunMode, StartClientResponse, Status, StopClientResponse,
+    DestinationSource, DestinationStatus, DisconnectResponse, PixChunkStats, PixPhase, QuickProbeCheck,
+    QuickProbeResponse, QuickProbeState, Request, Response, RouteHealthState, RunMode, StartClientResponse, Status,
+    StopClientResponse,
 };
 use rand::seq::SliceRandom;
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    time::{Duration, SystemTime},
+};
 use tracing::{debug, error, info, warn};
 
 use crate::fixtures::lib::{self, ConditionCheck};
@@ -277,6 +281,41 @@ impl ControlClient {
         })
         .await?;
         Ok(())
+    }
+
+    /// Runs one quick probe against the destination and returns its result.
+    pub async fn quick_probe(&self, destination: &Destination, timeout: Duration) -> anyhow::Result<QuickProbeCheck> {
+        let requested_at = SystemTime::now();
+        let request = Request::QuickProbe {
+            destination: destination.id.clone(),
+        };
+        match self.send(request).await? {
+            Response::QuickProbe(QuickProbeResponse::Checking { .. } | QuickProbeResponse::AlreadyChecking { .. }) => {}
+            response => return Err(anyhow::anyhow!("quick probe refused: {response:?}")),
+        }
+
+        lib::wait_for_condition("quick probe", timeout, Duration::from_secs(1), || async {
+            let Ok(Some(status)) = self.status().await else {
+                return Ok(ConditionCheck::Pending);
+            };
+            let probe = status
+                .destinations
+                .into_iter()
+                .find(|state| state.destination.id == destination.id)
+                .and_then(|state| state.route_health)
+                .and_then(|health| health.quick_probe);
+            // Results from before this request belong to an earlier probe
+            match probe {
+                Some(QuickProbeState::Checked(check)) if check.checked_at >= requested_at => {
+                    Ok(ConditionCheck::Ready(check))
+                }
+                Some(QuickProbeState::Failed { checked_at, error }) if checked_at >= requested_at => {
+                    Err(anyhow::anyhow!("quick probe failed: {error}"))
+                }
+                _ => Ok(ConditionCheck::Pending),
+            }
+        })
+        .await
     }
 
     /// Polls until the destination's session paid for every chunk the exit asked for; on timeout returns the last snapshot.
