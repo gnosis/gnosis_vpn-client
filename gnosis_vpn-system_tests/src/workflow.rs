@@ -97,6 +97,8 @@ impl SystemTestWorkflow {
         info!("\n\n{}", connection_report.render());
 
         let destination = self.select_destination(&successful_destinations)?;
+        // A fresh session pays on a stable tunnel; the hopping above cut its deposit flushes mid-request
+        self.close_connection(DISCONNECTION_TIMEOUT).await?;
         self.establish_connection(&destination, FINAL_CONNECTION_TIMEOUT)
             .await?;
 
