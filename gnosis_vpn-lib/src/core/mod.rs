@@ -956,7 +956,10 @@ impl Core {
                     if stall >= connection::up::COUNTER_STALL_RECONNECT {
                         tracing::warn!(%conn, ?stall, "inbound counters stalled - reconnecting");
                         self.reconnecting_since = Some(SystemTime::now());
-                        self.reconnect_in_place(conn, true, results_sender).await;
+                        // The tunnel is dead by definition here (inbound flat for 20 s), and a kept
+                        // device would be reused with its routes and DNS still pointed at it - the
+                        // state in which the host's own loopback calls failed next. Rebuild it.
+                        self.reconnect_in_place(conn, false, results_sender).await;
                     }
                 }
                 phase => {
@@ -2646,6 +2649,61 @@ mod tests {
             from_core.try_recv(),
             Ok(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
         )
+    }
+
+    /// A stalled inbound path means the device is dead: it must be rebuilt, not reused with its
+    /// routes and DNS still pointed at a tunnel that carries nothing.
+    #[tokio::test]
+    async fn a_counter_stall_rebuilds_the_device() {
+        use crate::wg_tunnel;
+
+        let TestCore {
+            mut core,
+            mut from_core,
+            results,
+            ..
+        } = fresh_core().await;
+        let mut conn = connected_with_key("exit");
+        let step = Duration::from_secs(4);
+        conn.record_wg_stats(wg_tunnel::TunnelStatsSample {
+            at: SystemTime::UNIX_EPOCH,
+            tx_bytes: 500,
+            rx_bytes: 500,
+            ..Default::default()
+        });
+        core.phase = Phase::Connected(conn);
+
+        // Outbound grows, inbound flat: the runner reports the stall past its reconnect threshold.
+        let mut stalled = Duration::ZERO;
+        for step_index in 1..=6u32 {
+            if let Phase::Connected(conn) = &mut core.phase {
+                stalled = conn.record_wg_stats(wg_tunnel::TunnelStatsSample {
+                    at: SystemTime::UNIX_EPOCH + step * step_index,
+                    tx_bytes: 600,
+                    rx_bytes: 500,
+                    ..Default::default()
+                });
+            }
+        }
+        assert!(stalled >= connection::up::COUNTER_STALL_RECONNECT, "{stalled:?}");
+
+        assert!(matches!(core.phase, Phase::Connected(_)), "still connected");
+        core.on_results(
+            Results::WgStatsSample(wg_tunnel::TunnelStatsSample {
+                at: SystemTime::UNIX_EPOCH + step * 6,
+                tx_bytes: 600,
+                rx_bytes: 500,
+                ..Default::default()
+            }),
+            &results,
+        )
+        .await;
+
+        assert!(teardown_requested(&mut from_core), "the dead device must be rebuilt");
+        // The key is kept: the reconnect resumes the same WireGuard identity and exit address.
+        let resume = core.resume.as_ref().expect("key kept");
+        assert_eq!(resume.wireguard.key_pair.public_key, "pub");
+        assert!(matches!(core.phase, Phase::HoprRunning));
     }
 
     #[tokio::test]
