@@ -1,12 +1,23 @@
+<<<<<<< HEAD
 use gnosis_vpn_lib::command::{
     BalanceResponse, Command, ConnectResponse, DestinationState, DisconnectResponse, Response, RunMode,
     StartClientResponse, StatusResponse, StopClientResponse,
+=======
+use gnosis_vpn_ipc::{
+    self as ipc, Address, Balances, CallError, ConnectResponse, Connection, Destination, DestinationId,
+    DestinationSource, DestinationStatus, DisconnectResponse, PixChunkStats, PixPhase, QuickProbeCheck,
+    QuickProbeResponse, QuickProbeState, Request, Response, RouteHealthState, RunMode, StartClientResponse, Status,
+    StopClientResponse,
+>>>>>>> ca3f297 (test(system-tests): require a paid PIX chunk on networks with a pix_strategy (GNO-1072) (#1002))
 };
 use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::route_health::RouteHealthState;
 use gnosis_vpn_lib::socket::root::{Error as SocketError, process_cmd};
 use rand::seq::SliceRandom;
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    time::{Duration, SystemTime},
+};
 use tracing::{debug, error, info, warn};
 
 use crate::fixtures::lib::{self, ConditionCheck};
@@ -283,6 +294,82 @@ impl ControlClient {
         })
         .await?;
         Ok(())
+    }
+
+    /// Runs one quick probe against the destination and returns its result.
+    pub async fn quick_probe(&self, destination: &Destination, timeout: Duration) -> anyhow::Result<QuickProbeCheck> {
+        let requested_at = SystemTime::now();
+        let request = Request::QuickProbe {
+            destination: destination.id.clone(),
+        };
+        match self.send(request).await? {
+            Response::QuickProbe(QuickProbeResponse::Checking { .. } | QuickProbeResponse::AlreadyChecking { .. }) => {}
+            response => return Err(anyhow::anyhow!("quick probe refused: {response:?}")),
+        }
+
+        lib::wait_for_condition("quick probe", timeout, Duration::from_secs(1), || async {
+            let Ok(Some(status)) = self.status().await else {
+                return Ok(ConditionCheck::Pending);
+            };
+            let probe = status
+                .destinations
+                .into_iter()
+                .find(|state| state.destination.id == destination.id)
+                .and_then(|state| state.route_health)
+                .and_then(|health| health.quick_probe);
+            // Results from before this request belong to an earlier probe
+            match probe {
+                Some(QuickProbeState::Checked(check)) if check.checked_at >= requested_at => {
+                    Ok(ConditionCheck::Ready(check))
+                }
+                Some(QuickProbeState::Failed { checked_at, error }) if checked_at >= requested_at => {
+                    Err(anyhow::anyhow!("quick probe failed: {error}"))
+                }
+                _ => Ok(ConditionCheck::Pending),
+            }
+        })
+        .await
+    }
+
+    /// Polls until the destination's session paid for every chunk the exit asked for; on timeout returns the last snapshot.
+    pub async fn wait_for_pix_funded(
+        &self,
+        destination: &Destination,
+        timeout: Duration,
+    ) -> anyhow::Result<Option<PixChunkStats>> {
+        lib::wait_for_condition("pix funded", timeout, Duration::from_secs(5), || async {
+            let Ok(Some(status)) = self.status().await else {
+                return Ok(ConditionCheck::Pending);
+            };
+            let pix = match status.connection {
+                Connection::Connecting {
+                    destination: dest, pix, ..
+                }
+                | Connection::Connected {
+                    destination: dest, pix, ..
+                } if dest == destination.id => pix,
+                _ => None,
+            };
+            let Some(stats) = pix else {
+                warn!(dest_id = %destination.id, "no pix session yet");
+                return Ok(ConditionCheck::PendingWithValue(None));
+            };
+            match stats.phase {
+                PixPhase::Funded => Ok(ConditionCheck::Ready(Some(stats))),
+                // A failed deposit never recovers within its session
+                PixPhase::PaymentFailed => Err(anyhow::anyhow!("pix payment failed: {stats:?}")),
+                PixPhase::Free | PixPhase::PaymentPending => {
+                    warn!(
+                        phase = ?stats.phase,
+                        committed = stats.chunks_committed,
+                        paid = stats.chunks_paid,
+                        "waiting for pix chunks to be paid"
+                    );
+                    Ok(ConditionCheck::PendingWithValue(Some(stats)))
+                }
+            }
+        })
+        .await
     }
 
     /// Ensures there is no active VPN connection.

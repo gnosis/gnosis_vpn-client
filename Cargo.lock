@@ -3768,6 +3768,11 @@ dependencies = [
  "gnosis_vpn-lib",
  "rand 0.10.3",
  "reqwest",
+<<<<<<< HEAD
+=======
+ "rustix",
+ "serde",
+>>>>>>> ca3f297 (test(system-tests): require a paid PIX chunk on networks with a pix_strategy (GNO-1072) (#1002))
  "serde_json",
  "tokio",
  "tracing",
