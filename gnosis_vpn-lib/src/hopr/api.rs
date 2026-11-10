@@ -612,10 +612,11 @@ fn wire_count(count: usize) -> u32 {
     u32::try_from(count).unwrap_or(u32::MAX)
 }
 
-/// Extract all unique IPv4 addresses from a list of multiaddrs.
+/// Extract the peer's IPv4 addresses that may carry a WAN bypass route.
 ///
 /// Walks each multiaddr from right to left (via `pop`), collecting
-/// `Protocol::Ip4` components. The result is deduplicated and sorted
+/// `Protocol::Ip4` components, and keeps only globally routable unicast addresses
+/// (see [`is_bypass_routable`]). The result is deduplicated and sorted
 /// via `BTreeSet`, then returned as a `Vec`.
 fn extract_ipv4_addrs(multiaddrs: &[multiaddr::Multiaddr]) -> Vec<Ipv4Addr> {
     multiaddrs
@@ -630,9 +631,40 @@ fn extract_ipv4_addrs(multiaddrs: &[multiaddr::Multiaddr]) -> Vec<Ipv4Addr> {
             }
             found
         })
+        .filter(|ipv4| is_bypass_routable(*ipv4))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+/// Whether an announced address may become a host route through the physical interface.
+///
+/// Every address this returns is installed as a bypass route, so an address that cannot be one is
+/// a route the host must never get. A peer announcing `127.0.0.1` sends loopback out of the WAN
+/// interface, which breaks every local connection - including the probe's own listener - and a
+/// peer announcing anything else it does not own can push that address outside the tunnel.
+///
+/// Private and link-local ranges are excluded as well, although the root's `RFC1918_BYPASS_NETS`
+/// already bypasses them at network granularity: a host route there would only repeat what the
+/// split already does.
+fn is_bypass_routable(ipv4: Ipv4Addr) -> bool {
+    !(ipv4.is_unspecified()
+        || ipv4.is_loopback()
+        || ipv4.is_private()
+        || ipv4.is_link_local()
+        || ipv4.is_broadcast()
+        || ipv4.is_documentation()
+        || ipv4.is_multicast()
+        || is_shared_address(ipv4))
+}
+
+/// `100.64.0.0/10`, the shared address space of RFC 6598.
+///
+/// Not private by `Ipv4Addr::is_private`, but a host running CGNAT-space services of its own
+/// (Tailscale's `100.100.100.100` among them) must not have them rerouted by a peer's announcement.
+fn is_shared_address(ipv4: Ipv4Addr) -> bool {
+    let octets = ipv4.octets();
+    octets[0] == 100 && (64..=127).contains(&octets[1])
 }
 
 #[cfg(test)]
@@ -668,5 +700,52 @@ mod tests {
     #[test]
     fn extract_ipv4_empty_input_returns_empty() {
         assert!(extract_ipv4_addrs(&[]).is_empty());
+    }
+
+    #[test]
+    fn extract_ipv4_keeps_only_globally_routable_addresses() {
+        // Every one of these becomes a WAN bypass route, so an address that cannot be one is a
+        // route the host should never get: `127.0.0.1` breaks loopback (and with it every local
+        // probe), `100.64.0.0/10` carries the host's own CGNAT services, and the rest are not
+        // routable at all.
+        let cases = [
+            ("127.0.0.1", false),
+            ("127.9.9.9", false),
+            ("0.0.0.0", false),
+            ("224.0.0.1", false),
+            ("239.255.255.250", false),
+            ("255.255.255.255", false),
+            ("169.254.10.1", false),
+            ("10.1.2.3", false),
+            ("172.16.5.4", false),
+            ("192.168.88.1", false),
+            ("192.0.2.10", false),
+            ("100.100.100.100", false),
+            ("1.2.3.4", true),
+            ("34.159.222.103", true),
+        ];
+
+        for (ip, kept) in cases {
+            let addrs = vec![multiaddr(&format!("/ip4/{ip}/tcp/9091"))];
+            let expected = kept.then(|| ip.parse::<Ipv4Addr>().unwrap());
+            assert_eq!(
+                extract_ipv4_addrs(&addrs),
+                expected.into_iter().collect::<Vec<_>>(),
+                "{ip} must {} be kept",
+                if kept { "" } else { "not" }
+            );
+        }
+    }
+
+    #[test]
+    fn extract_ipv4_drops_a_loopback_announcement_from_a_mixed_peer() {
+        let addrs = vec![
+            multiaddr("/ip4/127.0.0.1/tcp/9091"),
+            multiaddr("/ip4/34.159.222.103/tcp/9091"),
+        ];
+        assert_eq!(
+            extract_ipv4_addrs(&addrs),
+            vec!["34.159.222.103".parse::<Ipv4Addr>().unwrap()]
+        );
     }
 }
