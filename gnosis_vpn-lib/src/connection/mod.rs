@@ -1,4 +1,3 @@
-pub(crate) mod bridge;
 pub mod destination;
 pub(crate) mod down;
 pub(crate) mod options;
