@@ -110,12 +110,19 @@ system-tests test_binary="gnosis_vpn-system_tests":
         pix_args=(--expectPix)
     fi
 
+    # Only jura exits run the in-tunnel proxy; piz-palu traffic rides the tunnel directly
+    proxy_args=()
+    if [ "${SYSTEM_TEST_NETWORK}" = "jura-dev" ]; then
+        proxy_args=(--proxy "http://10.128.0.1:3128")
+    fi
+
     # Name the resolved target up front so a failed run does not need the secrets UI to explain itself
     echo "=== system test target ==="
     echo "  network:   ${SYSTEM_TEST_NETWORK}"
     echo "  blokli:    ${blokli_url}"
     echo "  expected:  ${expected_exits_args[1]:-none}"
     echo "  pix:       ${pix_args[0]:-off}"
+    echo "  proxy:     ${proxy_args[1]:-none}"
     grep -o '^\[destinations\.[^]]*\]' "${network_dir}/config.toml" | sed 's/^/  destination: /' || true
     # Hashing the encrypted keystore leaks nothing but pins which identity ran; a hash matching the other line means the secret ternary fell through
     echo "  identity:  sha256:$(printf %s "${SYSTEM_TEST_HOPRD_ID}" | sha256sum | cut -c1-12)"
@@ -190,4 +197,4 @@ system-tests test_binary="gnosis_vpn-system_tests":
     sudo chmod 0755 "${worker_binary}" "${ctl_binary}"
 
     # Run the test binary with the appropriate environment variables
-    sudo CARGO_BIN_EXE_GNOSIS_VPN_ROOT="${SYSTEM_TEST_ROOT_BINARY}" CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" CARGO_BIN_EXE_GNOSIS_VPN_CTL="${ctl_binary}" SYSTEM_TEST_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" GNOSISVPN_FORCE_STATIC_ROUTING="true" RUST_LOG="debug" {{ test_binary }} --blokliUrl "${blokli_url}" --proxy "http://10.128.0.1:3128" "${expected_exits_args[@]}" "${pix_args[@]}"
+    sudo CARGO_BIN_EXE_GNOSIS_VPN_ROOT="${SYSTEM_TEST_ROOT_BINARY}" CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" CARGO_BIN_EXE_GNOSIS_VPN_CTL="${ctl_binary}" SYSTEM_TEST_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" GNOSISVPN_FORCE_STATIC_ROUTING="true" RUST_LOG="debug" {{ test_binary }} --blokliUrl "${blokli_url}" "${proxy_args[@]}" "${expected_exits_args[@]}" "${pix_args[@]}"
