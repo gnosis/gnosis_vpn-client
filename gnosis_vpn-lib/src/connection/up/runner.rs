@@ -211,6 +211,7 @@ impl Display for Runner {
     }
 }
 
+/// A dead probe listener fails fast so `core` replaces the probe and restarts the attempt.
 async fn register(
     options: &Options,
     session_client_metadata: &SessionClientMetadata,
@@ -229,6 +230,8 @@ async fn register(
         gvpn_client::register(&client, &input).await
     })
     .retry(remote_data::backoff_expo_short_delay())
+    // A local connect failure is not the exit's fault: retrying over the same listener cannot help.
+    .when(|err: &gvpn_client::Error| !err.is_local_connect())
     .notify(|err: &gvpn_client::Error, dur: Duration| {
         tracing::warn!(error = ?err, "register wg pubkey failed - will retry after {:?}", dur);
         let tx = results_sender.clone();
