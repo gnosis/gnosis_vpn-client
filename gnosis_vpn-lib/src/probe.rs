@@ -65,6 +65,22 @@ fn reopen_backoff(attempt: u32) -> Duration {
         .min(REOPEN_BACKOFF_MAX)
 }
 
+/// How long to wait before reopening a broken session, and the attempt count to carry on with.
+///
+/// A session that broke after at least one check passed was working, so its break is a transient
+/// fault: reopen at once, as before. A session that broke without a single check passing never
+/// became usable, and reopening immediately turns that into a hot loop - the local endpoint stays
+/// dead, the three initial checks fail within milliseconds, and every cycle opens another session.
+/// Back off instead, so a broken exit costs a handful of opens a minute rather than hundreds a
+/// second. The count resets as soon as a session works again.
+fn next_reopen(attempt: u32, checks_passed: bool) -> (u32, Duration) {
+    if checks_passed {
+        (0, Duration::ZERO)
+    } else {
+        (attempt.saturating_add(1), reopen_backoff(attempt))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Check {
     Version,
@@ -329,6 +345,7 @@ async fn run_probe(
         Some(rx) => rx.await.unwrap_or(None),
         None => None,
     };
+    let mut reopen_attempt = 0;
     loop {
         let session = match adopted.take() {
             Some(session) => {
@@ -353,10 +370,17 @@ async fn run_probe(
             sender: sender.clone(),
             generation,
         };
-        let error = checker.run_until_broken(&options.health_check_intervals).await;
-        tracing::warn!(%destination, %error, "probe session broken - reopening");
-        send(Event::Reopening { error }).await;
+        let broken = checker.run_until_broken(&options.health_check_intervals).await;
+        tracing::warn!(%destination, error = %broken.error, "probe session broken - reopening");
+        send(Event::Reopening { error: broken.error }).await;
         session.close().await;
+
+        let (attempt, delay) = next_reopen(reopen_attempt, broken.checks_passed);
+        reopen_attempt = attempt;
+        if !delay.is_zero() {
+            tracing::warn!(%destination, ?delay, "probe session never became usable - backing off");
+            time::sleep(delay).await;
+        }
     }
 }
 
@@ -477,21 +501,33 @@ struct Checker {
     generation: u64,
 }
 
+/// Why a session's checks stopped, and whether that session ever worked.
+struct Broken {
+    error: String,
+    /// At least one check passed on this session, so the break is a transient fault rather than a
+    /// session that never became usable. The reopen pacing depends on the difference.
+    checks_passed: bool,
+}
+
 impl Checker {
-    /// Initial version → ping → load, then jittered timers; returns the error that broke the session.
-    async fn run_until_broken(&self, intervals: &HealthCheckIntervals) -> String {
+    /// Initial version → ping → load, then jittered timers; returns why the session broke.
+    async fn run_until_broken(&self, intervals: &HealthCheckIntervals) -> Broken {
         let mut failures = 0;
+        let mut checks_passed = false;
         // Ready needs all three, and a check that fails here has no timer yet - retry it rather than wait one out.
         let mut pending = vec![Check::Version, Check::Ping, Check::Load];
         while !pending.is_empty() {
             let mut failed = Vec::new();
             for check in pending {
-                if let Err(error) = self.run(check).await {
-                    failures += 1;
-                    if failures >= REOPEN_AFTER_FAILURES {
-                        return error;
+                match self.run(check).await {
+                    Ok(()) => checks_passed = true,
+                    Err(error) => {
+                        failures += 1;
+                        if failures >= REOPEN_AFTER_FAILURES {
+                            return Broken { error, checks_passed };
+                        }
+                        failed.push(check);
                     }
-                    failed.push(check);
                 }
             }
             pending = failed;
@@ -519,11 +555,14 @@ impl Checker {
                 }
             };
             match self.run(check).await {
-                Ok(()) => failures = 0,
+                Ok(()) => {
+                    failures = 0;
+                    checks_passed = true;
+                }
                 Err(error) => {
                     failures += 1;
                     if failures >= REOPEN_AFTER_FAILURES {
-                        return error;
+                        return Broken { error, checks_passed };
                     }
                 }
             }
@@ -863,6 +902,20 @@ mod tests {
         assert_eq!(reopen_backoff(1), REOPEN_BACKOFF_STEP);
         assert_eq!(reopen_backoff(2), REOPEN_BACKOFF_STEP * 2);
         assert_eq!(reopen_backoff(u32::MAX), REOPEN_BACKOFF_MAX);
+    }
+
+    #[test]
+    fn a_session_that_never_worked_backs_off_more_each_time() {
+        assert_eq!(next_reopen(0, false), (1, REOPEN_BACKOFF_STEP));
+        assert_eq!(next_reopen(1, false), (2, REOPEN_BACKOFF_STEP));
+        assert_eq!(next_reopen(2, false), (3, REOPEN_BACKOFF_STEP * 2));
+        assert_eq!(next_reopen(u32::MAX, false), (u32::MAX, REOPEN_BACKOFF_MAX));
+    }
+
+    #[test]
+    fn a_session_that_worked_reopens_at_once_and_forgets_the_backoff() {
+        assert_eq!(next_reopen(0, true), (0, Duration::ZERO));
+        assert_eq!(next_reopen(9, true), (0, Duration::ZERO));
     }
 
     #[test]
