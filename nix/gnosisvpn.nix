@@ -32,10 +32,17 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.6#ce185155e1639403cc40e01260d0830065a49555" =
       "sha256-3Hjb/OdjLwy2N3QAF+e8XlZ2YPp+k53Xt17jtUUP1XQ=";
+<<<<<<< HEAD
     "git+https://github.com/hoprnet/edge-client.git?branch=release/4.1#47f75486137c1f07853e937bf78db9805f2c45e1" =
       "sha256-Jokl1oVBYDDDgLiDYkgOftCLt1xiHgRFiRiD/Hb/Yhg=";
     "git+https://github.com/hoprnet/hoprnet?branch=release/4.0#77ac01dadf488b38e4948a64315ac6b88a800e18" =
       "sha256-AIMqx+qNYtVB5zg3BsT1FcVCGeBByMZUAC2voP74rJ4=";
+=======
+    "git+https://github.com/hoprnet/edge-client.git?branch=main#cb26f0da366ba53f921c7d9a7c1885bf30e9edc3" =
+      "sha256-fmXqcdjd/ZXTSEIU6FHBsDwuHw/QsYDi1v+laOrgin4=";
+    "git+https://github.com/hoprnet/hoprnet?branch=master#bfb7c233abf396ffd41c436cfb3e543b917323ee" =
+      "sha256-X9sp3+jftujcmVzTZ5YEEn5glmpfVt3cd2phZIy3MZc=";
+>>>>>>> 05b6e3b (fix(deps): bump edgli and hoprnet for the GNO-1183 starved-relay fix (#1005))
   };
 
   builders = nixLib.mkRustBuilders {
