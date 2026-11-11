@@ -129,6 +129,9 @@ fn pretty_print(resp: &Response) {
         Response::Unprobe(command::UnprobeResponse::NotProbing) => {
             eprintln!("Currently not probing any destination");
         }
+        Response::ProbingBoost => {
+            println!("Network probing stepped up");
+        }
         Response::QuickProbe(
             res @ (command::QuickProbeResponse::Checking { .. } | command::QuickProbeResponse::AlreadyChecking { .. }),
         ) => {
@@ -143,6 +146,7 @@ fn pretty_print(resp: &Response) {
         Response::Telemetry(None) => {
             println!("No telemetry information available.");
         }
+<<<<<<< HEAD
         Response::Status(command::StatusResponse {
             run_mode,
             destinations,
@@ -159,6 +163,26 @@ fn pretty_print(resp: &Response) {
                 let is_active = connecting.as_ref().is_some_and(|c| c.destination_id == *id)
                     || reconnecting.as_ref().is_some_and(|c| c.destination_id == *id)
                     || connected.as_ref().is_some_and(|c| c.destination_id == *id);
+=======
+        Response::Status(status) => {
+            let ipc::Status {
+                run_mode,
+                destinations,
+                target,
+                connection,
+                disconnecting,
+                probe,
+                pix_chunk_bytes,
+                probing,
+                recent,
+            } = status.as_ref();
+            let mut str_resp = format!("{run_mode}\n");
+            if let Some(bytes) = pix_chunk_bytes {
+                str_resp.push_str(&format!("PIX chunk per exit: {}\n", ByteSize(*bytes)));
+            }
+            if let Some(id) = target {
+                let is_active = connection.destination() == Some(id);
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
                 if !is_active {
                     str_resp.push_str(&format!("---\nWaiting to connect to {id}\n"));
                 }
@@ -177,6 +201,12 @@ fn pretty_print(resp: &Response) {
             }
             if let Some(probe) = probe {
                 str_resp.push_str(&format!("---\n{probe}\n"));
+            }
+            if let Some(probing) = probing {
+                str_resp.push_str(&format!("---\n{probing}\n"));
+            }
+            if !recent.is_empty() {
+                str_resp.push_str(&format!("Recent exits: {}\n", ipc::join(recent)));
             }
             if !destinations.is_empty() {
                 str_resp.push_str("---\nDestinations | slots: in use(pending) / total\n");
@@ -398,9 +428,16 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::QuickProbe(command::QuickProbeResponse::AlreadyChecking { .. }) => exitcode::OK,
         Response::QuickProbe(command::QuickProbeResponse::DestinationAmbiguous { .. }) => exitcode::USAGE,
         Response::QuickProbe(..) => exitcode::UNAVAILABLE,
+<<<<<<< HEAD
         Response::Unprobe(command::UnprobeResponse::Closing { .. }) => exitcode::OK,
         Response::Unprobe(command::UnprobeResponse::InUse { .. }) => exitcode::PROTOCOL,
         Response::Unprobe(command::UnprobeResponse::NotProbing) => exitcode::PROTOCOL,
+=======
+        Response::Unprobe(ipc::UnprobeResponse::Closing { .. }) => exitcode::OK,
+        Response::Unprobe(ipc::UnprobeResponse::InUse { .. }) => exitcode::PROTOCOL,
+        Response::Unprobe(ipc::UnprobeResponse::NotProbing) => exitcode::PROTOCOL,
+        Response::ProbingBoost => exitcode::OK,
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
         Response::Status(..) => exitcode::OK,
         Response::Balance(Ok(..)) => exitcode::OK,
         Response::Balance(Err(..)) => exitcode::SOFTWARE,

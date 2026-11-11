@@ -32,10 +32,17 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.6#ce185155e1639403cc40e01260d0830065a49555" =
       "sha256-3Hjb/OdjLwy2N3QAF+e8XlZ2YPp+k53Xt17jtUUP1XQ=";
+<<<<<<< HEAD
     "git+https://github.com/hoprnet/edge-client.git?branch=release/4.1#47f75486137c1f07853e937bf78db9805f2c45e1" =
       "sha256-Jokl1oVBYDDDgLiDYkgOftCLt1xiHgRFiRiD/Hb/Yhg=";
     "git+https://github.com/hoprnet/hoprnet?branch=release/4.0#77ac01dadf488b38e4948a64315ac6b88a800e18" =
       "sha256-AIMqx+qNYtVB5zg3BsT1FcVCGeBByMZUAC2voP74rJ4=";
+=======
+    "git+https://github.com/hoprnet/edge-client.git?branch=main#b41f6c9113df7f88529046d2922faac4dae5965e" =
+      "sha256-N3MgHTVDRofwiNHzGQTNhAgEUr3Q30F8Dad5pvEnym8=";
+    "git+https://github.com/hoprnet/hoprnet?branch=master#0c356bfd80746d5adce1cb4678c02c24f13d9336" =
+      "sha256-368SSzng+xyRudrn4IDEuUJ/i1N5zNyIbkwwXMl+YcM=";
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
   };
 
   builders = nixLib.mkRustBuilders {

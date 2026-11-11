@@ -9,6 +9,7 @@ use tokio::fs;
 use crate::connection::{destination::Destination, options::Options as ConnectionOptions};
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::strategy_config::StrategyConfig;
+use crate::network_probing::ProbingPolicy;
 use crate::wireguard::Config as WireGuardConfig;
 
 mod v3;
@@ -26,6 +27,15 @@ pub struct Config {
     pub wireguard: WireGuardConfig,
     pub blokli: BlokliConfig,
     pub strategy: StrategyConfig,
+<<<<<<< HEAD
+=======
+    pub pix_strategy: PixConfig,
+    pub probing: ProbingPolicy,
+    /// The country database, at the installer's location unless a v7 file points elsewhere.
+    pub geoip_db: PathBuf,
+    /// The Curvy proving files, at the installer's location unless a v7 file points elsewhere.
+    pub curvy_zk_dir: PathBuf,
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 }
 
 #[derive(Debug, Error)]

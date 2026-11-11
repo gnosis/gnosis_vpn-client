@@ -15,6 +15,10 @@ ignore = [
   "RUSTSEC-2026-0118", # hickory-proto: NSEC3 unbounded loop - no fixed version available yet
   "RUSTSEC-2026-0119", # hickory-proto: O(n²) name compression CPU exhaustion - fixed in hickory-proto >=0.26.1
   "RUSTSEC-2026-0387", # crypto-bigint 0.5.5: constant-time leaks - via alloy → k256 0.13, upstream-blocked (GNO-1057, hoprnet/contracts#162)
+  "RUSTSEC-2026-0487", # hickory-proto: panic on malformed SVCB/HTTPS alpn - fixed in hickory-proto >=0.26.2
+  "RUSTSEC-2026-0489", # hickory-proto: panic on single-quote SVCB/HTTPS value - fixed in hickory-proto >=0.26.2
+  "RUSTSEC-2026-0490", # hickory-proto: zone file lexer panic on long token - fixed in hickory-proto >=0.26.2
+  "RUSTSEC-2026-0491", # hickory-proto: memory amplification from header record counts - fixed in hickory-proto >=0.26.2
 ]
 
 # Output configuration

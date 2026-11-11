@@ -67,6 +67,10 @@ pub enum Command {
         id: String,
     },
 
+    /// Step network probing up one level; route readiness steps it back down
+    #[command(name = "probing-boost")]
+    ProbingBoost {},
+
     /// Query balance information
     #[command()]
     Balance {},
@@ -121,6 +125,7 @@ pub enum Command {
 impl From<Command> for LibCommand {
     fn from(val: Command) -> Self {
         match val {
+<<<<<<< HEAD
             Command::Status {} => LibCommand::Status,
             Command::Connect { id } => LibCommand::Connect(id),
             Command::Disconnect {} => LibCommand::Disconnect,
@@ -136,6 +141,28 @@ impl From<Command> for LibCommand {
             Command::StartClient { keep_alive } => LibCommand::StartClient(keep_alive.into()),
             Command::StopClient {} => LibCommand::StopClient,
             Command::Destinations {} => LibCommand::Destinations,
+=======
+            Command::Status {} => Request::Status,
+            Command::Connect { id } => Request::Connect { destination: id.into() },
+            Command::Disconnect {} => Request::Disconnect,
+            Command::Probe { id } => Request::Probe { destination: id.into() },
+            Command::Unprobe {} => Request::Unprobe,
+            Command::QuickProbe { id } => Request::QuickProbe { destination: id.into() },
+            Command::ProbingBoost {} => Request::ProbingBoost,
+            Command::Balance {} => Request::Balance,
+            Command::FundingTool { secret } => Request::FundingTool {
+                secret: FundingSecret::new(secret),
+            },
+            Command::Ping {} => Request::Ping,
+            Command::Telemetry {} => Request::Telemetry,
+            Command::NerdStats {} => Request::NerdStats,
+            Command::Info {} => Request::Info,
+            Command::StartClient { keep_alive } => Request::StartClient {
+                timeout: keep_alive.into(),
+            },
+            Command::StopClient {} => Request::StopClient,
+            Command::Destinations {} => Request::Destinations,
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
             Command::Completions { .. } => unreachable!("Completions is handled before socket dispatch"),
         }
     }

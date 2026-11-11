@@ -1094,7 +1094,14 @@ impl DaemonState {
             connected: None,
             disconnecting: vec![],
             probe: None,
+<<<<<<< HEAD
         })
+=======
+            pix_chunk_bytes: None,
+            probing: None,
+            recent: vec![],
+        }))
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
     }
 
     async fn incoming_root_command(&mut self, cmd: RootCommand, peer_uid: u32) -> Result<Response, exitcode::ExitCode> {

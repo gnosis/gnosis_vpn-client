@@ -774,10 +774,20 @@ impl TryFrom<Config> for config::Config {
         let strategy = value.strategy.into();
         Ok(config::Config {
             connection,
+<<<<<<< HEAD
             destinations,
             wireguard,
             blokli,
             strategy,
+=======
+            wireguard: value.wireguard,
+            blokli: value.blokli,
+            strategy: value.strategy,
+            pix_strategy: None,
+            probing: None,
+            geoip_db: Some(crate::geoip::DEFAULT_DB_PATH.into()),
+            curvy_zk_dir: Some(crate::hopr::pix_config::DEFAULT_CURVY_ZK_DIR.into()),
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
         })
     }
 }
@@ -1505,6 +1515,7 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
     }
 
     #[test]
+<<<<<<< HEAD
     fn surb_ramp_unknown_key_is_flagged() {
         let table = r#####"
 version = 6
@@ -1538,6 +1549,26 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
 
         let cfg = parse(
             r#####"
+=======
+    fn probing_is_not_a_supported_key_in_v6() {
+        let toml = r#####"
+version = 6
+
+[probing]
+policy = { type = "off" }
+"#####;
+        assert_eq!(
+            wrong_keys(&toml.parse::<toml::Table>().expect("valid TOML")),
+            vec!["probing".to_string()]
+        );
+        let result = runtime_config(parse(toml));
+        assert_eq!(result.probing, crate::network_probing::ProbingPolicy::Adaptive);
+    }
+
+    #[test]
+    fn tunnel_ping_max_rtt_is_not_a_supported_key_in_v6() {
+        let toml = r#####"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 version = 6
 
 [destinations.Germany]

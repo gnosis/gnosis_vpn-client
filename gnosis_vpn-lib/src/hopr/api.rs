@@ -396,7 +396,44 @@ impl Hopr {
         Ok(peers)
     }
 
+<<<<<<< HEAD
     /// Walks the graph for `dest` with the path planner's own selector; blocks and needs the Tokio context, so call it from `spawn_blocking`.
+=======
+    /// Sets edgli's probing pace and biases loopbacks towards `exits`; no exits clears the focus.
+    pub fn apply_probing(&self, level: gnosis_vpn_ipc::ProbingLevel, exits: &[Address]) {
+        let level = match level {
+            gnosis_vpn_ipc::ProbingLevel::Off => None,
+            gnosis_vpn_ipc::ProbingLevel::Low => Some(edgli::ProbingLevel::Low),
+            gnosis_vpn_ipc::ProbingLevel::Medium => Some(edgli::ProbingLevel::Medium),
+            gnosis_vpn_ipc::ProbingLevel::High => Some(edgli::ProbingLevel::High),
+            gnosis_vpn_ipc::ProbingLevel::Ultra => Some(edgli::ProbingLevel::Ultra),
+        };
+        self.edgli.set_probing_level(level);
+        if exits.is_empty() {
+            self.edgli.clear_probing_focus();
+            return;
+        }
+        let chain_api = self.edgli.chain_api();
+        // An unannounced exit has no packet key; the next sync retries it.
+        let keys: Vec<OffchainPublicKey> = exits
+            .iter()
+            .filter_map(|exit| match chain_api.chain_key_to_packet_key(exit) {
+                Ok(Some(key)) => Some(key),
+                Ok(None) => {
+                    tracing::debug!(%exit, "probing focus skips exit without packet key");
+                    None
+                }
+                Err(error) => {
+                    tracing::debug!(%exit, %error, "probing focus cannot resolve exit");
+                    None
+                }
+            })
+            .collect();
+        self.edgli.set_probing_focus(keys);
+    }
+
+    /// Walks the graph for `dest` with the path planner's own selector; blocks, so run it on a blocking thread.
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub fn walk_route(&self, dest: Address, routing: HopRouting) -> Result<RouteWalk, HoprError> {
         let chain_api = self.edgli.chain_api();

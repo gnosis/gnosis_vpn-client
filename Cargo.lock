@@ -2986,8 +2986,13 @@ dependencies = [
 
 [[package]]
 name = "edgli"
+<<<<<<< HEAD
 version = "4.1.1"
 source = "git+https://github.com/hoprnet/edge-client.git?branch=release%2F4.1#47f75486137c1f07853e937bf78db9805f2c45e1"
+=======
+version = "5.3.0"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=main#b41f6c9113df7f88529046d2922faac4dae5965e"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "anyhow",
  "async-signal",
@@ -2999,7 +3004,7 @@ dependencies = [
  "hopr-chain-connector",
  "hopr-ct-full-network",
  "hopr-lib",
- "hopr-network-graph",
+ "hopr-network-graph 0.11.0",
  "hopr-strategy",
  "hopr-ticket-manager",
  "hopr-transport-p2p",
@@ -4201,8 +4206,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-crypto-packet"
+<<<<<<< HEAD
 version = "1.4.0"
 source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#77ac01dadf488b38e4948a64315ac6b88a800e18"
+=======
+version = "2.2.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#0c356bfd80746d5adce1cb4678c02c24f13d9336"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "bimap",
  "const-hex",
@@ -4219,26 +4229,38 @@ dependencies = [
 
 [[package]]
 name = "hopr-ct-full-network"
+<<<<<<< HEAD
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7985d0e77c83e9ae107dcc53012eeb736b83edeb83cf3522a3d1b7ab1e66fa9"
+=======
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "344e82a1e789dfe44edfaa1ad483effdfdda1b67133db0af008b8273bff6a75c"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "anyhow",
  "cfg-if",
  "futures",
  "futures-time",
  "hopr-api",
- "hopr-network-graph",
+ "hopr-network-graph 0.11.0",
  "hopr-utilities",
  "smart-default",
+ "tokio",
  "tracing",
  "validator",
 ]
 
 [[package]]
 name = "hopr-lib"
+<<<<<<< HEAD
 version = "4.0.5"
 source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#77ac01dadf488b38e4948a64315ac6b88a800e18"
+=======
+version = "5.0.0-rc.6"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#0c356bfd80746d5adce1cb4678c02c24f13d9336"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -4250,7 +4272,7 @@ dependencies = [
  "futures-concurrency",
  "futures-time",
  "hopr-api",
- "hopr-network-graph",
+ "hopr-network-graph 0.10.3",
  "hopr-transport",
  "hopr-utilities",
  "humantime-serde",
@@ -4277,7 +4299,29 @@ dependencies = [
  "futures",
  "hopr-api",
  "hopr-utilities",
+<<<<<<< HEAD
  "indexmap 2.14.0",
+=======
+ "lazy_static",
+ "parking_lot 0.12.5",
+ "smallvec",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
+name = "hopr-network-graph"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "053f0d252ace2004a36423758640118c9103fba9d55c1729b980370cf6f11087"
+dependencies = [
+ "anyhow",
+ "bimap",
+ "futures",
+ "hopr-api",
+ "hopr-utilities",
+ "indexmap 2.14.2",
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
  "lazy_static",
  "parking_lot 0.12.5",
  "petgraph",
@@ -4289,8 +4333,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-protocol-app"
+<<<<<<< HEAD
 version = "1.1.0"
 source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#77ac01dadf488b38e4948a64315ac6b88a800e18"
+=======
+version = "1.2.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#0c356bfd80746d5adce1cb4678c02c24f13d9336"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "hopr-crypto-packet",
  "hopr-types",
@@ -4302,8 +4351,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-protocol-hopr"
+<<<<<<< HEAD
 version = "6.2.0"
 source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#77ac01dadf488b38e4948a64315ac6b88a800e18"
+=======
+version = "6.5.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#0c356bfd80746d5adce1cb4678c02c24f13d9336"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4330,9 +4384,38 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
 name = "hopr-protocol-session"
 version = "1.5.0"
 source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#77ac01dadf488b38e4948a64315ac6b88a800e18"
+=======
+name = "hopr-protocol-pix"
+version = "0.3.1"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#0c356bfd80746d5adce1cb4678c02c24f13d9336"
+dependencies = [
+ "ahash",
+ "auto_impl",
+ "const-hex",
+ "elliptic-curve-tools",
+ "hopr-types",
+ "hopr-utilities",
+ "moka",
+ "parking_lot 0.12.5",
+ "serde",
+ "serde_bytes",
+ "smart-default",
+ "strum",
+ "thiserror 2.0.21",
+ "tracing",
+ "validator",
+ "vsss-rs",
+]
+
+[[package]]
+name = "hopr-protocol-session"
+version = "1.7.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#0c356bfd80746d5adce1cb4678c02c24f13d9336"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "aquamarine",
  "asynchronous-codec",
@@ -4362,8 +4445,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-protocol-start"
+<<<<<<< HEAD
 version = "1.1.0"
 source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#77ac01dadf488b38e4948a64315ac6b88a800e18"
+=======
+version = "3.1.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#0c356bfd80746d5adce1cb4678c02c24f13d9336"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "aquamarine",
  "flagset",
@@ -4432,8 +4520,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport"
+<<<<<<< HEAD
 version = "0.48.6"
 source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#77ac01dadf488b38e4948a64315ac6b88a800e18"
+=======
+version = "0.53.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#0c356bfd80746d5adce1cb4678c02c24f13d9336"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "ahash",
  "anyhow",
@@ -4476,8 +4569,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport-mixer"
+<<<<<<< HEAD
 version = "0.4.1"
 source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#77ac01dadf488b38e4948a64315ac6b88a800e18"
+=======
+version = "1.0.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#0c356bfd80746d5adce1cb4678c02c24f13d9336"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "futures",
  "futures-timer",
@@ -4516,8 +4614,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport-probe"
+<<<<<<< HEAD
 version = "0.8.0"
 source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#77ac01dadf488b38e4948a64315ac6b88a800e18"
+=======
+version = "0.9.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#0c356bfd80746d5adce1cb4678c02c24f13d9336"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4542,8 +4645,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport-session"
+<<<<<<< HEAD
 version = "0.30.3"
 source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#77ac01dadf488b38e4948a64315ac6b88a800e18"
+=======
+version = "0.35.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#0c356bfd80746d5adce1cb4678c02c24f13d9336"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4574,8 +4682,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport-tag-allocator"
+<<<<<<< HEAD
 version = "0.1.1"
 source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#77ac01dadf488b38e4948a64315ac6b88a800e18"
+=======
+version = "0.2.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#0c356bfd80746d5adce1cb4678c02c24f13d9336"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "hopr-protocol-app",
  "serde",
@@ -4650,9 +4763,15 @@ dependencies = [
 
 [[package]]
 name = "hopr-utilities"
+<<<<<<< HEAD
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ba683da5035a6a5fa45822c2ba59872874c7c49aad77f06a7ac17e23d8a6311"
+=======
+version = "0.19.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13b34f66429e82ec56350a3370e153921dcd4e7e1dd48316973d9c1fe741dc29"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "arrayvec",
  "auto_impl",
@@ -4685,8 +4804,13 @@ dependencies = [
 
 [[package]]
 name = "hopr-utils-session"
+<<<<<<< HEAD
 version = "1.2.1"
 source = "git+https://github.com/hoprnet/hoprnet?branch=release%2F4.0#77ac01dadf488b38e4948a64315ac6b88a800e18"
+=======
+version = "1.3.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#0c356bfd80746d5adce1cb4678c02c24f13d9336"
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
 dependencies = [
  "anyhow",
  "async-trait",

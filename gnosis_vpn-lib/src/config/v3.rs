@@ -170,9 +170,20 @@ impl TryFrom<Config> for config::Config {
         Ok(config::Config {
             connection,
             destinations,
+<<<<<<< HEAD
             wireguard,
             blokli,
             strategy: Default::default(),
+=======
+            connection: Some(value.connection.into()),
+            wireguard: value.wireguard,
+            blokli: value.blokli,
+            strategy: None,
+            pix_strategy: None,
+            probing: None,
+            geoip_db: Some(crate::geoip::DEFAULT_DB_PATH.into()),
+            curvy_zk_dir: Some(crate::hopr::pix_config::DEFAULT_CURVY_ZK_DIR.into()),
+>>>>>>> 2a018bf (feat(probing): adaptive network probing in the worker (#1018))
         })
     }
 }
