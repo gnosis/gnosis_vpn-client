@@ -1,4 +1,4 @@
-//! Network probing policy: the edge client's probing level and focus, decided from phase, route walks and boosts.
+//! Network probing policy: a level staircase driven by route readiness, plus the exits probing focuses on.
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +11,7 @@ use gnosis_vpn_ipc::{ProbingLevel, ProbingReason};
 use crate::connection::destination::ExitKey;
 use crate::route_health::{RouteHealth, RouteWalk};
 
-/// The app's weak-route banner threshold, so "warm" and "no banner" agree.
+/// The app's weak-route banner threshold, so "ready" and "no banner" agree.
 pub(crate) const WEAK_ROUTE_VALUE: f64 = 0.9;
 /// Twice the slowest walk interval: an older walk says nothing about the route now.
 const WALK_FRESHNESS: Duration = Duration::from_secs(120);
@@ -19,11 +19,8 @@ const MAX_FOCUS: usize = 10;
 const MAX_PINNED: usize = 5;
 /// The length of the app's former recent list.
 const MAX_HISTORY: usize = 6;
-const READY_HOLD: Duration = Duration::from_secs(30);
-const WARM_UP_CAP: Duration = Duration::from_secs(5 * 60);
-const NOT_READY_HOLD: Duration = Duration::from_secs(60);
-/// Without it a network where nothing gets ready cycles 5 min High / 60 s Medium forever.
-const CAP_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+/// How long readiness, or its absence, must last for one more level step.
+const STEP_HOLD: Duration = Duration::from_secs(30);
 const ROTATION_PERIOD: Duration = Duration::from_secs(5 * 60);
 const HISTORY_FILE: &str = "recent_exits.json";
 /// With probing off only session traffic moves the scores, so walks can idle.
@@ -49,8 +46,6 @@ pub(crate) enum Activity {
 }
 
 pub(crate) struct Inputs {
-    /// A client asked for Medium instead of Low once warm.
-    pub boosted: bool,
     pub activity: Activity,
     /// Exits worth probing; order does not matter, the rotation shuffles them.
     pub selectable: Vec<ExitKey>,
@@ -81,21 +76,16 @@ impl Plan {
     }
 }
 
-enum Warmth {
-    Cold {
-        high_for: Duration,
-    },
-    /// `capped_at` is set when the warm-up cap, not readiness, ended the warm-up.
-    Warm {
-        capped_at: Option<Instant>,
-    },
+struct Readiness {
+    ready: bool,
+    since: Instant,
 }
 
 pub(crate) struct NetworkProbing {
-    warmth: Warmth,
-    ready_since: Option<Instant>,
-    not_ready_since: Option<Instant>,
-    last_decided_at: Option<Instant>,
+    /// The staircase level while idle; connecting and connected override it without moving it.
+    level: ProbingLevel,
+    /// None until the first idle decision, and again after every connection.
+    readiness: Option<Readiness>,
     rotation: Rotation,
     /// Recently connected exits, newest first.
     history: Vec<ExitKey>,
@@ -104,12 +94,8 @@ pub(crate) struct NetworkProbing {
 impl NetworkProbing {
     pub(crate) fn new(history: Vec<ExitKey>) -> Self {
         Self {
-            warmth: Warmth::Cold {
-                high_for: Duration::ZERO,
-            },
-            ready_since: None,
-            not_ready_since: None,
-            last_decided_at: None,
+            level: ProbingLevel::High,
+            readiness: None,
             rotation: Rotation::default(),
             history,
         }
@@ -127,79 +113,55 @@ impl NetworkProbing {
         &self.history
     }
 
+    /// One level up; readiness walks it back down after the usual hold.
+    pub(crate) fn boost(&mut self, now: Instant) {
+        self.level = faster(self.level);
+        if let Some(readiness) = &mut self.readiness {
+            readiness.since = now;
+        }
+    }
+
     pub(crate) fn decide(&mut self, inputs: &Inputs, now: Instant) -> Plan {
-        self.accrue_high(now);
-        self.track_readiness(inputs, now);
-        self.update_warmth(inputs, now);
-        let (level, reason) = self.level(inputs);
         let focus = self.focus(inputs, now);
+        let (level, reason) = match inputs.activity {
+            Activity::Connecting(_) => (ProbingLevel::High, ProbingReason::Connecting),
+            Activity::Connected(_) => (ProbingLevel::Low, ProbingReason::Connected),
+            Activity::Idle => self.step(inputs.any_ready, now),
+        };
+        if inputs.activity != Activity::Idle {
+            self.readiness = None;
+        }
         Plan { level, focus, reason }
     }
 
-    fn accrue_high(&mut self, now: Instant) {
-        let elapsed = self
-            .last_decided_at
-            .map_or(Duration::ZERO, |at| now.saturating_duration_since(at));
-        self.last_decided_at = Some(now);
-        // Cold always means High, so cold time is warm-up time.
-        if let Warmth::Cold { high_for } = &mut self.warmth {
-            *high_for += elapsed;
+    /// The graph already smooths over 60 s, so readiness moves the level at once and again per hold.
+    fn step(&mut self, ready: bool, now: Instant) -> (ProbingLevel, ProbingReason) {
+        let due = match &mut self.readiness {
+            Some(readiness) if readiness.ready == ready => {
+                let held = now.saturating_duration_since(readiness.since) >= STEP_HOLD;
+                if held {
+                    readiness.since = now;
+                }
+                held
+            }
+            _ => {
+                self.readiness = Some(Readiness { ready, since: now });
+                true
+            }
+        };
+        if due {
+            self.level = if ready { slower(self.level) } else { faster(self.level) };
         }
-    }
-
-    /// Readiness only counts while idle, so a disconnect gets the full not-ready grace before re-raising.
-    fn track_readiness(&mut self, inputs: &Inputs, now: Instant) {
-        if inputs.activity != Activity::Idle {
-            self.ready_since = None;
-            self.not_ready_since = None;
-            return;
-        }
-        if inputs.any_ready {
-            self.not_ready_since = None;
-            self.ready_since.get_or_insert(now);
+        let held_for = self
+            .readiness
+            .as_ref()
+            .map_or(Duration::ZERO, |r| now.saturating_duration_since(r.since));
+        let reason = if ready {
+            ProbingReason::Ready { held_for }
         } else {
-            self.ready_since = None;
-            self.not_ready_since.get_or_insert(now);
-        }
-    }
-
-    fn update_warmth(&mut self, inputs: &Inputs, now: Instant) {
-        if inputs.activity != Activity::Idle {
-            self.warmth = Warmth::Warm { capped_at: None };
-            return;
-        }
-        let held_for =
-            |since: Option<Instant>, hold: Duration| since.is_some_and(|at| now.saturating_duration_since(at) >= hold);
-        match self.warmth {
-            Warmth::Cold { high_for } => {
-                if held_for(self.ready_since, READY_HOLD) {
-                    self.warmth = Warmth::Warm { capped_at: None };
-                } else if high_for >= WARM_UP_CAP {
-                    self.warmth = Warmth::Warm { capped_at: Some(now) };
-                }
-            }
-            Warmth::Warm { capped_at } => {
-                let cooling_down = capped_at.is_some_and(|at| now.saturating_duration_since(at) < CAP_COOLDOWN);
-                if held_for(self.not_ready_since, NOT_READY_HOLD) && !cooling_down {
-                    self.warmth = Warmth::Cold {
-                        high_for: Duration::ZERO,
-                    };
-                }
-            }
-        }
-    }
-
-    fn level(&self, inputs: &Inputs) -> (ProbingLevel, ProbingReason) {
-        match inputs.activity {
-            Activity::Connecting(_) => return (ProbingLevel::High, ProbingReason::Connecting),
-            Activity::Connected(_) => return (ProbingLevel::Low, ProbingReason::Connected),
-            Activity::Idle => {}
-        }
-        match self.warmth {
-            Warmth::Cold { high_for } => (ProbingLevel::High, ProbingReason::WarmingUp { high_for }),
-            Warmth::Warm { .. } if inputs.boosted => (ProbingLevel::Medium, ProbingReason::Warm),
-            Warmth::Warm { .. } => (ProbingLevel::Low, ProbingReason::Idle),
-        }
+            ProbingReason::NotReady { held_for }
+        };
+        (self.level, reason)
     }
 
     /// Recent exits first, the rest of the slots rotate through every other selectable exit.
@@ -223,6 +185,21 @@ impl NetworkProbing {
         let rotating = self.rotation.window(free, |key| eligible(key) && !focus.contains(key));
         focus.extend(rotating);
         focus
+    }
+}
+
+/// The policy never holds Off; that only comes from configuration.
+fn slower(level: ProbingLevel) -> ProbingLevel {
+    match level {
+        ProbingLevel::High => ProbingLevel::Medium,
+        ProbingLevel::Medium | ProbingLevel::Low | ProbingLevel::Off => ProbingLevel::Low,
+    }
+}
+
+fn faster(level: ProbingLevel) -> ProbingLevel {
+    match level {
+        ProbingLevel::Low | ProbingLevel::Off => ProbingLevel::Medium,
+        ProbingLevel::Medium | ProbingLevel::High => ProbingLevel::High,
     }
 }
 
@@ -363,9 +340,8 @@ mod tests {
         bytes.map(key).collect()
     }
 
-    fn idle(boosted: bool, any_ready: bool) -> Inputs {
+    fn idle(any_ready: bool) -> Inputs {
         Inputs {
-            boosted,
             activity: Activity::Idle,
             selectable: keys(1..=3),
             any_ready,
@@ -388,20 +364,51 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_worker_starts_cold_at_high_without_a_boost() {
+    fn a_network_that_never_gets_ready_stays_high() {
         let mut probing = NetworkProbing::new(Vec::new());
-        let plan = probing.decide(&idle(false, false), Instant::now());
+        let (plan, _) = run(&mut probing, &idle(false), Instant::now(), secs(600));
         assert_eq!(plan.level, ProbingLevel::High);
-        assert!(matches!(plan.reason, ProbingReason::WarmingUp { .. }));
+        assert!(matches!(plan.reason, ProbingReason::NotReady { .. }));
     }
 
     #[test]
-    fn warm_is_low_without_a_boost_and_medium_with_one() {
+    fn readiness_steps_down_at_once_and_again_after_each_hold() {
         let mut probing = NetworkProbing::new(Vec::new());
-        let (plan, at) = run(&mut probing, &idle(false, true), Instant::now(), READY_HOLD);
-        assert_eq!((plan.level, plan.reason), (ProbingLevel::Low, ProbingReason::Idle));
-        let plan = probing.decide(&idle(true, true), at + secs(5));
-        assert_eq!((plan.level, plan.reason), (ProbingLevel::Medium, ProbingReason::Warm));
+        let start = Instant::now();
+        assert_eq!(probing.decide(&idle(true), start).level, ProbingLevel::Medium);
+        assert_eq!(
+            probing.decide(&idle(true), start + secs(25)).level,
+            ProbingLevel::Medium
+        );
+        let plan = probing.decide(&idle(true), start + STEP_HOLD);
+        assert_eq!(
+            (plan.level, plan.reason),
+            (ProbingLevel::Low, ProbingReason::Ready { held_for: secs(0) })
+        );
+        let (plan, _) = run(&mut probing, &idle(true), start + STEP_HOLD, secs(120));
+        assert_eq!(plan.level, ProbingLevel::Low);
+    }
+
+    #[test]
+    fn losing_readiness_steps_up_at_once_and_again_after_each_hold() {
+        let mut probing = NetworkProbing::new(Vec::new());
+        let (_, at) = run(&mut probing, &idle(true), Instant::now(), STEP_HOLD);
+        assert_eq!(probing.decide(&idle(false), at + secs(5)).level, ProbingLevel::Medium);
+        let plan = probing.decide(&idle(false), at + secs(5) + STEP_HOLD);
+        assert_eq!(plan.level, ProbingLevel::High);
+    }
+
+    #[test]
+    fn a_boost_steps_up_and_restarts_the_hold() {
+        let mut probing = NetworkProbing::new(Vec::new());
+        let (_, at) = run(&mut probing, &idle(true), Instant::now(), STEP_HOLD);
+        probing.boost(at + secs(1));
+        assert_eq!(probing.decide(&idle(true), at + secs(5)).level, ProbingLevel::Medium);
+        assert_eq!(probing.decide(&idle(true), at + STEP_HOLD).level, ProbingLevel::Medium);
+        assert_eq!(
+            probing.decide(&idle(true), at + secs(1) + STEP_HOLD).level,
+            ProbingLevel::Low
+        );
     }
 
     #[test]
@@ -409,7 +416,7 @@ mod tests {
         let mut probing = NetworkProbing::new(vec![key(1)]);
         let inputs = Inputs {
             activity: Activity::Connecting(key(2)),
-            ..idle(false, false)
+            ..idle(false)
         };
         let plan = probing.decide(&inputs, Instant::now());
         assert_eq!(plan.level, ProbingLevel::High);
@@ -422,7 +429,7 @@ mod tests {
         let mut probing = NetworkProbing::new(vec![key(1), key(2)]);
         let inputs = Inputs {
             activity: Activity::Connected(key(1)),
-            ..idle(true, true)
+            ..idle(true)
         };
         let plan = probing.decide(&inputs, Instant::now());
         assert_eq!(plan.level, ProbingLevel::Low);
@@ -432,55 +439,16 @@ mod tests {
     }
 
     #[test]
-    fn warms_to_medium_after_readiness_holds_30_s() {
+    fn after_a_connection_the_staircase_resumes_where_it_was() {
         let mut probing = NetworkProbing::new(Vec::new());
-        let start = Instant::now();
-        let (plan, _) = run(&mut probing, &idle(true, true), start, secs(25));
-        assert_eq!(plan.level, ProbingLevel::High);
-        let (plan, _) = run(&mut probing, &idle(true, true), start + secs(25), secs(5));
-        assert_eq!(plan.level, ProbingLevel::Medium);
-        assert_eq!(plan.reason, ProbingReason::Warm);
-    }
-
-    #[test]
-    fn warms_to_medium_after_5_min_of_high_without_readiness() {
-        let mut probing = NetworkProbing::new(Vec::new());
-        let (plan, _) = run(&mut probing, &idle(true, false), Instant::now(), WARM_UP_CAP);
-        assert_eq!(plan.level, ProbingLevel::Medium);
-    }
-
-    #[test]
-    fn re_raises_to_high_after_60_s_not_ready() {
-        let mut probing = NetworkProbing::new(Vec::new());
-        let (_, at) = run(&mut probing, &idle(true, true), Instant::now(), READY_HOLD);
-        let (plan, at) = run(&mut probing, &idle(true, false), at + secs(5), secs(55));
-        assert_eq!(plan.level, ProbingLevel::Medium);
-        let plan = probing.decide(&idle(true, false), at + secs(5));
-        assert_eq!(plan.level, ProbingLevel::High);
-    }
-
-    #[test]
-    fn no_re_raise_within_30_min_of_a_capped_warm_up() {
-        let mut probing = NetworkProbing::new(Vec::new());
-        let start = Instant::now();
-        let (_, at) = run(&mut probing, &idle(true, false), start, WARM_UP_CAP);
-        let (plan, at) = run(&mut probing, &idle(true, false), at, CAP_COOLDOWN - secs(10));
-        assert_eq!(plan.level, ProbingLevel::Medium);
-        let (plan, _) = run(&mut probing, &idle(true, false), at, secs(10));
-        assert_eq!(plan.level, ProbingLevel::High);
-    }
-
-    #[test]
-    fn a_disconnect_lands_warm() {
-        let mut probing = NetworkProbing::new(Vec::new());
-        let start = Instant::now();
+        let (_, at) = run(&mut probing, &idle(true), Instant::now(), STEP_HOLD);
         let connected = Inputs {
             activity: Activity::Connected(key(1)),
-            ..idle(true, false)
+            ..idle(false)
         };
-        let (_, at) = run(&mut probing, &connected, start, secs(300));
-        let plan = probing.decide(&idle(true, false), at + secs(5));
-        assert_eq!(plan.level, ProbingLevel::Medium);
+        let (_, at) = run(&mut probing, &connected, at + secs(5), secs(300));
+        assert_eq!(probing.decide(&idle(true), at + secs(5)).level, ProbingLevel::Low);
+        assert_eq!(probing.decide(&idle(false), at + secs(10)).level, ProbingLevel::Medium);
     }
 
     #[test]
@@ -489,7 +457,7 @@ mod tests {
         let mut probing = NetworkProbing::new(history);
         let inputs = Inputs {
             selectable: keys(1..=20),
-            ..idle(false, false)
+            ..idle(false)
         };
         let plan = probing.decide(&inputs, Instant::now());
         assert_eq!(plan.focus.len(), MAX_FOCUS);
@@ -501,13 +469,13 @@ mod tests {
     #[test]
     fn focus_drops_exits_that_are_no_longer_selectable() {
         let mut probing = NetworkProbing::new(vec![key(9)]);
-        let plan = probing.decide(&idle(false, false), Instant::now());
+        let plan = probing.decide(&idle(false), Instant::now());
         assert!(!plan.focus.contains(&key(9)));
         let start = Instant::now();
-        probing.decide(&idle(false, false), start);
+        probing.decide(&idle(false), start);
         let fewer = Inputs {
             selectable: vec![key(1)],
-            ..idle(false, false)
+            ..idle(false)
         };
         assert_eq!(probing.decide(&fewer, start + secs(5)).focus, vec![key(1)]);
     }
@@ -518,12 +486,12 @@ mod tests {
         let start = Instant::now();
         let many = Inputs {
             selectable: keys(1..=30),
-            ..idle(false, false)
+            ..idle(false)
         };
         probing.decide(&many, start);
         let one_more = Inputs {
             selectable: keys(1..=31),
-            ..idle(false, false)
+            ..idle(false)
         };
         assert!(probing.decide(&one_more, start + secs(5)).focus.contains(&key(31)));
     }
@@ -533,7 +501,7 @@ mod tests {
         let mut probing = NetworkProbing::new(Vec::new());
         let inputs = Inputs {
             selectable: keys(1..=25),
-            ..idle(false, false)
+            ..idle(false)
         };
         let start = Instant::now();
         let first = probing.decide(&inputs, start).focus;

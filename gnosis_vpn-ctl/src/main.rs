@@ -157,7 +157,7 @@ fn pretty_print(resp: &Response) {
             eprintln!("Currently not probing any destination");
         }
         Response::ProbingBoost => {
-            println!("Probing boost updated");
+            println!("Network probing stepped up");
         }
         Response::QuickProbe(
             res @ (ipc::QuickProbeResponse::Checking { .. } | ipc::QuickProbeResponse::AlreadyChecking { .. }),

@@ -394,19 +394,16 @@ impl Display for ProbingReason {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ProbingReason::Fixed => write!(f, "fixed by configuration"),
-            ProbingReason::WarmingUp { high_for } => {
-                write!(
-                    f,
-                    "warming up for {}",
-                    format_duration(Duration::from_secs(high_for.as_secs()))
-                )
-            }
-            ProbingReason::Warm => write!(f, "warm"),
+            ProbingReason::Ready { held_for } => write!(f, "ready for {}", whole_seconds(held_for)),
+            ProbingReason::NotReady { held_for } => write!(f, "not ready for {}", whole_seconds(held_for)),
             ProbingReason::Connecting => write!(f, "connecting"),
             ProbingReason::Connected => write!(f, "connected"),
-            ProbingReason::Idle => write!(f, "idle"),
         }
     }
+}
+
+fn whole_seconds(duration: &Duration) -> String {
+    format_duration(Duration::from_secs(duration.as_secs())).to_string()
 }
 
 impl Display for ExitVersions {

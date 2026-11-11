@@ -182,8 +182,8 @@ pub fn quick_probe(socket_path: &Path, destination: DestinationId) -> Result<Qui
     }
 }
 
-pub fn probing_boost(socket_path: &Path, active: bool) -> Result<(), CallError> {
-    match call(socket_path, Request::ProbingBoost { active })? {
+pub fn probing_boost(socket_path: &Path) -> Result<(), CallError> {
+    match call(socket_path, Request::ProbingBoost)? {
         Response::ProbingBoost => Ok(()),
         other => Err(unexpected(other)),
     }

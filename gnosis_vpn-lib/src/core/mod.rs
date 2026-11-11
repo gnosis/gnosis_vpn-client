@@ -46,8 +46,6 @@ const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
 const ROUTABILITY_EAGER_INTERVAL: Duration = Duration::from_secs(10);
 /// The probing policy is time-driven, and without an app nothing else wakes Core.
 const PROBING_TICK: Duration = Duration::from_secs(5);
-/// A client re-sends its boost every 10 s, so one missed report keeps it.
-const BOOST_LEASE: Duration = Duration::from_secs(30);
 /// What a quick probe reports when discovery moved its exit out from under it.
 const QUICK_PROBE_MOVED: &str = "destination moved while the check was running";
 
@@ -103,8 +101,6 @@ pub struct Core {
     /// Mirrors root's `probing`: it holds the idle countdown for an explicit probe until we say the probe is gone.
     root_probe_hold: bool,
     network_probing: NetworkProbing,
-    /// A client's probing boost holds until then.
-    boosted_until: Option<Instant>,
     /// The last plan, for status and to log only changes.
     probing_plan: Option<Plan>,
 
@@ -245,7 +241,6 @@ impl Core {
             announced_peers_loop_running: false,
             root_probe_hold: false,
             network_probing: NetworkProbing::new(history),
-            boosted_until: None,
             probing_plan: None,
 
             // user provided data
@@ -586,8 +581,8 @@ impl Core {
                         let _ = resp.send(Response::Unprobe(response));
                     }
 
-                    WorkerCommand::ProbingBoost { active } => {
-                        self.boosted_until = active.then(|| Instant::now() + BOOST_LEASE);
+                    WorkerCommand::ProbingBoost => {
+                        self.network_probing.boost(Instant::now());
                         let _ = resp.send(Response::ProbingBoost);
                     }
 
@@ -2233,7 +2228,7 @@ impl Core {
         let plan = match Plan::from_override(self.config.probing) {
             Some(plan) => plan,
             None => {
-                let inputs = self.probing_inputs(now);
+                let inputs = self.probing_inputs();
                 self.network_probing.decide(&inputs, now)
             }
         };
@@ -2252,8 +2247,7 @@ impl Core {
         }
     }
 
-    fn probing_inputs(&self, now: Instant) -> network_probing::Inputs {
-        let boosted = self.boosted_until.is_some_and(|until| now < until);
+    fn probing_inputs(&self) -> network_probing::Inputs {
         let activity = match &self.phase {
             Phase::Connecting(conn) => Activity::Connecting(conn.destination.key()),
             Phase::Connected(conn) => Activity::Connected(conn.destination.key()),
@@ -2271,7 +2265,6 @@ impl Core {
             .values()
             .any(|health| network_probing::is_ready(health, wall_now));
         network_probing::Inputs {
-            boosted,
             activity,
             selectable,
             any_ready,

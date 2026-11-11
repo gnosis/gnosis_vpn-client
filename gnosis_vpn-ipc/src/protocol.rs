@@ -50,10 +50,8 @@ pub enum Request {
     QuickProbe {
         destination: DestinationId,
     },
-    /// Keeps warm probing at Medium instead of Low for 30 s; re-send to hold it, `active: false` ends it.
-    ProbingBoost {
-        active: bool,
-    },
+    /// Steps network probing up one level; route readiness steps it back down.
+    ProbingBoost,
     /// List interfaces the service may capture traffic on
     TrafficInterfaces,
     /// Begin capturing on one interface, replacing any current capture
@@ -657,14 +655,16 @@ pub enum ProbingLevel {
 pub enum ProbingReason {
     /// Set by configuration, not by the adaptive policy.
     Fixed,
-    WarmingUp {
+    /// Some exit is ready; the level steps down per hold.
+    Ready {
         #[serde(with = "duration_ms")]
-        high_for: Duration,
+        held_for: Duration,
     },
-    /// Warmed up and boosted: Medium.
-    Warm,
-    /// Warmed up without a boost: Low.
-    Idle,
+    /// No exit is ready; the level steps up per hold.
+    NotReady {
+        #[serde(with = "duration_ms")]
+        held_for: Duration,
+    },
     Connecting,
     Connected,
 }
@@ -1023,9 +1023,9 @@ mod tests {
 
     #[test]
     fn probing_boost_request_is_a_tagged_object() {
-        let request = Request::ProbingBoost { active: true };
+        let request = Request::ProbingBoost;
         let json = serde_json::to_value(&request).expect("serialize");
-        assert_eq!(json, serde_json::json!({ "type": "probing_boost", "active": true }));
+        assert_eq!(json, serde_json::json!({ "type": "probing_boost" }));
         assert_eq!(serde_json::from_value::<Request>(json).expect("deserialize"), request);
     }
 
@@ -1033,8 +1033,8 @@ mod tests {
     fn probing_view_round_trips_with_tagged_level_and_reason() {
         let view = ProbingView {
             level: ProbingLevel::High,
-            reason: ProbingReason::WarmingUp {
-                high_for: Duration::from_millis(42_000),
+            reason: ProbingReason::NotReady {
+                held_for: Duration::from_millis(42_000),
             },
             focus: vec![DestinationId::from("germany")],
         };
@@ -1042,7 +1042,7 @@ mod tests {
         assert_eq!(json["level"], serde_json::json!({ "type": "high" }));
         assert_eq!(
             json["reason"],
-            serde_json::json!({ "type": "warming_up", "high_for": 42_000 })
+            serde_json::json!({ "type": "not_ready", "held_for": 42_000 })
         );
         assert_eq!(serde_json::from_value::<ProbingView>(json).expect("deserialize"), view);
     }

@@ -4,12 +4,6 @@ use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
-pub enum Switch {
-    On,
-    Off,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum OutputFormat {
     Plain,
     Json,
@@ -72,9 +66,9 @@ pub enum Command {
         id: String,
     },
 
-    /// Keep warm network probing at medium instead of low for 30 s; repeat to hold it
+    /// Step network probing up one level; route readiness steps it back down
     #[command(name = "probing-boost")]
-    ProbingBoost { switch: Switch },
+    ProbingBoost {},
 
     /// Query balance information
     #[command()]
@@ -136,9 +130,7 @@ impl From<Command> for Request {
             Command::Probe { id } => Request::Probe { destination: id.into() },
             Command::Unprobe {} => Request::Unprobe,
             Command::QuickProbe { id } => Request::QuickProbe { destination: id.into() },
-            Command::ProbingBoost { switch } => Request::ProbingBoost {
-                active: matches!(switch, Switch::On),
-            },
+            Command::ProbingBoost {} => Request::ProbingBoost,
             Command::Balance {} => Request::Balance,
             Command::FundingTool { secret } => Request::FundingTool {
                 secret: FundingSecret::new(secret),
