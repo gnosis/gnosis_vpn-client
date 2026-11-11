@@ -1,4 +1,5 @@
 //! One long-lived bridge session per daemon, probed for version, latency and load; connections register over it.
+use backon::{BackoffBuilder, ExponentialBuilder};
 use edgli::FlowControlConfig;
 use edgli::hopr_lib::HoprSessionClientConfig;
 use rand::prelude::*;
@@ -21,10 +22,14 @@ use crate::hopr::{Hopr, HoprError};
 pub use gnosis_vpn_ipc::{ApiVersion, ExitVersions, Health, LoadAvg, ProbeState, ProbeView, Slots};
 
 const REOPEN_AFTER_FAILURES: u32 = 3;
-/// Roughly 50 s over the backoff curve below; past that a waiting target is better off in a fresh worker.
-const OPEN_ATTEMPTS: u32 = 5;
-const REOPEN_BACKOFF_STEP: Duration = Duration::from_secs(5);
-const REOPEN_BACKOFF_MAX: Duration = Duration::from_secs(60);
+/// Roughly 40 s over `REOPEN_BACKOFF`; past that a waiting target is better off in a fresh worker.
+const OPEN_RETRIES: usize = 4;
+/// Paces session opens against an exit that never got ready, so a dead exit cannot hot-loop opens.
+const REOPEN_BACKOFF: ExponentialBuilder = ExponentialBuilder::new()
+    .with_min_delay(Duration::from_secs(5))
+    .with_max_delay(Duration::from_secs(60))
+    .with_factor(1.5)
+    .without_max_times();
 /// Gap between retries of an initial check, whose own interval is far too long to wait out.
 const CHECK_RETRY_DELAY: Duration = Duration::from_secs(5);
 
@@ -57,12 +62,6 @@ pub(crate) fn select_api_version(offered: &[ApiVersion]) -> Option<ApiVersion> {
 /// hopr-lib fixes SURB balancing and PIX at open, so only an identically opened session can be adopted.
 pub(crate) fn quick_session_matches_bridge(bridge: &SessionSurbOptions, pix: &SessionPixOptions) -> bool {
     !bridge.enabled && !bridge.always_max_out_surbs && !pix.enabled
-}
-
-fn reopen_backoff(attempt: u32) -> Duration {
-    REOPEN_BACKOFF_STEP
-        .saturating_mul(attempt.max(1))
-        .min(REOPEN_BACKOFF_MAX)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -329,6 +328,7 @@ async fn run_probe(
         Some(rx) => rx.await.unwrap_or(None),
         None => None,
     };
+    let mut never_ready = REOPEN_BACKOFF.build();
     loop {
         let session = match adopted.take() {
             Some(session) => {
@@ -353,14 +353,24 @@ async fn run_probe(
             sender: sender.clone(),
             generation,
         };
-        let error = checker.run_until_broken(&options.health_check_intervals).await;
-        tracing::warn!(%destination, %error, "probe session broken - reopening");
-        send(Event::Reopening { error }).await;
+        let broken = checker.run_until_broken(&options.health_check_intervals).await;
+        tracing::warn!(%destination, error = %broken.error, "probe session broken - reopening");
+        send(Event::Reopening { error: broken.error }).await;
         session.close().await;
+
+        // A session that was ready broke on a transient fault: reopen at once.
+        if broken.was_ready {
+            never_ready = REOPEN_BACKOFF.build();
+            continue;
+        }
+        if let Some(delay) = never_ready.next() {
+            tracing::warn!(%destination, ?delay, "probe session never became ready - backing off");
+            time::sleep(delay).await;
+        }
     }
 }
 
-/// Opens a bridge session with growing backoff; `None` once `OPEN_ATTEMPTS` failed, reported as `OpenGaveUp`.
+/// Opens a bridge session with growing backoff; `None` once `OPEN_RETRIES` ran out, reported as `OpenGaveUp`.
 async fn open_session<F, Fut>(
     hopr: Arc<Hopr>,
     destination: &Destination,
@@ -372,7 +382,7 @@ where
     F: Fn(Event) -> Fut,
     Fut: Future<Output = ()>,
 {
-    let mut open_attempt = 0;
+    let mut delays = REOPEN_BACKOFF.with_max_times(OPEN_RETRIES).build();
     loop {
         let err = match ProbeSession::open(
             hopr.clone(),
@@ -386,13 +396,11 @@ where
             Ok(session) => return Some(session),
             Err(err) => err.to_string(),
         };
-        open_attempt += 1;
-        if open_attempt >= OPEN_ATTEMPTS {
-            tracing::error!(%destination, %err, attempts = OPEN_ATTEMPTS, "opening probe session kept failing - giving up");
+        let Some(delay) = delays.next() else {
+            tracing::error!(%destination, %err, retries = OPEN_RETRIES, "opening probe session kept failing - giving up");
             send(Event::OpenGaveUp { error: err }).await;
             return None;
-        }
-        let delay = reopen_backoff(open_attempt);
+        };
         tracing::warn!(%destination, %err, ?delay, "opening probe session failed - retrying");
         send(Event::OpenFailed { error: err }).await;
         time::sleep(delay).await;
@@ -477,9 +485,15 @@ struct Checker {
     generation: u64,
 }
 
+struct Broken {
+    error: String,
+    /// All three initial checks passed, so the break is transient rather than a dead exit.
+    was_ready: bool,
+}
+
 impl Checker {
-    /// Initial version → ping → load, then jittered timers; returns the error that broke the session.
-    async fn run_until_broken(&self, intervals: &HealthCheckIntervals) -> String {
+    /// Initial version → ping → load, then jittered timers; returns why the session broke.
+    async fn run_until_broken(&self, intervals: &HealthCheckIntervals) -> Broken {
         let mut failures = 0;
         // Ready needs all three, and a check that fails here has no timer yet - retry it rather than wait one out.
         let mut pending = vec![Check::Version, Check::Ping, Check::Load];
@@ -489,7 +503,10 @@ impl Checker {
                 if let Err(error) = self.run(check).await {
                     failures += 1;
                     if failures >= REOPEN_AFTER_FAILURES {
-                        return error;
+                        return Broken {
+                            error,
+                            was_ready: false,
+                        };
                     }
                     failed.push(check);
                 }
@@ -523,7 +540,7 @@ impl Checker {
                 Err(error) => {
                     failures += 1;
                     if failures >= REOPEN_AFTER_FAILURES {
-                        return error;
+                        return Broken { error, was_ready: true };
                     }
                 }
             }
@@ -858,11 +875,11 @@ mod tests {
     }
 
     #[test]
-    fn reopen_backoff_grows_and_clamps() {
-        assert_eq!(reopen_backoff(0), REOPEN_BACKOFF_STEP);
-        assert_eq!(reopen_backoff(1), REOPEN_BACKOFF_STEP);
-        assert_eq!(reopen_backoff(2), REOPEN_BACKOFF_STEP * 2);
-        assert_eq!(reopen_backoff(u32::MAX), REOPEN_BACKOFF_MAX);
+    fn reopen_backoff_never_runs_out_and_caps_at_a_minute() {
+        let delays: Vec<Duration> = REOPEN_BACKOFF.build().take(20).collect();
+        assert_eq!(delays.len(), 20);
+        assert_eq!(delays[0], Duration::from_secs(5));
+        assert_eq!(delays[19], Duration::from_secs(60));
     }
 
     #[test]

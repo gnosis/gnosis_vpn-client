@@ -56,6 +56,34 @@ pub enum Error {
     RegistrationNotFound,
 }
 
+impl Error {
+    /// The request never reached the exit: the host could not connect to its own session listener.
+    pub fn is_local_connect(&self) -> bool {
+        matches!(self, Error::SocketConnect(_))
+    }
+
+    /// `AddrNotAvailable` is a host fault a new session cannot fix.
+    pub fn is_listener_gone(&self) -> bool {
+        let Error::SocketConnect(err) = self else {
+            return false;
+        };
+        let addr_unavailable = io_error_of(err).is_some_and(|e| e.kind() == std::io::ErrorKind::AddrNotAvailable);
+        !addr_unavailable
+    }
+}
+
+/// reqwest's `Display` hides the source chain, so the io error has to be dug out.
+fn io_error_of(err: &reqwest::Error) -> Option<&std::io::Error> {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(err);
+    while let Some(current) = source {
+        if let Some(io_error) = current.downcast_ref::<std::io::Error>() {
+            return Some(io_error);
+        }
+        source = current.source();
+    }
+    None
+}
+
 impl Input {
     pub fn new(public_key: String, socket_addr: SocketAddr, timeout: Duration) -> Self {
         Input {
@@ -262,8 +290,11 @@ impl Display for Registration {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    use std::net::TcpListener;
+    use std::time::Duration;
 
     #[test]
     fn registration_debug_hides_the_preshared_key() {
@@ -278,5 +309,58 @@ mod tests {
         let printed = format!("{registration:?}");
         assert!(printed.contains("pub"));
         assert!(!printed.contains("secret-psk"), "{printed}");
+    }
+
+    #[tokio::test]
+    async fn a_closed_listener_is_gone() {
+        let err = closed_listener_error().await;
+
+        assert!(err.is_local_connect(), "{err:?}");
+        assert!(err.is_listener_gone(), "{err:?}");
+    }
+
+    /// A listener that accepts but never answers is a request failure, not a local connect one.
+    #[tokio::test]
+    async fn a_silent_listener_is_not_a_local_connect_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        // Hold the accepted connection open; the response never comes. The request times out after
+        // 300 ms; a full second leaves headroom on a loaded machine without slowing the suite much.
+        let held = std::thread::spawn(move || {
+            let _accepted = listener.accept().map(|(stream, _)| stream);
+            std::thread::sleep(Duration::from_secs(1));
+        });
+        let input = Input::new("pub".to_string(), addr, Duration::from_millis(300));
+
+        let err = register(&Client::new(), &input)
+            .await
+            .expect_err("silent listener times out");
+
+        assert!(!err.is_local_connect(), "{err:?}");
+        assert!(!err.is_listener_gone(), "{err:?}");
+        assert!(matches!(err, Error::Timeout(_)), "{err:?}");
+        let _ = held.join();
+    }
+
+    /// The freed port can be taken again by a parallel test, so retry until the connect is refused.
+    pub(crate) async fn closed_listener_error() -> Error {
+        for _ in 0..16 {
+            let port = {
+                let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+                listener.local_addr().expect("local addr").port()
+            };
+            let input = Input::new(
+                "pub".to_string(),
+                format!("127.0.0.1:{port}").parse().unwrap(),
+                Duration::from_secs(5),
+            );
+            let err = register(&Client::new(), &input)
+                .await
+                .expect_err("closed listener fails");
+            if err.is_listener_gone() {
+                return err;
+            }
+        }
+        panic!("no loopback connect was refused in 16 attempts");
     }
 }
