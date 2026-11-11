@@ -2,7 +2,7 @@
 use humantime::format_duration;
 
 use std::fmt::{self, Display};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::protocol::*;
 use crate::values::Address;
@@ -366,6 +366,45 @@ impl Display for ProbeState {
             ProbeState::Reopening => write!(f, "reopening session"),
         }
     }
+}
+
+impl Display for ProbingView {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Network probing: {} - {}", self.level, self.reason)?;
+        if self.focus.is_empty() {
+            return Ok(());
+        }
+        write!(f, ", focus {}: {}", self.focus.len(), join(&self.focus))
+    }
+}
+
+impl Display for ProbingLevel {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let text = match self {
+            ProbingLevel::Off => "off",
+            ProbingLevel::Low => "low",
+            ProbingLevel::Medium => "medium",
+            ProbingLevel::High => "high",
+            ProbingLevel::Ultra => "ultra",
+        };
+        f.write_str(text)
+    }
+}
+
+impl Display for ProbingReason {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ProbingReason::Fixed => write!(f, "fixed by configuration"),
+            ProbingReason::Ready { held_for } => write!(f, "ready for {}", whole_seconds(held_for)),
+            ProbingReason::NotReady { held_for } => write!(f, "not ready for {}", whole_seconds(held_for)),
+            ProbingReason::Connecting => write!(f, "connecting"),
+            ProbingReason::Connected => write!(f, "connected"),
+        }
+    }
+}
+
+fn whole_seconds(duration: &Duration) -> String {
+    format_duration(Duration::from_secs(duration.as_secs())).to_string()
 }
 
 impl Display for ExitVersions {

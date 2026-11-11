@@ -66,6 +66,10 @@ pub enum Command {
         id: String,
     },
 
+    /// Step network probing up one level; route readiness steps it back down
+    #[command(name = "probing-boost")]
+    ProbingBoost {},
+
     /// Query balance information
     #[command()]
     Balance {},
@@ -126,6 +130,7 @@ impl From<Command> for Request {
             Command::Probe { id } => Request::Probe { destination: id.into() },
             Command::Unprobe {} => Request::Unprobe,
             Command::QuickProbe { id } => Request::QuickProbe { destination: id.into() },
+            Command::ProbingBoost {} => Request::ProbingBoost,
             Command::Balance {} => Request::Balance,
             Command::FundingTool { secret } => Request::FundingTool {
                 secret: FundingSecret::new(secret),

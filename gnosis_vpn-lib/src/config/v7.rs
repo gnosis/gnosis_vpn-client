@@ -31,6 +31,7 @@ use crate::connection::options;
 use crate::hopr::blokli_config::BlokliConfig as HoprBlokliConfig;
 use crate::hopr::pix_config::PixConfig;
 use crate::hopr::strategy_config::StrategyConfig;
+use crate::network_probing::ProbingPolicy;
 use crate::ping;
 use crate::wireguard::Config as WireGuardConfig;
 
@@ -617,6 +618,12 @@ impl From<Option<PixStrategy>> for PixConfig {
     }
 }
 
+/// Timings are not configurable on purpose; only the policy is.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct Probing {
+    pub(super) policy: Option<ProbingPolicy>,
+}
+
 // ── Destinations ───────────────────────────────────────────────────────────────
 
 #[serde_as]
@@ -629,6 +636,7 @@ pub struct Config {
     pub(super) blokli: Option<BlokliConfig>,
     pub(super) strategy: Option<Strategy>,
     pub(super) pix_strategy: Option<PixStrategy>,
+    pub(super) probing: Option<Probing>,
     pub(super) geoip_db: Option<PathBuf>,
     pub(super) curvy_zk_dir: Option<PathBuf>,
 }
@@ -939,6 +947,17 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
             }
             continue;
         }
+        if key == "probing" {
+            if let Some(probing) = value.as_table() {
+                for (k, _) in probing.iter() {
+                    if k == "policy" {
+                        continue;
+                    }
+                    wrong.push(format!("probing.{k}"));
+                }
+            }
+            continue;
+        }
         wrong.push(key.clone());
     }
     wrong
@@ -985,6 +1004,7 @@ impl TryFrom<Config> for config::Config {
             blokli,
             strategy,
             pix_strategy,
+            probing: value.probing.and_then(|p| p.policy).unwrap_or_default(),
             geoip_db: value.geoip_db.unwrap_or_else(|| crate::geoip::DEFAULT_DB_PATH.into()),
             curvy_zk_dir: value
                 .curvy_zk_dir
@@ -2023,6 +2043,45 @@ pric_per_byte = "5 wxHOPR"
             .expect("valid TOML");
 
         assert_eq!(wrong_keys(&table), vec!["pix_strategy.pric_per_byte".to_string()]);
+    }
+
+    #[test]
+    fn probing_defaults_to_adaptive() {
+        let result: crate::config::Config = parse("version = 7\n").try_into().expect("should succeed");
+        assert_eq!(result.probing, crate::network_probing::ProbingPolicy::Adaptive);
+    }
+
+    #[test]
+    fn probing_policy_is_parsed() {
+        let toml = r#####"
+version = 7
+
+[probing]
+policy = { type = "fixed", level = { type = "high" } }
+"#####;
+        assert_eq!(
+            wrong_keys(&toml.parse::<toml::Table>().expect("valid TOML")),
+            Vec::<String>::new()
+        );
+        let result: crate::config::Config = parse(toml).try_into().expect("should succeed");
+        assert_eq!(
+            result.probing,
+            crate::network_probing::ProbingPolicy::Fixed {
+                level: gnosis_vpn_ipc::ProbingLevel::High
+            }
+        );
+        let off: crate::config::Config = parse("version = 7\n[probing]\npolicy = { type = \"off\" }\n")
+            .try_into()
+            .expect("should succeed");
+        assert_eq!(off.probing, crate::network_probing::ProbingPolicy::Off);
+    }
+
+    #[test]
+    fn probing_typo_is_reported() {
+        let table = "version = 7\n[probing]\npolcy = { type = \"off\" }\n"
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+        assert_eq!(wrong_keys(&table), vec!["probing.polcy".to_string()]);
     }
 
     #[test]

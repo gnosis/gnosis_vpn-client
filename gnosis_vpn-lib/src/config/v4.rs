@@ -140,6 +140,7 @@ impl TryFrom<Config> for super::v7::Config {
             blokli: value.blokli,
             strategy: None,
             pix_strategy: None,
+            probing: None,
             geoip_db: Some(crate::geoip::DEFAULT_DB_PATH.into()),
             curvy_zk_dir: Some(crate::hopr::pix_config::DEFAULT_CURVY_ZK_DIR.into()),
         })

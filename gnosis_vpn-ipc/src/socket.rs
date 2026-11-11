@@ -182,6 +182,13 @@ pub fn quick_probe(socket_path: &Path, destination: DestinationId) -> Result<Qui
     }
 }
 
+pub fn probing_boost(socket_path: &Path) -> Result<(), CallError> {
+    match call(socket_path, Request::ProbingBoost)? {
+        Response::ProbingBoost => Ok(()),
+        other => Err(unexpected(other)),
+    }
+}
+
 /// Service side: one request line, checked against this build's protocol version first.
 pub fn decode_request(line: &str) -> Result<Request, ServiceError> {
     let invalid = |reason: String| ServiceError::InvalidRequest { reason };

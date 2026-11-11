@@ -11,6 +11,7 @@ pub mod event;
 pub mod geoip;
 pub mod hopr;
 pub mod logging;
+pub mod network_probing;
 pub mod ping;
 pub mod probe;
 pub mod route_health;

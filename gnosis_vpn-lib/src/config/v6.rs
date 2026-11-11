@@ -291,6 +291,7 @@ impl TryFrom<Config> for super::v7::Config {
             blokli: value.blokli,
             strategy: value.strategy,
             pix_strategy: None,
+            probing: None,
             geoip_db: Some(crate::geoip::DEFAULT_DB_PATH.into()),
             curvy_zk_dir: Some(crate::hopr::pix_config::DEFAULT_CURVY_ZK_DIR.into()),
         })
@@ -480,6 +481,22 @@ max_deposit_retries = 5
         let result = runtime_config(parse(toml));
         assert_eq!(result.connection.pix, crate::connection::options::PixOptions::default());
         assert_eq!(result.pix_strategy, crate::hopr::pix_config::PixConfig::default());
+    }
+
+    #[test]
+    fn probing_is_not_a_supported_key_in_v6() {
+        let toml = r#####"
+version = 6
+
+[probing]
+policy = { type = "off" }
+"#####;
+        assert_eq!(
+            wrong_keys(&toml.parse::<toml::Table>().expect("valid TOML")),
+            vec!["probing".to_string()]
+        );
+        let result = runtime_config(parse(toml));
+        assert_eq!(result.probing, crate::network_probing::ProbingPolicy::Adaptive);
     }
 
     #[test]
