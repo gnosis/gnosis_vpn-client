@@ -4,6 +4,12 @@ use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum WindowArg {
+    Visible,
+    Hidden,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum OutputFormat {
     Plain,
     Json,
@@ -66,6 +72,10 @@ pub enum Command {
         id: String,
     },
 
+    /// Report the app window as visible or hidden; a visible report lasts 30 s, so repeat it to stay in the foreground
+    #[command()]
+    Presence { window: WindowArg },
+
     /// Query balance information
     #[command()]
     Balance {},
@@ -126,6 +136,12 @@ impl From<Command> for Request {
             Command::Probe { id } => Request::Probe { destination: id.into() },
             Command::Unprobe {} => Request::Unprobe,
             Command::QuickProbe { id } => Request::QuickProbe { destination: id.into() },
+            Command::Presence { window } => Request::Presence {
+                window: match window {
+                    WindowArg::Visible => ipc::WindowPresence::Visible,
+                    WindowArg::Hidden => ipc::WindowPresence::Hidden,
+                },
+            },
             Command::Balance {} => Request::Balance,
             Command::FundingTool { secret } => Request::FundingTool {
                 secret: FundingSecret::new(secret),

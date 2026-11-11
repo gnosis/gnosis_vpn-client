@@ -50,6 +50,10 @@ pub enum Request {
     QuickProbe {
         destination: DestinationId,
     },
+    /// The app's window visibility; a visible report lasts 30 s, so the app re-sends it while shown.
+    Presence {
+        window: WindowPresence,
+    },
     /// List interfaces the service may capture traffic on
     TrafficInterfaces,
     /// Begin capturing on one interface, replacing any current capture
@@ -106,6 +110,7 @@ pub enum Response {
     Probe(ProbeResponse),
     Unprobe(UnprobeResponse),
     QuickProbe(QuickProbeResponse),
+    Presence,
     TrafficInterfaces(Vec<traffic::Interface>),
     TrafficStart(traffic::StartReply),
     TrafficRead(traffic::ReadResponse),
@@ -126,6 +131,10 @@ pub struct Status {
     pub probe: Option<ProbeView>,
     /// Data an exit sells per PIX chunk; none until the node runs.
     pub pix_chunk_bytes: Option<u64>,
+    /// Network probing as applied to the edge client; none until the node runs.
+    pub probing: Option<ProbingView>,
+    /// Recently connected exits on this network, newest first.
+    pub recent: Vec<DestinationId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -623,6 +632,50 @@ pub enum ProbeResponse {
     },
 }
 
+// ---- network probing ----
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WindowPresence {
+    Visible,
+    Hidden,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProbingView {
+    pub level: ProbingLevel,
+    pub reason: ProbingReason,
+    /// Exits loopback probing is biased towards.
+    pub focus: Vec<DestinationId>,
+    /// Whether an app window counts as visible right now.
+    pub foreground: bool,
+}
+
+/// Pace of the edge client's network probing: Low 30 s, Medium 6 s, High 3 s between rounds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProbingLevel {
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProbingReason {
+    /// Set by configuration, not by the adaptive policy.
+    Fixed,
+    WarmingUp {
+        #[serde(with = "duration_ms")]
+        high_for: Duration,
+    },
+    Warm,
+    Connecting,
+    Connected,
+    Background,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UnprobeResponse {
@@ -968,5 +1021,42 @@ impl Default for TunnelStatsSample {
             time_since_last_handshake: None,
             estimated_loss: 0.0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presence_request_is_a_tagged_object() {
+        let request = Request::Presence {
+            window: WindowPresence::Visible,
+        };
+        let json = serde_json::to_value(&request).expect("serialize");
+        assert_eq!(
+            json,
+            serde_json::json!({ "type": "presence", "window": { "type": "visible" } })
+        );
+        assert_eq!(serde_json::from_value::<Request>(json).expect("deserialize"), request);
+    }
+
+    #[test]
+    fn probing_view_round_trips_with_tagged_level_and_reason() {
+        let view = ProbingView {
+            level: ProbingLevel::High,
+            reason: ProbingReason::WarmingUp {
+                high_for: Duration::from_millis(42_000),
+            },
+            focus: vec![DestinationId::from("germany")],
+            foreground: true,
+        };
+        let json = serde_json::to_value(&view).expect("serialize");
+        assert_eq!(json["level"], serde_json::json!({ "type": "high" }));
+        assert_eq!(
+            json["reason"],
+            serde_json::json!({ "type": "warming_up", "high_for": 42_000 })
+        );
+        assert_eq!(serde_json::from_value::<ProbingView>(json).expect("deserialize"), view);
     }
 }

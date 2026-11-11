@@ -156,6 +156,9 @@ fn pretty_print(resp: &Response) {
         Response::Unprobe(ipc::UnprobeResponse::NotProbing) => {
             eprintln!("Currently not probing any destination");
         }
+        Response::Presence => {
+            println!("Presence reported");
+        }
         Response::QuickProbe(
             res @ (ipc::QuickProbeResponse::Checking { .. } | ipc::QuickProbeResponse::AlreadyChecking { .. }),
         ) => {
@@ -179,6 +182,8 @@ fn pretty_print(resp: &Response) {
                 disconnecting,
                 probe,
                 pix_chunk_bytes,
+                probing,
+                recent,
             } = status.as_ref();
             let mut str_resp = format!("{run_mode}\n");
             if let Some(bytes) = pix_chunk_bytes {
@@ -203,6 +208,12 @@ fn pretty_print(resp: &Response) {
             }
             if let Some(probe) = probe {
                 str_resp.push_str(&format!("---\n{probe}\n"));
+            }
+            if let Some(probing) = probing {
+                str_resp.push_str(&format!("---\n{probing}\n"));
+            }
+            if !recent.is_empty() {
+                str_resp.push_str(&format!("Recent exits: {}\n", ipc::join(recent)));
             }
             if !destinations.is_empty() {
                 str_resp.push_str("---\nDestinations - [c] configured, [d] discovered, (c) value from config\n");
@@ -407,6 +418,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Unprobe(ipc::UnprobeResponse::Closing { .. }) => exitcode::OK,
         Response::Unprobe(ipc::UnprobeResponse::InUse { .. }) => exitcode::PROTOCOL,
         Response::Unprobe(ipc::UnprobeResponse::NotProbing) => exitcode::PROTOCOL,
+        Response::Presence => exitcode::OK,
         Response::Status(..) => exitcode::OK,
         Response::Balance(ipc::BalanceResponse::Available(..)) => exitcode::OK,
         Response::Balance(ipc::BalanceResponse::Unavailable { .. }) => exitcode::SOFTWARE,

@@ -12,6 +12,7 @@ use crate::connection::{
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::pix_config::PixConfig;
 use crate::hopr::strategy_config::StrategyConfig;
+use crate::network_probing::ProbingPolicy;
 use crate::wireguard::Config as WireGuardConfig;
 
 mod v3;
@@ -33,6 +34,7 @@ pub struct Config {
     pub blokli: BlokliConfig,
     pub strategy: StrategyConfig,
     pub pix_strategy: PixConfig,
+    pub probing: ProbingPolicy,
     /// The country database, at the installer's location unless a v7 file points elsewhere.
     pub geoip_db: PathBuf,
     /// The Curvy proving files, at the installer's location unless a v7 file points elsewhere.

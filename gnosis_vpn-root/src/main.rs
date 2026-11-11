@@ -1100,6 +1100,8 @@ impl DaemonState {
             disconnecting: vec![],
             probe: None,
             pix_chunk_bytes: None,
+            probing: None,
+            recent: vec![],
         }))
     }
 

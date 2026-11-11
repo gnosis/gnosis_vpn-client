@@ -11,7 +11,7 @@ use tokio_util::task::TaskTracker;
 use std::collections::{HashMap, HashSet};
 use std::net;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use gnosis_vpn_ipc::{self as ipc, Response, RunMode};
 
@@ -24,6 +24,7 @@ use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, 
 use crate::geoip::{self, GeoIp};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
+use crate::network_probing::{self, Activity, NetworkProbing, Plan, Presence};
 use crate::probe::{self, Probe};
 use crate::route_health::RouteHealth;
 use crate::worker_params::{self, WorkerParams};
@@ -45,6 +46,10 @@ const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
 const ROUTABILITY_EAGER_INTERVAL: Duration = Duration::from_secs(10);
 /// Graph walk cadence once every destination has settled.
 const ROUTABILITY_LAZY_INTERVAL: Duration = Duration::from_secs(60);
+/// The probing policy is time-driven, and without an app nothing else wakes Core.
+const PROBING_TICK: Duration = Duration::from_secs(5);
+/// The app re-reports every 10 s, so one missed report keeps it in the foreground.
+const PRESENCE_LEASE: Duration = Duration::from_secs(30);
 /// What a quick probe reports when discovery moved its exit out from under it.
 const QUICK_PROBE_MOVED: &str = "destination moved while the check was running";
 
@@ -99,6 +104,11 @@ pub struct Core {
     announced_peers_loop_running: bool,
     /// Mirrors root's `probing`: it holds the idle countdown for an explicit probe until we say the probe is gone.
     root_probe_hold: bool,
+    network_probing: NetworkProbing,
+    /// A visible app window counts until then; none means no app is looking.
+    foreground_until: Option<Instant>,
+    /// What edgli was last told, so an unchanged plan is not re-applied.
+    applied_probing: Option<Plan>,
 
     // user provided data
     /// The connect id, resolved live - a cached clone goes stale on a discovery tick and cannot outlive a restart.
@@ -202,6 +212,7 @@ impl Core {
         // A database that does not open is a broken install, not a reason to run blind.
         let geoip = GeoIp::open(&config.geoip_db)?;
         let cancel_on_shutdown = CancellationToken::new();
+        let history = network_probing::load_history(&worker_params.network_data_dir()).await;
         let mut route_healths = HashMap::new();
         for (key, dest) in config.destinations.iter() {
             route_healths.insert(
@@ -235,6 +246,9 @@ impl Core {
             cancel_routability: cancel_on_shutdown.child_token(),
             announced_peers_loop_running: false,
             root_probe_hold: false,
+            network_probing: NetworkProbing::new(history),
+            foreground_until: None,
+            applied_probing: None,
 
             // user provided data
             target,
@@ -280,14 +294,22 @@ impl Core {
     pub async fn start(mut self) {
         let (results_sender, mut results_receiver) = mpsc::channel(32);
         self.spawn_initial_runner(&results_sender, Duration::ZERO);
+        let mut probing_tick = time::interval(PROBING_TICK);
+        probing_tick.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 // React to an incoming worker events
-                Some(event) = self.incoming_receiver.recv() => {
+                event = self.incoming_receiver.recv() => {
+                    // Matched here, not in the pattern: the never-ending tick would keep `else` from firing.
+                    let Some(event) = event else {
+                        tracing::warn!("event receiver closed");
+                        break;
+                    };
                     if !self.on_event(event, &results_sender).await {
                         break;
                     }
                     self.sync_root_probe_hold().await;
+                    self.sync_network_probing();
                 }
 
                 // React to internal results from spawned runner tasks
@@ -296,12 +318,10 @@ impl Core {
                         break;
                     }
                     self.sync_root_probe_hold().await;
+                    self.sync_network_probing();
                 }
 
-                else => {
-                    tracing::warn!("event receiver closed");
-                    break;
-                }
+                _ = probing_tick.tick() => self.sync_network_probing(),
             }
         }
     }
@@ -566,6 +586,14 @@ impl Core {
                             }
                         };
                         let _ = resp.send(Response::Unprobe(response));
+                    }
+
+                    WorkerCommand::Presence { window } => {
+                        self.foreground_until = match window {
+                            ipc::WindowPresence::Visible => Some(Instant::now() + PRESENCE_LEASE),
+                            ipc::WindowPresence::Hidden => None,
+                        };
+                        let _ = resp.send(Response::Presence);
                     }
 
                     WorkerCommand::Balance => {
@@ -853,6 +881,7 @@ impl Core {
                     self.reconnecting_since = None;
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
+                    self.remember_connected(conn.destination.key()).await;
                     let route = format!(
                         "{}({})",
                         conn.destination.pretty_print_path(),
@@ -2171,6 +2200,99 @@ impl Core {
             disconnecting,
             probe: self.probe.as_ref().map(Probe::view),
             pix_chunk_bytes: self.hopr.as_ref().map(|h| h.pix_chunk_bytes()),
+            probing: self.applied_probing.as_ref().map(|plan| self.probing_view(plan)),
+            recent: self
+                .network_probing
+                .history()
+                .iter()
+                .filter_map(|key| self.destination_id(key))
+                .collect(),
+        }
+    }
+
+    fn probing_view(&self, plan: &Plan) -> ipc::ProbingView {
+        ipc::ProbingView {
+            level: plan.level,
+            reason: plan.reason.clone(),
+            focus: plan.focus.iter().filter_map(|key| self.destination_id(key)).collect(),
+            foreground: self.is_foreground(Instant::now()),
+        }
+    }
+
+    /// A key that discovery no longer reports has no connect id, so it is left out.
+    fn destination_id(&self, key: &ExitKey) -> Option<ipc::DestinationId> {
+        self.config.destinations.get(key).map(|d| d.connect_id.as_str().into())
+    }
+
+    fn is_foreground(&self, now: Instant) -> bool {
+        self.foreground_until.is_some_and(|until| now < until)
+    }
+
+    /// Re-decides network probing; edgli hears about it only when level or focus changed.
+    fn sync_network_probing(&mut self) {
+        let Some(hopr) = self.hopr.clone() else {
+            return;
+        };
+        let now = Instant::now();
+        let plan = match Plan::from_override(self.config.probing) {
+            Some(plan) => plan,
+            None => {
+                let inputs = self.probing_inputs(now);
+                self.network_probing.decide(&inputs, now)
+            }
+        };
+        let previous = self.applied_probing.replace(plan.clone());
+        if previous.as_ref().is_some_and(|p| p.same_effect(&plan)) {
+            return;
+        }
+        let exits: Vec<Address> = plan.focus.iter().map(|key| key.address).collect();
+        hopr.apply_probing(plan.level, &exits);
+        let focus: Vec<String> = plan.focus.iter().map(ToString::to_string).collect();
+        // The focus rotates every 5 min; only a level change is worth an info line.
+        let level_changed = previous.is_none_or(|p| p.level != plan.level);
+        if level_changed {
+            tracing::info!(level = %plan.level, reason = %plan.reason, ?focus, "network probing applied");
+        } else {
+            tracing::debug!(level = %plan.level, reason = %plan.reason, ?focus, "network probing focus moved");
+        }
+    }
+
+    fn probing_inputs(&self, now: Instant) -> network_probing::Inputs {
+        let presence = if self.is_foreground(now) {
+            Presence::Foreground
+        } else {
+            Presence::Background
+        };
+        let activity = match &self.phase {
+            Phase::Connecting(conn) => Activity::Connecting(conn.destination.key()),
+            Phase::Connected(conn) => Activity::Connected(conn.destination.key()),
+            _ => Activity::Idle,
+        };
+        let selectable = self
+            .route_healths
+            .iter()
+            .filter(|(_, health)| network_probing::is_selectable(health))
+            .map(|(key, _)| *key)
+            .collect();
+        let wall_now = SystemTime::now();
+        let any_ready = self
+            .route_healths
+            .values()
+            .any(|health| network_probing::is_ready(health, wall_now));
+        network_probing::Inputs {
+            presence,
+            activity,
+            selectable,
+            any_ready,
+        }
+    }
+
+    /// Recorded on Connected, not on connect, so an attempt that never came up stays out of the history.
+    async fn remember_connected(&mut self, key: ExitKey) {
+        let history = self.network_probing.remember_connected(key).to_vec();
+        let dir = self.worker_params.network_data_dir();
+        if let Err(error) = network_probing::save_history(&dir, &history).await {
+            tracing::warn!(dir = %dir.display(), %error, "cannot save recent exits");
         }
     }
 
