@@ -637,34 +637,21 @@ fn extract_ipv4_addrs(multiaddrs: &[multiaddr::Multiaddr]) -> Vec<Ipv4Addr> {
         .collect()
 }
 
-/// Whether an announced address may become a host route through the physical interface.
-///
-/// Every address this returns is installed as a bypass route, so an address that cannot be one is
-/// a route the host must never get. A peer announcing `127.0.0.1` sends loopback out of the WAN
-/// interface, which breaks every local connection - including the probe's own listener - and a
-/// peer announcing anything else it does not own can push that address outside the tunnel.
-///
-/// Private and link-local ranges are excluded as well, although the root's `RFC1918_BYPASS_NETS`
-/// already bypasses them at network granularity: a host route there would only repeat what the
-/// split already does.
+/// Every kept address becomes a WAN host route, e.g. an announced `127.0.0.1` would break loopback.
 fn is_bypass_routable(ipv4: Ipv4Addr) -> bool {
+    let octets = ipv4.octets();
+    let is_shared = octets[0] == 100 && (64..=127).contains(&octets[1]); // 100.64.0.0/10, CGNAT
+    let is_benchmarking = octets[0] == 198 && (18..=19).contains(&octets[1]); // 198.18.0.0/15
+    let is_reserved = octets[0] >= 240; // 240.0.0.0/4, includes broadcast
     !(ipv4.is_unspecified()
         || ipv4.is_loopback()
         || ipv4.is_private()
         || ipv4.is_link_local()
-        || ipv4.is_broadcast()
         || ipv4.is_documentation()
         || ipv4.is_multicast()
-        || is_shared_address(ipv4))
-}
-
-/// `100.64.0.0/10`, the shared address space of RFC 6598.
-///
-/// Not private by `Ipv4Addr::is_private`, but a host running CGNAT-space services of its own
-/// (Tailscale's `100.100.100.100` among them) must not have them rerouted by a peer's announcement.
-fn is_shared_address(ipv4: Ipv4Addr) -> bool {
-    let octets = ipv4.octets();
-    octets[0] == 100 && (64..=127).contains(&octets[1])
+        || is_shared
+        || is_benchmarking
+        || is_reserved)
 }
 
 #[cfg(test)]
@@ -704,10 +691,6 @@ mod tests {
 
     #[test]
     fn extract_ipv4_keeps_only_globally_routable_addresses() {
-        // Every one of these becomes a WAN bypass route, so an address that cannot be one is a
-        // route the host should never get: `127.0.0.1` breaks loopback (and with it every local
-        // probe), `100.64.0.0/10` carries the host's own CGNAT services, and the rest are not
-        // routable at all.
         let cases = [
             ("127.0.0.1", false),
             ("127.9.9.9", false),
@@ -721,6 +704,8 @@ mod tests {
             ("192.168.88.1", false),
             ("192.0.2.10", false),
             ("100.100.100.100", false),
+            ("198.18.0.1", false),
+            ("240.0.0.1", false),
             ("1.2.3.4", true),
             ("34.159.222.103", true),
         ];
@@ -731,8 +716,7 @@ mod tests {
             assert_eq!(
                 extract_ipv4_addrs(&addrs),
                 expected.into_iter().collect::<Vec<_>>(),
-                "{ip} must {} be kept",
-                if kept { "" } else { "not" }
+                "{ip}: kept = {kept}"
             );
         }
     }
