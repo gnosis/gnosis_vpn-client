@@ -182,9 +182,9 @@ pub fn quick_probe(socket_path: &Path, destination: DestinationId) -> Result<Qui
     }
 }
 
-pub fn presence(socket_path: &Path, window: WindowPresence) -> Result<(), CallError> {
-    match call(socket_path, Request::Presence { window })? {
-        Response::Presence => Ok(()),
+pub fn probing_boost(socket_path: &Path, active: bool) -> Result<(), CallError> {
+    match call(socket_path, Request::ProbingBoost { active })? {
+        Response::ProbingBoost => Ok(()),
         other => Err(unexpected(other)),
     }
 }

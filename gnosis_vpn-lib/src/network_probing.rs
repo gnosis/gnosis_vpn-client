@@ -1,4 +1,4 @@
-//! Network probing policy: the edge client's probing level and focus, decided from presence, phase and route walks.
+//! Network probing policy: the edge client's probing level and focus, decided from phase, route walks and boosts.
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
@@ -40,12 +40,6 @@ pub enum ProbingPolicy {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Presence {
-    Foreground,
-    Background,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Activity {
     Idle,
     Connecting(ExitKey),
@@ -53,7 +47,8 @@ pub(crate) enum Activity {
 }
 
 pub(crate) struct Inputs {
-    pub presence: Presence,
+    /// A client asked for Medium instead of Low once warm.
+    pub boosted: bool,
     pub activity: Activity,
     /// Exits worth probing; order does not matter, the rotation shuffles them.
     pub selectable: Vec<ExitKey>,
@@ -104,8 +99,6 @@ pub(crate) struct NetworkProbing {
     ready_since: Option<Instant>,
     not_ready_since: Option<Instant>,
     last_decided_at: Option<Instant>,
-    /// Whether the last plan was a cold High; only that time counts towards the warm-up cap.
-    warming_up: bool,
     rotation: Rotation,
     /// Recently connected exits, newest first.
     history: Vec<ExitKey>,
@@ -120,7 +113,6 @@ impl NetworkProbing {
             ready_since: None,
             not_ready_since: None,
             last_decided_at: None,
-            warming_up: false,
             rotation: Rotation::default(),
             history,
         }
@@ -143,7 +135,6 @@ impl NetworkProbing {
         self.track_readiness(inputs, now);
         self.update_warmth(inputs, now);
         let (level, reason) = self.level(inputs);
-        self.warming_up = matches!(reason, ProbingReason::WarmingUp { .. });
         let focus = self.focus(inputs, now);
         Plan { level, focus, reason }
     }
@@ -153,9 +144,7 @@ impl NetworkProbing {
             .last_decided_at
             .map_or(Duration::ZERO, |at| now.saturating_duration_since(at));
         self.last_decided_at = Some(now);
-        if !self.warming_up {
-            return;
-        }
+        // Cold always means High, so cold time is warm-up time.
         if let Warmth::Cold { high_for } = &mut self.warmth {
             *high_for += elapsed;
         }
@@ -209,12 +198,10 @@ impl NetworkProbing {
             Activity::Connected(_) => return (ProbingLevel::Low, ProbingReason::Connected),
             Activity::Idle => {}
         }
-        if inputs.presence == Presence::Background {
-            return (ProbingLevel::Low, ProbingReason::Background);
-        }
         match self.warmth {
             Warmth::Cold { high_for } => (ProbingLevel::High, ProbingReason::WarmingUp { high_for }),
-            Warmth::Warm { .. } => (ProbingLevel::Medium, ProbingReason::Warm),
+            Warmth::Warm { .. } if inputs.boosted => (ProbingLevel::Medium, ProbingReason::Warm),
+            Warmth::Warm { .. } => (ProbingLevel::Low, ProbingReason::Idle),
         }
     }
 
@@ -364,9 +351,9 @@ mod tests {
         bytes.map(key).collect()
     }
 
-    fn idle(presence: Presence, any_ready: bool) -> Inputs {
+    fn idle(boosted: bool, any_ready: bool) -> Inputs {
         Inputs {
-            presence,
+            boosted,
             activity: Activity::Idle,
             selectable: keys(1..=3),
             any_ready,
@@ -389,19 +376,20 @@ mod tests {
     }
 
     #[test]
-    fn foreground_starts_cold_at_high() {
+    fn a_fresh_worker_starts_cold_at_high_without_a_boost() {
         let mut probing = NetworkProbing::new(Vec::new());
-        let plan = probing.decide(&idle(Presence::Foreground, false), Instant::now());
+        let plan = probing.decide(&idle(false, false), Instant::now());
         assert_eq!(plan.level, ProbingLevel::High);
         assert!(matches!(plan.reason, ProbingReason::WarmingUp { .. }));
     }
 
     #[test]
-    fn background_is_low_even_while_cold() {
+    fn warm_is_low_without_a_boost_and_medium_with_one() {
         let mut probing = NetworkProbing::new(Vec::new());
-        let plan = probing.decide(&idle(Presence::Background, false), Instant::now());
-        assert_eq!(plan.level, ProbingLevel::Low);
-        assert_eq!(plan.reason, ProbingReason::Background);
+        let (plan, at) = run(&mut probing, &idle(false, true), Instant::now(), READY_HOLD);
+        assert_eq!((plan.level, plan.reason), (ProbingLevel::Low, ProbingReason::Idle));
+        let plan = probing.decide(&idle(true, true), at + secs(5));
+        assert_eq!((plan.level, plan.reason), (ProbingLevel::Medium, ProbingReason::Warm));
     }
 
     #[test]
@@ -409,7 +397,7 @@ mod tests {
         let mut probing = NetworkProbing::new(vec![key(1)]);
         let inputs = Inputs {
             activity: Activity::Connecting(key(2)),
-            ..idle(Presence::Background, false)
+            ..idle(false, false)
         };
         let plan = probing.decide(&inputs, Instant::now());
         assert_eq!(plan.level, ProbingLevel::High);
@@ -422,7 +410,7 @@ mod tests {
         let mut probing = NetworkProbing::new(vec![key(1), key(2)]);
         let inputs = Inputs {
             activity: Activity::Connected(key(1)),
-            ..idle(Presence::Foreground, true)
+            ..idle(true, true)
         };
         let plan = probing.decide(&inputs, Instant::now());
         assert_eq!(plan.level, ProbingLevel::Low);
@@ -435,14 +423,9 @@ mod tests {
     fn warms_to_medium_after_readiness_holds_30_s() {
         let mut probing = NetworkProbing::new(Vec::new());
         let start = Instant::now();
-        let (plan, _) = run(&mut probing, &idle(Presence::Foreground, true), start, secs(25));
+        let (plan, _) = run(&mut probing, &idle(true, true), start, secs(25));
         assert_eq!(plan.level, ProbingLevel::High);
-        let (plan, _) = run(
-            &mut probing,
-            &idle(Presence::Foreground, true),
-            start + secs(25),
-            secs(5),
-        );
+        let (plan, _) = run(&mut probing, &idle(true, true), start + secs(25), secs(5));
         assert_eq!(plan.level, ProbingLevel::Medium);
         assert_eq!(plan.reason, ProbingReason::Warm);
     }
@@ -450,40 +433,17 @@ mod tests {
     #[test]
     fn warms_to_medium_after_5_min_of_high_without_readiness() {
         let mut probing = NetworkProbing::new(Vec::new());
-        let (plan, _) = run(
-            &mut probing,
-            &idle(Presence::Foreground, false),
-            Instant::now(),
-            WARM_UP_CAP,
-        );
+        let (plan, _) = run(&mut probing, &idle(true, false), Instant::now(), WARM_UP_CAP);
         assert_eq!(plan.level, ProbingLevel::Medium);
-    }
-
-    #[test]
-    fn background_time_does_not_count_towards_the_warm_up_cap() {
-        let mut probing = NetworkProbing::new(Vec::new());
-        let start = Instant::now();
-        let (_, at) = run(&mut probing, &idle(Presence::Foreground, false), start, secs(60));
-        let (_, at) = run(&mut probing, &idle(Presence::Background, false), at, secs(600));
-        let plan = probing.decide(&idle(Presence::Foreground, false), at + secs(5));
-        let ProbingReason::WarmingUp { high_for } = plan.reason else {
-            panic!("expected warming up, got {:?}", plan.reason);
-        };
-        assert!(high_for >= secs(60) && high_for < secs(120), "resumed at {high_for:?}");
     }
 
     #[test]
     fn re_raises_to_high_after_60_s_not_ready() {
         let mut probing = NetworkProbing::new(Vec::new());
-        let (_, at) = run(
-            &mut probing,
-            &idle(Presence::Foreground, true),
-            Instant::now(),
-            READY_HOLD,
-        );
-        let (plan, at) = run(&mut probing, &idle(Presence::Foreground, false), at + secs(5), secs(55));
+        let (_, at) = run(&mut probing, &idle(true, true), Instant::now(), READY_HOLD);
+        let (plan, at) = run(&mut probing, &idle(true, false), at + secs(5), secs(55));
         assert_eq!(plan.level, ProbingLevel::Medium);
-        let plan = probing.decide(&idle(Presence::Foreground, false), at + secs(5));
+        let plan = probing.decide(&idle(true, false), at + secs(5));
         assert_eq!(plan.level, ProbingLevel::High);
     }
 
@@ -491,15 +451,10 @@ mod tests {
     fn no_re_raise_within_30_min_of_a_capped_warm_up() {
         let mut probing = NetworkProbing::new(Vec::new());
         let start = Instant::now();
-        let (_, at) = run(&mut probing, &idle(Presence::Foreground, false), start, WARM_UP_CAP);
-        let (plan, at) = run(
-            &mut probing,
-            &idle(Presence::Foreground, false),
-            at,
-            CAP_COOLDOWN - secs(10),
-        );
+        let (_, at) = run(&mut probing, &idle(true, false), start, WARM_UP_CAP);
+        let (plan, at) = run(&mut probing, &idle(true, false), at, CAP_COOLDOWN - secs(10));
         assert_eq!(plan.level, ProbingLevel::Medium);
-        let (plan, _) = run(&mut probing, &idle(Presence::Foreground, false), at, secs(10));
+        let (plan, _) = run(&mut probing, &idle(true, false), at, secs(10));
         assert_eq!(plan.level, ProbingLevel::High);
     }
 
@@ -509,10 +464,10 @@ mod tests {
         let start = Instant::now();
         let connected = Inputs {
             activity: Activity::Connected(key(1)),
-            ..idle(Presence::Foreground, false)
+            ..idle(true, false)
         };
         let (_, at) = run(&mut probing, &connected, start, secs(300));
-        let plan = probing.decide(&idle(Presence::Foreground, false), at + secs(5));
+        let plan = probing.decide(&idle(true, false), at + secs(5));
         assert_eq!(plan.level, ProbingLevel::Medium);
     }
 
@@ -522,7 +477,7 @@ mod tests {
         let mut probing = NetworkProbing::new(history);
         let inputs = Inputs {
             selectable: keys(1..=20),
-            ..idle(Presence::Background, false)
+            ..idle(false, false)
         };
         let plan = probing.decide(&inputs, Instant::now());
         assert_eq!(plan.focus.len(), MAX_FOCUS);
@@ -534,13 +489,13 @@ mod tests {
     #[test]
     fn focus_drops_exits_that_are_no_longer_selectable() {
         let mut probing = NetworkProbing::new(vec![key(9)]);
-        let plan = probing.decide(&idle(Presence::Background, false), Instant::now());
+        let plan = probing.decide(&idle(false, false), Instant::now());
         assert!(!plan.focus.contains(&key(9)));
         let start = Instant::now();
-        probing.decide(&idle(Presence::Background, false), start);
+        probing.decide(&idle(false, false), start);
         let fewer = Inputs {
             selectable: vec![key(1)],
-            ..idle(Presence::Background, false)
+            ..idle(false, false)
         };
         assert_eq!(probing.decide(&fewer, start + secs(5)).focus, vec![key(1)]);
     }
@@ -551,12 +506,12 @@ mod tests {
         let start = Instant::now();
         let many = Inputs {
             selectable: keys(1..=30),
-            ..idle(Presence::Background, false)
+            ..idle(false, false)
         };
         probing.decide(&many, start);
         let one_more = Inputs {
             selectable: keys(1..=31),
-            ..idle(Presence::Background, false)
+            ..idle(false, false)
         };
         assert!(probing.decide(&one_more, start + secs(5)).focus.contains(&key(31)));
     }
@@ -566,7 +521,7 @@ mod tests {
         let mut probing = NetworkProbing::new(Vec::new());
         let inputs = Inputs {
             selectable: keys(1..=25),
-            ..idle(Presence::Background, false)
+            ..idle(false, false)
         };
         let start = Instant::now();
         let first = probing.decide(&inputs, start).focus;

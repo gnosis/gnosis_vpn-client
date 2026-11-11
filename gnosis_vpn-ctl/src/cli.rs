@@ -4,9 +4,9 @@ use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
-pub enum WindowArg {
-    Visible,
-    Hidden,
+pub enum Switch {
+    On,
+    Off,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -72,9 +72,9 @@ pub enum Command {
         id: String,
     },
 
-    /// Report the app window as visible or hidden; a visible report lasts 30 s, so repeat it to stay in the foreground
-    #[command()]
-    Presence { window: WindowArg },
+    /// Keep warm network probing at medium instead of low for 30 s; repeat to hold it
+    #[command(name = "probing-boost")]
+    ProbingBoost { switch: Switch },
 
     /// Query balance information
     #[command()]
@@ -136,11 +136,8 @@ impl From<Command> for Request {
             Command::Probe { id } => Request::Probe { destination: id.into() },
             Command::Unprobe {} => Request::Unprobe,
             Command::QuickProbe { id } => Request::QuickProbe { destination: id.into() },
-            Command::Presence { window } => Request::Presence {
-                window: match window {
-                    WindowArg::Visible => ipc::WindowPresence::Visible,
-                    WindowArg::Hidden => ipc::WindowPresence::Hidden,
-                },
+            Command::ProbingBoost { switch } => Request::ProbingBoost {
+                active: matches!(switch, Switch::On),
             },
             Command::Balance {} => Request::Balance,
             Command::FundingTool { secret } => Request::FundingTool {

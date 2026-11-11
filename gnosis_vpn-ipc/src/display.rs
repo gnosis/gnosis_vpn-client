@@ -370,12 +370,7 @@ impl Display for ProbeState {
 
 impl Display for ProbingView {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let presence = if self.foreground {
-            "app visible"
-        } else {
-            "app not visible"
-        };
-        write!(f, "Network probing: {} - {} ({presence})", self.level, self.reason)?;
+        write!(f, "Network probing: {} - {}", self.level, self.reason)?;
         if self.focus.is_empty() {
             return Ok(());
         }
@@ -409,7 +404,7 @@ impl Display for ProbingReason {
             ProbingReason::Warm => write!(f, "warm"),
             ProbingReason::Connecting => write!(f, "connecting"),
             ProbingReason::Connected => write!(f, "connected"),
-            ProbingReason::Background => write!(f, "background"),
+            ProbingReason::Idle => write!(f, "idle"),
         }
     }
 }

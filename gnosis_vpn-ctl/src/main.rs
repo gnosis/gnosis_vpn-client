@@ -156,8 +156,8 @@ fn pretty_print(resp: &Response) {
         Response::Unprobe(ipc::UnprobeResponse::NotProbing) => {
             eprintln!("Currently not probing any destination");
         }
-        Response::Presence => {
-            println!("Presence reported");
+        Response::ProbingBoost => {
+            println!("Probing boost updated");
         }
         Response::QuickProbe(
             res @ (ipc::QuickProbeResponse::Checking { .. } | ipc::QuickProbeResponse::AlreadyChecking { .. }),
@@ -418,7 +418,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Unprobe(ipc::UnprobeResponse::Closing { .. }) => exitcode::OK,
         Response::Unprobe(ipc::UnprobeResponse::InUse { .. }) => exitcode::PROTOCOL,
         Response::Unprobe(ipc::UnprobeResponse::NotProbing) => exitcode::PROTOCOL,
-        Response::Presence => exitcode::OK,
+        Response::ProbingBoost => exitcode::OK,
         Response::Status(..) => exitcode::OK,
         Response::Balance(ipc::BalanceResponse::Available(..)) => exitcode::OK,
         Response::Balance(ipc::BalanceResponse::Unavailable { .. }) => exitcode::SOFTWARE,

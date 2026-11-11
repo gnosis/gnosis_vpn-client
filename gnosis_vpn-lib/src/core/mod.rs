@@ -24,7 +24,7 @@ use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, 
 use crate::geoip::{self, GeoIp};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
-use crate::network_probing::{self, Activity, NetworkProbing, Plan, Presence};
+use crate::network_probing::{self, Activity, NetworkProbing, Plan};
 use crate::probe::{self, Probe};
 use crate::route_health::RouteHealth;
 use crate::worker_params::{self, WorkerParams};
@@ -48,8 +48,8 @@ const ROUTABILITY_EAGER_INTERVAL: Duration = Duration::from_secs(10);
 const ROUTABILITY_LAZY_INTERVAL: Duration = Duration::from_secs(60);
 /// The probing policy is time-driven, and without an app nothing else wakes Core.
 const PROBING_TICK: Duration = Duration::from_secs(5);
-/// The app re-reports every 10 s, so one missed report keeps it in the foreground.
-const PRESENCE_LEASE: Duration = Duration::from_secs(30);
+/// A client re-sends its boost every 10 s, so one missed report keeps it.
+const BOOST_LEASE: Duration = Duration::from_secs(30);
 /// What a quick probe reports when discovery moved its exit out from under it.
 const QUICK_PROBE_MOVED: &str = "destination moved while the check was running";
 
@@ -105,8 +105,8 @@ pub struct Core {
     /// Mirrors root's `probing`: it holds the idle countdown for an explicit probe until we say the probe is gone.
     root_probe_hold: bool,
     network_probing: NetworkProbing,
-    /// A visible app window counts until then; none means no app is looking.
-    foreground_until: Option<Instant>,
+    /// A client's probing boost holds until then.
+    boosted_until: Option<Instant>,
     /// What edgli was last told, so an unchanged plan is not re-applied.
     applied_probing: Option<Plan>,
 
@@ -247,7 +247,7 @@ impl Core {
             announced_peers_loop_running: false,
             root_probe_hold: false,
             network_probing: NetworkProbing::new(history),
-            foreground_until: None,
+            boosted_until: None,
             applied_probing: None,
 
             // user provided data
@@ -588,12 +588,9 @@ impl Core {
                         let _ = resp.send(Response::Unprobe(response));
                     }
 
-                    WorkerCommand::Presence { window } => {
-                        self.foreground_until = match window {
-                            ipc::WindowPresence::Visible => Some(Instant::now() + PRESENCE_LEASE),
-                            ipc::WindowPresence::Hidden => None,
-                        };
-                        let _ = resp.send(Response::Presence);
+                    WorkerCommand::ProbingBoost { active } => {
+                        self.boosted_until = active.then(|| Instant::now() + BOOST_LEASE);
+                        let _ = resp.send(Response::ProbingBoost);
                     }
 
                     WorkerCommand::Balance => {
@@ -2215,17 +2212,12 @@ impl Core {
             level: plan.level,
             reason: plan.reason.clone(),
             focus: plan.focus.iter().filter_map(|key| self.destination_id(key)).collect(),
-            foreground: self.is_foreground(Instant::now()),
         }
     }
 
     /// A key that discovery no longer reports has no connect id, so it is left out.
     fn destination_id(&self, key: &ExitKey) -> Option<ipc::DestinationId> {
         self.config.destinations.get(key).map(|d| d.connect_id.as_str().into())
-    }
-
-    fn is_foreground(&self, now: Instant) -> bool {
-        self.foreground_until.is_some_and(|until| now < until)
     }
 
     /// Re-decides network probing; edgli hears about it only when level or focus changed.
@@ -2258,11 +2250,7 @@ impl Core {
     }
 
     fn probing_inputs(&self, now: Instant) -> network_probing::Inputs {
-        let presence = if self.is_foreground(now) {
-            Presence::Foreground
-        } else {
-            Presence::Background
-        };
+        let boosted = self.boosted_until.is_some_and(|until| now < until);
         let activity = match &self.phase {
             Phase::Connecting(conn) => Activity::Connecting(conn.destination.key()),
             Phase::Connected(conn) => Activity::Connected(conn.destination.key()),
@@ -2280,7 +2268,7 @@ impl Core {
             .values()
             .any(|health| network_probing::is_ready(health, wall_now));
         network_probing::Inputs {
-            presence,
+            boosted,
             activity,
             selectable,
             any_ready,

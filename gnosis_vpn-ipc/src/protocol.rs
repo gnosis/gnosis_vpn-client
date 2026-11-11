@@ -50,9 +50,9 @@ pub enum Request {
     QuickProbe {
         destination: DestinationId,
     },
-    /// The app's window visibility; a visible report lasts 30 s, so the app re-sends it while shown.
-    Presence {
-        window: WindowPresence,
+    /// Keeps warm probing at Medium instead of Low for 30 s; re-send to hold it, `active: false` ends it.
+    ProbingBoost {
+        active: bool,
     },
     /// List interfaces the service may capture traffic on
     TrafficInterfaces,
@@ -110,7 +110,7 @@ pub enum Response {
     Probe(ProbeResponse),
     Unprobe(UnprobeResponse),
     QuickProbe(QuickProbeResponse),
-    Presence,
+    ProbingBoost,
     TrafficInterfaces(Vec<traffic::Interface>),
     TrafficStart(traffic::StartReply),
     TrafficRead(traffic::ReadResponse),
@@ -634,21 +634,12 @@ pub enum ProbeResponse {
 
 // ---- network probing ----
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum WindowPresence {
-    Visible,
-    Hidden,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProbingView {
     pub level: ProbingLevel,
     pub reason: ProbingReason,
     /// Exits loopback probing is biased towards.
     pub focus: Vec<DestinationId>,
-    /// Whether an app window counts as visible right now.
-    pub foreground: bool,
 }
 
 /// Pace of the edge client's network probing: Low 30 s, Medium 6 s, High 3 s between rounds.
@@ -670,10 +661,12 @@ pub enum ProbingReason {
         #[serde(with = "duration_ms")]
         high_for: Duration,
     },
+    /// Warmed up and boosted: Medium.
     Warm,
+    /// Warmed up without a boost: Low.
+    Idle,
     Connecting,
     Connected,
-    Background,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1029,15 +1022,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn presence_request_is_a_tagged_object() {
-        let request = Request::Presence {
-            window: WindowPresence::Visible,
-        };
+    fn probing_boost_request_is_a_tagged_object() {
+        let request = Request::ProbingBoost { active: true };
         let json = serde_json::to_value(&request).expect("serialize");
-        assert_eq!(
-            json,
-            serde_json::json!({ "type": "presence", "window": { "type": "visible" } })
-        );
+        assert_eq!(json, serde_json::json!({ "type": "probing_boost", "active": true }));
         assert_eq!(serde_json::from_value::<Request>(json).expect("deserialize"), request);
     }
 
@@ -1049,7 +1037,6 @@ mod tests {
                 high_for: Duration::from_millis(42_000),
             },
             focus: vec![DestinationId::from("germany")],
-            foreground: true,
         };
         let json = serde_json::to_value(&view).expect("serialize");
         assert_eq!(json["level"], serde_json::json!({ "type": "high" }));
