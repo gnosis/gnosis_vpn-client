@@ -3768,6 +3768,7 @@ dependencies = [
  "gnosis_vpn-lib",
  "rand 0.10.3",
  "reqwest",
+ "rustix",
  "serde_json",
  "tokio",
  "tracing",

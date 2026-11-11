@@ -26,15 +26,6 @@ pub struct SharedArgs {
     )]
     pub blokli_url: Url,
 
-    /// Optional HTTP proxy used for download/upload requests.
-    #[arg(
-        long = "proxy",
-        env = "SYSTEM_TEST_PROXY",
-        value_name = "URL",
-        default_value = None
-    )]
-    pub proxy: Option<Url>,
-
     /// Allow insecure connections (e.g., self-signed certificates).
     #[arg(long = "allowInsecure", env = "SYSTEM_TEST_ALLOW_INSECURE", default_value_t = false)]
     pub allow_insecure: bool,

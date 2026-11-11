@@ -150,4 +150,4 @@ system-tests test_binary="gnosis_vpn-system_tests":
     sudo chmod 0755 "${worker_binary}" "${ctl_binary}"
 
     # Run the test binary with the appropriate environment variables
-    sudo CARGO_BIN_EXE_GNOSIS_VPN_ROOT="${SYSTEM_TEST_ROOT_BINARY}" CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" CARGO_BIN_EXE_GNOSIS_VPN_CTL="${ctl_binary}" SYSTEM_TEST_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" GNOSISVPN_FORCE_STATIC_ROUTING="true" RUST_LOG="debug" {{ test_binary }} --blokliUrl "${blokli_url}" --proxy "http://10.128.0.1:3128"
+    sudo CARGO_BIN_EXE_GNOSIS_VPN_ROOT="${SYSTEM_TEST_ROOT_BINARY}" CARGO_BIN_EXE_GNOSIS_VPN_WORKER="${worker_binary}" CARGO_BIN_EXE_GNOSIS_VPN_CTL="${ctl_binary}" SYSTEM_TEST_WORKER_USER="${worker_user}" GNOSISVPN_WORKER_BINARY="${worker_binary}" GNOSISVPN_FORCE_STATIC_ROUTING="true" RUST_LOG="debug" {{ test_binary }} --blokliUrl "${blokli_url}"
