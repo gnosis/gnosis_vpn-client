@@ -105,8 +105,8 @@ pub struct Core {
     network_probing: NetworkProbing,
     /// A client's probing boost holds until then.
     boosted_until: Option<Instant>,
-    /// What edgli was last told, so an unchanged plan is not re-applied.
-    applied_probing: Option<Plan>,
+    /// The last plan, for status and to log only changes.
+    probing_plan: Option<Plan>,
 
     // user provided data
     /// The connect id, resolved live - a cached clone goes stale on a discovery tick and cannot outlive a restart.
@@ -246,7 +246,7 @@ impl Core {
             root_probe_hold: false,
             network_probing: NetworkProbing::new(history),
             boosted_until: None,
-            applied_probing: None,
+            probing_plan: None,
 
             // user provided data
             target,
@@ -827,7 +827,7 @@ impl Core {
                 let target_pending = self.target.is_some() && !matches!(self.phase, Phase::Connected(_));
                 // Before the first plan edgli probes at its default, High.
                 let level = self
-                    .applied_probing
+                    .probing_plan
                     .as_ref()
                     .map_or(ipc::ProbingLevel::High, |plan| plan.level);
                 let paced = network_probing::walk_interval(level);
@@ -2201,7 +2201,7 @@ impl Core {
             disconnecting,
             probe: self.probe.as_ref().map(Probe::view),
             pix_chunk_bytes: self.hopr.as_ref().map(|h| h.pix_chunk_bytes()),
-            probing: self.applied_probing.as_ref().map(|plan| self.probing_view(plan)),
+            probing: self.probing_plan.as_ref().map(|plan| self.probing_view(plan)),
             recent: self
                 .network_probing
                 .history()
@@ -2224,7 +2224,7 @@ impl Core {
         self.config.destinations.get(key).map(|d| d.connect_id.as_str().into())
     }
 
-    /// Re-decides network probing; edgli hears about it only when level or focus changed.
+    /// Re-decides network probing and hands the plan to edgli.
     fn sync_network_probing(&mut self) {
         let Some(hopr) = self.hopr.clone() else {
             return;
@@ -2237,18 +2237,17 @@ impl Core {
                 self.network_probing.decide(&inputs, now)
             }
         };
-        let previous = self.applied_probing.replace(plan.clone());
-        if previous.as_ref().is_some_and(|p| p.same_effect(&plan)) {
-            return;
-        }
+        // edgli ignores an unchanged level or focus, and re-applying retries exits whose key was unresolvable.
         let exits: Vec<Address> = plan.focus.iter().map(|key| key.address).collect();
         hopr.apply_probing(plan.level, &exits);
+        let previous = self.probing_plan.replace(plan.clone());
+        let level_changed = previous.as_ref().is_none_or(|p| p.level != plan.level);
+        let focus_changed = previous.as_ref().is_none_or(|p| p.focus != plan.focus);
         let focus: Vec<String> = plan.focus.iter().map(ToString::to_string).collect();
         // The focus rotates every 5 min; only a level change is worth an info line.
-        let level_changed = previous.is_none_or(|p| p.level != plan.level);
         if level_changed {
             tracing::info!(level = %plan.level, reason = %plan.reason, ?focus, "network probing applied");
-        } else {
+        } else if focus_changed {
             tracing::debug!(level = %plan.level, reason = %plan.reason, ?focus, "network probing focus moved");
         }
     }

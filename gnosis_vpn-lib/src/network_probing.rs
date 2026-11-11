@@ -79,11 +79,6 @@ impl Plan {
             reason: ProbingReason::Fixed,
         })
     }
-
-    /// Level and focus are all the edge client sees; a changed reason alone needs no re-apply.
-    pub(crate) fn same_effect(&self, other: &Plan) -> bool {
-        self.level == other.level && self.focus == other.focus
-    }
 }
 
 enum Warmth {

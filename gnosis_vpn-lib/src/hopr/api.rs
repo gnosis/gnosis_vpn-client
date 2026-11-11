@@ -460,7 +460,7 @@ impl Hopr {
             return;
         }
         let chain_api = self.edgli.chain_api();
-        // An unannounced exit has no packet key; it stays out until the focus changes again.
+        // An unannounced exit has no packet key; the next sync retries it.
         let keys: Vec<OffchainPublicKey> = exits
             .iter()
             .filter_map(|exit| match chain_api.chain_key_to_packet_key(exit) {
