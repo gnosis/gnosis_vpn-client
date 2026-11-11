@@ -453,6 +453,7 @@ impl Hopr {
             gnosis_vpn_ipc::ProbingLevel::Low => Some(edgli::ProbingLevel::Low),
             gnosis_vpn_ipc::ProbingLevel::Medium => Some(edgli::ProbingLevel::Medium),
             gnosis_vpn_ipc::ProbingLevel::High => Some(edgli::ProbingLevel::High),
+            gnosis_vpn_ipc::ProbingLevel::Ultra => Some(edgli::ProbingLevel::Ultra),
         };
         self.edgli.set_probing_level(level);
         if exits.is_empty() {

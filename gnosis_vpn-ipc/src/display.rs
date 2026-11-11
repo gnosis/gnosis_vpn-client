@@ -385,6 +385,7 @@ impl Display for ProbingLevel {
             ProbingLevel::Low => "low",
             ProbingLevel::Medium => "medium",
             ProbingLevel::High => "high",
+            ProbingLevel::Ultra => "ultra",
         };
         f.write_str(text)
     }

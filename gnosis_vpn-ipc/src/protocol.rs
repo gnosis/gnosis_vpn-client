@@ -640,7 +640,7 @@ pub struct ProbingView {
     pub focus: Vec<DestinationId>,
 }
 
-/// Pace of the edge client's network probing: Low 30 s, Medium 6 s, High 3 s between rounds.
+/// Pace of the edge client's network probing: Low 30 s, Medium 6 s, High 3 s, Ultra 1.5 s between rounds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProbingLevel {
@@ -648,6 +648,8 @@ pub enum ProbingLevel {
     Low,
     Medium,
     High,
+    /// A short burst while connecting, when the new session needs path evidence fast.
+    Ultra,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

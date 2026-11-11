@@ -124,7 +124,7 @@ impl NetworkProbing {
     pub(crate) fn decide(&mut self, inputs: &Inputs, now: Instant) -> Plan {
         let focus = self.focus(inputs, now);
         let (level, reason) = match inputs.activity {
-            Activity::Connecting(_) => (ProbingLevel::High, ProbingReason::Connecting),
+            Activity::Connecting(_) => (ProbingLevel::Ultra, ProbingReason::Connecting),
             Activity::Connected(_) => (ProbingLevel::Low, ProbingReason::Connected),
             Activity::Idle => self.step(inputs.any_ready, now),
         };
@@ -188,9 +188,10 @@ impl NetworkProbing {
     }
 }
 
-/// The policy never holds Off; that only comes from configuration.
+/// The staircase spans Low to High; Ultra is connecting only and Off only from configuration.
 fn slower(level: ProbingLevel) -> ProbingLevel {
     match level {
+        ProbingLevel::Ultra => ProbingLevel::High,
         ProbingLevel::High => ProbingLevel::Medium,
         ProbingLevel::Medium | ProbingLevel::Low | ProbingLevel::Off => ProbingLevel::Low,
     }
@@ -199,7 +200,7 @@ fn slower(level: ProbingLevel) -> ProbingLevel {
 fn faster(level: ProbingLevel) -> ProbingLevel {
     match level {
         ProbingLevel::Low | ProbingLevel::Off => ProbingLevel::Medium,
-        ProbingLevel::Medium | ProbingLevel::High => ProbingLevel::High,
+        ProbingLevel::Medium | ProbingLevel::High | ProbingLevel::Ultra => ProbingLevel::High,
     }
 }
 
@@ -252,6 +253,7 @@ fn probing_round(level: ProbingLevel) -> Option<Duration> {
         ProbingLevel::Low => Some(Duration::from_secs(30)),
         ProbingLevel::Medium => Some(Duration::from_secs(6)),
         ProbingLevel::High => Some(Duration::from_secs(3)),
+        ProbingLevel::Ultra => Some(Duration::from_millis(1500)),
     }
 }
 
@@ -412,14 +414,14 @@ mod tests {
     }
 
     #[test]
-    fn connecting_is_high_and_focuses_on_the_target_only() {
+    fn connecting_is_ultra_and_focuses_on_the_target_only() {
         let mut probing = NetworkProbing::new(vec![key(1)]);
         let inputs = Inputs {
             activity: Activity::Connecting(key(2)),
             ..idle(false)
         };
         let plan = probing.decide(&inputs, Instant::now());
-        assert_eq!(plan.level, ProbingLevel::High);
+        assert_eq!(plan.level, ProbingLevel::Ultra);
         assert_eq!(plan.reason, ProbingReason::Connecting);
         assert_eq!(plan.focus, vec![key(2)]);
     }
@@ -531,7 +533,12 @@ mod tests {
 
     #[test]
     fn jittered_walks_span_more_than_one_round_and_less_than_two() {
-        for level in [ProbingLevel::Low, ProbingLevel::Medium, ProbingLevel::High] {
+        for level in [
+            ProbingLevel::Low,
+            ProbingLevel::Medium,
+            ProbingLevel::High,
+            ProbingLevel::Ultra,
+        ] {
             let round = probing_round(level).expect("probing");
             let interval = walk_interval(level);
             assert!(interval.mul_f64(0.75) > round, "{level:?} may walk twice in one round");
