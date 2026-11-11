@@ -13,7 +13,7 @@ use crate::route_health::{RouteHealth, RouteWalk};
 
 /// The app's weak-route banner threshold, so "warm" and "no banner" agree.
 pub(crate) const WEAK_ROUTE_VALUE: f64 = 0.9;
-/// Twice the lazy walk interval: an older walk says nothing about the route now.
+/// Twice the slowest walk interval: an older walk says nothing about the route now.
 const WALK_FRESHNESS: Duration = Duration::from_secs(120);
 const MAX_FOCUS: usize = 10;
 const MAX_PINNED: usize = 5;
@@ -26,6 +26,8 @@ const NOT_READY_HOLD: Duration = Duration::from_secs(60);
 const CAP_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 const ROTATION_PERIOD: Duration = Duration::from_secs(5 * 60);
 const HISTORY_FILE: &str = "recent_exits.json";
+/// With probing off only session traffic moves the scores, so walks can idle.
+const WALK_WITHOUT_PROBING: Duration = Duration::from_secs(60);
 
 /// Operator override of the adaptive policy, e.g. for measurements.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,6 +271,21 @@ impl Rotation {
     fn window(&self, count: usize, keep: impl Fn(&ExitKey) -> bool) -> Vec<ExitKey> {
         self.queue.iter().filter(|key| keep(key)).take(count).copied().collect()
     }
+}
+
+/// Time between edgli's probing rounds: its 3 s base (edge-client `src/client.rs:332`) scaled by the level.
+fn probing_round(level: ProbingLevel) -> Option<Duration> {
+    match level {
+        ProbingLevel::Off => None,
+        ProbingLevel::Low => Some(Duration::from_secs(30)),
+        ProbingLevel::Medium => Some(Duration::from_secs(6)),
+        ProbingLevel::High => Some(Duration::from_secs(3)),
+    }
+}
+
+/// 1.5 rounds: even with the walk's ±25 % jitter, each walk sees a new round and skips at most one.
+pub(crate) fn walk_interval(level: ProbingLevel) -> Duration {
+    probing_round(level).map_or(WALK_WITHOUT_PROBING, |round| round * 3 / 2)
 }
 
 /// Unrecoverable and unannounced exits cannot be reached, so probing towards them is wasted.
@@ -547,6 +564,17 @@ mod tests {
         assert_eq!(history.len(), MAX_HISTORY);
         assert_eq!(history[0], key(7));
         assert!(!history.contains(&key(6)));
+    }
+
+    #[test]
+    fn jittered_walks_span_more_than_one_round_and_less_than_two() {
+        for level in [ProbingLevel::Low, ProbingLevel::Medium, ProbingLevel::High] {
+            let round = probing_round(level).expect("probing");
+            let interval = walk_interval(level);
+            assert!(interval.mul_f64(0.75) > round, "{level:?} may walk twice in one round");
+            assert!(interval.mul_f64(1.25) < round * 2, "{level:?} may skip two rounds");
+        }
+        assert_eq!(walk_interval(ProbingLevel::Off), WALK_WITHOUT_PROBING);
     }
 
     #[test]

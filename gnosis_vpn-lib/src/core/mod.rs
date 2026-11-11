@@ -42,10 +42,8 @@ enum Responder {
 }
 
 const NODE_WXHOPR_WITHDRAW_INTERVAL: Duration = Duration::from_secs(45);
-/// Graph walk cadence while a destination is not routable yet or a target is pending.
+/// Slowest graph walk cadence while a destination is not routable yet or a target is pending.
 const ROUTABILITY_EAGER_INTERVAL: Duration = Duration::from_secs(10);
-/// Graph walk cadence once every destination has settled.
-const ROUTABILITY_LAZY_INTERVAL: Duration = Duration::from_secs(60);
 /// The probing policy is time-driven, and without an app nothing else wakes Core.
 const PROBING_TICK: Duration = Duration::from_secs(5);
 /// A client re-sends its boost every 10 s, so one missed report keeps it.
@@ -827,10 +825,16 @@ impl Core {
                     .values()
                     .any(|rh| !rh.is_routable() && !rh.is_unrecoverable());
                 let target_pending = self.target.is_some() && !matches!(self.phase, Phase::Connected(_));
+                // Before the first plan edgli probes at its default, High.
+                let level = self
+                    .applied_probing
+                    .as_ref()
+                    .map_or(ipc::ProbingLevel::High, |plan| plan.level);
+                let paced = network_probing::walk_interval(level);
                 let delay = if settling || target_pending {
-                    ROUTABILITY_EAGER_INTERVAL
+                    paced.min(ROUTABILITY_EAGER_INTERVAL)
                 } else {
-                    ROUTABILITY_LAZY_INTERVAL
+                    paced
                 };
                 self.spawn_routability_runner(results_sender, delay);
             }
