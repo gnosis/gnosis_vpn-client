@@ -1,8 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "schedule:earlyMondays"],
-  "baseBranchPatterns": ["main", "/^release\\/.*/"],
-  "useBaseBranchConfig": "merge",
   "pinDigests": true,
   "prCreation": "immediate",
   "semanticCommits": "enabled",

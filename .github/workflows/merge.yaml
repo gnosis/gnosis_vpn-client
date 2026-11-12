@@ -6,7 +6,6 @@ on:
       # - synchronize
     branches:
       - main
-      - 'release/**'
 concurrency:
   group: merge-${{ github.event.pull_request.base.ref }}
   cancel-in-progress: false
@@ -73,5 +72,4 @@ jobs:
         with:
           token: ${{ steps.bot-token.outputs.token }}
           repository: gnosis/gnosis_vpn
-          # installer lines split at 0.100.0: main feeds the experimental line, release/** the standard one
-          event-type: ${{ github.event.pull_request.base.ref == 'main' && 'experimental_build' || 'snapshot_build' }}
+          event-type: snapshot_build
