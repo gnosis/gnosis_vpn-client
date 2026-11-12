@@ -190,8 +190,8 @@ chmod -R go-rwx .local
 
 ## Branches
 
-`main` is the experimental line (hoprd v5); `release/hoprdv4` is the stable
-maintenance line (hoprd v4). See [docs/branch-strategy.md](docs/branch-strategy.md).
+`main` is the only release line (hoprd v5); `release/hoprdv4` (hoprd v4) is
+frozen. See [docs/branch-strategy.md](docs/branch-strategy.md).
 
 ## Dependency Updates
 
