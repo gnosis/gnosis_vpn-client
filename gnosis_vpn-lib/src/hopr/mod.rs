@@ -12,8 +12,10 @@ pub(crate) mod config;
 pub(crate) mod identity;
 pub(crate) mod pix_chunks;
 pub(crate) mod pix_config;
+pub(crate) mod pix_float;
 pub(crate) mod strategy_config;
 pub use pix_config::{CURVY_ZK_DIR_ENV, PixConfig};
+pub use pix_float::PixFloat;
 pub use strategy_config::StrategyConfig;
 
 pub const ENV_VAR_CONFIG: &str = "GNOSISVPN_HOPR_CONFIG_PATH";

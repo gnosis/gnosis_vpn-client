@@ -11,6 +11,10 @@ pub fn wxhopr(balance: Balance<WxHOPR>) -> ipc::Balance<ipc::WxHopr> {
     ipc::Balance::from_wei(wei(&balance))
 }
 
+pub fn from_wxhopr(balance: ipc::Balance<ipc::WxHopr>) -> Balance<WxHOPR> {
+    Balance::from(balance.wei())
+}
+
 pub fn xdai(balance: Balance<XDai>) -> ipc::Balance<ipc::XDai> {
     ipc::Balance::from_wei(wei(&balance))
 }

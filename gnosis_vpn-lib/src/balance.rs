@@ -339,6 +339,8 @@ pub struct Balances {
     pub node_xdai: Balance<XDai>,
     pub safe_wxhopr: Balance<WxHOPR>,
     pub channels_out: HashMap<Address, Balance<WxHOPR>>,
+    /// None without a Curvy PIX pool, or when the pool could not be read.
+    pub pix_float_wxhopr: Option<Balance<WxHOPR>>,
 }
 
 impl Display for Balances {

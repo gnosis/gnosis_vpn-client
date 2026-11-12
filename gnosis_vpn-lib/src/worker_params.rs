@@ -147,16 +147,17 @@ impl WorkerParams {
 
     pub async fn calc_keys(&self) -> Result<HoprKeys, Error> {
         let identity_file = identity::file(&self.network_data_dir());
-        let path = identity::pass_file(&self.network_data_dir());
-        let identity_pass = fs::read_to_string(&path).await.map_err(|e| {
-            tracing::error!(error = %e, ?path, "failed to read HOPR identity pass file");
-            Error::IOFile {
-                path: path.clone(),
-                source: e,
-            }
-        })?;
+        let identity_pass = self.identity_pass().await?;
+        identity::from_path(identity_file, identity_pass).map_err(Error::from)
+    }
 
-        identity::from_path(identity_file, identity_pass.clone()).map_err(Error::from)
+    /// Also seals the PIX pool state: it already must never get lost, so it adds no new way to strand funds.
+    pub async fn identity_pass(&self) -> Result<String, Error> {
+        let path = identity::pass_file(&self.network_data_dir());
+        fs::read_to_string(&path).await.map_err(|e| {
+            tracing::error!(error = %e, ?path, "failed to read HOPR identity pass file");
+            Error::IOFile { path, source: e }
+        })
     }
 
     pub async fn to_config(

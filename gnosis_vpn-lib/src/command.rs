@@ -32,6 +32,7 @@ pub enum WorkerCommand {
     Unprobe,
     QuickProbe { destination: ipc::DestinationId },
     ProbingBoost,
+    FundPixFloat { amount: ipc::Balance<ipc::WxHopr> },
 }
 
 /// Debug, not JSON: the funding secret must never reach a log line.
@@ -76,6 +77,7 @@ impl From<ipc::Request> for CommandRoute {
             ipc::Request::Unprobe => CommandRoute::Worker(WorkerCommand::Unprobe),
             ipc::Request::QuickProbe { destination } => CommandRoute::Worker(WorkerCommand::QuickProbe { destination }),
             ipc::Request::ProbingBoost => CommandRoute::Worker(WorkerCommand::ProbingBoost),
+            ipc::Request::FundPixFloat { amount } => CommandRoute::Worker(WorkerCommand::FundPixFloat { amount }),
             ipc::Request::Ping => CommandRoute::Root(RootCommand::Ping),
             ipc::Request::Info => CommandRoute::Root(RootCommand::Info),
             ipc::Request::StartClient { timeout } => CommandRoute::Root(RootCommand::StartClient(timeout)),
@@ -188,6 +190,7 @@ pub fn balances(
         capacity_allocations: capacity_allocations.map(Into::into),
         ideal_balance: ideal_balance.as_ref().map(Into::into),
         funding_status: funding_status.as_ref().map(Into::into),
+        pix_float: balances.pix_float_wxhopr.map(wire::wxhopr),
     }
 }
 
