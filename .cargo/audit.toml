@@ -19,6 +19,11 @@ ignore = [
   "RUSTSEC-2026-0489", # hickory-proto: panic on single-quote SVCB/HTTPS value - fixed in hickory-proto >=0.26.2
   "RUSTSEC-2026-0490", # hickory-proto: zone file lexer panic on long token - fixed in hickory-proto >=0.26.2
   "RUSTSEC-2026-0491", # hickory-proto: memory amplification from header record counts - fixed in hickory-proto >=0.26.2
+  "RUSTSEC-2026-0504", # hickory-proto: inverted NSEC3 comparison in DNSSEC validation - no fixed version available yet
+  "RUSTSEC-2026-0505", # hickory-proto: NSEC3 owner names not checked against the zone - no fixed version available yet
+  "RUSTSEC-2026-0511", # hickory-proto: NXDOMAIN accepted for a proven empty non-terminal - no fixed version available yet
+  "RUSTSEC-2026-0512", # hickory-proto: DNSSEC accepted an unrelated signed RRset - no fixed version available yet
+  "RUSTSEC-2026-0514", # hickory-resolver: lookup returned records that failed DNSSEC validation - no fixed version available yet
 ]
 
 # Output configuration
