@@ -4,7 +4,7 @@ version = 7
 
 [pix_strategy]
 deposit_buffer_period     = "500ms"
-initial_funding           = "0.0001 wxHOPR"               # matches the dev VM; must cover the ~0.0000031 wxHOPR commitment fee, the 100 wxHOPR default exceeds the test Safe
+initial_funding           = "0.0001 wxHOPR"           # matches the dev VM; must cover the ~0.0000031 wxHOPR commitment fee, the 100 wxHOPR default exceeds the test Safe
 max_deposit_retries       = 3
 max_deposit_tracking_time = "60s"
 max_ssa_allocation        = "0.00001 wxHOPR"
