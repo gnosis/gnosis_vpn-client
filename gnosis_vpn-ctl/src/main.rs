@@ -166,7 +166,7 @@ fn pretty_print(resp: &Response) {
             eprintln!("No PIX float yet - the Curvy pool starts with the edge node");
         }
         Response::FundPixFloat(ipc::FundPixFloatResponse::AlreadyFunding) => {
-            eprintln!("A PIX float funding is already running - check `status` for the float balance");
+            eprintln!("A PIX float funding is already running - check `balance` for the float balance");
         }
         Response::FundPixFloat(ipc::FundPixFloatResponse::Failed { reason }) => {
             eprintln!("Funding the PIX float failed: {reason}");
