@@ -780,6 +780,8 @@ pub enum FundPixFloatResponse {
     },
     /// No Curvy PIX pool runs yet.
     NotReady,
+    /// An earlier funding is still shielding.
+    AlreadyFunding,
     Failed {
         reason: String,
     },

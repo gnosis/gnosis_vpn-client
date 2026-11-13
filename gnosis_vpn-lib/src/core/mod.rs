@@ -123,6 +123,8 @@ pub struct Core {
     strategy_state: Option<edgli::StrategyStateHandle>,
     /// The Curvy float, paired with `strategy_handle`.
     pix_float: Option<hopr::PixFloat>,
+    /// Outlives a float swap: both shields draw from the same Safe.
+    pix_funding: Option<tokio::task::JoinHandle<()>>,
     channel_maintenance: channel_maintenance::Supervisor,
     route_healths: HashMap<ExitKey, RouteHealth>,
     /// The last announced-peers snapshot, so an exit discovered between fetches gets its country at once.
@@ -261,6 +263,7 @@ impl Core {
             strategy_handle: None,
             strategy_state: None,
             pix_float: None,
+            pix_funding: None,
             channel_maintenance: channel_maintenance::Supervisor::default(),
             ongoing_disconnections: Vec::new(),
             pending_unregisters: Vec::new(),
@@ -1803,20 +1806,35 @@ impl Core {
         }
     }
 
-    /// Starts `quickprobe <id>` and answers right away; the result lands in the destination's route health.
     /// Shielding waits for a chain transaction, so it answers from its own task.
-    fn spawn_fund_pix_float(&self, amount: ipc::Balance<ipc::WxHopr>, resp: oneshot::Sender<Response>) {
+    fn spawn_fund_pix_float(&mut self, amount: ipc::Balance<ipc::WxHopr>, resp: oneshot::Sender<Response>) {
         let Some(float) = self.pix_float.clone() else {
             let _ = resp.send(Response::FundPixFloat(ipc::FundPixFloatResponse::NotReady));
             return;
         };
-        tokio::spawn(async move {
-            let response = match float.fund(wire::from_wxhopr(amount)).await {
-                Ok(()) => {
+        // a ctl retry after its 30 s timeout must not shield the amount twice
+        let is_funding = self.pix_funding.as_ref().is_some_and(|task| !task.is_finished());
+        if is_funding {
+            tracing::info!(%amount, "refused PIX float funding while one is running");
+            let _ = resp.send(Response::FundPixFloat(ipc::FundPixFloatResponse::AlreadyFunding));
+            return;
+        }
+        let cancel = self.cancel_on_shutdown.clone();
+        let task = tokio::spawn(async move {
+            let funding = cancel.run_until_cancelled(float.fund(wire::from_wxhopr(amount))).await;
+            let response = match funding {
+                Some(Ok(())) => {
                     tracing::info!(%amount, "funded the PIX float");
                     ipc::FundPixFloatResponse::Funded { amount }
                 }
-                Err(err) => {
+                // a shield already submitted may still land
+                None => {
+                    tracing::warn!(%amount, "PIX float funding interrupted by shutdown");
+                    ipc::FundPixFloatResponse::Failed {
+                        reason: "service shut down while shielding".to_string(),
+                    }
+                }
+                Some(Err(err)) => {
                     tracing::error!(%err, %amount, "failed to fund the PIX float");
                     ipc::FundPixFloatResponse::Failed {
                         reason: err.to_string(),
@@ -1825,8 +1843,10 @@ impl Core {
             };
             let _ = resp.send(Response::FundPixFloat(response));
         });
+        self.pix_funding = Some(task);
     }
 
+    /// Starts `quickprobe <id>` and answers right away; the result lands in the destination's route health.
     fn spawn_quick_probe(
         &mut self,
         dest: Destination,

@@ -165,6 +165,9 @@ fn pretty_print(resp: &Response) {
         Response::FundPixFloat(ipc::FundPixFloatResponse::NotReady) => {
             eprintln!("No PIX float yet - the Curvy pool starts with the edge node");
         }
+        Response::FundPixFloat(ipc::FundPixFloatResponse::AlreadyFunding) => {
+            eprintln!("A PIX float funding is already running - check `status` for the float balance");
+        }
         Response::FundPixFloat(ipc::FundPixFloatResponse::Failed { reason }) => {
             eprintln!("Funding the PIX float failed: {reason}");
         }
@@ -434,6 +437,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::ProbingBoost => exitcode::OK,
         Response::FundPixFloat(ipc::FundPixFloatResponse::Funded { .. }) => exitcode::OK,
         Response::FundPixFloat(ipc::FundPixFloatResponse::NotReady) => exitcode::UNAVAILABLE,
+        Response::FundPixFloat(ipc::FundPixFloatResponse::AlreadyFunding) => exitcode::UNAVAILABLE,
         Response::FundPixFloat(ipc::FundPixFloatResponse::Failed { .. }) => exitcode::SOFTWARE,
         Response::Status(..) => exitcode::OK,
         Response::Balance(ipc::BalanceResponse::Available(..)) => exitcode::OK,

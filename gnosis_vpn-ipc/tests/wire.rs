@@ -218,6 +218,13 @@ fn fund_pix_float_request_carries_wei() {
 }
 
 #[test]
+fn fund_pix_float_already_funding_is_tagged() {
+    let response = FundPixFloatResponse::AlreadyFunding;
+    let json = serde_json::to_value(&response).expect("serialize");
+    assert_eq!(json, json!({"type": "already_funding"}));
+}
+
+#[test]
 fn nerd_stats_carry_tagged_strategy_health_and_optional_counters() {
     let stats = NerdStats::NoInfo {
         tickets: TicketStatsStatus::Waiting,
