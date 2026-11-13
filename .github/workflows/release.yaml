@@ -32,12 +32,13 @@ jobs:
           - architecture: aarch64-darwin
             runner: ${{ vars.MACOS_RUNNER }} # Posible values are: `macos-26-xlarge` or `depot-macos-26`
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@45221eb1aadfc5c46751306c5c7d6d291c8a24b3 # build-binaries-v3.1.2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@3df1022f4b852f1b7acd064123ce819258a62fe3 # build-binaries-v4.0.1
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
     with:
-      source_branch: ${{ github.ref_name }}
+      repo_sha: ${{ github.sha }}
       version_type: release
       architecture: ${{ matrix.architecture }}
       cachix_cache_name: gnosis-vpn-client

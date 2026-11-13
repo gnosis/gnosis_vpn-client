@@ -20,13 +20,14 @@ jobs:
   # recompiling root/worker/ctl itself.
   build-x86_64-linux:
     name: Binary x86_64-linux
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@45221eb1aadfc5c46751306c5c7d6d291c8a24b3 # build-binaries-v3.1.2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@3df1022f4b852f1b7acd064123ce819258a62fe3 # build-binaries-v4.0.1
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
     with:
-      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      repo_sha: ${{ github.event.pull_request.head.sha }}
       version_type: commit
       architecture: x86_64-linux
       cachix_cache_name: gnosis-vpn-client
@@ -59,13 +60,14 @@ jobs:
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
             build_debug_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin-dev
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@45221eb1aadfc5c46751306c5c7d6d291c8a24b3 # build-binaries-v3.1.2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@3df1022f4b852f1b7acd064123ce819258a62fe3 # build-binaries-v4.0.1
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
     with:
-      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      repo_sha: ${{ github.event.pull_request.head.sha }}
       version_type: commit
       architecture: ${{ matrix.architecture }}
       cachix_cache_name: gnosis-vpn-client
