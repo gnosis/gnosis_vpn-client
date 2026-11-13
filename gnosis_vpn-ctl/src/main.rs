@@ -159,6 +159,18 @@ fn pretty_print(resp: &Response) {
         Response::ProbingBoost => {
             println!("Network probing stepped up");
         }
+        Response::FundPixFloat(ipc::FundPixFloatResponse::Funded { amount }) => {
+            println!("Shielded {amount} into the PIX float");
+        }
+        Response::FundPixFloat(ipc::FundPixFloatResponse::NotReady) => {
+            eprintln!("No PIX float yet - the Curvy pool starts with the edge node");
+        }
+        Response::FundPixFloat(ipc::FundPixFloatResponse::AlreadyFunding) => {
+            eprintln!("A PIX float funding is already running - check `balance` for the float balance");
+        }
+        Response::FundPixFloat(ipc::FundPixFloatResponse::Failed { reason }) => {
+            eprintln!("Funding the PIX float failed: {reason}");
+        }
         Response::QuickProbe(
             res @ (ipc::QuickProbeResponse::Checking { .. } | ipc::QuickProbeResponse::AlreadyChecking { .. }),
         ) => {
@@ -242,6 +254,7 @@ fn pretty_print(resp: &Response) {
                 capacity_allocations,
                 ideal_balance: _,
                 funding_status,
+                pix_float,
             } = balances.as_ref();
             let mut str_resp = String::new();
             str_resp.push_str(&format!(
@@ -250,6 +263,9 @@ fn pretty_print(resp: &Response) {
             ));
             let safe_sci = ipc::scientific_suffix(safe);
             str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\n"));
+            if let Some(float) = pix_float {
+                str_resp.push_str(&format!("PIX Float: {float}{}\n", ipc::scientific_suffix(float)));
+            }
             let allocations = capacity_allocations.as_ref();
             if let Some(nc) = allocations.map(|a| a.node).filter(|c| !c.stake.is_zero()) {
                 str_resp.push_str(&format!(
@@ -419,6 +435,10 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Unprobe(ipc::UnprobeResponse::InUse { .. }) => exitcode::PROTOCOL,
         Response::Unprobe(ipc::UnprobeResponse::NotProbing) => exitcode::PROTOCOL,
         Response::ProbingBoost => exitcode::OK,
+        Response::FundPixFloat(ipc::FundPixFloatResponse::Funded { .. }) => exitcode::OK,
+        Response::FundPixFloat(ipc::FundPixFloatResponse::NotReady) => exitcode::UNAVAILABLE,
+        Response::FundPixFloat(ipc::FundPixFloatResponse::AlreadyFunding) => exitcode::UNAVAILABLE,
+        Response::FundPixFloat(ipc::FundPixFloatResponse::Failed { .. }) => exitcode::SOFTWARE,
         Response::Status(..) => exitcode::OK,
         Response::Balance(ipc::BalanceResponse::Available(..)) => exitcode::OK,
         Response::Balance(ipc::BalanceResponse::Unavailable { .. }) => exitcode::SOFTWARE,

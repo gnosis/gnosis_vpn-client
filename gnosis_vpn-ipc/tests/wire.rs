@@ -177,6 +177,7 @@ fn balances_are_wei_strings() {
             xdai_deficit: None,
             refill_shortfall: None,
         }),
+        pix_float: Some(Balance::from_wei(42)),
     }));
     let json = serde_json::to_value(&balances).expect("serialize");
     assert_eq!(json["type"], "available");
@@ -185,6 +186,42 @@ fn balances_are_wei_strings() {
     assert_eq!(json["channels_out"][0]["balance"], "750000000");
     assert_eq!(json["funding_status"]["traffic"], json!({"type": "low"}));
     assert_eq!(json["funding_status"]["wxhopr_deficit"], "5");
+    assert_eq!(json["pix_float"], "42");
+}
+
+#[test]
+fn balances_without_pix_float_still_parse() {
+    let json = json!({
+        "type": "available",
+        "node": "0",
+        "safe": "0",
+        "channels_out": [],
+        "info": {"node_address": address(3), "node_peer_id": "12D3KooW", "safe_address": address(4)},
+        "capacity_allocations": null,
+        "ideal_balance": null,
+        "funding_status": null,
+    });
+    let parsed: BalanceResponse = serde_json::from_value(json).expect("an older service omits pix_float");
+    let BalanceResponse::Available(balances) = parsed else {
+        panic!("expected available balances");
+    };
+    assert!(balances.pix_float.is_none());
+}
+
+#[test]
+fn fund_pix_float_request_carries_wei() {
+    let request = Request::FundPixFloat {
+        amount: "1.5".parse().expect("token amount"),
+    };
+    let json = serde_json::to_value(&request).expect("serialize");
+    assert_eq!(json, json!({"type": "fund_pix_float", "amount": "1500000000000000000"}));
+}
+
+#[test]
+fn fund_pix_float_already_funding_is_tagged() {
+    let response = FundPixFloatResponse::AlreadyFunding;
+    let json = serde_json::to_value(&response).expect("serialize");
+    assert_eq!(json, json!({"type": "already_funding"}));
 }
 
 #[test]

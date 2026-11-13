@@ -17,6 +17,8 @@ pub enum ParseError {
     AddressChecksum(String),
     #[error("not a wei amount: {0}")]
     Balance(String),
+    #[error("not a token amount with at most 18 decimals: {0}")]
+    TokenAmount(String),
     #[error("hop count {0} exceeds {max}", max = Hops::MAX)]
     Hops(u8),
     #[error("not a WireGuard public key: {0}")]
@@ -209,6 +211,30 @@ impl<C: Currency> Display for Balance<C> {
         }
         let digits = format!("{fraction:018}");
         write!(f, "{whole}.{} {}", digits.trim_end_matches('0'), C::NAME)
+    }
+}
+
+/// Parses a decimal token amount such as `10` or `0.5`; the wire form stays wei.
+impl<C> FromStr for Balance<C> {
+    type Err = ParseError;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let invalid = || ParseError::TokenAmount(raw.to_string());
+        let trimmed = raw.trim();
+        let (whole, fraction) = trimmed.split_once('.').unwrap_or((trimmed, "0"));
+        let is_digits = |part: &str| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit());
+        let is_well_formed = is_digits(whole) && is_digits(fraction) && fraction.len() <= 18;
+        if !is_well_formed {
+            return Err(invalid());
+        }
+        let whole_wei = whole
+            .parse::<u128>()
+            .ok()
+            .and_then(|w| w.checked_mul(WEI_PER_TOKEN))
+            .ok_or_else(invalid)?;
+        let fraction_wei = format!("{fraction:0<18}").parse::<u128>().map_err(|_| invalid())?;
+        let wei = whole_wei.checked_add(fraction_wei).ok_or_else(invalid)?;
+        Ok(Self::from_wei(wei))
     }
 }
 
@@ -561,6 +587,17 @@ mod tests {
     #[test]
     fn balance_rejects_token_notation() {
         assert!(serde_json::from_str::<Balance<XDai>>(r#""1.5 xDai""#).is_err());
+    }
+
+    #[test]
+    fn balance_parses_decimal_token_amounts() {
+        let parse = |raw: &str| raw.parse::<Balance<WxHopr>>();
+        assert_eq!(parse("10").unwrap().wei(), 10 * WEI_PER_TOKEN);
+        assert_eq!(parse("0.5").unwrap().wei(), WEI_PER_TOKEN / 2);
+        assert_eq!(parse("0.000000000000000001").unwrap().wei(), 1);
+        for bad in ["", ".5", "1.", "1.0000000000000000001", "-1", "1e3", "1 wxHOPR"] {
+            assert!(parse(bad).is_err(), "{bad:?} must be rejected");
+        }
     }
 
     #[test]

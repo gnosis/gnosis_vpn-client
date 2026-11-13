@@ -29,6 +29,9 @@ pub enum HoprError {
     #[error("No ticket price available")]
     NoTicketPrice,
 
+    #[error("PIX float error: {0}")]
+    PixFloat(String),
+
     #[error("Failed to start telemetry reactor: {0}")]
     TelemetryReactorStart(String),
 

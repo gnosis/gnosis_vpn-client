@@ -120,7 +120,11 @@ impl PixConfig {
     }
 
     /// The edgli form; which pool the knobs reach is edgli's call, deployment stays on `HOPRD_CURVY_*`.
-    pub fn to_entry_config(&self, state_dir: PathBuf) -> edgli::strategy::PixEntryConfig {
+    pub fn to_entry_config(
+        &self,
+        state_dir: PathBuf,
+        state_password: edgli::strategy::PixRecoveryPassword,
+    ) -> edgli::strategy::PixEntryConfig {
         let pool = edgli::strategy::PixEntryPool::from_knobs(edgli::strategy::PixEntryPoolKnobs {
             max_deposit_tracking_time: Some(self.max_deposit_tracking_time),
             max_deposit_retries: self.max_deposit_retries,
@@ -143,6 +147,7 @@ impl PixConfig {
             },
             pool,
             state_dir: Some(state_dir),
+            state_password,
         }
     }
 }
@@ -150,6 +155,10 @@ impl PixConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_password() -> edgli::strategy::PixRecoveryPassword {
+        "test password".to_owned().into()
+    }
 
     #[test]
     fn partial_toml_falls_back_to_pix_config_default() {
@@ -170,16 +179,18 @@ mod tests {
     #[test]
     fn to_entry_config_keeps_pool_state_in_the_network_pix_dir() {
         let pix_dir = PathBuf::from("/home/alice/.local/share/gnosisvpn/networks/jura-dev/pix");
-        let cfg = PixConfig::default().to_entry_config(pix_dir.clone());
+        let cfg = PixConfig::default().to_entry_config(pix_dir.clone(), test_password());
         assert_eq!(cfg.state_dir, Some(pix_dir));
+        assert_eq!(cfg.state_password, test_password());
     }
 
     #[cfg(feature = "pix-curvy")]
     #[test]
     fn to_entry_config_submits_through_curvy_relayer() {
-        let cfg = PixConfig::default().to_entry_config(PathBuf::from(
-            "/home/alice/.local/share/gnosisvpn/networks/jura-dev/pix",
-        ));
+        let cfg = PixConfig::default().to_entry_config(
+            PathBuf::from("/home/alice/.local/share/gnosisvpn/networks/jura-dev/pix"),
+            test_password(),
+        );
         assert_eq!(
             cfg.pool.submission,
             edgli::strategy::PixCurvySubmission::Relayer(PixConfig::default_relayer_url())
@@ -190,7 +201,7 @@ mod tests {
     #[test]
     fn to_entry_config_carries_initial_funding() {
         let pix_dir = PathBuf::from("/home/alice/.local/share/gnosisvpn/networks/jura-dev/pix");
-        let unset = PixConfig::default().to_entry_config(pix_dir.clone());
+        let unset = PixConfig::default().to_entry_config(pix_dir.clone(), test_password());
         assert_eq!(
             unset.pool.initial_funding,
             edgli::strategy::PixEntryPool::default().initial_funding
@@ -201,7 +212,7 @@ mod tests {
             initial_funding: Some(funding),
             ..PixConfig::default()
         }
-        .to_entry_config(pix_dir);
+        .to_entry_config(pix_dir, test_password());
         assert_eq!(set.pool.initial_funding, funding);
     }
 }

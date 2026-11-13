@@ -128,6 +128,7 @@ fn respond(request: Request, run_mode: RunMode) -> Response {
         Request::Unprobe => Response::Unprobe(UnprobeResponse::NotProbing),
         Request::QuickProbe { .. } => Response::QuickProbe(QuickProbeResponse::DestinationNotFound),
         Request::ProbingBoost => Response::ProbingBoost,
+        Request::FundPixFloat { .. } => Response::FundPixFloat(FundPixFloatResponse::NotReady),
         Request::TrafficInterfaces => Response::TrafficInterfaces(vec![]),
         Request::TrafficStart(request) => Response::TrafficStart(traffic::StartReply::Failed {
             reason: format!("Interface {} is not available", request.interface_id),

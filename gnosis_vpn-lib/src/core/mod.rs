@@ -121,6 +121,10 @@ pub struct Core {
     strategy_handle: Option<AbortHandle>,
     /// Read handle to the strategy reactor's health, paired with `strategy_handle`.
     strategy_state: Option<edgli::StrategyStateHandle>,
+    /// The Curvy float, paired with `strategy_handle`.
+    pix_float: Option<hopr::PixFloat>,
+    /// Outlives a float swap: both shields draw from the same Safe.
+    pix_funding: Option<tokio::task::JoinHandle<()>>,
     channel_maintenance: channel_maintenance::Supervisor,
     route_healths: HashMap<ExitKey, RouteHealth>,
     /// The last announced-peers snapshot, so an exit discovered between fetches gets its country at once.
@@ -258,6 +262,8 @@ impl Core {
             balances: None,
             strategy_handle: None,
             strategy_state: None,
+            pix_float: None,
+            pix_funding: None,
             channel_maintenance: channel_maintenance::Supervisor::default(),
             ongoing_disconnections: Vec::new(),
             pending_unregisters: Vec::new(),
@@ -334,6 +340,7 @@ impl Core {
                     let shutdown_tracker = TaskTracker::new();
                     if let Some(handle) = self.strategy_handle.take() {
                         self.strategy_state = None;
+                        self.pix_float = None;
                         shutdown_tracker.spawn(async move {
                             tracing::debug!("aborting strategy task");
                             handle.abort();
@@ -585,6 +592,8 @@ impl Core {
                         self.network_probing.boost(Instant::now());
                         let _ = resp.send(Response::ProbingBoost);
                     }
+
+                    WorkerCommand::FundPixFloat { amount } => self.spawn_fund_pix_float(amount, resp),
 
                     WorkerCommand::Balance => {
                         let result = match (&self.hopr, &self.balances) {
@@ -1671,13 +1680,14 @@ impl Core {
 
     fn spawn_balances_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
+            let pix_float = self.pix_float.clone();
             let cancel = self.cancel_balances.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::balances(hopr, results_sender).await;
+                        runner::balances(hopr, pix_float, results_sender).await;
                     })
                     .await
             });
@@ -1794,6 +1804,46 @@ impl Core {
                 destination: command::destination(&dest),
             },
         }
+    }
+
+    /// Shielding waits for a chain transaction, so it answers from its own task.
+    fn spawn_fund_pix_float(&mut self, amount: ipc::Balance<ipc::WxHopr>, resp: oneshot::Sender<Response>) {
+        let Some(float) = self.pix_float.clone() else {
+            let _ = resp.send(Response::FundPixFloat(ipc::FundPixFloatResponse::NotReady));
+            return;
+        };
+        // a ctl retry after its 30 s timeout must not shield the amount twice
+        let is_funding = self.pix_funding.as_ref().is_some_and(|task| !task.is_finished());
+        if is_funding {
+            tracing::info!(%amount, "refused PIX float funding while one is running");
+            let _ = resp.send(Response::FundPixFloat(ipc::FundPixFloatResponse::AlreadyFunding));
+            return;
+        }
+        let cancel = self.cancel_on_shutdown.clone();
+        let task = tokio::spawn(async move {
+            let funding = cancel.run_until_cancelled(float.fund(wire::from_wxhopr(amount))).await;
+            let response = match funding {
+                Some(Ok(())) => {
+                    tracing::info!(%amount, "funded the PIX float");
+                    ipc::FundPixFloatResponse::Funded { amount }
+                }
+                // a shield already submitted may still land
+                None => {
+                    tracing::warn!(%amount, "PIX float funding interrupted by shutdown");
+                    ipc::FundPixFloatResponse::Failed {
+                        reason: "service shut down while shielding".to_string(),
+                    }
+                }
+                Some(Err(err)) => {
+                    tracing::error!(%err, %amount, "failed to fund the PIX float");
+                    ipc::FundPixFloatResponse::Failed {
+                        reason: err.to_string(),
+                    }
+                }
+            };
+            let _ = resp.send(Response::FundPixFloat(response));
+        });
+        self.pix_funding = Some(task);
     }
 
     /// Starts `quickprobe <id>` and answers right away; the result lands in the destination's route health.
@@ -2460,18 +2510,26 @@ impl Core {
         if self.strategy_handle.is_some() {
             return;
         }
-        let Some(edgli) = self.hopr.as_ref() else { return };
+        let Some(edgli) = self.hopr.clone() else { return };
+        let identity_pass = match self.worker_params.identity_pass().await {
+            Ok(pass) => pass,
+            Err(err) => {
+                tracing::error!(?err, "no identity pass to seal the PIX state - retrying reactor in 10s");
+                self.spawn_retry_reactor(results_sender, Duration::from_secs(10));
+                return;
+            }
+        };
+        let pix = self
+            .config
+            .pix_strategy
+            .to_entry_config(self.worker_params.pix_state_dir(), identity_pass.into());
         match edgli
-            .start_telemetry_reactor(
-                self.config.strategy.clone().into(),
-                self.config
-                    .pix_strategy
-                    .to_entry_config(self.worker_params.pix_state_dir()),
-            )
+            .start_telemetry_reactor(self.config.strategy.clone().into(), pix)
             .await
         {
             Ok(reactor) => {
                 tracing::info!("started edge node telemetry reactor");
+                self.pix_float = hopr::PixFloat::of(&reactor);
                 self.strategy_handle = Some(reactor.abort_handle);
                 self.strategy_state = Some(reactor.strategy_state);
             }

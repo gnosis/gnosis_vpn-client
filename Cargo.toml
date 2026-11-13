@@ -33,7 +33,7 @@ exitcode = "~1.1.2"
 futures = "~0.3.34"
 futures-util = "~0.3.34"
 # only for the feature: edgli's `telemetry` doesn't forward `hopr-strategy/telemetry`
-hopr-strategy = { version = "~7.0.0", default-features = false, features = [
+hopr-strategy = { version = "~8.0.0", default-features = false, features = [
   "telemetry",
 ] }
 # Pinned by BRANCH to match edgli's own `hopr-lib` pin: cargo treats `?branch=X#sha` and

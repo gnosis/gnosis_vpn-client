@@ -52,6 +52,10 @@ pub enum Request {
     },
     /// Steps network probing up one level; route readiness steps it back down.
     ProbingBoost,
+    /// Shield wxHOPR from the Safe into the PIX float deposits are paid from.
+    FundPixFloat {
+        amount: Balance<WxHopr>,
+    },
     /// List interfaces the service may capture traffic on
     TrafficInterfaces,
     /// Begin capturing on one interface, replacing any current capture
@@ -109,6 +113,7 @@ pub enum Response {
     Unprobe(UnprobeResponse),
     QuickProbe(QuickProbeResponse),
     ProbingBoost,
+    FundPixFloat(FundPixFloatResponse),
     TrafficInterfaces(Vec<traffic::Interface>),
     TrafficStart(traffic::StartReply),
     TrafficRead(traffic::ReadResponse),
@@ -762,6 +767,24 @@ pub struct Balances {
     pub capacity_allocations: Option<CapacityAllocations>,
     pub ideal_balance: Option<BalanceRecommendation>,
     pub funding_status: Option<FundingStatus>,
+    /// wxHOPR shielded for PIX deposits, as the pool accounts it; none without a Curvy PIX pool.
+    #[serde(default)]
+    pub pix_float: Option<Balance<WxHopr>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FundPixFloatResponse {
+    Funded {
+        amount: Balance<WxHopr>,
+    },
+    /// No Curvy PIX pool runs yet.
+    NotReady,
+    /// An earlier funding is still shielding.
+    AlreadyFunding,
+    Failed {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -25,7 +25,7 @@ use crate::compat::SafeModule;
 use crate::connection::destination::{Destination, ExitKey};
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
-use crate::hopr::{Hopr, HoprError, config as hopr_config};
+use crate::hopr::{Hopr, HoprError, PixFloat, config as hopr_config};
 use crate::probe;
 use crate::route_health::RouteWalk;
 use crate::worker_params::{self, WorkerParams};
@@ -194,9 +194,17 @@ pub(crate) async fn capacity_allocations(hopr: Arc<Hopr>, results_sender: mpsc::
     let _ = results_sender.send(Results::CapacityAllocations { res }).await;
 }
 
-pub(crate) async fn balances(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn balances(hopr: Arc<Hopr>, pix_float: Option<PixFloat>, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("starting balances runner");
-    let res = hopr.balances().await.map_err(Error::from);
+    let mut res = hopr.balances().await.map_err(Error::from);
+    if let (Ok(balances), Some(float)) = (res.as_mut(), pix_float) {
+        // A missing float figure must not hide the Safe and channel balances.
+        balances.pix_float_wxhopr = float
+            .balance()
+            .await
+            .inspect_err(|err| tracing::warn!(%err, "failed to read the PIX float balance"))
+            .ok();
+    }
     let _ = results_sender.send(Results::Balances { res }).await;
 }
 
