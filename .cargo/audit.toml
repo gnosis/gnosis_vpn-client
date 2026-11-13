@@ -24,6 +24,9 @@ ignore = [
   "RUSTSEC-2026-0511", # hickory-proto: NXDOMAIN accepted for a proven empty non-terminal - no fixed version available yet
   "RUSTSEC-2026-0512", # hickory-proto: DNSSEC accepted an unrelated signed RRset - no fixed version available yet
   "RUSTSEC-2026-0514", # hickory-resolver: lookup returned records that failed DNSSEC validation - no fixed version available yet
+  "RUSTSEC-2026-0530", # hickory-proto: parent-side NSEC at a zone cut accepted as nonexistence proof - no fixed version available yet
+  "RUSTSEC-2026-0531", # hickory-proto: child-side NSEC/NSEC3 accepted as no-DS proof - no fixed version available yet
+  "RUSTSEC-2026-0532", # hickory-proto: parent-side NSEC3 at a zone cut accepted as nonexistence proof - no fixed version available yet
 ]
 
 # Output configuration
