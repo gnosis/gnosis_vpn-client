@@ -134,6 +134,9 @@ pub struct Status {
     pub probe: Option<ProbeView>,
     /// Data an exit sells per PIX chunk; none until the node runs.
     pub pix_chunk_bytes: Option<u64>,
+    /// What one PIX chunk costs at this client's price; none until the node runs.
+    #[serde(default)]
+    pub pix_chunk_cost: Option<Balance<WxHopr>>,
     /// Network probing as applied to the edge client; none until the node runs.
     pub probing: Option<ProbingView>,
     /// Recently connected exits on this network, newest first.

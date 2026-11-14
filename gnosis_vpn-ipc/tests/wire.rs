@@ -401,6 +401,27 @@ fn a_status_from_a_client_without_pix_still_reads() {
 }
 
 #[test]
+fn a_status_without_a_chunk_cost_still_reads() {
+    let status = Status {
+        run_mode: RunMode::Init { last_error: None },
+        destinations: vec![],
+        target: None,
+        connection: Connection::Disconnected,
+        disconnecting: vec![],
+        probe: None,
+        pix_chunk_bytes: Some(660_160_512),
+        pix_chunk_cost: Some(Balance::from_wei(660_160_512_000_000_000)),
+        probing: None,
+        recent: vec![],
+    };
+    let mut json = serde_json::to_value(&status).expect("serialize");
+    assert_eq!(json["pix_chunk_cost"], "660160512000000000");
+    json.as_object_mut().expect("object").remove("pix_chunk_cost");
+    let parsed: Status = serde_json::from_value(json).expect("an older service omits pix_chunk_cost");
+    assert_eq!(parsed.pix_chunk_cost, None);
+}
+
+#[test]
 fn a_stall_shows_only_while_pings_fail() {
     let connected = |stall| Connection::Connected {
         destination: "berlin".into(),

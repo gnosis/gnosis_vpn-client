@@ -194,12 +194,14 @@ fn pretty_print(resp: &Response) {
                 disconnecting,
                 probe,
                 pix_chunk_bytes,
+                pix_chunk_cost,
                 probing,
                 recent,
             } = status.as_ref();
             let mut str_resp = format!("{run_mode}\n");
             if let Some(bytes) = pix_chunk_bytes {
-                str_resp.push_str(&format!("PIX chunk per exit: {}\n", ByteSize(*bytes)));
+                let cost = pix_chunk_cost.map(|c| format!(" for {c}")).unwrap_or_default();
+                str_resp.push_str(&format!("PIX chunk per exit: {}{cost}\n", ByteSize(*bytes)));
             }
             if let Some(id) = target {
                 let is_active = connection.destination() == Some(id);

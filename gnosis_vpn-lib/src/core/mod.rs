@@ -2247,6 +2247,10 @@ impl Core {
             disconnecting,
             probe: self.probe.as_ref().map(Probe::view),
             pix_chunk_bytes: self.hopr.as_ref().map(|h| h.pix_chunk_bytes()),
+            pix_chunk_cost: self
+                .hopr
+                .as_ref()
+                .map(|h| wire::wxhopr(self.config.pix_strategy.price_per_byte * h.pix_chunk_bytes())),
             probing: self.probing_plan.as_ref().map(|plan| self.probing_view(plan)),
             recent: self
                 .network_probing
