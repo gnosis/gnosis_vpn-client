@@ -119,6 +119,16 @@ impl PixConfig {
         edgli::strategy::PixEntryPool::default().max_deposit_tracking_time
     }
 
+    /// What the pool shields from the Safe once; the `pix-test` pool has no float.
+    pub fn float(&self) -> HoprBalance {
+        #[cfg(feature = "pix-curvy")]
+        return self
+            .initial_funding
+            .unwrap_or(edgli::strategy::PixEntryPool::default().initial_funding);
+        #[cfg(not(feature = "pix-curvy"))]
+        HoprBalance::zero()
+    }
+
     /// The edgli form; which pool the knobs reach is edgli's call, deployment stays on `HOPRD_CURVY_*`.
     pub fn to_entry_config(
         &self,

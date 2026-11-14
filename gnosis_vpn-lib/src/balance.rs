@@ -277,7 +277,7 @@ impl CapacityReconciler {
 /// periodically while running, feeding funding-issue checks and balance responses).
 #[derive(Copy, Clone, Debug)]
 pub struct BalanceRecommendation {
-    /// Total wxHOPR to fund: channel stakes plus the fee to start.
+    /// Total wxHOPR to fund: channel stakes, the PIX float and the fee to start.
     pub wxhopr: Balance<WxHOPR>,
     /// Recommended xDai balance for gas: the total amount to fund the node with.
     ///
@@ -287,6 +287,8 @@ pub struct BalanceRecommendation {
     pub xdai: Balance<XDai>,
     /// wxHOPR needed to stake the missing channels.
     pub channel_stakes: Balance<WxHOPR>,
+    /// Curvy float shielded from the Safe once; only onboarding counts it.
+    pub pix_float: Balance<WxHOPR>,
     /// One-time key-binding fee still owed before the node can start;
     /// zero once the key is bound on-chain.
     pub fee_to_start: Balance<WxHOPR>,
@@ -305,6 +307,7 @@ impl From<edgli::strategy::BalanceRecommendation> for BalanceRecommendation {
             wxhopr: rec.total_wxhopr(),
             xdai: rec.xdai_fund_amount,
             channel_stakes: rec.channel_stakes,
+            pix_float: rec.pix_float,
             fee_to_start: rec.fee_to_start,
             txs_to_start: rec.txs_to_start,
             xdai_fee_per_tx: rec.xdai_fee_per_tx,
@@ -459,6 +462,7 @@ impl From<&BalanceRecommendation> for gnosis_vpn_ipc::BalanceRecommendation {
             wxhopr: wire::wxhopr(rec.wxhopr),
             xdai: wire::xdai(rec.xdai),
             channel_stakes: wire::wxhopr(rec.channel_stakes),
+            pix_float: wire::wxhopr(rec.pix_float),
             fee_to_start: wire::wxhopr(rec.fee_to_start),
             txs_to_start: rec.txs_to_start,
             xdai_fee_per_tx: wire::xdai(rec.xdai_fee_per_tx),
@@ -476,6 +480,7 @@ mod tests {
             wxhopr: Balance::<WxHOPR>::from(wxhopr),
             xdai: Balance::<XDai>::from(xdai),
             channel_stakes: Balance::<WxHOPR>::from(wxhopr),
+            pix_float: Balance::<WxHOPR>::zero(),
             fee_to_start: Balance::<WxHOPR>::zero(),
             txs_to_start: 0,
             xdai_fee_per_tx: Balance::<XDai>::from(xdai),
@@ -605,9 +610,10 @@ mod tests {
     }
 
     #[test]
-    fn balance_recommendation_from_edgli_totals_stakes_and_fee() {
+    fn balance_recommendation_from_edgli_totals_stakes_float_and_fee() {
         let rec = edgli::strategy::BalanceRecommendation {
             channel_stakes: Balance::<WxHOPR>::from(800u64),
+            pix_float: Balance::<WxHOPR>::from(200u64),
             fee_to_start: Balance::<WxHOPR>::from(10_000u64),
             txs_to_start: 3,
             xdai_fee_per_tx: Balance::<XDai>::from(100u64),
@@ -615,7 +621,7 @@ mod tests {
             topup_headroom: Balance::<WxHOPR>::from(42u64),
         };
         let mirrored: BalanceRecommendation = rec.into();
-        assert_eq!(mirrored.wxhopr, Balance::<WxHOPR>::from(10_800u64));
+        assert_eq!(mirrored.wxhopr, Balance::<WxHOPR>::from(11_000u64));
         assert_eq!(
             mirrored.topup_headroom,
             Balance::<WxHOPR>::from(42u64),
@@ -627,6 +633,7 @@ mod tests {
             "xdai must mirror the fund amount, not one transaction's fee ceiling"
         );
         assert_eq!(mirrored.channel_stakes, Balance::<WxHOPR>::from(800u64));
+        assert_eq!(mirrored.pix_float, Balance::<WxHOPR>::from(200u64));
         assert_eq!(mirrored.fee_to_start, Balance::<WxHOPR>::from(10_000u64));
         assert_eq!(mirrored.txs_to_start, 3);
         assert_eq!(mirrored.xdai_fee_per_tx, Balance::<XDai>::from(100u64));
