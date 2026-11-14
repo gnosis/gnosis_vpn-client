@@ -243,8 +243,8 @@ impl SnapshotTotals {
 /// Channels are read from the indexer (lags the chain) before the live Safe/EOA
 /// balances, so stake moving Safe→channel is counted nowhere for a poll or two.
 /// The only legitimate *fast* Safe/EOA drop is a transfer toward a channel (usage
-/// drains channel stakes and the exit-traffic funds instead, and a shield into the
-/// exit-traffic funds is counted there), so an unmatched drop is presumed in-flight and
+/// drains channel stakes and the exit-traffic funds instead, and a shield recorded via
+/// [`Self::record_shield`] is counted there), so an unmatched drop is presumed in-flight and
 /// folded back into the published Safe capacity. The fold-in expires after
 /// `PENDING_ALLOCATION_MAX_POLLS` polls so a real spend still surfaces, just late;
 /// a transient over-count decays over the same window.
@@ -252,9 +252,15 @@ impl SnapshotTotals {
 pub struct CapacityReconciler {
     prev: Option<SnapshotTotals>,
     pending: Option<PendingAllocation>,
+    shielded: Balance<WxHOPR>,
 }
 
 impl CapacityReconciler {
+    /// Gross shields since the last snapshot, so a payment netted against one still counts as usage.
+    pub fn record_shield(&mut self, amount: Balance<WxHOPR>) {
+        self.shielded += amount;
+    }
+
     /// Snapshot to publish: in-flight stake folded into `safe`. Same shape as the
     /// raw snapshot, so downstream consumers summing components need no protocol change.
     pub fn reconcile(&mut self, mut raw: CapacityAllocations) -> CapacityAllocations {
@@ -269,13 +275,14 @@ impl CapacityReconciler {
             byte_capacity,
         };
         let totals = SnapshotTotals::of(&raw);
+        let shielded = std::mem::replace(&mut self.shielded, Balance::zero());
         let pending_stake = match &self.prev {
             Some(prev) => {
                 let carried = self.pending.map(|p| p.stake).unwrap_or_else(Balance::zero);
-                // Channel drops (drainage, closure) and exit-traffic drops (paid exits) are real usage, not in-flight; `-` saturates at zero.
+                // Channel drops (drainage, closure) and paid exits are real usage, not in-flight; `-` saturates at zero.
                 let channel_drop = prev.channel_stake - totals.channel_stake;
-                let exit_traffic_drop = prev.exit_traffic_stake - totals.exit_traffic_stake;
-                prev.stake + carried - channel_drop - exit_traffic_drop - totals.stake
+                let exit_payments = prev.exit_traffic_stake + shielded - totals.exit_traffic_stake;
+                prev.stake + carried - channel_drop - exit_payments - totals.stake
             }
             None => Balance::zero(),
         };
@@ -1037,6 +1044,30 @@ mod tests {
         let out = r.reconcile(with_exit(90, 100));
         assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(190u64));
         assert_eq!(total_bytes(&out), 1900);
+    }
+
+    #[test]
+    fn reconcile_shield_and_paid_exit_between_polls_count_the_payment() {
+        for (exit_after, total) in [(90u64, 190u64), (150, 250)] {
+            let mut r = CapacityReconciler::default();
+            r.reconcile(with_exit(100, 200));
+            r.record_shield(Balance::<WxHOPR>::from(100u64));
+            let out = r.reconcile(with_exit(exit_after, 100));
+            assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(total));
+            assert_eq!(out.safe.stake, Balance::<WxHOPR>::from(100u64));
+        }
+    }
+
+    #[test]
+    fn reconcile_shield_seen_in_the_float_before_the_safe() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(with_exit(100, 200));
+        // the pool counts a shield from submission, the Safe only once it is mined
+        r.reconcile(with_exit(200, 200));
+        r.record_shield(Balance::<WxHOPR>::from(100u64));
+        let out = r.reconcile(with_exit(200, 100));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(300u64));
+        assert_eq!(out.safe.stake, Balance::<WxHOPR>::from(100u64));
     }
 
     // 1 wxHOPR in wei, for the refill-shortfall fixtures below.

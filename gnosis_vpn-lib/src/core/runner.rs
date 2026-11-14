@@ -56,6 +56,9 @@ pub(crate) enum Results {
     CapacityAllocations {
         res: Result<balance::CapacityAllocations, Error>,
     },
+    PixFloatShielded {
+        amount: balance::Balance<balance::WxHOPR>,
+    },
     Balances {
         res: Result<balance::Balances, Error>,
     },
@@ -739,6 +742,7 @@ impl Display for Results {
                 ),
                 Err(err) => write!(f, "CapacityAllocations: Error({})", err),
             },
+            Results::PixFloatShielded { amount } => write!(f, "PixFloatShielded: {}", amount),
             Results::Balances { res } => match res {
                 Ok(balances) => write!(f, "Balances: {}", balances),
                 Err(err) => write!(f, "Balances: Error({})", err),
