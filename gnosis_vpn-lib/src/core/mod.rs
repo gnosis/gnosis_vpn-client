@@ -1145,15 +1145,17 @@ impl Core {
             }
 
             Results::RetryConnect { generation } => {
-                let is_current = generation == self.connection_generation;
+                // Warn to learn whether this queued-retry race ever happens in the field.
+                if generation != self.connection_generation {
+                    tracing::warn!(generation, current = self.connection_generation, phase = ?self.phase, "dropping connect retry of a replaced attempt");
+                    return true;
+                }
                 match self.phase.clone() {
-                    Phase::Connecting(conn)
-                        if is_current && self.target.as_deref() == Some(conn.destination.connect_id.as_str()) =>
-                    {
+                    Phase::Connecting(conn) if self.target.as_deref() == Some(conn.destination.connect_id.as_str()) => {
                         self.reconnect_in_place(conn, true, results_sender).await;
                     }
                     phase => {
-                        tracing::debug!(?phase, target = ?self.target, generation, "dropping connect retry - attempt moved on");
+                        tracing::debug!(?phase, target = ?self.target, "dropping connect retry - target moved on");
                     }
                 }
             }
