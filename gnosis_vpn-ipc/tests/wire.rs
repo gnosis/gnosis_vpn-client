@@ -209,6 +209,27 @@ fn balances_without_pix_float_still_parse() {
 }
 
 #[test]
+fn exit_traffic_funds_carry_only_stake_and_bytes() {
+    let funds = ExitTrafficFunds {
+        stake: Balance::from_wei(84),
+        byte_capacity: 17,
+        bytes_from_exits: 78,
+    };
+    assert_eq!(
+        serde_json::to_value(funds).expect("serialize"),
+        json!({"stake": "84", "byte_capacity": 17, "bytes_from_exits": 78})
+    );
+}
+
+#[test]
+fn capacity_allocations_without_exit_traffic_still_parse() {
+    let zero = json!({"stake": "0", "expected_messages": 0, "min_guaranteed_messages": 0, "byte_capacity": 0});
+    let json = json!({"peer_allocations": {}, "node": zero, "safe": zero});
+    let parsed: CapacityAllocations = serde_json::from_value(json).expect("an older service omits exit_traffic");
+    assert_eq!(parsed.exit_traffic, ExitTrafficFunds::default());
+}
+
+#[test]
 fn fund_pix_float_request_carries_wei() {
     let request = Request::FundPixFloat {
         amount: "1.5".parse().expect("token amount"),
