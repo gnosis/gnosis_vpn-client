@@ -5,7 +5,7 @@ use backon::{ExponentialBuilder, Retryable};
 use edgli::blokli::{IncentiveOperations, make_incentive_operations};
 use edgli::hopr_lib::HopRouting;
 use edgli::hopr_lib::api::node::HoprState;
-use edgli::hopr_lib::api::types::primitive::prelude::Address;
+use edgli::hopr_lib::api::types::primitive::prelude::{Address, HoprBalance};
 use edgli::hopr_lib::builder::Keypair;
 use edgli::{BlockchainConnectorConfig, EdgliInitState};
 use serde::Deserialize;
@@ -126,6 +126,10 @@ pub(crate) enum Results {
     /// The SURB ramp ticker fired; Core nudges the active session's setpoint toward its target.
     SurbRampTick,
     RetryReactor,
+    /// The backoff delay after a failed connect elapsed; Core reconnects in place.
+    RetryConnect {
+        generation: u64,
+    },
     /// Periodic read of the strategy reactor's health verdict.
     StrategySampleTick,
     NerdStatsTicketStats {
@@ -168,9 +172,10 @@ struct UnauthorizedError {
 pub(crate) async fn minimum_balance_recommendation(
     incentive_operations: Arc<dyn IncentiveOperations>,
     cfg: edgli::strategy::IncentiveConfiguration,
+    pix_float: HoprBalance,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = run_minimum_balance_recommendation(incentive_operations, cfg).await;
+    let res = run_minimum_balance_recommendation(incentive_operations, cfg, pix_float).await;
     let _ = results_sender.send(Results::MinimumBalanceRecommendation { res }).await;
 }
 
@@ -539,13 +544,14 @@ async fn run_node_balance(incentive_operations: Arc<dyn IncentiveOperations>) ->
 async fn run_minimum_balance_recommendation(
     incentive_operations: Arc<dyn IncentiveOperations>,
     cfg: edgli::strategy::IncentiveConfiguration,
+    pix_float: HoprBalance,
 ) -> Result<balance::BalanceRecommendation, Error> {
     tracing::debug!("starting minimum balance recommendation runner");
     (|| {
         let ops = incentive_operations.clone();
         let cfg = cfg.clone();
         async move {
-            let rec = edgli::strategy::minimum_balance_recommendation(&*ops, &cfg)
+            let rec = edgli::strategy::minimum_balance_recommendation(&*ops, &cfg, pix_float)
                 .await
                 .map_err(|e| Error::Chain(e.to_string()))?;
             Ok(rec.into())
@@ -818,6 +824,7 @@ impl Display for Results {
             },
             Results::Probe { generation, event } => write!(f, "Probe (gen {generation}): {event:?}"),
             Results::RetryReactor => write!(f, "RetryReactor"),
+            Results::RetryConnect { generation } => write!(f, "RetryConnect (gen {generation})"),
             Results::StrategySampleTick => write!(f, "StrategySampleTick"),
             Results::NerdStatsTicketStats { .. } => write!(f, "NerdStatsTicketStats"),
             Results::QuickProbe {
