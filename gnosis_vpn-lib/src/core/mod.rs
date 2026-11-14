@@ -147,6 +147,8 @@ pub struct Core {
     reconnecting_since: Option<SystemTime>,
     /// Retry budget of the current connect attempts; reset once connected or on a user disconnect or switch.
     connect_retries: Option<ExponentialBackoff>,
+    /// Bumped on every connection teardown so an already-queued RetryConnect of an older attempt is dropped.
+    connection_generation: u64,
 }
 
 /// A disconnect whose unregister failed; re-run against its own destination snapshot on the next connect to this exit.
@@ -286,6 +288,7 @@ impl Core {
             responders: HashMap::new(),
             reconnecting_since: None,
             connect_retries: None,
+            connection_generation: 0,
         };
         Ok((core, incoming_sender))
     }
@@ -484,6 +487,7 @@ impl Core {
                         match self.config.destinations.resolve(token.as_str()).cloned() {
                             Ok(dest) => {
                                 self.reconnecting_since = None;
+                                self.connect_retries = None;
                                 self.abandon_resume(results_sender).await;
                                 let is_already_active = match &self.phase {
                                     Phase::Connected(conn) | Phase::Connecting(conn) => {
@@ -536,6 +540,7 @@ impl Core {
                     WorkerCommand::Disconnect => {
                         self.target = None;
                         self.reconnecting_since = None;
+                        self.connect_retries = None;
                         self.abandon_resume(results_sender).await;
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
@@ -1139,14 +1144,19 @@ impl Core {
                 self.try_start_reactor(results_sender).await;
             }
 
-            Results::RetryConnect => match self.phase.clone() {
-                Phase::Connecting(conn) if self.target.as_deref() == Some(conn.destination.connect_id.as_str()) => {
-                    self.reconnect_in_place(conn, true, results_sender).await;
+            Results::RetryConnect { generation } => {
+                let is_current = generation == self.connection_generation;
+                match self.phase.clone() {
+                    Phase::Connecting(conn)
+                        if is_current && self.target.as_deref() == Some(conn.destination.connect_id.as_str()) =>
+                    {
+                        self.reconnect_in_place(conn, true, results_sender).await;
+                    }
+                    phase => {
+                        tracing::debug!(?phase, target = ?self.target, generation, "dropping connect retry - attempt moved on");
+                    }
                 }
-                phase => {
-                    tracing::debug!(?phase, target = ?self.target, "dropping connect retry - target moved on");
-                }
-            },
+            }
 
             Results::StrategySampleTick => {
                 let sample = self.strategy_state.as_ref().map(|h| h.state());
@@ -2461,6 +2471,7 @@ impl Core {
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
         self.cancel_connection.cancel();
         self.connect_retries = None;
+        self.connection_generation += 1;
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
         self.responders.clear();
@@ -2485,6 +2496,7 @@ impl Core {
         results_sender: &mpsc::Sender<Results>,
     ) {
         self.cancel_connection.cancel();
+        self.connection_generation += 1;
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
         self.responders.clear();
@@ -2588,12 +2600,13 @@ impl Core {
 
     fn spawn_connect_retry(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_connection.clone();
+        let generation = self.connection_generation;
         let results_sender = results_sender.clone();
         tokio::spawn(async move {
             cancel
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
-                    let _ = results_sender.send(Results::RetryConnect).await;
+                    let _ = results_sender.send(Results::RetryConnect { generation }).await;
                 })
                 .await
         });

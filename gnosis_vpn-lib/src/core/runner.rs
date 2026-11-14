@@ -127,7 +127,9 @@ pub(crate) enum Results {
     SurbRampTick,
     RetryReactor,
     /// The backoff delay after a failed connect elapsed; Core reconnects in place.
-    RetryConnect,
+    RetryConnect {
+        generation: u64,
+    },
     /// Periodic read of the strategy reactor's health verdict.
     StrategySampleTick,
     NerdStatsTicketStats {
@@ -806,7 +808,7 @@ impl Display for Results {
             },
             Results::Probe { generation, event } => write!(f, "Probe (gen {generation}): {event:?}"),
             Results::RetryReactor => write!(f, "RetryReactor"),
-            Results::RetryConnect => write!(f, "RetryConnect"),
+            Results::RetryConnect { generation } => write!(f, "RetryConnect (gen {generation})"),
             Results::StrategySampleTick => write!(f, "StrategySampleTick"),
             Results::NerdStatsTicketStats { .. } => write!(f, "NerdStatsTicketStats"),
             Results::QuickProbe {
