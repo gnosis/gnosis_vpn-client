@@ -1145,7 +1145,6 @@ impl Core {
             }
 
             Results::RetryConnect { generation } => {
-                // Warn to learn whether this queued-retry race ever happens in the field.
                 if generation != self.connection_generation {
                     tracing::warn!(generation, current = self.connection_generation, phase = ?self.phase, "dropping connect retry of a replaced attempt");
                     return true;
