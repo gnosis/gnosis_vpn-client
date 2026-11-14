@@ -824,11 +824,14 @@ pub struct CapacityAllocations {
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BalanceRecommendation {
-    /// Total wxHOPR to fund: channel stakes plus the fee to start.
+    /// Total wxHOPR to fund: channel stakes, the PIX float and the fee to start.
     pub wxhopr: Balance<WxHopr>,
     /// The total xDai to fund the node with for gas.
     pub xdai: Balance<XDai>,
     pub channel_stakes: Balance<WxHopr>,
+    /// Curvy float shielded from the Safe once; only onboarding counts it.
+    #[serde(default)]
+    pub pix_float: Balance<WxHopr>,
     /// One-time key-binding fee; zero once the key is bound on-chain.
     pub fee_to_start: Balance<WxHopr>,
     /// On-chain transactions still needed before channel funding can begin.
