@@ -134,9 +134,6 @@ pub struct Status {
     pub probe: Option<ProbeView>,
     /// Data an exit sells per PIX chunk; none until the node runs.
     pub pix_chunk_bytes: Option<u64>,
-    /// What one PIX chunk costs at this client's price; none until the node runs.
-    #[serde(default)]
-    pub pix_chunk_cost: Option<Balance<WxHopr>>,
     /// Network probing as applied to the edge client; none until the node runs.
     pub probing: Option<ProbingView>,
     /// Recently connected exits on this network, newest first.
@@ -814,7 +811,7 @@ pub struct Capacity {
     pub byte_capacity: u64,
 }
 
-/// Every entity holding a wxHOPR stake.
+/// The funds paying for relays (open channels, the Safe, the node account) and for exit traffic.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CapacityAllocations {
     /// Open outgoing channels, keyed by peer.
@@ -823,9 +820,19 @@ pub struct CapacityAllocations {
     pub node: Capacity,
     /// The unallocated wxHOPR in the Safe.
     pub safe: Capacity,
-    /// The PIX float that pays the exits, valued at the Safe's rate; zero without a Curvy PIX pool.
+    /// Pays for exit traffic; zero without a Curvy PIX pool.
     #[serde(default)]
-    pub pix_float: Capacity,
+    pub exit_traffic: ExitTrafficFunds,
+}
+
+/// The funds paying for exit traffic.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExitTrafficFunds {
+    pub stake: Balance<WxHopr>,
+    /// What the funds count for in the total, valued at the rate paying for relays.
+    pub byte_capacity: u64,
+    /// Data the funds buy from exits.
+    pub bytes_from_exits: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

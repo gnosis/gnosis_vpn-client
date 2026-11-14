@@ -209,11 +209,24 @@ fn balances_without_pix_float_still_parse() {
 }
 
 #[test]
-fn capacity_allocations_without_pix_float_still_parse() {
+fn exit_traffic_funds_carry_only_stake_and_bytes() {
+    let funds = ExitTrafficFunds {
+        stake: Balance::from_wei(84),
+        byte_capacity: 17,
+        bytes_from_exits: 78,
+    };
+    assert_eq!(
+        serde_json::to_value(funds).expect("serialize"),
+        json!({"stake": "84", "byte_capacity": 17, "bytes_from_exits": 78})
+    );
+}
+
+#[test]
+fn capacity_allocations_without_exit_traffic_still_parse() {
     let zero = json!({"stake": "0", "expected_messages": 0, "min_guaranteed_messages": 0, "byte_capacity": 0});
     let json = json!({"peer_allocations": {}, "node": zero, "safe": zero});
-    let parsed: CapacityAllocations = serde_json::from_value(json).expect("an older service omits pix_float");
-    assert_eq!(parsed.pix_float, Capacity::default());
+    let parsed: CapacityAllocations = serde_json::from_value(json).expect("an older service omits exit_traffic");
+    assert_eq!(parsed.exit_traffic, ExitTrafficFunds::default());
 }
 
 #[test]
@@ -398,27 +411,6 @@ fn a_status_from_a_client_without_pix_still_reads() {
     }))
     .expect("deserialize");
     assert!(matches!(connected, Connection::Connected { pix: None, .. }));
-}
-
-#[test]
-fn a_status_without_a_chunk_cost_still_reads() {
-    let status = Status {
-        run_mode: RunMode::Init { last_error: None },
-        destinations: vec![],
-        target: None,
-        connection: Connection::Disconnected,
-        disconnecting: vec![],
-        probe: None,
-        pix_chunk_bytes: Some(660_160_512),
-        pix_chunk_cost: Some(Balance::from_wei(660_160_512_000_000_000)),
-        probing: None,
-        recent: vec![],
-    };
-    let mut json = serde_json::to_value(&status).expect("serialize");
-    assert_eq!(json["pix_chunk_cost"], "660160512000000000");
-    json.as_object_mut().expect("object").remove("pix_chunk_cost");
-    let parsed: Status = serde_json::from_value(json).expect("an older service omits pix_chunk_cost");
-    assert_eq!(parsed.pix_chunk_cost, None);
 }
 
 #[test]

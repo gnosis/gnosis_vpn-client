@@ -194,14 +194,12 @@ fn pretty_print(resp: &Response) {
                 disconnecting,
                 probe,
                 pix_chunk_bytes,
-                pix_chunk_cost,
                 probing,
                 recent,
             } = status.as_ref();
             let mut str_resp = format!("{run_mode}\n");
             if let Some(bytes) = pix_chunk_bytes {
-                let cost = pix_chunk_cost.map(|c| format!(" for {c}")).unwrap_or_default();
-                str_resp.push_str(&format!("PIX chunk per exit: {}{cost}\n", ByteSize(*bytes)));
+                str_resp.push_str(&format!("PIX chunk per exit: {}\n", ByteSize(*bytes)));
             }
             if let Some(id) = target {
                 let is_active = connection.destination() == Some(id);
@@ -267,10 +265,18 @@ fn pretty_print(resp: &Response) {
             str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\n"));
             let allocations = capacity_allocations.as_ref();
             if let Some(float) = pix_float {
+                let exit_traffic = allocations
+                    .map(|a| {
+                        format!(
+                            " [{} in total, buys {} of exit traffic]",
+                            ByteSize(a.exit_traffic.byte_capacity),
+                            ByteSize(a.exit_traffic.bytes_from_exits)
+                        )
+                    })
+                    .unwrap_or_default();
                 str_resp.push_str(&format!(
-                    "PIX Float: {float}{}{}\n",
-                    ipc::scientific_suffix(float),
-                    format_capacity(allocations.map(|a| &a.pix_float))
+                    "PIX Float: {float}{}{exit_traffic}\n",
+                    ipc::scientific_suffix(float)
                 ));
             }
             if let Some(nc) = allocations.map(|a| a.node).filter(|c| !c.stake.is_zero()) {
