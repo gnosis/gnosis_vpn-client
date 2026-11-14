@@ -1665,13 +1665,15 @@ impl Core {
 
     fn spawn_capacity_allocations_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
+            let pix_float = self.pix_float.clone();
+            let price_per_byte = self.config.pix_strategy.price_per_byte;
             let cancel = self.cancel_on_shutdown.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::capacity_allocations(hopr, results_sender).await;
+                        runner::capacity_allocations(hopr, pix_float, price_per_byte, results_sender).await;
                     })
                     .await
             });

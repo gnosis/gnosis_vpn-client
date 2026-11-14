@@ -186,11 +186,25 @@ pub(crate) async fn ideal_balance_recommendation(
     let _ = results_sender.send(Results::IdealBalanceRecommendation { res }).await;
 }
 
-pub(crate) async fn capacity_allocations(hopr: Arc<Hopr>, results_sender: mpsc::Sender<Results>) {
-    let res = hopr
+pub(crate) async fn capacity_allocations(
+    hopr: Arc<Hopr>,
+    pix_float: Option<PixFloat>,
+    price_per_byte: balance::Balance<balance::WxHOPR>,
+    results_sender: mpsc::Sender<Results>,
+) {
+    let mut res = hopr
         .capacity_allocations()
         .await
         .map_err(|e| Error::Chain(e.to_string()));
+    if let (Ok(caps), Some(float)) = (res.as_mut(), pix_float) {
+        // The pool sums its own notes in memory, so a failure won't clear on the next poll.
+        match float.balance().await {
+            Ok(funds) => caps.exit_traffic = balance::ExitTrafficFunds::new(funds, price_per_byte),
+            Err(err) => {
+                tracing::warn!(%err, "failed to read the funds paying for exit traffic - leaving them out of capacity")
+            }
+        }
+    }
     let _ = results_sender.send(Results::CapacityAllocations { res }).await;
 }
 

@@ -75,9 +75,9 @@ impl Default for Capacity {
     }
 }
 
-/// Serde mirror of [`edgli::strategy::CapacityAllocations`]: every entity holding
-/// a wxHOPR stake — open outgoing channels, the unallocated Safe balance, and the
-/// node EOA (deposited funds not yet swept into the Safe).
+/// Serde mirror of [`edgli::strategy::CapacityAllocations`], the funds paying for relays — open
+/// outgoing channels, the unallocated Safe balance, and the node EOA (deposited funds not yet swept
+/// into the Safe) — plus the funds paying for exit traffic.
 #[derive(Clone, Debug, Default)]
 pub struct CapacityAllocations {
     /// Open outgoing payment channels, keyed by destination peer.
@@ -86,6 +86,60 @@ pub struct CapacityAllocations {
     pub node: Capacity,
     /// The unallocated wxHOPR balance held in the user's Safe contract.
     pub safe: Capacity,
+    /// Pays for exit traffic; edgli doesn't report it, see [`ExitTrafficFunds::new`].
+    pub exit_traffic: ExitTrafficFunds,
+}
+
+/// The funds paying for exit traffic: the Curvy float PIX deposits come out of.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExitTrafficFunds {
+    /// Valued by [`CapacityReconciler`] at the rate paying for relays, so moving funds between the two keeps the total.
+    pub capacity: Capacity,
+    /// Data the funds buy from exits at this client's price per byte.
+    pub bytes_from_exits: u64,
+}
+
+impl ExitTrafficFunds {
+    /// Unvalued until [`CapacityReconciler::reconcile`] fills in the capacity.
+    pub fn new(funds: Balance<WxHOPR>, price_per_byte: Balance<WxHOPR>) -> Self {
+        let bytes_from_exits = if price_per_byte.is_zero() {
+            0
+        } else {
+            u64::try_from(funds.amount() / price_per_byte.amount()).unwrap_or(u64::MAX)
+        };
+        Self {
+            capacity: Capacity {
+                stake: funds,
+                ..Capacity::default()
+            },
+            bytes_from_exits,
+        }
+    }
+}
+
+/// Linear capacity of `stake` at the `base` stake's rate; `None` without a rate to scale from.
+fn scale_capacity(
+    stake: Balance<WxHOPR>,
+    base: Balance<WxHOPR>,
+    bytes: u64,
+    msgs: u64,
+    min_msgs: u64,
+) -> Option<(u64, u64, u64)> {
+    let tokens = |b: Balance<WxHOPR>| -> f64 {
+        b.amount_in_base_units().parse().unwrap_or_else(|e| {
+            tracing::warn!(balance = %b, error = %e, "failed to parse balance while scaling capacity");
+            0.0
+        })
+    };
+    let base = tokens(base);
+    (base > 0.0).then(|| {
+        let r = tokens(stake) / base;
+        (
+            (bytes as f64 * r) as u64,
+            (msgs as f64 * r) as u64,
+            (min_msgs as f64 * r) as u64,
+        )
+    })
 }
 
 impl From<edgli::strategy::Capacity> for Capacity {
@@ -109,6 +163,7 @@ impl From<edgli::strategy::CapacityAllocations> for CapacityAllocations {
                 .collect(),
             node: a.node.into(),
             safe: a.safe.into(),
+            exit_traffic: ExitTrafficFunds::default(),
         }
     }
 }
@@ -117,11 +172,12 @@ impl Display for CapacityAllocations {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "CapacityAllocations(node: {}, safe: {}, {} channels totalling {})",
+            "CapacityAllocations(node: {}, safe: {}, {} channels totalling {}, exit traffic: {})",
             self.node.stake,
             self.safe.stake,
             self.peer_allocations.len(),
-            self.peer_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>()
+            self.peer_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>(),
+            self.exit_traffic.capacity.stake
         )
     }
 }
@@ -144,13 +200,15 @@ struct PendingAllocation {
 struct SnapshotTotals {
     stake: Balance<WxHOPR>,
     channel_stake: Balance<WxHOPR>,
+    exit_traffic_stake: Balance<WxHOPR>,
     expected_messages: u64,
     min_guaranteed_messages: u64,
     byte_capacity: u64,
 }
 
 impl SnapshotTotals {
-    fn of(caps: &CapacityAllocations) -> Self {
+    /// The funds paying for relays alone.
+    fn relays(caps: &CapacityAllocations) -> Self {
         let channel_stake = caps.peer_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>();
         let sum = |f: fn(&Capacity) -> u64| {
             f(&caps.node) + f(&caps.safe) + caps.peer_allocations.values().map(f).sum::<u64>()
@@ -158,9 +216,24 @@ impl SnapshotTotals {
         SnapshotTotals {
             stake: caps.node.stake + caps.safe.stake + channel_stake,
             channel_stake,
+            exit_traffic_stake: Balance::zero(),
             expected_messages: sum(|c| c.expected_messages),
             min_guaranteed_messages: sum(|c| c.min_guaranteed_messages),
             byte_capacity: sum(|c| c.byte_capacity),
+        }
+    }
+
+    /// Every allocation, the funds paying for exit traffic included.
+    fn of(caps: &CapacityAllocations) -> Self {
+        let relays = Self::relays(caps);
+        let exit = &caps.exit_traffic.capacity;
+        SnapshotTotals {
+            stake: relays.stake + exit.stake,
+            exit_traffic_stake: exit.stake,
+            expected_messages: relays.expected_messages + exit.expected_messages,
+            min_guaranteed_messages: relays.min_guaranteed_messages + exit.min_guaranteed_messages,
+            byte_capacity: relays.byte_capacity + exit.byte_capacity,
+            ..relays
         }
     }
 }
@@ -170,7 +243,8 @@ impl SnapshotTotals {
 /// Channels are read from the indexer (lags the chain) before the live Safe/EOA
 /// balances, so stake moving Safe→channel is counted nowhere for a poll or two.
 /// The only legitimate *fast* Safe/EOA drop is a transfer toward a channel (usage
-/// drains channel stakes instead), so an unmatched drop is presumed in-flight and
+/// drains channel stakes and the exit-traffic funds instead, and a shield into the
+/// exit-traffic funds is counted there), so an unmatched drop is presumed in-flight and
 /// folded back into the published Safe capacity. The fold-in expires after
 /// `PENDING_ALLOCATION_MAX_POLLS` polls so a real spend still surfaces, just late;
 /// a transient over-count decays over the same window.
@@ -183,14 +257,25 @@ pub struct CapacityReconciler {
 impl CapacityReconciler {
     /// Snapshot to publish: in-flight stake folded into `safe`. Same shape as the
     /// raw snapshot, so downstream consumers summing components need no protocol change.
-    pub fn reconcile(&mut self, raw: CapacityAllocations) -> CapacityAllocations {
+    pub fn reconcile(&mut self, mut raw: CapacityAllocations) -> CapacityAllocations {
+        // Valued here so a snapshot with nothing left paying for relays still has the last rate.
+        let exit_stake = raw.exit_traffic.capacity.stake;
+        let (byte_capacity, expected_messages, min_guaranteed_messages) =
+            self.scaled_capacity(exit_stake, &SnapshotTotals::relays(&raw));
+        raw.exit_traffic.capacity = Capacity {
+            stake: exit_stake,
+            expected_messages,
+            min_guaranteed_messages,
+            byte_capacity,
+        };
         let totals = SnapshotTotals::of(&raw);
         let pending_stake = match &self.prev {
             Some(prev) => {
                 let carried = self.pending.map(|p| p.stake).unwrap_or_else(Balance::zero);
-                // Channel drops (drainage, closure) are real usage, not in-flight; `-` saturates at zero.
+                // Channel drops (drainage, closure) and exit-traffic drops (paid exits) are real usage, not in-flight; `-` saturates at zero.
                 let channel_drop = prev.channel_stake - totals.channel_stake;
-                prev.stake + carried - channel_drop - totals.stake
+                let exit_traffic_drop = prev.exit_traffic_stake - totals.exit_traffic_stake;
+                prev.stake + carried - channel_drop - exit_traffic_drop - totals.stake
             }
             None => Balance::zero(),
         };
@@ -237,31 +322,27 @@ impl CapacityReconciler {
     /// holds neither ticket price nor win probability, so it cannot recompute
     /// capacities. A pending stake guarantees some fallback has non-zero stake.
     fn scaled_capacity(&self, stake: Balance<WxHOPR>, current: &SnapshotTotals) -> (u64, u64, u64) {
-        let tokens = |b: Balance<WxHOPR>| -> f64 {
-            b.amount_in_base_units().parse().unwrap_or_else(|e| {
-                tracing::warn!(balance = %b, error = %e, "failed to parse balance while scaling pending capacity");
-                0.0
-            })
+        let of_totals = |t: &SnapshotTotals| {
+            scale_capacity(
+                stake,
+                t.stake,
+                t.byte_capacity,
+                t.expected_messages,
+                t.min_guaranteed_messages,
+            )
         };
-        let scale = |bytes: u64, msgs: u64, min_msgs: u64, base: Balance<WxHOPR>| {
-            let base = tokens(base);
-            (base > 0.0).then(|| {
-                let r = tokens(stake) / base;
-                (
-                    (bytes as f64 * r) as u64,
-                    (msgs as f64 * r) as u64,
-                    (min_msgs as f64 * r) as u64,
-                )
-            })
-        };
-        let of_totals =
-            |t: &SnapshotTotals| scale(t.byte_capacity, t.expected_messages, t.min_guaranteed_messages, t.stake);
         of_totals(current)
             .or_else(|| self.prev.as_ref().and_then(of_totals))
             .or_else(|| {
-                self.pending
-                    .as_ref()
-                    .and_then(|p| scale(p.byte_capacity, p.expected_messages, p.min_guaranteed_messages, p.stake))
+                self.pending.as_ref().and_then(|p| {
+                    scale_capacity(
+                        stake,
+                        p.stake,
+                        p.byte_capacity,
+                        p.expected_messages,
+                        p.min_guaranteed_messages,
+                    )
+                })
             })
             .unwrap_or((0, 0, 0))
     }
@@ -355,34 +436,26 @@ impl Display for Balances {
     }
 }
 
-/// Pools every allocation location so funds sitting unswept on the node EOA still count.
+fn traffic_level(bytes: u64) -> FundingLevel {
+    if bytes <= TRAFFIC_EMPTY_MAX_BYTES {
+        FundingLevel::Empty
+    } else if bytes <= TRAFFIC_LOW_MAX_BYTES {
+        FundingLevel::Low
+    } else {
+        FundingLevel::Good
+    }
+}
+
+/// Pools every allocation location so funds unswept on the node EOA or paying for exit traffic still count.
 pub fn to_funding_status(
     ideal: BalanceRecommendation,
     capacity_allocations: &CapacityAllocations,
     node_xdai: Balance<XDai>,
     safe_wxhopr: Balance<WxHOPR>,
 ) -> FundingStatus {
-    let peer_stake = capacity_allocations
-        .peer_allocations
-        .values()
-        .map(|c| c.stake)
-        .sum::<Balance<WxHOPR>>();
-    let total_stake = capacity_allocations.node.stake + capacity_allocations.safe.stake + peer_stake;
-
-    let peer_bytes: u64 = capacity_allocations
-        .peer_allocations
-        .values()
-        .map(|c| c.byte_capacity)
-        .sum();
-    let total_bytes = capacity_allocations.node.byte_capacity + capacity_allocations.safe.byte_capacity + peer_bytes;
-
-    let traffic = if total_bytes <= TRAFFIC_EMPTY_MAX_BYTES {
-        FundingLevel::Empty
-    } else if total_bytes <= TRAFFIC_LOW_MAX_BYTES {
-        FundingLevel::Low
-    } else {
-        FundingLevel::Good
-    };
+    let traffic = traffic_level(SnapshotTotals::of(capacity_allocations).byte_capacity);
+    // Funds paying for exit traffic can't pay for relays, so the deficit follows the relay funds alone.
+    let relays = SnapshotTotals::relays(capacity_allocations);
 
     // Safe funds missing channels first (wxhopr_deficit counts it there), only the rest can refill; `-` saturates.
     let safe_after_missing = safe_wxhopr - ideal.wxhopr;
@@ -399,8 +472,8 @@ pub fn to_funding_status(
     };
 
     // `-` on Balance saturates at zero; wxhopr_deficit is relative to `ideal` only, which ignores drained stake on already-open channels.
-    let wxhopr_deficit = (traffic != FundingLevel::Good)
-        .then(|| ideal.wxhopr - total_stake)
+    let wxhopr_deficit = (traffic_level(relays.byte_capacity) != FundingLevel::Good)
+        .then(|| ideal.wxhopr - relays.stake)
         .filter(|d| !d.is_zero());
     // Floored at xdai_low_below so this can't go None while gas isn't Good, even if `ideal` dips below it.
     let xdai_deficit = (gas != FundingLevel::Good)
@@ -449,6 +522,17 @@ impl From<&CapacityAllocations> for gnosis_vpn_ipc::CapacityAllocations {
                 .collect(),
             node: (&allocations.node).into(),
             safe: (&allocations.safe).into(),
+            exit_traffic: (&allocations.exit_traffic).into(),
+        }
+    }
+}
+
+impl From<&ExitTrafficFunds> for gnosis_vpn_ipc::ExitTrafficFunds {
+    fn from(funds: &ExitTrafficFunds) -> Self {
+        Self {
+            stake: wire::wxhopr(funds.capacity.stake),
+            byte_capacity: funds.capacity.byte_capacity,
+            bytes_from_exits: funds.bytes_from_exits,
         }
     }
 }
@@ -501,6 +585,15 @@ mod tests {
             peer_allocations: peer.map(|c| (Address::from([1u8; 20]), c)).into_iter().collect(),
             node,
             safe,
+            exit_traffic: ExitTrafficFunds::default(),
+        }
+    }
+
+    /// Exit-traffic funds as the reconciler publishes them: already valued.
+    fn valued_exit_funds(stake: u64, bytes: u64) -> ExitTrafficFunds {
+        ExitTrafficFunds {
+            capacity: capacity(stake, bytes),
+            bytes_from_exits: 0,
         }
     }
 
@@ -703,6 +796,40 @@ mod tests {
     }
 
     #[test]
+    fn traffic_counts_exit_traffic_funds() {
+        // 320 MB paying for relays alone is Empty; 640 MB paying for exit traffic lifts the pool to Low.
+        let allocations = CapacityAllocations {
+            exit_traffic: valued_exit_funds(500, 640 * MB),
+            ..allocs(None, Capacity::default(), capacity(100, 320 * MB))
+        };
+        let status = to_funding_status(
+            ideal(1000, 0),
+            &allocations,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::from(100u64),
+        );
+        assert_eq!(status.traffic, FundingLevel::Low);
+        assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(900u64)));
+    }
+
+    #[test]
+    fn exit_traffic_funds_never_hide_the_relay_deficit() {
+        // Good overall thanks to 2 GB paying for exit traffic, yet the relays still lack 900.
+        let allocations = CapacityAllocations {
+            exit_traffic: valued_exit_funds(500, 2 * GB),
+            ..allocs(None, Capacity::default(), capacity(100, 320 * MB))
+        };
+        let status = to_funding_status(
+            ideal(1000, 0),
+            &allocations,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::from(100u64),
+        );
+        assert_eq!(status.traffic, FundingLevel::Good);
+        assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(900u64)));
+    }
+
+    #[test]
     fn good_traffic_and_gas_when_well_funded() {
         // 2 GB each on the channel, Safe, and node EOA = 6 GB pooled, above the 5 GB threshold.
         let allocations = allocs(Some(capacity(100, 2 * GB)), capacity(0, 2 * GB), capacity(100, 2 * GB));
@@ -831,6 +958,78 @@ mod tests {
         // correction back to 200 is masked until expiry (documented trade-off), never below 200
         let out = r.reconcile(allocs(None, Capacity::default(), cap10(200)));
         assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(300u64));
+    }
+
+    /// Exit-traffic funds as the runner hands them over: unvalued, at 1 wei per byte.
+    fn exit_funds(stake: u64) -> ExitTrafficFunds {
+        ExitTrafficFunds::new(Balance::from(stake), Balance::from(1u64))
+    }
+
+    fn with_exit(exit: u64, safe: u64) -> CapacityAllocations {
+        CapacityAllocations {
+            exit_traffic: exit_funds(exit),
+            ..allocs(None, Capacity::default(), cap10(safe))
+        }
+    }
+
+    #[test]
+    fn exit_traffic_funds_count_the_data_they_buy_from_exits() {
+        let funds = ExitTrafficFunds::new(Balance::from(1000u64), Balance::from(10u64));
+        assert_eq!(funds.bytes_from_exits, 100);
+        assert_eq!(funds.capacity.byte_capacity, 0);
+        let free = ExitTrafficFunds::new(Balance::from(1000u64), Balance::zero());
+        assert_eq!(free.bytes_from_exits, 0);
+    }
+
+    #[test]
+    fn reconcile_values_exit_traffic_at_the_relay_rate() {
+        let mut r = CapacityReconciler::default();
+        let out = r.reconcile(CapacityAllocations {
+            exit_traffic: exit_funds(50),
+            ..allocs(Some(cap10(100)), Capacity::default(), cap10(100))
+        });
+        assert_eq!(out.exit_traffic.capacity.stake, Balance::<WxHOPR>::from(50u64));
+        assert_eq!(out.exit_traffic.capacity.byte_capacity, 500);
+        assert_eq!(out.exit_traffic.bytes_from_exits, 50);
+        assert_eq!(total_bytes(&out), 2500);
+    }
+
+    #[test]
+    fn reconcile_without_any_rate_keeps_the_stake_but_no_bytes() {
+        let out = CapacityReconciler::default().reconcile(with_exit(50, 0));
+        assert_eq!(out.exit_traffic.capacity.stake, Balance::<WxHOPR>::from(50u64));
+        assert_eq!(out.exit_traffic.capacity.byte_capacity, 0);
+    }
+
+    #[test]
+    fn reconcile_shield_into_exit_traffic_keeps_the_total_without_a_fold_in() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(with_exit(0, 200));
+        let out = r.reconcile(with_exit(100, 100));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(200u64));
+        assert_eq!(total_bytes(&out), 2000);
+        assert_eq!(out.safe.stake, Balance::<WxHOPR>::from(100u64));
+    }
+
+    #[test]
+    fn reconcile_full_shield_keeps_the_last_relay_rate() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(with_exit(0, 200));
+        // nothing left paying for relays to read a rate from
+        let out = r.reconcile(with_exit(200, 0));
+        assert_eq!(total_bytes(&out), 2000);
+        let out = r.reconcile(with_exit(200, 0));
+        assert_eq!(total_bytes(&out), 2000);
+    }
+
+    #[test]
+    fn reconcile_paid_exits_pass_through_immediately() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(with_exit(100, 100));
+        // a chunk paid to an exit is real usage, not in-flight funds
+        let out = r.reconcile(with_exit(90, 100));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(190u64));
+        assert_eq!(total_bytes(&out), 1900);
     }
 
     // 1 wxHOPR in wei, for the refill-shortfall fixtures below.
