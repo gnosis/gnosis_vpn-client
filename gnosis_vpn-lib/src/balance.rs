@@ -77,7 +77,7 @@ impl Default for Capacity {
 
 /// Serde mirror of [`edgli::strategy::CapacityAllocations`]: every entity holding
 /// a wxHOPR stake — open outgoing channels, the unallocated Safe balance, and the
-/// node EOA (deposited funds not yet swept into the Safe).
+/// node EOA (deposited funds not yet swept into the Safe) — plus the PIX float.
 #[derive(Clone, Debug, Default)]
 pub struct CapacityAllocations {
     /// Open outgoing payment channels, keyed by destination peer.
@@ -86,6 +86,55 @@ pub struct CapacityAllocations {
     pub node: Capacity,
     /// The unallocated wxHOPR balance held in the user's Safe contract.
     pub safe: Capacity,
+    /// The Curvy float PIX deposits are paid from; edgli doesn't report it, see [`Self::with_pix_float`].
+    pub pix_float: Capacity,
+}
+
+impl CapacityAllocations {
+    /// Values the float at this snapshot's own stake→capacity rate, so a Safe→float shield keeps the total.
+    pub fn with_pix_float(mut self, float: Balance<WxHOPR>) -> Self {
+        let totals = SnapshotTotals::of(&self);
+        let (byte_capacity, expected_messages, min_guaranteed_messages) = scale_capacity(
+            float,
+            totals.stake,
+            totals.byte_capacity,
+            totals.expected_messages,
+            totals.min_guaranteed_messages,
+        )
+        .unwrap_or((0, 0, 0));
+        self.pix_float = Capacity {
+            stake: float,
+            expected_messages,
+            min_guaranteed_messages,
+            byte_capacity,
+        };
+        self
+    }
+}
+
+/// Linear capacity of `stake` at the `base` stake's rate; `None` without a rate to scale from.
+fn scale_capacity(
+    stake: Balance<WxHOPR>,
+    base: Balance<WxHOPR>,
+    bytes: u64,
+    msgs: u64,
+    min_msgs: u64,
+) -> Option<(u64, u64, u64)> {
+    let tokens = |b: Balance<WxHOPR>| -> f64 {
+        b.amount_in_base_units().parse().unwrap_or_else(|e| {
+            tracing::warn!(balance = %b, error = %e, "failed to parse balance while scaling capacity");
+            0.0
+        })
+    };
+    let base = tokens(base);
+    (base > 0.0).then(|| {
+        let r = tokens(stake) / base;
+        (
+            (bytes as f64 * r) as u64,
+            (msgs as f64 * r) as u64,
+            (min_msgs as f64 * r) as u64,
+        )
+    })
 }
 
 impl From<edgli::strategy::Capacity> for Capacity {
@@ -109,6 +158,7 @@ impl From<edgli::strategy::CapacityAllocations> for CapacityAllocations {
                 .collect(),
             node: a.node.into(),
             safe: a.safe.into(),
+            pix_float: Capacity::default(),
         }
     }
 }
@@ -117,11 +167,12 @@ impl Display for CapacityAllocations {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "CapacityAllocations(node: {}, safe: {}, {} channels totalling {})",
+            "CapacityAllocations(node: {}, safe: {}, {} channels totalling {}, pix float: {})",
             self.node.stake,
             self.safe.stake,
             self.peer_allocations.len(),
-            self.peer_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>()
+            self.peer_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>(),
+            self.pix_float.stake
         )
     }
 }
@@ -144,6 +195,7 @@ struct PendingAllocation {
 struct SnapshotTotals {
     stake: Balance<WxHOPR>,
     channel_stake: Balance<WxHOPR>,
+    float_stake: Balance<WxHOPR>,
     expected_messages: u64,
     min_guaranteed_messages: u64,
     byte_capacity: u64,
@@ -153,11 +205,12 @@ impl SnapshotTotals {
     fn of(caps: &CapacityAllocations) -> Self {
         let channel_stake = caps.peer_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>();
         let sum = |f: fn(&Capacity) -> u64| {
-            f(&caps.node) + f(&caps.safe) + caps.peer_allocations.values().map(f).sum::<u64>()
+            f(&caps.node) + f(&caps.safe) + f(&caps.pix_float) + caps.peer_allocations.values().map(f).sum::<u64>()
         };
         SnapshotTotals {
-            stake: caps.node.stake + caps.safe.stake + channel_stake,
+            stake: caps.node.stake + caps.safe.stake + caps.pix_float.stake + channel_stake,
             channel_stake,
+            float_stake: caps.pix_float.stake,
             expected_messages: sum(|c| c.expected_messages),
             min_guaranteed_messages: sum(|c| c.min_guaranteed_messages),
             byte_capacity: sum(|c| c.byte_capacity),
@@ -170,7 +223,8 @@ impl SnapshotTotals {
 /// Channels are read from the indexer (lags the chain) before the live Safe/EOA
 /// balances, so stake moving Safe→channel is counted nowhere for a poll or two.
 /// The only legitimate *fast* Safe/EOA drop is a transfer toward a channel (usage
-/// drains channel stakes instead), so an unmatched drop is presumed in-flight and
+/// drains channel stakes and the PIX float instead, and a shield into the float
+/// is counted there), so an unmatched drop is presumed in-flight and
 /// folded back into the published Safe capacity. The fold-in expires after
 /// `PENDING_ALLOCATION_MAX_POLLS` polls so a real spend still surfaces, just late;
 /// a transient over-count decays over the same window.
@@ -188,9 +242,10 @@ impl CapacityReconciler {
         let pending_stake = match &self.prev {
             Some(prev) => {
                 let carried = self.pending.map(|p| p.stake).unwrap_or_else(Balance::zero);
-                // Channel drops (drainage, closure) are real usage, not in-flight; `-` saturates at zero.
+                // Channel drops (drainage, closure) and float drops (PIX deposits) are real usage, not in-flight; `-` saturates at zero.
                 let channel_drop = prev.channel_stake - totals.channel_stake;
-                prev.stake + carried - channel_drop - totals.stake
+                let float_drop = prev.float_stake - totals.float_stake;
+                prev.stake + carried - channel_drop - float_drop - totals.stake
             }
             None => Balance::zero(),
         };
@@ -237,31 +292,27 @@ impl CapacityReconciler {
     /// holds neither ticket price nor win probability, so it cannot recompute
     /// capacities. A pending stake guarantees some fallback has non-zero stake.
     fn scaled_capacity(&self, stake: Balance<WxHOPR>, current: &SnapshotTotals) -> (u64, u64, u64) {
-        let tokens = |b: Balance<WxHOPR>| -> f64 {
-            b.amount_in_base_units().parse().unwrap_or_else(|e| {
-                tracing::warn!(balance = %b, error = %e, "failed to parse balance while scaling pending capacity");
-                0.0
-            })
+        let of_totals = |t: &SnapshotTotals| {
+            scale_capacity(
+                stake,
+                t.stake,
+                t.byte_capacity,
+                t.expected_messages,
+                t.min_guaranteed_messages,
+            )
         };
-        let scale = |bytes: u64, msgs: u64, min_msgs: u64, base: Balance<WxHOPR>| {
-            let base = tokens(base);
-            (base > 0.0).then(|| {
-                let r = tokens(stake) / base;
-                (
-                    (bytes as f64 * r) as u64,
-                    (msgs as f64 * r) as u64,
-                    (min_msgs as f64 * r) as u64,
-                )
-            })
-        };
-        let of_totals =
-            |t: &SnapshotTotals| scale(t.byte_capacity, t.expected_messages, t.min_guaranteed_messages, t.stake);
         of_totals(current)
             .or_else(|| self.prev.as_ref().and_then(of_totals))
             .or_else(|| {
-                self.pending
-                    .as_ref()
-                    .and_then(|p| scale(p.byte_capacity, p.expected_messages, p.min_guaranteed_messages, p.stake))
+                self.pending.as_ref().and_then(|p| {
+                    scale_capacity(
+                        stake,
+                        p.stake,
+                        p.byte_capacity,
+                        p.expected_messages,
+                        p.min_guaranteed_messages,
+                    )
+                })
             })
             .unwrap_or((0, 0, 0))
     }
@@ -355,26 +406,17 @@ impl Display for Balances {
     }
 }
 
-/// Pools every allocation location so funds sitting unswept on the node EOA still count.
+/// Pools every allocation location so funds unswept on the node EOA or shielded into the PIX float still count.
 pub fn to_funding_status(
     ideal: BalanceRecommendation,
     capacity_allocations: &CapacityAllocations,
     node_xdai: Balance<XDai>,
     safe_wxhopr: Balance<WxHOPR>,
 ) -> FundingStatus {
-    let peer_stake = capacity_allocations
-        .peer_allocations
-        .values()
-        .map(|c| c.stake)
-        .sum::<Balance<WxHOPR>>();
-    let total_stake = capacity_allocations.node.stake + capacity_allocations.safe.stake + peer_stake;
-
-    let peer_bytes: u64 = capacity_allocations
-        .peer_allocations
-        .values()
-        .map(|c| c.byte_capacity)
-        .sum();
-    let total_bytes = capacity_allocations.node.byte_capacity + capacity_allocations.safe.byte_capacity + peer_bytes;
+    let totals = SnapshotTotals::of(capacity_allocations);
+    let total_bytes = totals.byte_capacity;
+    // The float pays exits but can't stake channels, so it doesn't cover the deficit.
+    let stakeable = totals.stake - totals.float_stake;
 
     let traffic = if total_bytes <= TRAFFIC_EMPTY_MAX_BYTES {
         FundingLevel::Empty
@@ -400,7 +442,7 @@ pub fn to_funding_status(
 
     // `-` on Balance saturates at zero; wxhopr_deficit is relative to `ideal` only, which ignores drained stake on already-open channels.
     let wxhopr_deficit = (traffic != FundingLevel::Good)
-        .then(|| ideal.wxhopr - total_stake)
+        .then(|| ideal.wxhopr - stakeable)
         .filter(|d| !d.is_zero());
     // Floored at xdai_low_below so this can't go None while gas isn't Good, even if `ideal` dips below it.
     let xdai_deficit = (gas != FundingLevel::Good)
@@ -449,6 +491,7 @@ impl From<&CapacityAllocations> for gnosis_vpn_ipc::CapacityAllocations {
                 .collect(),
             node: (&allocations.node).into(),
             safe: (&allocations.safe).into(),
+            pix_float: (&allocations.pix_float).into(),
         }
     }
 }
@@ -501,6 +544,7 @@ mod tests {
             peer_allocations: peer.map(|c| (Address::from([1u8; 20]), c)).into_iter().collect(),
             node,
             safe,
+            pix_float: Capacity::default(),
         }
     }
 
@@ -703,6 +747,23 @@ mod tests {
     }
 
     #[test]
+    fn traffic_counts_the_pix_float_but_the_deficit_does_not() {
+        // 320 MB on the Safe alone is Empty; the float's 640 MB lifts the pool to Low.
+        let allocations = CapacityAllocations {
+            pix_float: capacity(500, 640 * MB),
+            ..allocs(None, Capacity::default(), capacity(100, 320 * MB))
+        };
+        let status = to_funding_status(
+            ideal(1000, 0),
+            &allocations,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::from(100u64),
+        );
+        assert_eq!(status.traffic, FundingLevel::Low);
+        assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(900u64)));
+    }
+
+    #[test]
     fn good_traffic_and_gas_when_well_funded() {
         // 2 GB each on the channel, Safe, and node EOA = 6 GB pooled, above the 5 GB threshold.
         let allocations = allocs(Some(capacity(100, 2 * GB)), capacity(0, 2 * GB), capacity(100, 2 * GB));
@@ -831,6 +892,48 @@ mod tests {
         // correction back to 200 is masked until expiry (documented trade-off), never below 200
         let out = r.reconcile(allocs(None, Capacity::default(), cap10(200)));
         assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(300u64));
+    }
+
+    #[test]
+    fn with_pix_float_values_the_float_at_the_snapshot_rate() {
+        let caps = allocs(Some(cap10(100)), Capacity::default(), cap10(100)).with_pix_float(Balance::from(50u64));
+        assert_eq!(caps.pix_float.stake, Balance::<WxHOPR>::from(50u64));
+        assert_eq!(caps.pix_float.byte_capacity, 500);
+        assert_eq!(total_bytes(&caps), 2500);
+    }
+
+    #[test]
+    fn with_pix_float_without_a_rate_keeps_the_stake_but_no_bytes() {
+        let caps = CapacityAllocations::default().with_pix_float(Balance::from(50u64));
+        assert_eq!(caps.pix_float.stake, Balance::<WxHOPR>::from(50u64));
+        assert_eq!(caps.pix_float.byte_capacity, 0);
+    }
+
+    #[test]
+    fn reconcile_shield_into_the_float_keeps_the_total_without_a_fold_in() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(allocs(None, Capacity::default(), cap10(200)));
+        let shielded = CapacityAllocations {
+            pix_float: cap10(100),
+            ..allocs(None, Capacity::default(), cap10(100))
+        };
+        let out = r.reconcile(shielded);
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(200u64));
+        assert_eq!(out.safe.stake, Balance::<WxHOPR>::from(100u64));
+    }
+
+    #[test]
+    fn reconcile_pix_deposits_pass_through_immediately() {
+        let mut r = CapacityReconciler::default();
+        let with_float = |float| CapacityAllocations {
+            pix_float: cap10(float),
+            ..allocs(None, Capacity::default(), cap10(100))
+        };
+        r.reconcile(with_float(100));
+        // a chunk paid from the float is real usage, not in-flight funds
+        let out = r.reconcile(with_float(90));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(190u64));
+        assert_eq!(total_bytes(&out), 1900);
     }
 
     // 1 wxHOPR in wei, for the refill-shortfall fixtures below.

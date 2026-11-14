@@ -209,6 +209,14 @@ fn balances_without_pix_float_still_parse() {
 }
 
 #[test]
+fn capacity_allocations_without_pix_float_still_parse() {
+    let zero = json!({"stake": "0", "expected_messages": 0, "min_guaranteed_messages": 0, "byte_capacity": 0});
+    let json = json!({"peer_allocations": {}, "node": zero, "safe": zero});
+    let parsed: CapacityAllocations = serde_json::from_value(json).expect("an older service omits pix_float");
+    assert_eq!(parsed.pix_float, Capacity::default());
+}
+
+#[test]
 fn fund_pix_float_request_carries_wei() {
     let request = Request::FundPixFloat {
         amount: "1.5".parse().expect("token amount"),

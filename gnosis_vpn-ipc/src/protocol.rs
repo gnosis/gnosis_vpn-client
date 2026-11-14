@@ -820,6 +820,9 @@ pub struct CapacityAllocations {
     pub node: Capacity,
     /// The unallocated wxHOPR in the Safe.
     pub safe: Capacity,
+    /// The PIX float that pays the exits, valued at the Safe's rate; zero without a Curvy PIX pool.
+    #[serde(default)]
+    pub pix_float: Capacity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

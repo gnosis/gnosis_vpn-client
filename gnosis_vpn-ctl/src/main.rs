@@ -263,10 +263,14 @@ fn pretty_print(resp: &Response) {
             ));
             let safe_sci = ipc::scientific_suffix(safe);
             str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\n"));
-            if let Some(float) = pix_float {
-                str_resp.push_str(&format!("PIX Float: {float}{}\n", ipc::scientific_suffix(float)));
-            }
             let allocations = capacity_allocations.as_ref();
+            if let Some(float) = pix_float {
+                str_resp.push_str(&format!(
+                    "PIX Float: {float}{}{}\n",
+                    ipc::scientific_suffix(float),
+                    format_capacity(allocations.map(|a| &a.pix_float))
+                ));
+            }
             if let Some(nc) = allocations.map(|a| a.node).filter(|c| !c.stake.is_zero()) {
                 str_resp.push_str(&format!(
                     "Node wxHOPR (not yet in Safe): {}{}{}\n",
