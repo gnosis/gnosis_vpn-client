@@ -1635,12 +1635,14 @@ impl Core {
         let cancel = self.cancel_on_shutdown.clone();
         let results_sender = results_sender.clone();
         let cfg = self.config.strategy.clone().into();
+        let pix_float = self.config.pix_strategy.float();
         if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::minimum_balance_recommendation(incentive_operations, cfg, results_sender).await;
+                        runner::minimum_balance_recommendation(incentive_operations, cfg, pix_float, results_sender)
+                            .await;
                     })
                     .await
             });
