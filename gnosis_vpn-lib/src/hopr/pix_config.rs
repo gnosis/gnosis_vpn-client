@@ -121,10 +121,15 @@ impl PixConfig {
 
     /// What the pool shields from the Safe once; the `pix-test` pool has no float.
     pub fn float(&self) -> HoprBalance {
+        // Upstream applies this override when building the pool; mirror it so the recommendation covers the real float.
         #[cfg(feature = "pix-curvy")]
-        return self
-            .initial_funding
-            .unwrap_or(edgli::strategy::PixEntryPool::default().initial_funding);
+        return std::env::var(hopr_strategy::pix::pools::curvy::INITIAL_FUNDING_ENV)
+            .ok()
+            .and_then(|raw| raw.parse().ok())
+            .unwrap_or(
+                self.initial_funding
+                    .unwrap_or(edgli::strategy::PixEntryPool::default().initial_funding),
+            );
         #[cfg(not(feature = "pix-curvy"))]
         HoprBalance::zero()
     }
