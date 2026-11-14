@@ -1,3 +1,4 @@
+use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder};
 use edgli::EdgliInitState;
 use edgli::blokli::IncentiveOperations;
 use edgli::hopr_lib::builder::Keypair;
@@ -144,6 +145,8 @@ pub struct Core {
     ongoing_disconnections: Vec<connection::down::Down>,
     pending_unregisters: Vec<PendingUnregister>,
     reconnecting_since: Option<SystemTime>,
+    /// Retry budget of the current connect attempts; reset once connected or on a user disconnect or switch.
+    connect_retries: Option<ExponentialBackoff>,
 }
 
 /// A disconnect whose unregister failed; re-run against its own destination snapshot on the next connect to this exit.
@@ -155,6 +158,13 @@ struct PendingUnregister {
 /// Server GC: client_handshake_timeout_s=300 plus a 180 s sweep - older entries are already collected.
 const PENDING_UNREGISTER_TTL: Duration = Duration::from_secs(8 * 60);
 const PUMP_STOP_BUDGET: Duration = Duration::from_secs(5);
+/// Few, short retries: a fresh worker rebuilds the node and costs minutes offline.
+const CONNECT_RETRY_BACKOFF: ExponentialBuilder = ExponentialBuilder::new()
+    .with_min_delay(Duration::from_secs(2))
+    .with_max_delay(Duration::from_secs(10))
+    .with_factor(2.0)
+    .with_jitter()
+    .with_max_times(3);
 
 #[derive(Debug, Clone)]
 enum Phase {
@@ -275,6 +285,7 @@ impl Core {
             next_request_id: 0,
             responders: HashMap::new(),
             reconnecting_since: None,
+            connect_retries: None,
         };
         Ok((core, incoming_sender))
     }
@@ -884,6 +895,7 @@ impl Core {
                 (Ok(_session), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     self.reconnecting_since = None;
+                    self.connect_retries = None;
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
                     self.remember_connected(conn.destination.key()).await;
@@ -915,16 +927,27 @@ impl Core {
                 }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(?err, %conn, "connection failed");
-                    self.reconnecting_since = None;
                     if let Some(rh) = self.route_healths.get_mut(&conn.destination.key()) {
                         rh.with_error(err.to_string());
                     }
                     // By identity: a dropped target must still restart the worker, not stick in Connecting.
                     let failed_the_target = self.target.as_deref() == Some(conn.destination.connect_id.as_str());
-                    if failed_the_target {
-                        tracing::info!(id = %conn.destination.connect_id, "restarting connection worker process due to final connection error");
-                        return false;
+                    if !failed_the_target {
+                        self.reconnecting_since = None;
+                        return true;
                     }
+                    let delay = self
+                        .connect_retries
+                        .get_or_insert_with(|| CONNECT_RETRY_BACKOFF.build())
+                        .next();
+                    let Some(delay) = delay else {
+                        tracing::info!(id = %conn.destination.connect_id, "restarting connection worker process due to final connection error");
+                        self.reconnecting_since = None;
+                        return false;
+                    };
+                    // Stays Connecting until the retry fires, so act_on_target leaves it alone and a switch cancels the timer.
+                    tracing::warn!(id = %conn.destination.connect_id, ?delay, "connection failed - retrying in place");
+                    self.spawn_connect_retry(results_sender, delay);
                 }
                 (Err(err), phase) => {
                     tracing::warn!(%err, ?phase, "connection failed in unexpecting state");
@@ -1115,6 +1138,15 @@ impl Core {
             Results::RetryReactor => {
                 self.try_start_reactor(results_sender).await;
             }
+
+            Results::RetryConnect => match self.phase.clone() {
+                Phase::Connecting(conn) if self.target.as_deref() == Some(conn.destination.connect_id.as_str()) => {
+                    self.reconnect_in_place(conn, true, results_sender).await;
+                }
+                phase => {
+                    tracing::debug!(?phase, target = ?self.target, "dropping connect retry - target moved on");
+                }
+            },
 
             Results::StrategySampleTick => {
                 let sample = self.strategy_state.as_ref().map(|h| h.state());
@@ -2428,6 +2460,7 @@ impl Core {
 
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
         self.cancel_connection.cancel();
+        self.connect_retries = None;
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
         self.responders.clear();
@@ -2548,6 +2581,19 @@ impl Core {
                 .run_until_cancelled(async move {
                     time::sleep(delay).await;
                     let _ = results_sender.send(Results::StrategySampleTick).await;
+                })
+                .await
+        });
+    }
+
+    fn spawn_connect_retry(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        let cancel = self.cancel_connection.clone();
+        let results_sender = results_sender.clone();
+        tokio::spawn(async move {
+            cancel
+                .run_until_cancelled(async move {
+                    time::sleep(delay).await;
+                    let _ = results_sender.send(Results::RetryConnect).await;
                 })
                 .await
         });
@@ -2730,6 +2776,14 @@ mod tests {
     use super::*;
     use crate::connection::destination::{DestinationSource, HopRouting, Meta};
     use crate::connection::up::{Phase as UpPhase, Up};
+
+    #[test]
+    fn connect_retry_backoff_gives_up_after_three_short_retries() {
+        let delays: Vec<Duration> = CONNECT_RETRY_BACKOFF.build().collect();
+        assert_eq!(delays.len(), 3);
+        // Jitter adds up to one more delay on top of the 10 s cap.
+        assert!(delays.iter().all(|d| *d <= Duration::from_secs(20)));
+    }
 
     fn destination(id: &str) -> Destination {
         Destination::new(

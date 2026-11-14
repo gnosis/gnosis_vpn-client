@@ -126,6 +126,8 @@ pub(crate) enum Results {
     /// The SURB ramp ticker fired; Core nudges the active session's setpoint toward its target.
     SurbRampTick,
     RetryReactor,
+    /// The backoff delay after a failed connect elapsed; Core reconnects in place.
+    RetryConnect,
     /// Periodic read of the strategy reactor's health verdict.
     StrategySampleTick,
     NerdStatsTicketStats {
@@ -804,6 +806,7 @@ impl Display for Results {
             },
             Results::Probe { generation, event } => write!(f, "Probe (gen {generation}): {event:?}"),
             Results::RetryReactor => write!(f, "RetryReactor"),
+            Results::RetryConnect => write!(f, "RetryConnect"),
             Results::StrategySampleTick => write!(f, "StrategySampleTick"),
             Results::NerdStatsTicketStats { .. } => write!(f, "NerdStatsTicketStats"),
             Results::QuickProbe {
