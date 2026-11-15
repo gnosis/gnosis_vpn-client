@@ -64,10 +64,27 @@ pub struct PixConfig {
     #[serde(default = "PixConfig::default_relayer_url")]
     pub relayer_url: Url,
 
-    /// Curvy float shielded from the Safe once, never topped up; `HOPRD_CURVY_INITIAL_FUNDING` overrides it.
-    #[serde_as(as = "Option<DisplayFromStr>")]
+    /// Curvy float below which the pool tops itself up from the Safe ahead of a deposit flush.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default = "PixConfig::default_funding_min_available")]
+    pub funding_min_available: HoprBalance,
+
+    /// wxHOPR one Curvy top-up shields from the Safe, gross of the shield fee.
+    #[serde_as(as = "DisplayFromStr")]
+    #[serde(default = "PixConfig::default_funding_top_up")]
+    pub funding_top_up: HoprBalance,
+
+    /// Top up once at startup; off because the first float is funded manually (`fund-pix-float`).
     #[serde(default)]
-    pub initial_funding: Option<HoprBalance>,
+    pub fund_at_startup: bool,
+
+    /// Lag budget of one Curvy top-up; unset keeps the pool's default.
+    #[serde(default, with = "humantime_serde::option")]
+    pub max_funding_time: Option<Duration>,
+
+    /// Wait for an unconfirmed Curvy shield before resending it; unset keeps the pool's default.
+    #[serde(default, with = "humantime_serde::option")]
+    pub direct_shield_settle_grace: Option<Duration>,
 }
 
 impl Default for PixConfig {
@@ -83,7 +100,11 @@ impl Default for PixConfig {
             max_deposit_retries: None, // Applies to pix-test pool only.
             min_safe_hopr_reserve: None,
             relayer_url: Self::default_relayer_url(),
-            initial_funding: None,
+            funding_min_available: Self::default_funding_min_available(),
+            funding_top_up: Self::default_funding_top_up(),
+            fund_at_startup: false,
+            max_funding_time: None,
+            direct_shield_settle_grace: None,
         }
     }
 }
@@ -119,17 +140,20 @@ impl PixConfig {
         edgli::strategy::PixEntryPool::default().max_deposit_tracking_time
     }
 
-    /// What the pool shields from the Safe once; the `pix-test` pool has no float.
+    /// About three deposits of 0.66 wxHOPR, well under half of `funding_top_up` as upstream asks.
+    fn default_funding_min_available() -> HoprBalance {
+        "2 wxHOPR".parse().expect("default funding floor is valid")
+    }
+
+    /// The GNO-1151 onboarding float.
+    fn default_funding_top_up() -> HoprBalance {
+        "35.35 wxHOPR".parse().expect("default funding top-up is valid")
+    }
+
+    /// What one top-up shields from the Safe; the `pix-test` pool has no float.
     pub fn float(&self) -> HoprBalance {
-        // Upstream applies this override when building the pool; mirror it so the recommendation covers the real float.
         #[cfg(feature = "pix-curvy")]
-        return std::env::var(hopr_strategy::pix::pools::curvy::INITIAL_FUNDING_ENV)
-            .ok()
-            .and_then(|raw| raw.parse().ok())
-            .unwrap_or(
-                self.initial_funding
-                    .unwrap_or(edgli::strategy::PixEntryPool::default().initial_funding),
-            );
+        return self.funding_top_up;
         #[cfg(not(feature = "pix-curvy"))]
         HoprBalance::zero()
     }
@@ -149,7 +173,15 @@ impl PixConfig {
         #[cfg(feature = "pix-curvy")]
         let pool = edgli::strategy::PixEntryPool {
             submission: edgli::strategy::PixCurvySubmission::Relayer(self.relayer_url.clone()),
-            initial_funding: self.initial_funding.unwrap_or(pool.initial_funding),
+            funding: Some(edgli::strategy::PixFundingPolicy {
+                min_available: self.funding_min_available,
+                top_up: self.funding_top_up,
+                fund_at_startup: self.fund_at_startup,
+            }),
+            max_funding_time: self.max_funding_time.unwrap_or(pool.max_funding_time),
+            direct_shield_settle_grace: self
+                .direct_shield_settle_grace
+                .unwrap_or(pool.direct_shield_settle_grace),
             ..pool
         };
         edgli::strategy::PixEntryConfig {
@@ -188,7 +220,9 @@ mod tests {
         assert_eq!(parsed.max_deposit_tracking_time, def.max_deposit_tracking_time);
         assert_eq!(parsed.min_safe_hopr_reserve, def.min_safe_hopr_reserve);
         assert_eq!(parsed.relayer_url, def.relayer_url);
-        assert_eq!(parsed.initial_funding, def.initial_funding);
+        assert_eq!(parsed.funding_min_available, def.funding_min_available);
+        assert_eq!(parsed.funding_top_up, def.funding_top_up);
+        assert_eq!(parsed.fund_at_startup, def.fund_at_startup);
     }
 
     #[test]
@@ -214,20 +248,40 @@ mod tests {
 
     #[cfg(feature = "pix-curvy")]
     #[test]
-    fn to_entry_config_carries_initial_funding() {
+    fn to_entry_config_always_carries_a_funding_policy() {
         let pix_dir = PathBuf::from("/home/alice/.local/share/gnosisvpn/networks/jura-dev/pix");
         let unset = PixConfig::default().to_entry_config(pix_dir.clone(), test_password());
         assert_eq!(
-            unset.pool.initial_funding,
-            edgli::strategy::PixEntryPool::default().initial_funding
+            unset.pool.funding,
+            Some(edgli::strategy::PixFundingPolicy {
+                min_available: PixConfig::default_funding_min_available(),
+                top_up: PixConfig::default_funding_top_up(),
+                fund_at_startup: false,
+            })
+        );
+        assert_eq!(
+            unset.pool.max_funding_time,
+            edgli::strategy::PixEntryPool::default().max_funding_time
         );
 
-        let funding: HoprBalance = "0.000001 wxHOPR".parse().expect("valid balance");
         let set = PixConfig {
-            initial_funding: Some(funding),
+            funding_min_available: "1 wxHOPR".parse().expect("valid balance"),
+            funding_top_up: "10 wxHOPR".parse().expect("valid balance"),
+            fund_at_startup: true,
+            max_funding_time: Some(Duration::from_secs(600)),
+            direct_shield_settle_grace: Some(Duration::from_secs(60)),
             ..PixConfig::default()
         }
         .to_entry_config(pix_dir, test_password());
-        assert_eq!(set.pool.initial_funding, funding);
+        assert_eq!(
+            set.pool.funding,
+            Some(edgli::strategy::PixFundingPolicy {
+                min_available: "1 wxHOPR".parse().expect("valid balance"),
+                top_up: "10 wxHOPR".parse().expect("valid balance"),
+                fund_at_startup: true,
+            })
+        );
+        assert_eq!(set.pool.max_funding_time, Duration::from_secs(600));
+        assert_eq!(set.pool.direct_shield_settle_grace, Duration::from_secs(60));
     }
 }
