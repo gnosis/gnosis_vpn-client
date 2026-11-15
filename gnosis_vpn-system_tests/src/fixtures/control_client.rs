@@ -1,17 +1,19 @@
 use gnosis_vpn_ipc::{
     self as ipc, Address, Balances, CallError, ConnectResponse, Connection, Destination, DestinationId,
     DestinationSource, DestinationStatus, DisconnectResponse, PixChunkStats, PixPhase, QuickProbeCheck,
-    QuickProbeResponse, QuickProbeState, Request, Response, RouteHealthState, RunMode, StartClientResponse, Status,
-    StopClientResponse,
+    QuickProbeResponse, QuickProbeState, Request, Response, RouteHealthState, RouteWalk, RunMode, StartClientResponse,
+    Status, StopClientResponse,
 };
-use rand::seq::SliceRandom;
 use std::{
     path::PathBuf,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 use tracing::{debug, error, info, warn};
 
 use crate::fixtures::lib::{self, ConditionCheck};
+
+const STRONG_PATH_VALUE: f64 = 0.9;
+const STRONG_DESTINATIONS: usize = 3;
 
 /// Thin wrapper around the gnosis_vpn control socket used during system tests.
 pub struct ControlClient {
@@ -210,38 +212,46 @@ impl ControlClient {
         Ok(())
     }
 
-    /// Aggregates ready and not-ready destinations.
-    pub async fn wait_for_ready_destinations(&self, timeout: Duration) -> anyhow::Result<DestinationReadiness> {
+    /// Lets path values settle for `settle`, or less once enough destinations have strong paths.
+    pub async fn wait_for_ready_destinations(
+        &self,
+        settle: Duration,
+        timeout: Duration,
+    ) -> anyhow::Result<DestinationReadiness> {
+        let start = Instant::now();
         lib::wait_for_condition(
-            "node ready to reach all destinations",
+            "node ready to reach destinations",
             timeout,
             Duration::from_secs(10),
             || async {
-                match self.status().await {
-                    Ok(Some(status)) => {
-                        let mut readiness = DestinationReadiness::from_states(status.destinations);
+                let Ok(Some(status)) = self.status().await else {
+                    return Ok(ConditionCheck::Pending);
+                };
+                let readiness = DestinationReadiness::from_states(status.destinations);
+                let strong = readiness
+                    .ready()
+                    .iter()
+                    .filter(|ranked| ranked.path_value > STRONG_PATH_VALUE)
+                    .count();
 
-                        if readiness.ready().is_empty() {
-                            warn!("no ready destinations yet");
-                            return Ok(ConditionCheck::PendingWithValue(readiness));
-                        }
-
-                        if readiness.not_ready().is_empty() {
-                            info!("all destinations are ready");
-                            readiness.shuffle_ready();
-                            return Ok(ConditionCheck::Ready(readiness));
-                        }
-
-                        warn!(
-                            ready = readiness.ready().len(),
-                            not_ready = readiness.not_ready().len(),
-                            "waiting for all destinations to be ready"
-                        );
-                        Ok(ConditionCheck::PendingWithValue(readiness))
-                    }
-                    Ok(None) => Ok(ConditionCheck::Pending),
-                    Err(_) => Ok(ConditionCheck::Pending),
+                if strong >= STRONG_DESTINATIONS {
+                    info!(strong, "enough destinations with strong paths");
+                    return Ok(ConditionCheck::Ready(readiness));
                 }
+
+                let settled = start.elapsed() >= settle;
+                if settled && !readiness.ready().is_empty() {
+                    info!(ready = readiness.ready().len(), "path values settled");
+                    return Ok(ConditionCheck::Ready(readiness));
+                }
+
+                debug!(
+                    ready = readiness.ready().len(),
+                    not_ready = readiness.not_ready().len(),
+                    strong,
+                    "waiting for path values to settle"
+                );
+                Ok(ConditionCheck::PendingWithValue(readiness))
             },
         )
         .await
@@ -452,8 +462,16 @@ fn discovered_exits(status: &Status, addresses: &[Address]) -> Vec<Option<Destin
 }
 
 #[derive(Debug, Clone)]
+pub struct RankedDestination {
+    pub destination: Destination,
+    /// The weaker of the forward and return best path values, in (0.0, 1.0].
+    pub path_value: f64,
+}
+
+#[derive(Debug, Clone)]
 pub struct DestinationReadiness {
-    ready: Vec<Destination>,
+    /// Best path value first.
+    ready: Vec<RankedDestination>,
     not_ready: Vec<Destination>,
 }
 
@@ -463,29 +481,34 @@ impl DestinationReadiness {
         let mut not_ready = Vec::new();
 
         for state in states {
-            let is_ready = state
+            let is_routable = state
                 .route_health
                 .as_ref()
                 .is_some_and(|rh| matches!(rh.state, RouteHealthState::Routable));
-            if is_ready {
-                ready.push(state.destination);
-            } else {
-                not_ready.push(state.destination);
+            let walk = state.route_health.and_then(|rh| rh.walk);
+            match walk {
+                // A session needs both directions, so the weaker one bounds it
+                Some(RouteWalk::Paths {
+                    best_value,
+                    return_best_value,
+                    ..
+                }) if is_routable => ready.push(RankedDestination {
+                    destination: state.destination,
+                    path_value: best_value.min(return_best_value),
+                }),
+                _ => not_ready.push(state.destination),
             }
         }
+        ready.sort_by(|a, b| b.path_value.total_cmp(&a.path_value));
 
         Self { ready, not_ready }
     }
 
-    pub fn ready(&self) -> &[Destination] {
+    pub fn ready(&self) -> &[RankedDestination] {
         &self.ready
     }
 
     pub fn not_ready(&self) -> &[Destination] {
         &self.not_ready
-    }
-
-    pub fn shuffle_ready(&mut self) {
-        self.ready.shuffle(&mut rand::rng());
     }
 }
