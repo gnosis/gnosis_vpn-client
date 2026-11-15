@@ -2665,7 +2665,7 @@ fn connection_view(
             destination: conn.destination.connect_id.as_str().into(),
             since: conn.phase.0,
             tunnel_ping_rtt: conn.tunnel_ping.rtt,
-            stall: conn.tunnel_ping.failing_since.map(|since| ipc::TunnelStall {
+            stall: conn.stall_since().map(|since| ipc::TunnelStall {
                 since,
                 failed_pings: conn.tunnel_ping.failures,
                 reconnect_at,
