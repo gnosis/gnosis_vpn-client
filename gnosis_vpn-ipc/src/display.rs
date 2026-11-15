@@ -270,14 +270,19 @@ impl Display for Connection {
                 if let Some(rtt) = tunnel_ping_rtt {
                     write!(f, ", tunnel ping RTT {:.2} s", rtt.as_secs_f32())?;
                 }
-                if let Some(stall) = stall {
-                    write!(
+                match stall {
+                    Some(TunnelStall {
+                        awaiting_payment_since: Some(held),
+                        ..
+                    }) => write!(f, ", held for PIX payment {}", elapsed(held))?,
+                    Some(stall) => write!(
                         f,
                         ", stalled {} ({}/{})",
                         elapsed(&stall.since),
                         stall.failed_pings,
                         stall.reconnect_at
-                    )?;
+                    )?,
+                    None => {}
                 }
                 Ok(())
             }

@@ -181,13 +181,16 @@ impl Connection {
     }
 }
 
-/// Consecutive tunnel pings failing; the service reconnects once `failed_pings` reaches `reconnect_at`.
+/// Consecutive tunnel pings failing; the service reconnects at `reconnect_at` unless held for PIX payment.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TunnelStall {
     #[serde(with = "unix_ms")]
     pub since: SystemTime,
     pub failed_pings: u32,
     pub reconnect_at: u32,
+    /// The exit parks data until this session's PIX chunk is paid; no reconnect while set.
+    #[serde(default, with = "unix_ms::option")]
+    pub awaiting_payment_since: Option<SystemTime>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
