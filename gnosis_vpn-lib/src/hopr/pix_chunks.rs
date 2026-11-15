@@ -199,9 +199,15 @@ impl Ledger {
             return;
         }
         let now = Deposits::read(telemetry);
-        let Some(counted) = self.counted.replace(now) else {
+        let Some(counted) = self.counted else {
+            self.counted = Some(now);
             return;
         };
+        // A cached scrape can be older than the one last settled.
+        self.counted = Some(Deposits {
+            sent: counted.sent.max(now.sent),
+            failed: counted.failed.max(now.failed),
+        });
         let new_sent = now.sent.saturating_sub(counted.sent);
         let new_failed = now.failed.saturating_sub(counted.failed);
         for _ in 0..new_sent {
@@ -368,6 +374,17 @@ mod tests {
         let failed = telemetry(0, 0.0, 0, 1);
         assert_eq!(stats_with(&chunks, "old", &failed).phase, ipc::PixPhase::PaymentFailed);
         assert_eq!(stats_with(&chunks, "new", &failed).phase, ipc::PixPhase::PaymentPending);
+    }
+
+    #[test]
+    fn an_older_cached_scrape_does_not_recount_a_deposit() {
+        let chunks = PixChunks::default();
+        chunks.record("old", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        chunks.record("new", 1, CHUNK, &telemetry(0, 0.0, 1, 0));
+
+        stats_with(&chunks, "new", &telemetry(0, 0.0, 0, 0));
+        let stats = stats_with(&chunks, "new", &telemetry(0, 0.0, 1, 0));
+        assert_eq!(stats.chunks_paid, 0);
     }
 
     #[test]
