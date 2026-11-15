@@ -291,6 +291,7 @@ impl Up {
                 }
             }
             Err(err) => {
+                self.tunnel_ping.rtt = None;
                 self.tunnel_ping.last_error = Some(err);
                 // Under heavy download the ping times out while data keeps arriving; that is load, not an outage.
                 if inbound == Inbound::Flowing {
@@ -368,6 +369,20 @@ impl Up {
             };
         }
         stall
+    }
+
+    /// When the current stall began, by counted ping failures or by a counter stall; the counter path is the one that reconnects.
+    pub fn stall_since(&self) -> Option<SystemTime> {
+        let ping_since = self.tunnel_ping.failing_since;
+        let counter_stalled = self.tunnel_ping.counter_stall >= INBOUND_STALL;
+        let counter_since = match self.wg_stats.back() {
+            Some(newest) if counter_stalled => newest.at.checked_sub(self.tunnel_ping.counter_stall),
+            _ => None,
+        };
+        match (ping_since, counter_since) {
+            (Some(ping), Some(counter)) => Some(ping.min(counter)),
+            (ping, counter) => ping.or(counter),
+        }
     }
 
     /// Records a WireGuard telemetry sample (evicting the oldest at the retention bound) and returns how long inbound has been stalled as of it.
@@ -959,6 +974,49 @@ mod tunnel_ping_tests {
         assert_eq!(up.tunnel_ping.failing_since, Some(started));
         up.tunnel_ping_result(Ok(Duration::from_millis(100)), MAX_RTT);
         assert!(up.tunnel_ping.failing_since.is_none());
+    }
+
+    #[test]
+    fn counter_stall_reports_a_stall_without_ping_failures() {
+        let mut up = up();
+        record_samples(&mut up, 1, true);
+        record_samples(&mut up, 3, false);
+        assert_eq!(up.tunnel_ping.failures, 0);
+        let newest = up.wg_stats.back().expect("sample").at;
+        assert_eq!(up.stall_since(), Some(newest - SAMPLE_GAP * 3));
+    }
+
+    #[test]
+    fn short_counter_stall_without_ping_failures_is_no_stall() {
+        let mut up = up();
+        record_samples(&mut up, 1, true);
+        record_samples(&mut up, 1, false);
+        assert!(up.stall_since().is_none());
+    }
+
+    #[test]
+    fn the_earlier_stall_start_wins() {
+        let mut up = up();
+        record_samples(&mut up, 1, true);
+        record_samples(&mut up, 3, false);
+        let counter_since = up.wg_stats.back().expect("sample").at - SAMPLE_GAP * 3;
+        up.tunnel_ping.failing_since = Some(counter_since + SAMPLE_GAP);
+        assert_eq!(up.stall_since(), Some(counter_since));
+        up.tunnel_ping.failing_since = Some(UNIX_EPOCH);
+        assert_eq!(up.stall_since(), Some(UNIX_EPOCH));
+    }
+
+    #[test]
+    fn failed_ping_clears_rtt() {
+        let mut up = up();
+        up.tunnel_ping_result(Ok(Duration::from_millis(100)), MAX_RTT);
+        up.tunnel_ping_result(TIMEOUT, MAX_RTT);
+        assert!(up.tunnel_ping.rtt.is_none());
+
+        up.tunnel_ping_result(Ok(Duration::from_millis(100)), MAX_RTT);
+        record_samples(&mut up, 3, true);
+        assert_eq!(up.tunnel_ping_result(TIMEOUT, MAX_RTT), 0, "timeout is excused");
+        assert!(up.tunnel_ping.rtt.is_none());
     }
 
     #[test]
