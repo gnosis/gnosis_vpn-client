@@ -7,7 +7,7 @@ use crate::{
     cli::{Cli, Command},
     download,
     fixtures::{
-        control_client::ControlClient,
+        control_client::{ControlClient, RankedDestination},
         lib,
         service::{Service, ServiceGuard},
     },
@@ -21,6 +21,7 @@ const NODE_RUNNING_TIMEOUT: Duration = Duration::from_mins(30);
 const NODE_FUNDING_TIMEOUT: Duration = Duration::from_secs(30);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_mins(5);
 const GEOLOCATION_TIMEOUT: Duration = Duration::from_mins(2);
+const PATH_SETTLE_TIME: Duration = Duration::from_mins(1);
 const READY_DESTINATIONS_TIMEOUT: Duration = Duration::from_mins(10);
 const QUICK_PROBE_TIMEOUT: Duration = Duration::from_mins(1);
 const QUICK_PROBE_BATCH: usize = 3;
@@ -71,7 +72,7 @@ impl SystemTestWorkflow {
 
         let readiness = self
             .client
-            .wait_for_ready_destinations(READY_DESTINATIONS_TIMEOUT)
+            .wait_for_ready_destinations(PATH_SETTLE_TIME, READY_DESTINATIONS_TIMEOUT)
             .await?;
 
         info!(
@@ -80,12 +81,16 @@ impl SystemTestWorkflow {
             "destinations ready to be used",
         );
 
-        let mut readiness_report = ReportTable::new("destination", &[]);
-        for destination in readiness.ready() {
-            readiness_report.add_row(destination.id.to_string(), RowStatus::Ready, Vec::new());
+        let mut readiness_report = ReportTable::new("destination", &["path value"]);
+        for ranked in readiness.ready() {
+            readiness_report.add_row(
+                ranked.destination.id.to_string(),
+                RowStatus::Ready,
+                vec![format!("{:.3}", ranked.path_value)],
+            );
         }
         for destination in readiness.not_ready() {
-            readiness_report.add_row(destination.id.to_string(), RowStatus::NotReady, Vec::new());
+            readiness_report.add_row(destination.id.to_string(), RowStatus::NotReady, vec!["-".to_string()]);
         }
         info!("\n\n{}", readiness_report.render());
 
@@ -211,12 +216,12 @@ impl SystemTestWorkflow {
         Ok(())
     }
 
-    /// Quick-probes shuffled ready destinations a batch at a time and picks the fastest of the first batch with an answer.
-    async fn select_best_probed(&self, ready: &[Destination]) -> Result<Destination> {
+    /// Quick-probes ready destinations best path first, a batch at a time, and picks the fastest of the first batch with an answer.
+    async fn select_best_probed(&self, ready: &[RankedDestination]) -> Result<Destination> {
         let mut report = ReportTable::new("destination", &["status rtt"]);
         let mut best: Option<(&Destination, Duration)> = None;
         for batch in ready.chunks(QUICK_PROBE_BATCH) {
-            for destination in batch {
+            for RankedDestination { destination, .. } in batch {
                 // A registered exit can still be routable after it stopped serving
                 let check = match self.client.quick_probe(destination, QUICK_PROBE_TIMEOUT).await {
                     Ok(check) => check,
