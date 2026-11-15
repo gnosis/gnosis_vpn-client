@@ -2310,9 +2310,9 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.37.0"
+version = "0.37.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0316ef1a89d3d089b8534c12fa77403702dbbbef24a64361f74f4b5ec7e2edd"
+checksum = "972d9fa491797d67e9262d2ee12c35cb4a77d0f241d7ad25e64f7a204db910bd"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4544,7 +4544,6 @@ dependencies = [
  "exitcode",
  "gnosis_vpn-ipc",
  "gnosis_vpn-lib",
- "rand 0.10.3",
  "reqwest",
  "rustix",
  "serde",
