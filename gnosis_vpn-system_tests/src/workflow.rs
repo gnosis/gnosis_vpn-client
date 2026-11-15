@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use std::{path::Path, time::Duration};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     cli::{Cli, Command},
@@ -23,7 +23,7 @@ const DISCOVERY_TIMEOUT: Duration = Duration::from_mins(5);
 const GEOLOCATION_TIMEOUT: Duration = Duration::from_mins(2);
 const READY_DESTINATIONS_TIMEOUT: Duration = Duration::from_mins(10);
 const QUICK_PROBE_TIMEOUT: Duration = Duration::from_mins(1);
-const QUICK_PROBE_COUNT: usize = 2;
+const QUICK_PROBE_BATCH: usize = 3;
 const CONNECTION_TIMEOUT: Duration = Duration::from_mins(10);
 const DOWNLOAD_SIZE_BYTES: u64 = 250_000;
 const DISCONNECTION_TIMEOUT: Duration = Duration::from_secs(15);
@@ -211,35 +211,45 @@ impl SystemTestWorkflow {
         Ok(())
     }
 
-    /// Quick-probes random ready destinations and picks the one with the fastest status round trip.
+    /// Quick-probes shuffled ready destinations a batch at a time and picks the fastest of the first batch with an answer.
     async fn select_best_probed(&self, ready: &[Destination]) -> Result<Destination> {
-        let candidates = ready.get(..QUICK_PROBE_COUNT).ok_or_else(|| {
-            anyhow!(
-                "need {QUICK_PROBE_COUNT} ready destinations to probe, have {}",
-                ready.len()
-            )
-        })?;
-
         let mut report = ReportTable::new("destination", &["status rtt"]);
         let mut best: Option<(&Destination, Duration)> = None;
-        for destination in candidates {
-            let check = self.client.quick_probe(destination, QUICK_PROBE_TIMEOUT).await?;
-            info!(dest = %destination, rtt = ?check.status_rtt, "quick probe succeeded");
-            report.add_row(
-                destination.id.to_string(),
-                RowStatus::Success,
-                vec![format!("{:?}", check.status_rtt)],
-            );
+        for batch in ready.chunks(QUICK_PROBE_BATCH) {
+            for destination in batch {
+                // A registered exit can still be routable after it stopped serving
+                let check = match self.client.quick_probe(destination, QUICK_PROBE_TIMEOUT).await {
+                    Ok(check) => check,
+                    Err(error) => {
+                        warn!(dest = %destination, %error, "quick probe failed");
+                        report.add_row(
+                            destination.id.to_string(),
+                            RowStatus::Failure(error.to_string()),
+                            vec!["-".to_string()],
+                        );
+                        continue;
+                    }
+                };
+                info!(dest = %destination, rtt = ?check.status_rtt, "quick probe succeeded");
+                report.add_row(
+                    destination.id.to_string(),
+                    RowStatus::Success,
+                    vec![format!("{:?}", check.status_rtt)],
+                );
 
-            let is_fastest = best.is_none_or(|(_, rtt)| check.status_rtt < rtt);
-            if is_fastest {
-                best = Some((destination, check.status_rtt));
+                let is_fastest = best.is_none_or(|(_, rtt)| check.status_rtt < rtt);
+                if is_fastest {
+                    best = Some((destination, check.status_rtt));
+                }
+            }
+            if best.is_some() {
+                break;
             }
         }
         info!("\n\n{}", report.render());
 
         best.map(|(destination, _)| destination.clone())
-            .ok_or_else(|| anyhow!("no destination was probed"))
+            .ok_or_else(|| anyhow!("no quick probe succeeded on any of {} ready destinations", ready.len()))
     }
 
     async fn try_connect(&self, destination: &Destination, timeout: Duration) -> Result<()> {
