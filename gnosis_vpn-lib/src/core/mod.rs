@@ -21,6 +21,7 @@ use crate::compat::SafeModule;
 use crate::config::{self, Config};
 use crate::connection;
 use crate::connection::destination::{self, Address, Destination, Destinations, ExitKey, HopRouting};
+use crate::connection::up::StallVerdict;
 use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, WorkerToCore};
 use crate::geoip::{self, GeoIp};
 use crate::hopr::types::SessionClientMetadata;
@@ -1009,7 +1010,8 @@ impl Core {
                     let failures = conn.tunnel_ping_result(rtt, max_rtt);
                     self.phase = Phase::Connected(conn.clone());
                     let max = self.config.connection.health_check_intervals.tunnel_ping_max_failures;
-                    if failures >= max {
+                    // The exit's PIX gate swallows in-tunnel pings too; the stall verdict decides during a hold.
+                    if failures >= max && !conn.payment_held() {
                         tracing::warn!(%conn, failures, "tunnel ping exceeded max failures - reconnecting");
                         self.reconnecting_since = Some(SystemTime::now());
                         self.reconnect_in_place(conn, true, results_sender).await;
@@ -1024,11 +1026,44 @@ impl Core {
                 }
                 Phase::Connected(mut conn) => {
                     let stall = conn.record_wg_stats(sample);
+                    let main_session_id = conn
+                        .ping_session
+                        .as_ref()
+                        .and_then(|(_, session)| session.active_clients.first().cloned());
+                    let pix_chunks = self.hopr.as_ref().map(|hopr| hopr.pix_chunks().clone());
+                    let awaiting_payment = match (&pix_chunks, &main_session_id) {
+                        (Some(chunks), Some(id)) => chunks.awaiting_payment(id),
+                        _ => false,
+                    };
+                    // A scrape per sample, but only during a stall that a payment might explain.
+                    let surbs_consumed = match (&pix_chunks, &main_session_id) {
+                        (Some(chunks), Some(id)) if awaiting_payment && !stall.is_zero() => chunks.surbs_consumed(id),
+                        _ => None,
+                    };
+                    let verdict = conn.judge_stall(stall, awaiting_payment, surbs_consumed, SystemTime::now());
                     self.phase = Phase::Connected(conn.clone());
-                    if stall >= connection::up::COUNTER_STALL_RECONNECT {
-                        tracing::warn!(%conn, ?stall, "inbound counters stalled - reconnecting");
-                        self.reconnecting_since = Some(SystemTime::now());
-                        self.reconnect_in_place(conn, true, results_sender).await;
+                    let session_id = main_session_id.unwrap_or_default();
+                    match verdict {
+                        StallVerdict::Fine | StallVerdict::Held => {}
+                        StallVerdict::HoldStarted => {
+                            tracing::info!(%conn, %session_id, ?stall, ?surbs_consumed, "inbound stalled while the exit awaits PIX payment - holding");
+                        }
+                        StallVerdict::HoldResumed { held_for } => {
+                            if let Some(chunks) = &pix_chunks {
+                                chunks.confirm(&session_id);
+                            }
+                            tracing::info!(%conn, %session_id, ?held_for, "inbound resumed after PIX payment hold");
+                        }
+                        StallVerdict::HoldBroken { held_for } => {
+                            tracing::warn!(%conn, %session_id, ?held_for, ?stall, "exit went silent during PIX payment hold - reconnecting");
+                            self.reconnecting_since = Some(SystemTime::now());
+                            self.reconnect_in_place(conn, true, results_sender).await;
+                        }
+                        StallVerdict::Reconnect => {
+                            tracing::warn!(%conn, ?stall, "inbound counters stalled - reconnecting");
+                            self.reconnecting_since = Some(SystemTime::now());
+                            self.reconnect_in_place(conn, true, results_sender).await;
+                        }
                     }
                 }
                 phase => {
@@ -2669,6 +2704,7 @@ fn connection_view(
                 since,
                 failed_pings: conn.tunnel_ping.failures,
                 reconnect_at,
+                awaiting_payment_since: conn.payment_hold_since,
             }),
             pix,
         },

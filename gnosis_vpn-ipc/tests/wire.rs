@@ -126,6 +126,7 @@ fn the_connection_is_one_tagged_state() {
                 since: at(3_000),
                 failed_pings: 2,
                 reconnect_at: 3,
+                awaiting_payment_since: None,
             }),
             pix: None,
         },
@@ -134,7 +135,7 @@ fn the_connection_is_one_tagged_state() {
             "destination": "berlin",
             "since": 2_000,
             "tunnel_ping_rtt": 90,
-            "stall": {"since": 3_000, "failed_pings": 2, "reconnect_at": 3},
+            "stall": {"since": 3_000, "failed_pings": 2, "reconnect_at": 3, "awaiting_payment_since": null},
             "pix": null
         }),
     );
@@ -428,9 +429,26 @@ fn a_stall_shows_only_while_pings_fail() {
         since: UNIX_EPOCH,
         failed_pings: 2,
         reconnect_at: 3,
+        awaiting_payment_since: None,
     }))
     .to_string();
     assert!(stalled.ends_with("(2/3)"), "{stalled}");
+    let held = connected(Some(TunnelStall {
+        since: UNIX_EPOCH,
+        failed_pings: 2,
+        reconnect_at: 3,
+        awaiting_payment_since: Some(UNIX_EPOCH),
+    }))
+    .to_string();
+    assert!(held.contains("held for PIX payment"), "{held}");
+    assert!(!held.contains("(2/3)"), "{held}");
+}
+
+#[test]
+fn a_stall_from_an_older_service_has_no_payment_hold() {
+    let stall: TunnelStall =
+        serde_json::from_value(json!({"since": 3_000, "failed_pings": 2, "reconnect_at": 3})).expect("deserialize");
+    assert_eq!(stall.awaiting_payment_since, None);
 }
 
 #[test]

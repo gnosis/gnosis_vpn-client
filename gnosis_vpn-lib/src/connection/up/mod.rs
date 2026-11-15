@@ -174,6 +174,33 @@ pub struct Up {
     /// SURB balancer setpoint actually pushed to the session so far.
     pub surb_applied: Option<SurbBalancerConfig>,
     surb_ramp: Option<SurbRamp>,
+    /// Exit packets on the main session seen during the current stall; they tell a PIX gate block from a dead path.
+    exit_replies: Option<ExitReplies>,
+    /// Set while a stall is held because the exit awaits this session's PIX payment.
+    pub payment_hold_since: Option<SystemTime>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ExitReplies {
+    surbs_consumed: u64,
+    grew_at: Option<SystemTime>,
+}
+
+/// What core does about the inbound stall after a WireGuard sample.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StallVerdict {
+    Fine,
+    HoldStarted,
+    Held,
+    /// Inbound came back during the hold: the exit got its payment.
+    HoldResumed {
+        held_for: Duration,
+    },
+    /// The exit went quiet on the session during the hold, so the gate no longer explains the stall.
+    HoldBroken {
+        held_for: Duration,
+    },
+    Reconnect,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -234,6 +261,8 @@ impl Up {
             surb_target: None,
             surb_applied: None,
             surb_ramp: None,
+            exit_replies: None,
+            payment_hold_since: None,
         }
     }
 
@@ -400,6 +429,75 @@ impl Up {
         }
         self.tunnel_ping.counter_stall = stall;
         stall
+    }
+
+    /// The PIX gate parks data but not keep-alives, so a payment-pending stall the exit still talks through is held.
+    pub fn judge_stall(
+        &mut self,
+        stall: Duration,
+        awaiting_payment: bool,
+        surbs_consumed: Option<u64>,
+        now: SystemTime,
+    ) -> StallVerdict {
+        if stall.is_zero() {
+            self.exit_replies = None;
+            let Some(since) = self.payment_hold_since.take() else {
+                return StallVerdict::Fine;
+            };
+            // The gate explains the failed pings too; they must not outlive the hold.
+            self.tunnel_ping.failures = 0;
+            self.tunnel_ping.failing_since = None;
+            let held_for = now.duration_since(since).unwrap_or(Duration::ZERO);
+            return StallVerdict::HoldResumed { held_for };
+        }
+
+        self.note_exit_replies(surbs_consumed, now);
+        if stall < COUNTER_STALL_RECONNECT {
+            return StallVerdict::Fine;
+        }
+
+        // Silence as long as a data stall we'd reconnect on means the exit can't reach us either.
+        let exit_talking = self
+            .exit_replies
+            .and_then(|replies| replies.grew_at)
+            .is_some_and(|at| now.duration_since(at).unwrap_or(Duration::ZERO) < COUNTER_STALL_RECONNECT);
+        let gate_block = awaiting_payment && exit_talking;
+        match (gate_block, self.payment_hold_since) {
+            (true, None) => {
+                self.payment_hold_since = Some(now);
+                StallVerdict::HoldStarted
+            }
+            (true, Some(_)) => StallVerdict::Held,
+            (false, Some(since)) => {
+                self.payment_hold_since = None;
+                let held_for = now.duration_since(since).unwrap_or(Duration::ZERO);
+                StallVerdict::HoldBroken { held_for }
+            }
+            (false, None) => StallVerdict::Reconnect,
+        }
+    }
+
+    pub fn payment_held(&self) -> bool {
+        self.payment_hold_since.is_some()
+    }
+
+    fn note_exit_replies(&mut self, surbs_consumed: Option<u64>, now: SystemTime) {
+        let Some(surbs_consumed) = surbs_consumed else {
+            return;
+        };
+        match &mut self.exit_replies {
+            None => {
+                self.exit_replies = Some(ExitReplies {
+                    surbs_consumed,
+                    grew_at: None,
+                })
+            }
+            Some(replies) if surbs_consumed > replies.surbs_consumed => {
+                replies.surbs_consumed = surbs_consumed;
+                replies.grew_at = Some(now);
+            }
+            Some(_) => {}
+        }
     }
 
     pub fn connect_progress(&mut self, evt: Progress) {
@@ -765,6 +863,92 @@ mod tunnel_ping_tests {
                 up.tunnel_ping_result(rtt.clone(), MAX_RTT)
             })
             .collect()
+    }
+
+    /// Records `count` stalled samples, the exit's packet count growing by `exit_step` each, and judges each.
+    fn judge_stalled(
+        up: &mut Up,
+        count: usize,
+        awaiting: bool,
+        consumed: &mut u64,
+        exit_step: u64,
+    ) -> Vec<StallVerdict> {
+        (0..count)
+            .map(|_| {
+                record_samples(up, 1, false);
+                *consumed += exit_step;
+                let now = up.wg_stats.back().expect("sample").at;
+                up.judge_stall(up.tunnel_ping.counter_stall, awaiting, Some(*consumed), now)
+            })
+            .collect()
+    }
+
+    /// Flowing first, then stalled until the hold starts at the reconnect threshold.
+    fn held_up(consumed: &mut u64) -> Up {
+        let mut up = up();
+        record_samples(&mut up, 2, true);
+        let verdicts = judge_stalled(&mut up, 5, true, consumed, 3);
+        assert_eq!(verdicts.last(), Some(&StallVerdict::HoldStarted), "{verdicts:?}");
+        up
+    }
+
+    #[test]
+    fn a_stall_awaiting_payment_while_the_exit_talks_is_held() {
+        let mut consumed = 0;
+        let mut up = held_up(&mut consumed);
+        // ~2 min of gate block, as on piz-palu-prod.
+        let verdicts = judge_stalled(&mut up, 30, true, &mut consumed, 3);
+        assert!(verdicts.iter().all(|v| *v == StallVerdict::Held), "{verdicts:?}");
+        assert!(up.payment_held());
+    }
+
+    #[test]
+    fn a_silent_exit_reconnects_even_while_awaiting_payment() {
+        let mut up = up();
+        record_samples(&mut up, 2, true);
+        let verdicts = judge_stalled(&mut up, 5, true, &mut 0, 0);
+        assert_eq!(verdicts.last(), Some(&StallVerdict::Reconnect), "{verdicts:?}");
+    }
+
+    #[test]
+    fn a_stall_without_a_pending_payment_reconnects() {
+        let mut up = up();
+        record_samples(&mut up, 2, true);
+        let verdicts = judge_stalled(&mut up, 5, false, &mut 0, 3);
+        assert_eq!(verdicts.last(), Some(&StallVerdict::Reconnect), "{verdicts:?}");
+    }
+
+    #[test]
+    fn the_hold_breaks_once_the_exit_goes_silent() {
+        let mut consumed = 0;
+        let mut up = held_up(&mut consumed);
+        let verdicts = judge_stalled(&mut up, 5, true, &mut consumed, 0);
+        assert!(
+            matches!(verdicts.last(), Some(StallVerdict::HoldBroken { .. })),
+            "{verdicts:?}"
+        );
+        assert!(!up.payment_held());
+    }
+
+    #[test]
+    fn inbound_resuming_ends_the_hold_and_forgives_the_gated_pings() {
+        let mut consumed = 0;
+        let mut up = held_up(&mut consumed);
+        judge_stalled(&mut up, 10, true, &mut consumed, 3);
+        up.tunnel_ping.failures = 3;
+        up.tunnel_ping.failing_since = Some(UNIX_EPOCH);
+
+        record_samples(&mut up, 1, true);
+        let now = up.wg_stats.back().expect("sample").at;
+        let verdict = up.judge_stall(up.tunnel_ping.counter_stall, true, None, now);
+        assert_eq!(
+            verdict,
+            StallVerdict::HoldResumed {
+                held_for: SAMPLE_GAP * 11
+            }
+        );
+        assert_eq!(up.tunnel_ping.failures, 0);
+        assert!(up.stall_since().is_none());
     }
 
     #[test]
