@@ -1,13 +1,13 @@
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use std::{path::Path, time::Duration};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     cli::{Cli, Command},
     download,
     fixtures::{
-        control_client::ControlClient,
+        control_client::{ControlClient, RankedDestination},
         lib,
         service::{Service, ServiceGuard},
     },
@@ -21,9 +21,10 @@ const NODE_RUNNING_TIMEOUT: Duration = Duration::from_mins(30);
 const NODE_FUNDING_TIMEOUT: Duration = Duration::from_secs(30);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_mins(5);
 const GEOLOCATION_TIMEOUT: Duration = Duration::from_mins(2);
+const PATH_SETTLE_TIME: Duration = Duration::from_mins(1);
 const READY_DESTINATIONS_TIMEOUT: Duration = Duration::from_mins(10);
 const QUICK_PROBE_TIMEOUT: Duration = Duration::from_mins(1);
-const QUICK_PROBE_COUNT: usize = 2;
+const QUICK_PROBE_BATCH: usize = 3;
 const CONNECTION_TIMEOUT: Duration = Duration::from_mins(10);
 const DOWNLOAD_SIZE_BYTES: u64 = 250_000;
 const DISCONNECTION_TIMEOUT: Duration = Duration::from_secs(15);
@@ -71,7 +72,7 @@ impl SystemTestWorkflow {
 
         let readiness = self
             .client
-            .wait_for_ready_destinations(READY_DESTINATIONS_TIMEOUT)
+            .wait_for_ready_destinations(PATH_SETTLE_TIME, READY_DESTINATIONS_TIMEOUT)
             .await?;
 
         info!(
@@ -80,12 +81,16 @@ impl SystemTestWorkflow {
             "destinations ready to be used",
         );
 
-        let mut readiness_report = ReportTable::new("destination", &[]);
-        for destination in readiness.ready() {
-            readiness_report.add_row(destination.id.to_string(), RowStatus::Ready, Vec::new());
+        let mut readiness_report = ReportTable::new("destination", &["path value"]);
+        for ranked in readiness.ready() {
+            readiness_report.add_row(
+                ranked.destination.id.to_string(),
+                RowStatus::Ready,
+                vec![format!("{:.3}", ranked.path_value)],
+            );
         }
         for destination in readiness.not_ready() {
-            readiness_report.add_row(destination.id.to_string(), RowStatus::NotReady, Vec::new());
+            readiness_report.add_row(destination.id.to_string(), RowStatus::NotReady, vec!["-".to_string()]);
         }
         info!("\n\n{}", readiness_report.render());
 
@@ -211,35 +216,45 @@ impl SystemTestWorkflow {
         Ok(())
     }
 
-    /// Quick-probes random ready destinations and picks the one with the fastest status round trip.
-    async fn select_best_probed(&self, ready: &[Destination]) -> Result<Destination> {
-        let candidates = ready.get(..QUICK_PROBE_COUNT).ok_or_else(|| {
-            anyhow!(
-                "need {QUICK_PROBE_COUNT} ready destinations to probe, have {}",
-                ready.len()
-            )
-        })?;
-
+    /// Quick-probes ready destinations best path first, a batch at a time, and picks the fastest of the first batch with an answer.
+    async fn select_best_probed(&self, ready: &[RankedDestination]) -> Result<Destination> {
         let mut report = ReportTable::new("destination", &["status rtt"]);
         let mut best: Option<(&Destination, Duration)> = None;
-        for destination in candidates {
-            let check = self.client.quick_probe(destination, QUICK_PROBE_TIMEOUT).await?;
-            info!(dest = %destination, rtt = ?check.status_rtt, "quick probe succeeded");
-            report.add_row(
-                destination.id.to_string(),
-                RowStatus::Success,
-                vec![format!("{:?}", check.status_rtt)],
-            );
+        for batch in ready.chunks(QUICK_PROBE_BATCH) {
+            for RankedDestination { destination, .. } in batch {
+                // A registered exit can still be routable after it stopped serving
+                let check = match self.client.quick_probe(destination, QUICK_PROBE_TIMEOUT).await {
+                    Ok(check) => check,
+                    Err(error) => {
+                        warn!(dest = %destination, %error, "quick probe failed");
+                        report.add_row(
+                            destination.id.to_string(),
+                            RowStatus::Failure(error.to_string()),
+                            vec!["-".to_string()],
+                        );
+                        continue;
+                    }
+                };
+                info!(dest = %destination, rtt = ?check.status_rtt, "quick probe succeeded");
+                report.add_row(
+                    destination.id.to_string(),
+                    RowStatus::Success,
+                    vec![format!("{:?}", check.status_rtt)],
+                );
 
-            let is_fastest = best.is_none_or(|(_, rtt)| check.status_rtt < rtt);
-            if is_fastest {
-                best = Some((destination, check.status_rtt));
+                let is_fastest = best.is_none_or(|(_, rtt)| check.status_rtt < rtt);
+                if is_fastest {
+                    best = Some((destination, check.status_rtt));
+                }
+            }
+            if best.is_some() {
+                break;
             }
         }
         info!("\n\n{}", report.render());
 
         best.map(|(destination, _)| destination.clone())
-            .ok_or_else(|| anyhow!("no destination was probed"))
+            .ok_or_else(|| anyhow!("no quick probe succeeded on any of {} ready destinations", ready.len()))
     }
 
     async fn try_connect(&self, destination: &Destination, timeout: Duration) -> Result<()> {
