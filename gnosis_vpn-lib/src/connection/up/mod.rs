@@ -178,6 +178,8 @@ pub struct Up {
     exit_replies: Option<ExitReplies>,
     /// Set while a stall is held because the exit awaits this session's PIX payment.
     pub payment_hold_since: Option<SystemTime>,
+    /// Set once the exit's PIX gate explains the stall; status only, the hold decides reconnects.
+    pub awaiting_payment_since: Option<SystemTime>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -263,6 +265,7 @@ impl Up {
             surb_ramp: None,
             exit_replies: None,
             payment_hold_since: None,
+            awaiting_payment_since: None,
         }
     }
 
@@ -441,6 +444,7 @@ impl Up {
     ) -> StallVerdict {
         if stall.is_zero() {
             self.exit_replies = None;
+            self.awaiting_payment_since = None;
             let Some(since) = self.payment_hold_since.take() else {
                 return StallVerdict::Fine;
             };
@@ -452,16 +456,22 @@ impl Up {
         }
 
         self.note_exit_replies(surbs_consumed, now);
-        if stall < COUNTER_STALL_RECONNECT {
-            return StallVerdict::Fine;
-        }
-
         // Silence as long as a data stall we'd reconnect on means the exit can't reach us either.
         let exit_talking = self
             .exit_replies
             .and_then(|replies| replies.grew_at)
             .is_some_and(|at| now.duration_since(at).unwrap_or(Duration::ZERO) < COUNTER_STALL_RECONNECT);
         let gate_block = awaiting_payment && exit_talking;
+        // Reported well before the hold, which waits for the reconnect threshold so recovery stays unchanged.
+        if gate_block && stall >= INBOUND_STALL {
+            self.awaiting_payment_since.get_or_insert(now);
+        } else {
+            self.awaiting_payment_since = None;
+        }
+        if stall < COUNTER_STALL_RECONNECT {
+            return StallVerdict::Fine;
+        }
+
         match (gate_block, self.payment_hold_since) {
             (true, None) => {
                 self.payment_hold_since = Some(now);
@@ -949,6 +959,70 @@ mod tunnel_ping_tests {
         );
         assert_eq!(up.tunnel_ping.failures, 0);
         assert!(up.stall_since().is_none());
+    }
+
+    #[test]
+    fn the_payment_wait_shows_once_the_stall_reaches_eight_seconds() {
+        let mut up = up();
+        record_samples(&mut up, 2, true);
+        let mut consumed = 0;
+
+        let at_four = judge_stalled(&mut up, 1, true, &mut consumed, 3);
+        assert_eq!(at_four, vec![StallVerdict::Fine]);
+        assert!(up.awaiting_payment_since.is_none());
+
+        let at_eight = judge_stalled(&mut up, 1, true, &mut consumed, 3);
+        assert_eq!(at_eight, vec![StallVerdict::Fine]);
+        assert_eq!(up.awaiting_payment_since, up.wg_stats.back().map(|s| s.at));
+        assert!(!up.payment_held());
+    }
+
+    #[test]
+    fn the_payment_wait_keeps_its_start_through_the_hold() {
+        let mut up = up();
+        record_samples(&mut up, 2, true);
+        let mut consumed = 0;
+        judge_stalled(&mut up, 2, true, &mut consumed, 3);
+        let shown_at = up.awaiting_payment_since;
+
+        let verdicts = judge_stalled(&mut up, 3, true, &mut consumed, 3);
+        assert_eq!(verdicts.last(), Some(&StallVerdict::HoldStarted), "{verdicts:?}");
+        assert_eq!(up.awaiting_payment_since, shown_at);
+    }
+
+    #[test]
+    fn no_payment_wait_without_a_pending_chunk() {
+        let mut up = up();
+        record_samples(&mut up, 2, true);
+        for _ in 0..5 {
+            judge_stalled(&mut up, 1, false, &mut 0, 3);
+            assert!(up.awaiting_payment_since.is_none());
+        }
+    }
+
+    #[test]
+    fn no_payment_wait_while_the_exit_is_silent() {
+        let mut up = up();
+        record_samples(&mut up, 2, true);
+        for _ in 0..4 {
+            judge_stalled(&mut up, 1, true, &mut 0, 0);
+            assert!(up.awaiting_payment_since.is_none());
+        }
+        let verdicts = judge_stalled(&mut up, 1, true, &mut 0, 0);
+        assert_eq!(verdicts, vec![StallVerdict::Reconnect]);
+        assert!(up.awaiting_payment_since.is_none());
+    }
+
+    #[test]
+    fn inbound_resuming_clears_the_payment_wait() {
+        let mut consumed = 0;
+        let mut up = held_up(&mut consumed);
+        assert!(up.awaiting_payment_since.is_some());
+
+        record_samples(&mut up, 1, true);
+        let now = up.wg_stats.back().expect("sample").at;
+        up.judge_stall(up.tunnel_ping.counter_stall, true, None, now);
+        assert!(up.awaiting_payment_since.is_none());
     }
 
     #[test]

@@ -188,7 +188,7 @@ pub struct TunnelStall {
     pub since: SystemTime,
     pub failed_pings: u32,
     pub reconnect_at: u32,
-    /// The exit parks data until this session's PIX chunk is paid; no reconnect while set.
+    /// Inbound stalled while the exit parks data until this session's PIX chunk is paid.
     #[serde(default, with = "unix_ms::option")]
     pub awaiting_payment_since: Option<SystemTime>,
 }
