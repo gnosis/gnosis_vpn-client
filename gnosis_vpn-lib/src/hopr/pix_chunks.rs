@@ -6,7 +6,7 @@ use edgli::hopr_lib::exports::transport::session::PIX_QUOTA_BYTES_PER_SHARE;
 use futures_util::StreamExt;
 use gnosis_vpn_ipc as ipc;
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -34,8 +34,8 @@ pub struct PixChunks {
 #[derive(Debug, Default)]
 struct Ledger {
     sessions: VecDeque<SessionChunks>,
-    /// One entry per chunk whose deposit outcome is not counted yet, oldest first.
-    unsettled: VecDeque<String>,
+    /// (session, chunk) whose deposit outcome is not counted yet, oldest first.
+    unsettled: VecDeque<(String, u32)>,
     /// Strategy counters as of the last settlement; `None` until the first chunk.
     counted: Option<Deposits>,
 }
@@ -50,14 +50,22 @@ struct SessionChunks {
     /// SURBs minted before the first chunk carried no share, so they are not spent quota.
     surbs_before_first_chunk: u64,
     bytes_in_before_first_chunk: u64,
-    paid: u64,
-    failed: u64,
+    outcomes: BTreeMap<u32, Deposit>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Deposit {
+    Paid,
+    Failed,
+    /// The strategy never retries it on its own, so the chunk stays unpaid.
+    Deferred,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Deposits {
     sent: u64,
     failed: u64,
+    deferred: u64,
 }
 
 impl Deposits {
@@ -69,6 +77,7 @@ impl Deposits {
             failed: count("hopr_strategy_pix_deposits_failed_total")
                 + count("hopr_strategy_pix_deposits_rejected_total")
                 + count("hopr_strategy_pix_deposits_over_budget_total"),
+            deferred: count("hopr_strategy_pix_deposits_pending_total"),
         }
     }
 }
@@ -104,7 +113,16 @@ impl PixChunks {
         let mut ledger = self.ledger.lock().expect("pix chunks lock poisoned");
         // Settled first, so deposits counted before this chunk can't be credited to it.
         ledger.settle(telemetry);
-        ledger.unsettled.push_back(session_id.to_string());
+        let entry = (session_id.to_string(), chunk_index);
+        // Mirrors the strategy, which skips a chunk in flight or paid without counting anything.
+        let is_unsettled = ledger.unsettled.contains(&entry);
+        let is_paid = ledger
+            .sessions
+            .iter()
+            .any(|s| s.session_id == session_id && s.outcomes.get(&chunk_index) == Some(&Deposit::Paid));
+        if !is_unsettled && !is_paid {
+            ledger.unsettled.push_back(entry);
+        }
         if let Some(mut known) = take(&mut ledger.sessions, session_id) {
             known.committed = known.committed.max(chunk_index);
             known.chunk_bytes = chunk_bytes;
@@ -114,7 +132,7 @@ impl PixChunks {
         if ledger.sessions.len() == MAX_SESSIONS
             && let Some(evicted) = ledger.sessions.pop_front()
         {
-            ledger.unsettled.retain(|id| *id != evicted.session_id);
+            ledger.unsettled.retain(|(id, _)| *id != evicted.session_id);
         }
         ledger.sessions.push_back(SessionChunks {
             session_id: session_id.to_string(),
@@ -123,8 +141,7 @@ impl PixChunks {
             chunk_bytes,
             surbs_before_first_chunk: gauge_u64(telemetry, SURBS_PRODUCED, session_id).unwrap_or(0),
             bytes_in_before_first_chunk: gauge_u64(telemetry, BYTES_IN, session_id).unwrap_or(0),
-            paid: 0,
-            failed: 0,
+            outcomes: BTreeMap::new(),
         });
     }
 
@@ -192,7 +209,7 @@ impl PixChunks {
 }
 
 impl Ledger {
-    /// Credits new deposits to the oldest unsettled chunks; node-wide counters force assuming request order.
+    /// Oldest unsettled chunk first: node-wide counters force assuming request order, so an uncounted drop shifts later chunks.
     fn settle(&mut self, telemetry: &str) {
         // a failed scrape reads as all-zero counters, which would look like a reset
         if telemetry.is_empty() {
@@ -207,23 +224,28 @@ impl Ledger {
         self.counted = Some(Deposits {
             sent: counted.sent.max(now.sent),
             failed: counted.failed.max(now.failed),
+            deferred: counted.deferred.max(now.deferred),
         });
         let new_sent = now.sent.saturating_sub(counted.sent);
         let new_failed = now.failed.saturating_sub(counted.failed);
+        let new_deferred = now.deferred.saturating_sub(counted.deferred);
         for _ in 0..new_sent {
-            self.credit(|session| session.paid += 1);
+            self.credit(Deposit::Paid);
         }
         for _ in 0..new_failed {
-            self.credit(|session| session.failed += 1);
+            self.credit(Deposit::Failed);
+        }
+        for _ in 0..new_deferred {
+            self.credit(Deposit::Deferred);
         }
     }
 
-    fn credit(&mut self, outcome: impl FnOnce(&mut SessionChunks)) {
-        let Some(session_id) = self.unsettled.pop_front() else {
+    fn credit(&mut self, outcome: Deposit) {
+        let Some((session_id, chunk_index)) = self.unsettled.pop_front() else {
             return;
         };
         if let Some(session) = self.sessions.iter_mut().find(|s| s.session_id == session_id) {
-            outcome(session);
+            session.outcomes.insert(chunk_index, outcome);
         }
     }
 }
@@ -253,14 +275,14 @@ fn free() -> ipc::PixChunkStats {
 fn derive(session: &SessionChunks, telemetry: &str, price_per_byte: HoprBalance) -> ipc::PixChunkStats {
     let session_id = session.session_id.as_str();
     let committed = u64::from(session.committed);
-    let paid = session.paid.min(committed);
-    let failed = session.failed;
-    let phase = if failed > 0 {
-        ipc::PixPhase::PaymentFailed
-    } else if paid < committed {
-        ipc::PixPhase::PaymentPending
-    } else {
-        ipc::PixPhase::Funded
+    let count = |wanted: Deposit| session.outcomes.values().filter(|outcome| **outcome == wanted).count() as u64;
+    let paid = count(Deposit::Paid);
+    let failed = count(Deposit::Failed);
+    // An early failure the exit got over must not mark the whole session failed.
+    let phase = match session.outcomes.get(&session.committed) {
+        Some(Deposit::Paid) => ipc::PixPhase::Funded,
+        Some(Deposit::Failed) => ipc::PixPhase::PaymentFailed,
+        Some(Deposit::Deferred) | None => ipc::PixPhase::PaymentPending,
     };
 
     let bytes_bought = committed * session.chunk_bytes;
@@ -343,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_payment_wins_over_paid_chunks() {
+    fn a_failed_latest_chunk_fails_the_session() {
         let chunks = PixChunks::default();
         chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
         chunks.record("s1", 2, CHUNK, &telemetry(0, 0.0, 0, 0));
@@ -352,6 +374,59 @@ mod tests {
         assert_eq!(stats.phase, ipc::PixPhase::PaymentFailed);
         assert_eq!(stats.chunks_committed, 2);
         assert_eq!((stats.chunks_paid, stats.chunks_failed), (1, 1));
+    }
+
+    #[test]
+    fn phase_follows_the_latest_chunk() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        chunks.record("s1", 2, CHUNK, &telemetry(0, 0.0, 0, 0));
+
+        stats_with(&chunks, "s1", &telemetry(0, 0.0, 0, 1));
+        let stats = stats_with(&chunks, "s1", &telemetry(0, 0.0, 1, 1));
+        assert_eq!(stats.phase, ipc::PixPhase::Funded);
+        assert_eq!((stats.chunks_paid, stats.chunks_failed), (1, 1));
+    }
+
+    #[test]
+    fn a_deferred_deposit_does_not_shift_later_chunks() {
+        let chunks = PixChunks::default();
+        let deferred = |n: u64| format!("hopr_strategy_pix_deposits_pending_total {n}\n");
+        chunks.record("old", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        chunks.record("new", 1, CHUNK, &format!("{}{}", telemetry(0, 0.0, 0, 0), deferred(1)));
+
+        let sent = format!("{}{}", telemetry(0, 0.0, 1, 0), deferred(1));
+        assert_eq!(stats_with(&chunks, "new", &sent).phase, ipc::PixPhase::Funded);
+        assert_eq!(stats_with(&chunks, "old", &sent).phase, ipc::PixPhase::PaymentPending);
+    }
+
+    #[test]
+    fn a_repeated_event_for_a_chunk_is_counted_once() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        chunks.record("s2", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+
+        assert_eq!(
+            stats_with(&chunks, "s1", &telemetry(0, 0.0, 1, 0)).phase,
+            ipc::PixPhase::Funded
+        );
+        assert_eq!(
+            stats_with(&chunks, "s2", &telemetry(0, 0.0, 2, 0)).phase,
+            ipc::PixPhase::Funded
+        );
+    }
+
+    #[test]
+    fn a_repeated_event_for_a_paid_chunk_is_not_queued() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 1, 0));
+        chunks.record("s2", 1, CHUNK, &telemetry(0, 0.0, 1, 0));
+
+        let stats = stats_with(&chunks, "s2", &telemetry(0, 0.0, 2, 0));
+        assert_eq!(stats.phase, ipc::PixPhase::Funded);
+        assert_eq!(stats_with(&chunks, "s1", &telemetry(0, 0.0, 2, 0)).chunks_paid, 1);
     }
 
     #[test]
