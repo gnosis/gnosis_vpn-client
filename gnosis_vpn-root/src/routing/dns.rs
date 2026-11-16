@@ -62,9 +62,13 @@ pub async fn set(interface: &str, servers: &str) -> Option<Diversion> {
 /// the tunnel interface, reversing the recorded mechanism.
 pub async fn restore(interface: &str, mechanism: Mechanism) -> bool {
     #[cfg(target_os = "linux")]
-    return restore_linux(interface, mechanism).await;
+    let restored = restore_linux(interface, mechanism).await;
     #[cfg(target_os = "macos")]
-    return restore_macos(interface, mechanism).await;
+    let restored = restore_macos(interface, mechanism).await;
+    if restored {
+        tracing::info!(%interface, ?mechanism, "restored DNS");
+    }
+    restored
 }
 
 /// Split the comma-separated server list into validated IP address tokens, trimming
@@ -105,10 +109,16 @@ fn resolvectl_domain_args(interface: &str) -> [&str; 3] {
     ["domain", interface, "~."]
 }
 
-/// Argv for dropping the per-interface DNS + domain settings applied at setup.
+/// Argv for clearing the per-interface DNS servers applied at setup.
 #[cfg(any(target_os = "linux", test))]
-fn resolvectl_revert_args(interface: &str) -> [&str; 2] {
-    ["revert", interface]
+fn resolvectl_dns_reset_args(interface: &str) -> [&str; 3] {
+    ["dns", interface, ""]
+}
+
+/// Argv for clearing the `~.` routing domain applied at setup.
+#[cfg(any(target_os = "linux", test))]
+fn resolvectl_domain_reset_args(interface: &str) -> [&str; 3] {
+    ["domain", interface, ""]
 }
 
 /// Argv for registering the tunnel resolvers with resolvconf, matching wg-quick's
@@ -318,10 +328,14 @@ async fn run_resolvconf_add(interface: &str, servers: &[&str]) -> bool {
 async fn restore_linux(interface: &str, mechanism: Mechanism) -> bool {
     match mechanism {
         Mechanism::Resolvectl => {
-            // `revert` drops the per-interface DNS + domain settings applied above.
-            let mut cmd = Command::new("resolvectl");
-            cmd.args(resolvectl_revert_args(interface));
-            run("resolvectl revert", cmd).await
+            // Explicit resets instead of `revert`: resolved journals them, so a disconnect is visible next to its set.
+            let mut dns = Command::new("resolvectl");
+            dns.args(resolvectl_dns_reset_args(interface));
+            let dns_reset = run("resolvectl dns reset", dns).await;
+            let mut domain = Command::new("resolvectl");
+            domain.args(resolvectl_domain_reset_args(interface));
+            let domain_reset = run("resolvectl domain reset", domain).await;
+            dns_reset && domain_reset
         }
         Mechanism::Resolvconf => {
             let mut cmd = Command::new("resolvconf");
@@ -430,7 +444,11 @@ mod tests {
             resolvectl_domain_args("wg0_gnosisvpn"),
             ["domain", "wg0_gnosisvpn", "~."]
         );
-        assert_eq!(resolvectl_revert_args("wg0_gnosisvpn"), ["revert", "wg0_gnosisvpn"]);
+        assert_eq!(resolvectl_dns_reset_args("wg0_gnosisvpn"), ["dns", "wg0_gnosisvpn", ""]);
+        assert_eq!(
+            resolvectl_domain_reset_args("wg0_gnosisvpn"),
+            ["domain", "wg0_gnosisvpn", ""]
+        );
     }
 
     #[test]
