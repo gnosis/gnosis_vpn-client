@@ -1,6 +1,6 @@
 //! Interface discovery and the capture thread, which never touches daemon state or keeps a packet.
 
-use std::net::{IpAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -30,8 +30,7 @@ pub struct Candidate {
 }
 
 /// Public interfaces with a routable address; tunnels are excluded since they are not the public path.
-pub fn discover() -> Vec<Candidate> {
-    let default_ip = egress_ip();
+pub fn discover(hopr_peers: &[IpAddr]) -> Vec<Candidate> {
     let mut candidates: Vec<Candidate> = pnet_datalink::interfaces()
         .into_iter()
         .filter(|link| !link.is_loopback() && !is_tunnel_name(&link.name))
@@ -45,21 +44,41 @@ pub fn discover() -> Vec<Candidate> {
             if addresses.is_empty() {
                 return None;
             }
-            let is_default = default_ip.is_some_and(|ip| addresses.contains(&ip));
             Some(Candidate {
                 descriptor: Interface {
                     id: link.name.clone(),
                     name: link.name.clone(),
                     addresses,
-                    is_default,
+                    is_default: false,
                 },
                 link,
                 side: Side::Wire,
             })
         })
         .collect();
+
+    // With a VPN up the public egress sits on the tunnel; HOPR peers keep their bypass routes via the uplink.
+    let peer_egresses = hopr_peers
+        .iter()
+        .filter_map(|peer| egress_ip_toward(SocketAddr::new(*peer, 443)));
+    let egresses = egress_ip().into_iter().chain(peer_egresses);
+    let addresses: Vec<&[IpAddr]> = candidates
+        .iter()
+        .map(|candidate| candidate.descriptor.addresses.as_slice())
+        .collect();
+    if let Some(index) = default_index(&addresses, egresses) {
+        candidates[index].descriptor.is_default = true;
+    }
+
     candidates.sort_by(|a, b| a.descriptor.name.cmp(&b.descriptor.name));
     candidates
+}
+
+/// The first egress address owned by a candidate picks it; egresses are tried lazily in order.
+fn default_index(candidates: &[&[IpAddr]], egresses: impl IntoIterator<Item = IpAddr>) -> Option<usize> {
+    egresses
+        .into_iter()
+        .find_map(|egress| candidates.iter().position(|addresses| addresses.contains(&egress)))
 }
 
 /// The VPN tunnel device owning the default route; shows traffic before the VPN encrypts it.
@@ -113,24 +132,27 @@ fn is_routable_local(ip: IpAddr) -> bool {
     !is_special && !is_link_scoped
 }
 
-/// Connecting a UDP socket sends nothing; it only asks the routing table for the egress address.
 fn egress_ip() -> Option<IpAddr> {
-    for target in ["1.1.1.1:443", "[2606:4700:4700::1111]:443"] {
-        let bind = if target.starts_with('[') { "[::]:0" } else { "0.0.0.0:0" };
-        let Ok(socket) = UdpSocket::bind(bind) else {
-            continue;
-        };
-        if socket.connect(target).is_err() {
-            continue;
-        }
-        if let Ok(local) = socket.local_addr() {
-            let ip = local.ip();
-            if !ip.is_unspecified() {
-                return Some(ip);
-            }
-        }
+    let public_targets = [
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 443),
+        SocketAddr::new(
+            IpAddr::V6(Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111)),
+            443,
+        ),
+    ];
+    public_targets.into_iter().find_map(egress_ip_toward)
+}
+
+/// Connecting a UDP socket sends nothing; it only asks the routing table for the egress address.
+fn egress_ip_toward(target: SocketAddr) -> Option<IpAddr> {
+    let bind = if target.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
+    let socket = UdpSocket::bind(bind).ok()?;
+    socket.connect(target).ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    if ip.is_unspecified() {
+        return None;
     }
-    None
+    Some(ip)
 }
 
 /// Dropping it stops and joins the thread, so no callback outlives the session.
@@ -299,6 +321,19 @@ mod tests {
         for name in ["en0", "tap0", "ipsec0", "ppp0", "awdl0", "gif0", "lo0"] {
             assert!(!is_vpn_tunnel_name(name), "{name}");
         }
+    }
+
+    #[test]
+    fn default_is_the_first_egress_owned_by_a_public_interface() {
+        let bridge: [IpAddr; 1] = ["172.30.0.1".parse().expect("ip")];
+        let uplink: [IpAddr; 1] = ["192.168.1.20".parse().expect("ip")];
+        let candidates: [&[IpAddr]; 2] = [&bridge, &uplink];
+        let tunnel_egress: IpAddr = "10.128.0.6".parse().expect("ip");
+
+        assert_eq!(default_index(&candidates, [uplink[0]]), Some(1));
+        // Connected: the public egress is the tunnel's, a peer's bypass route names the uplink.
+        assert_eq!(default_index(&candidates, [tunnel_egress, uplink[0]]), Some(1));
+        assert_eq!(default_index(&candidates, [tunnel_egress]), None);
     }
 
     #[test]

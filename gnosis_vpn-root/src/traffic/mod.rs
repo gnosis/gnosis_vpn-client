@@ -40,6 +40,11 @@ impl HoprPeers {
         *peers = ips.iter().copied().collect();
     }
 
+    fn snapshot(&self) -> Vec<IpAddr> {
+        let peers = self.0.read().expect("hopr peers poisoned");
+        peers.iter().copied().collect()
+    }
+
     fn mark(&self, deltas: &mut [traffic::Delta]) {
         let peers = self.0.read().expect("hopr peers poisoned");
         for delta in deltas {
@@ -194,7 +199,7 @@ impl TrafficService {
     }
 
     pub fn interfaces(&self) -> Vec<Interface> {
-        capture::discover()
+        capture::discover(&self.hopr_peers.snapshot())
             .into_iter()
             .map(|candidate| candidate.descriptor)
             .collect()
@@ -212,7 +217,7 @@ impl TrafficService {
             });
         }
 
-        let candidate = capture::discover()
+        let candidate = capture::discover(&self.hopr_peers.snapshot())
             .into_iter()
             .find(|candidate| candidate.descriptor.id == request.interface_id)
             .ok_or_else(|| format!("Interface {} is not available", request.interface_id))?;
@@ -542,7 +547,7 @@ mod tests {
         use std::net::UdpSocket;
         use std::time::Duration;
 
-        let candidate = capture::discover()
+        let candidate = capture::discover(&[])
             .into_iter()
             .find(|candidate| candidate.descriptor.is_default)
             .expect("an egress interface");
@@ -637,7 +642,7 @@ mod tests {
         let mut service = TrafficService::new();
         // With a VPN owning the default route no public interface is the default.
         let wire_name = std::env::var("GVPN_WIRE_INTERFACE").unwrap_or_else(|_| "en0".to_string());
-        let wire = capture::discover()
+        let wire = capture::discover(&[])
             .into_iter()
             .find(|candidate| candidate.descriptor.id == wire_name)
             .expect("the public interface")
