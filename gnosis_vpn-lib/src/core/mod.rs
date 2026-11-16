@@ -2704,7 +2704,7 @@ fn connection_view(
                 since,
                 failed_pings: conn.tunnel_ping.failures,
                 reconnect_at,
-                awaiting_payment_since: conn.payment_hold_since,
+                awaiting_payment_since: conn.awaiting_payment_since,
             }),
             pix,
         },
