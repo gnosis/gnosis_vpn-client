@@ -27,6 +27,7 @@ edgli = { git = "https://github.com/hoprnet/edge-client.git", branch = "main", d
   "blokli",
   "pix",
   "runtime-tokio",
+  "state-dump",
   "telemetry",
 ] }
 exitcode = "~1.1.2"
