@@ -32,7 +32,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: ${{ vars.MACOS_RUNNER }} # Posible values are: `macos-26-xlarge` or `depot-macos-26`
             build_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@3df1022f4b852f1b7acd064123ce819258a62fe3 # build-binaries-v4.0.1
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@f15435652c572ad5688af679f0e2b153c98c9773 # build-binaries-v4.0.2
     permissions:
       contents: read
       pull-requests: read
@@ -64,7 +64,7 @@ jobs:
       id-token: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@ab7f9eafdb4eeb9e60af573611b171381aeb761c # release-version-v5.4.0
+        uses: hoprnet/hopr-workflows/actions/release-version@f15435652c572ad5688af679f0e2b153c98c9773 # release-version-v5.5.2
         with:
           source_branch: ${{ github.ref_name }}
           target_commitish: ${{ github.ref_name }}
