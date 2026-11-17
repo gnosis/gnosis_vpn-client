@@ -1,10 +1,13 @@
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use file_rotate::compression::Compression;
+use file_rotate::suffix::AppendCount;
+use file_rotate::{ContentLimit, FileRotate};
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*, reload};
 
 use std::fs::OpenOptions;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use std::sync::Mutex;
 
 use crate::dirs;
 
@@ -29,9 +32,9 @@ pub fn make_file_fmt_layer(log_path: &Path) -> Result<FileFmtLayer, std::io::Err
     Ok(fmt::layer().with_writer(BoxMakeWriter::new(file)).with_ansi(false))
 }
 
-/// Root passes `<logs>/worker.log`; the appender writes `worker.log.YYYY-MM-DD` next to it.
+/// Root passes `<logs>/worker.log`; rotation renames it to `worker.log.1`, `worker.log.2` and so on, oldest highest.
 pub const WORKER_LOG_FILE: &str = "worker.log";
-/// Generations the worker keeps of its daily files.
+/// Files the worker keeps in total: the active one plus the rotated ones.
 pub const WORKER_MAX_LOG_FILES: usize = 7;
 /// Size at which the worker rolls to the next file, so debug volume stays bounded.
 pub const WORKER_MAX_LOG_BYTES: usize = 500 * 1024 * 1024;
@@ -43,20 +46,25 @@ pub fn make_rolling_fmt_layer(log_path: &Path) -> Result<FileFmtLayer, std::io::
 
 fn make_rolling_fmt_layer_with(
     log_path: &Path,
-    _max_bytes: usize,
-    _max_files: usize,
+    max_bytes: usize,
+    max_files: usize,
 ) -> Result<FileFmtLayer, std::io::Error> {
-    let (Some(log_dir), Some(prefix)) = (log_path.parent(), log_path.file_name()) else {
+    let Some(log_dir) = log_path.parent().filter(|_| log_path.file_name().is_some()) else {
         return Err(std::io::Error::other("log file path has no directory or file name"));
     };
     dirs::ensure_private_dir(log_dir, log_dir)?;
-    let appender = RollingFileAppender::builder()
-        .rotation(Rotation::DAILY)
-        .filename_prefix(prefix.to_string_lossy())
-        .max_log_files(WORKER_MAX_LOG_FILES)
-        .build(log_dir)
-        .map_err(std::io::Error::other)?;
-    Ok(fmt::layer().with_writer(BoxMakeWriter::new(appender)).with_ansi(false))
+    // `AppendCount` counts rotated files only, so one less leaves room for the active file.
+    // `BytesSurpassed` finishes the line that crosses the limit, so no line is split across files.
+    let appender = FileRotate::new(
+        log_path,
+        AppendCount::new(max_files.saturating_sub(1)),
+        ContentLimit::BytesSurpassed(max_bytes),
+        Compression::None,
+        None,
+    );
+    Ok(fmt::layer()
+        .with_writer(BoxMakeWriter::new(Mutex::new(appender)))
+        .with_ansi(false))
 }
 
 /// Installs the file layer, or stdout when it could not be opened: a log must never keep the client from running.
@@ -97,6 +105,8 @@ pub fn setup_stdout() {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Context;
+
     use super::*;
 
     #[test]
@@ -109,21 +119,29 @@ mod tests {
     }
 
     #[test]
-    fn the_worker_log_rolls_by_size_and_keeps_at_most_max_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let layer = make_rolling_fmt_layer_with(&dir.path().join("worker.log"), 1024, 3).unwrap();
+    fn rolling_layer_should_cap_file_count_and_size_when_log_volume_exceeds_the_limit() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir().context("create temp dir")?;
+        let layer = make_rolling_fmt_layer_with(&dir.path().join("worker.log"), 1024, 3).context("make layer")?;
         tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), || {
             for i in 0..200 {
                 tracing::info!("line {i:04} {}", "x".repeat(80));
             }
         });
-        let sizes: Vec<u64> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().metadata().unwrap().len())
-            .collect();
-        assert_eq!(sizes.len(), 3, "active file plus rotated ones are capped at max_files: {sizes:?}");
+        let sizes = std::fs::read_dir(dir.path())
+            .context("read log dir")?
+            .map(|entry| Ok(entry?.metadata()?.len()))
+            .collect::<std::io::Result<Vec<u64>>>()
+            .context("read log file sizes")?;
+        anyhow::ensure!(
+            sizes.len() == 3,
+            "active file plus rotated ones are capped at max_files: {sizes:?}"
+        );
         // A file rolls once it passes the limit, so it may overshoot by one line at most.
-        assert!(sizes.iter().all(|s| *s < 1024 + 256), "no file grows past the limit: {sizes:?}");
+        anyhow::ensure!(
+            sizes.iter().all(|size| *size < 1024 + 256),
+            "no file grows past the limit: {sizes:?}"
+        );
+        Ok(())
     }
 
     #[test]

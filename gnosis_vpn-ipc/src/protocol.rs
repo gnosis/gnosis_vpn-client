@@ -751,7 +751,7 @@ pub struct InfoResponse {
     /// The installer's version, a different numbering than the service's.
     pub package_version: Option<String>,
     pub log_file: Option<PathBuf>,
-    /// The owner's daily-rolled worker logs; none for callers who are neither the owner nor root.
+    /// The owner's size-rolled worker logs; none for callers who are neither the owner nor root.
     pub worker_log_dir: Option<PathBuf>,
 }
 
