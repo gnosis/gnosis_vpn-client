@@ -1067,12 +1067,13 @@ impl Core {
                         (Some(chunks), Some(id)) if awaiting_payment && !stall.is_zero() => chunks.surbs_consumed(id),
                         _ => None,
                     };
-                    let unpaid = match (&pix_chunks, &main_session_id) {
-                        (Some(chunks), Some(id)) => chunks.unpaid(id),
-                        _ => None,
+                    let (unpaid, has_refused) = match (&pix_chunks, &main_session_id) {
+                        (Some(chunks), Some(id)) => (chunks.unpaid(id), chunks.has_refused(id)),
+                        _ => (None, false),
                     };
-                    let end_hold_for =
-                        unpaid.filter(|reason| self.pix_hold_failures.may_end_hold(&conn.destination.key(), *reason));
+                    let end_hold_for = unpaid.filter(|reason| {
+                        !has_refused && self.pix_hold_failures.may_end_hold(&conn.destination.key(), *reason)
+                    });
                     let verdict =
                         conn.judge_stall(stall, awaiting_payment, surbs_consumed, end_hold_for, SystemTime::now());
                     self.phase = Phase::Connected(conn.clone());
@@ -2890,17 +2891,20 @@ mod tests {
 
     #[test]
     fn refused_and_repeated_deposit_failures_keep_the_hold_until_the_exit_goes_silent() {
-        for (reason, previously_failed) in [
-            (Deposit::Refused, false),
-            (Deposit::Failed, true),
-            (Deposit::Deferred, true),
+        for (reason, previously_failed, has_refused) in [
+            (Deposit::Refused, false, true),
+            (Deposit::Failed, false, true),
+            (Deposit::Deferred, false, true),
+            (Deposit::Failed, true, false),
+            (Deposit::Deferred, true, false),
         ] {
             let mut conn = attempt("exit", UpPhase::ConnectionEstablished);
             let mut failures = PixHoldFailures::default();
             if previously_failed {
                 failures.record_failed(conn.destination.key());
             }
-            let unpaid = Some(reason).filter(|reason| failures.may_end_hold(&conn.destination.key(), *reason));
+            let unpaid =
+                Some(reason).filter(|reason| !has_refused && failures.may_end_hold(&conn.destination.key(), *reason));
             assert_eq!(unpaid, None);
             conn.record_wg_stats(TunnelStatsSample {
                 at: SystemTime::UNIX_EPOCH,

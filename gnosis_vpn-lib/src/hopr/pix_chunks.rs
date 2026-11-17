@@ -62,6 +62,12 @@ impl SessionChunks {
             .map(|(_, outcome)| *outcome)
             .find(|outcome| matches!(outcome, Deposit::Failed | Deposit::Deferred | Deposit::Refused))
     }
+
+    fn has_refused(&self) -> bool {
+        self.outcomes
+            .range((Excluded(self.confirmed), Included(self.committed)))
+            .any(|(_, outcome)| *outcome == Deposit::Refused)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -191,6 +197,16 @@ impl PixChunks {
             .iter()
             .find(|s| s.session_id == session_id)
             .and_then(SessionChunks::unpaid)
+    }
+
+    /// A refusal on any unconfirmed chunk rules out recovery by opening a new session.
+    pub fn has_refused(&self, session_id: &str) -> bool {
+        let ledger = self.ledger.lock().expect("pix chunks lock poisoned");
+        ledger
+            .sessions
+            .iter()
+            .find(|s| s.session_id == session_id)
+            .is_some_and(SessionChunks::has_refused)
     }
 
     /// The exit served the session again after a payment hold, so every chunk asked for so far is funded.
@@ -507,6 +523,50 @@ mod tests {
         );
         stats_with(&chunks, "s1", &scrape);
         assert_eq!(chunks.unpaid("s1"), Some(Deposit::Deferred));
+    }
+
+    #[test]
+    fn an_earlier_unpaid_chunk_does_not_hide_a_refused_deposit() {
+        for (metric, outcome) in [("failed", Deposit::Failed), ("pending", Deposit::Deferred)] {
+            let chunks = PixChunks::default();
+            chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+            let first = format!("hopr_strategy_pix_deposits_{metric}_total 1\n");
+            chunks.record("s1", 2, CHUNK, &first);
+            let scrape = format!("{first}hopr_strategy_pix_deposits_rejected_total 1\n");
+            chunks.surbs_consumed_with("s1", &scrape);
+
+            assert_eq!(chunks.unpaid("s1"), Some(outcome));
+            assert!(chunks.has_refused("s1"));
+            chunks.record("s2", 1, CHUNK, &scrape);
+            assert!(!chunks.has_refused("s2"));
+            assert!(!chunks.has_refused("unknown"));
+        }
+    }
+
+    #[test]
+    fn a_confirmed_refusal_does_not_restrict_a_later_failed_chunk() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        let refused = "hopr_strategy_pix_deposits_rejected_total 1\n";
+        chunks.surbs_consumed_with("s1", refused);
+        assert!(chunks.has_refused("s1"));
+        chunks.confirm("s1");
+        assert!(!chunks.has_refused("s1"));
+        chunks.record("s1", 2, CHUNK, refused);
+        chunks.surbs_consumed_with("s1", &format!("{refused}hopr_strategy_pix_deposits_failed_total 1\n"));
+        assert_eq!(chunks.unpaid("s1"), Some(Deposit::Failed));
+        assert!(!chunks.has_refused("s1"));
+    }
+
+    #[test]
+    fn a_re_requested_refused_chunk_is_no_longer_refused() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        let refused = "hopr_strategy_pix_deposits_rejected_total 1\n";
+        chunks.surbs_consumed_with("s1", refused);
+        assert!(chunks.has_refused("s1"));
+        chunks.record("s1", 1, CHUNK, refused);
+        assert!(!chunks.has_refused("s1"));
     }
 
     #[test]
