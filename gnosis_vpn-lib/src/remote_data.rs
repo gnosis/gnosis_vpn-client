@@ -1,5 +1,6 @@
 use backon::ExponentialBuilder;
-use edgli::{BlokliDnsOverride, BlokliEndpoint};
+use edgli::{BlokliDnsOverride, BlokliEndpoint, FailureKind};
+use gnosis_vpn_ipc::StartupIssueKind;
 use reqwest::header::{self, HeaderMap, HeaderValue};
 use thiserror::Error;
 use tokio::net;
@@ -18,8 +19,20 @@ pub enum Error {
     NoIpv4,
     #[error("IO error: {0}")]
     IO(#[from] io::Error),
-    #[error("Blokli query failed: {0}")]
-    Blokli(String),
+    #[error("Blokli query failed: {message}")]
+    Blokli { kind: FailureKind, message: String },
+}
+
+impl Error {
+    /// How the app explains this failure while it blocks startup.
+    pub fn startup_issue_kind(&self) -> StartupIssueKind {
+        match self {
+            // Only the system resolver does IO here.
+            Error::IO(_) | Error::NoIpv4 => StartupIssueKind::Unreachable,
+            Error::Blokli { kind, .. } => crate::core::startup_issue::kind(*kind),
+            Error::NoHost | Error::UnknownPort => StartupIssueKind::Other,
+        }
+    }
 }
 
 pub fn json_headers() -> HeaderMap {
@@ -59,9 +72,10 @@ pub async fn query_blokli_network(url: &url::Url, ip: Ipv4Addr, request_timeout:
     let endpoint = BlokliEndpoint::new(url.clone())
         .with_request_timeout(request_timeout)
         .with_dns_override(BlokliDnsOverride::new(IpAddr::V4(ip), None));
-    edgli::query_network(&endpoint)
-        .await
-        .map_err(|e| Error::Blokli(format!("{e:#}")))
+    edgli::query_network(&endpoint).await.map_err(|e| Error::Blokli {
+        kind: e.failure_kind(),
+        message: format!("{e:#}"),
+    })
 }
 
 /// Resolves the IPv4 addresses for the host and port specified in the provided URL.
@@ -77,4 +91,30 @@ async fn resolve_ips(url: &url::Url) -> Result<Vec<Ipv4Addr>, Error> {
         }
     }
     Ok(ips)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blokli_failures_keep_their_kind() {
+        let error = Error::Blokli {
+            kind: FailureKind::ServiceUnavailable,
+            message: "503 Service Unavailable".to_string(),
+        };
+
+        assert_eq!(error.startup_issue_kind(), StartupIssueKind::ServiceUnavailable);
+        assert_eq!(error.to_string(), "Blokli query failed: 503 Service Unavailable");
+    }
+
+    #[test]
+    fn a_failed_lookup_is_unreachable_and_a_bad_url_is_not() {
+        assert_eq!(
+            Error::IO(io::Error::other("no such host")).startup_issue_kind(),
+            StartupIssueKind::Unreachable
+        );
+        assert_eq!(Error::NoIpv4.startup_issue_kind(), StartupIssueKind::Unreachable);
+        assert_eq!(Error::NoHost.startup_issue_kind(), StartupIssueKind::Other);
+    }
 }

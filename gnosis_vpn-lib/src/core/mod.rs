@@ -34,7 +34,7 @@ use crate::{balance, log_output, wire, wireguard};
 
 mod channel_maintenance;
 pub(crate) mod runner;
-mod startup_issue;
+pub(crate) mod startup_issue;
 
 use runner::Results;
 

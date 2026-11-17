@@ -20,7 +20,7 @@ pub(super) fn longest<'a>(issues: impl IntoIterator<Item = Option<&'a StartupIss
     issues.into_iter().flatten().min_by_key(|issue| issue.since).cloned()
 }
 
-pub(super) fn kind(failure: FailureKind) -> StartupIssueKind {
+pub(crate) fn kind(failure: FailureKind) -> StartupIssueKind {
     match failure {
         FailureKind::Unreachable => StartupIssueKind::Unreachable,
         FailureKind::ServiceUnavailable => StartupIssueKind::ServiceUnavailable,
