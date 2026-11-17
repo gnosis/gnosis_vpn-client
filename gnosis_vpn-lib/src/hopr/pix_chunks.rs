@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::ops::Bound::{Excluded, Included};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use crate::hopr::metrics::{gauge_u64, gauge_value, unlabeled_u64};
 use crate::wire;
@@ -53,7 +53,6 @@ struct SessionChunks {
     surbs_before_first_chunk: u64,
     bytes_in_before_first_chunk: u64,
     outcomes: BTreeMap<u32, Deposit>,
-    requested_at: BTreeMap<u32, SystemTime>,
 }
 
 impl SessionChunks {
@@ -62,13 +61,6 @@ impl SessionChunks {
             .range((Excluded(self.confirmed), Included(self.committed)))
             .map(|(_, outcome)| *outcome)
             .find(|outcome| matches!(outcome, Deposit::Failed | Deposit::Deferred | Deposit::Refused))
-    }
-
-    fn unconfirmed_since(&self) -> Option<SystemTime> {
-        self.requested_at
-            .range((Excluded(self.confirmed), Included(self.committed)))
-            .map(|(_, requested_at)| *requested_at)
-            .min()
     }
 }
 
@@ -160,7 +152,6 @@ impl PixChunks {
             if !is_unsettled && !is_paid {
                 known.outcomes.remove(&chunk_index);
             }
-            known.requested_at.entry(chunk_index).or_insert_with(SystemTime::now);
             known.committed = known.committed.max(chunk_index);
             known.chunk_bytes = chunk_bytes;
             ledger.sessions.push_back(known);
@@ -179,7 +170,6 @@ impl PixChunks {
             surbs_before_first_chunk: gauge_u64(telemetry, SURBS_PRODUCED, session_id).unwrap_or(0),
             bytes_in_before_first_chunk: gauge_u64(telemetry, BYTES_IN, session_id).unwrap_or(0),
             outcomes: BTreeMap::new(),
-            requested_at: BTreeMap::from([(chunk_index, SystemTime::now())]),
         });
     }
 
@@ -201,16 +191,6 @@ impl PixChunks {
             .iter()
             .find(|s| s.session_id == session_id)
             .and_then(SessionChunks::unpaid)
-    }
-
-    /// The hold limit counts from the earliest request, even when a chunk is requested again.
-    pub fn unconfirmed_since(&self, session_id: &str) -> Option<SystemTime> {
-        let ledger = self.ledger.lock().expect("pix chunks lock poisoned");
-        ledger
-            .sessions
-            .iter()
-            .find(|s| s.session_id == session_id)
-            .and_then(SessionChunks::unconfirmed_since)
     }
 
     /// The exit served the session again after a payment hold, so every chunk asked for so far is funded.
@@ -484,7 +464,6 @@ mod tests {
         stats_with(&chunks, "s1", &telemetry(0, 0.0, 1, 0));
         assert_eq!(chunks.unpaid("s1"), None);
         assert!(chunks.awaiting_payment("s1"));
-        assert!(chunks.unconfirmed_since("s1").is_some());
     }
 
     #[test]
@@ -495,26 +474,6 @@ mod tests {
         assert_eq!(chunks.unpaid("s1"), Some(Deposit::Failed));
         chunks.confirm("s1");
         assert_eq!(chunks.unpaid("s1"), None);
-        assert_eq!(chunks.unconfirmed_since("s1"), None);
-    }
-
-    #[test]
-    fn unconfirmed_since_is_the_earliest_request_of_an_unconfirmed_chunk() {
-        let chunks = PixChunks::default();
-        assert_eq!(chunks.unconfirmed_since("s1"), None);
-        chunks.record("s1", 1, CHUNK, "");
-        chunks.confirm("s1");
-        chunks.record("s1", 3, CHUNK, "");
-        chunks.record("s1", 2, CHUNK, "");
-        let first = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
-        let second = first + Duration::from_secs(10);
-        let third = second + Duration::from_secs(10);
-        chunks.ledger.lock().unwrap().sessions[0].requested_at = BTreeMap::from([(1, first), (3, second), (2, third)]);
-        assert_eq!(chunks.unconfirmed_since("s1"), Some(second));
-        chunks.record("s1", 3, CHUNK, "");
-        assert_eq!(chunks.unconfirmed_since("s1"), Some(second));
-        chunks.confirm("s1");
-        assert_eq!(chunks.unconfirmed_since("s1"), None);
     }
 
     #[test]
@@ -522,17 +481,12 @@ mod tests {
         for metric in ["failed", "pending", "rejected", "over_budget"] {
             let chunks = PixChunks::default();
             chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
-            let requested_at = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
-            chunks.ledger.lock().unwrap().sessions[0]
-                .requested_at
-                .insert(1, requested_at);
             let scrape = format!("hopr_strategy_pix_deposits_{metric}_total 1\n");
             stats_with(&chunks, "s1", &scrape);
             assert!(chunks.unpaid("s1").is_some());
             chunks.record("s1", 1, CHUNK, &scrape);
             chunks.record("s1", 1, CHUNK, &scrape);
             assert_eq!(chunks.unpaid("s1"), None);
-            assert_eq!(chunks.unconfirmed_since("s1"), Some(requested_at));
             assert_eq!(stats_with(&chunks, "s1", &scrape).phase, ipc::PixPhase::PaymentPending);
             let ledger = chunks.ledger.lock().unwrap();
             assert!(ledger.sessions[0].outcomes.is_empty());
