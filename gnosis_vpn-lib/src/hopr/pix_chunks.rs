@@ -221,12 +221,19 @@ impl PixChunks {
         }
     }
 
-    /// Fresh rather than cached: a hold is judged on whether this grew between two 4 s samples.
+    /// Fresh every 4 s during a stall: settle deposits too, so a hold does not depend on status polling.
     pub fn surbs_consumed(&self, session_id: &str) -> Option<u64> {
         let telemetry = super::telemetry()
             .inspect_err(|err| tracing::warn!(%err, "no telemetry for PIX hold"))
             .ok()?;
-        gauge_u64(&telemetry, SURBS_CONSUMED, session_id)
+        self.surbs_consumed_with(session_id, &telemetry)
+    }
+
+    fn surbs_consumed_with(&self, session_id: &str, telemetry: &str) -> Option<u64> {
+        if !telemetry.is_empty() {
+            self.ledger.lock().expect("pix chunks lock poisoned").settle(telemetry);
+        }
+        gauge_u64(telemetry, SURBS_CONSUMED, session_id)
     }
 
     /// Reads telemetry only once the session has chunks, and at most every `TELEMETRY_MAX_AGE`.
@@ -412,6 +419,17 @@ mod tests {
         let stats = PixChunks::default().stats("s1", price());
         assert_eq!(stats.phase, ipc::PixPhase::Free);
         assert_eq!(stats.bytes_bought, 0);
+    }
+
+    #[test]
+    fn reading_surbs_consumed_settles_new_deposit_outcomes() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        assert_eq!(chunks.unpaid("s1"), None);
+
+        let scrape = format!("{}{SURBS_CONSUMED}{{session_id=\"s1\"}} 42\n", telemetry(0, 0.0, 0, 1));
+        assert_eq!(chunks.surbs_consumed_with("s1", &scrape), Some(42));
+        assert_eq!(chunks.unpaid("s1"), Some(Deposit::Failed));
     }
 
     #[test]
