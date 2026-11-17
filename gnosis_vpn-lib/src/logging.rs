@@ -5,7 +5,9 @@ use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*, reload};
 
 use std::fs::OpenOptions;
+use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -36,8 +38,26 @@ pub fn make_file_fmt_layer(log_path: &Path) -> Result<FileFmtLayer, std::io::Err
 pub const WORKER_LOG_FILE: &str = "worker.log";
 /// Files the worker keeps in total: the active one plus the rotated ones.
 pub const WORKER_MAX_LOG_FILES: usize = 7;
-/// Size at which the worker rolls to the next file, so debug volume stays bounded.
+/// Size in bytes (500 MiB) at which the worker rolls to the next file, so debug volume stays bounded.
 pub const WORKER_MAX_LOG_BYTES: usize = 500 * 1024 * 1024;
+
+/// Turns a panic in the wrapped writer into an I/O error.
+///
+/// `FileRotate` panics when the log dir vanishes during a rotation. Caught here, the panic cannot poison the
+/// writer's mutex, which would make every later log call panic too.
+struct PanicSafe<W>(W);
+
+impl<W: Write> Write for PanicSafe<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        panic::catch_unwind(AssertUnwindSafe(|| self.0.write(buf)))
+            .unwrap_or_else(|_| Err(std::io::Error::other("log writer panicked")))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        panic::catch_unwind(AssertUnwindSafe(|| self.0.flush()))
+            .unwrap_or_else(|_| Err(std::io::Error::other("log writer panicked")))
+    }
+}
 
 /// The worker's log layer: lives in the user's own log dir, so it rotates itself instead of relying on a system rotator.
 pub fn make_rolling_fmt_layer(log_path: &Path) -> Result<FileFmtLayer, std::io::Error> {
@@ -53,6 +73,8 @@ fn make_rolling_fmt_layer_with(
         return Err(std::io::Error::other("log file path has no directory or file name"));
     };
     dirs::ensure_private_dir(log_dir, log_dir)?;
+    // `FileRotate` swallows a failed open and then drops every line, so fail here and let the caller use stdout.
+    OpenOptions::new().create(true).append(true).open(log_path)?;
     // `AppendCount` counts rotated files only, so one less leaves room for the active file.
     // `BytesSurpassed` finishes the line that crosses the limit, so no line is split across files.
     let appender = FileRotate::new(
@@ -63,7 +85,7 @@ fn make_rolling_fmt_layer_with(
         None,
     );
     Ok(fmt::layer()
-        .with_writer(BoxMakeWriter::new(Mutex::new(appender)))
+        .with_writer(BoxMakeWriter::new(Mutex::new(PanicSafe(appender))))
         .with_ansi(false))
 }
 
@@ -105,9 +127,53 @@ pub fn setup_stdout() {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use anyhow::Context;
 
     use super::*;
+
+    struct Panicking;
+
+    impl Write for Panicking {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            panic!("rotation failed")
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn panic_safe_writer_should_return_an_error_and_keep_the_mutex_usable_when_the_writer_panics() -> anyhow::Result<()>
+    {
+        let shared = Mutex::new(PanicSafe(Panicking));
+        for _ in 0..2 {
+            let mut guard = shared
+                .lock()
+                .map_err(|_| anyhow::anyhow!("mutex poisoned by an earlier panic"))?;
+            anyhow::ensure!(
+                guard.write(b"line").is_err(),
+                "a panicking write must surface as an error"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rolling_layer_should_fail_when_the_active_log_file_cannot_be_opened() -> anyhow::Result<()> {
+        // A read-only file makes the open fail without needing privileges; the caller then falls back to stdout.
+        let dir = tempfile::tempdir().context("create temp dir")?;
+        let log = dir.path().join("worker.log");
+        std::fs::write(&log, "x").context("write log")?;
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o400)).context("chmod log")?;
+        anyhow::ensure!(
+            make_rolling_fmt_layer_with(&log, 1024, 3).is_err(),
+            "an unopenable active file must not look like a working log"
+        );
+        Ok(())
+    }
 
     #[test]
     fn file_layer_creates_the_parent_and_the_rolling_layer_the_private_dir() {

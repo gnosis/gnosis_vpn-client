@@ -71,8 +71,8 @@ to; it is never configured. Per user and network:
 | worker logs `worker.log`, `worker.log.1`, …      | `~/.local/state/gnosisvpn/`                    | `~/Library/Logs/GnosisVPN/`                                   |
 
 An empty `networks/<network>/` means a fresh identity is generated; `hopr.pass` is `0600`, the directories are
-`0700`. The worker rolls its log at 500 MB and keeps at most seven files (`worker.log` plus
-`worker.log.1` to `worker.log.6`, oldest highest), so debug output stays under 3.5 GB; the root log
+`0700`. The worker rolls its log at 500 MiB and keeps at most seven files (`worker.log` plus
+`worker.log.1` to `worker.log.6`, oldest highest), so debug output stays under about 3.5 GiB. Daily `worker.log.YYYY-MM-DD` files from earlier versions are not pruned; the root log
 (`--log-file`) is root-owned and rotated by logrotate/newsyslog via SIGHUP as
 before. A log file that cannot be opened never stops either process: it logs
 to stdout instead and says so on stderr, and a failed reopen after SIGHUP keeps
