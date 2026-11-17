@@ -14,6 +14,7 @@ base64.workspace             = true
 bytesize                     = { workspace = true, features = ["serde"] }
 cfg-if.workspace             = true
 edgli.workspace              = true
+file-rotate.workspace        = true
 futures-util.workspace       = true
 gnosis_vpn-ipc.workspace     = true
 hopr-strategy.workspace      = true

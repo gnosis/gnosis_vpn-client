@@ -33,9 +33,19 @@ pub fn make_file_fmt_layer(log_path: &Path) -> Result<FileFmtLayer, std::io::Err
 pub const WORKER_LOG_FILE: &str = "worker.log";
 /// Generations the worker keeps of its daily files.
 pub const WORKER_MAX_LOG_FILES: usize = 7;
+/// Size at which the worker rolls to the next file, so debug volume stays bounded.
+pub const WORKER_MAX_LOG_BYTES: usize = 500 * 1024 * 1024;
 
 /// The worker's log layer: lives in the user's own log dir, so it rotates itself instead of relying on a system rotator.
 pub fn make_rolling_fmt_layer(log_path: &Path) -> Result<FileFmtLayer, std::io::Error> {
+    make_rolling_fmt_layer_with(log_path, WORKER_MAX_LOG_BYTES, WORKER_MAX_LOG_FILES)
+}
+
+fn make_rolling_fmt_layer_with(
+    log_path: &Path,
+    _max_bytes: usize,
+    _max_files: usize,
+) -> Result<FileFmtLayer, std::io::Error> {
     let (Some(log_dir), Some(prefix)) = (log_path.parent(), log_path.file_name()) else {
         return Err(std::io::Error::other("log file path has no directory or file name"));
     };
@@ -96,6 +106,24 @@ mod tests {
         assert!(dir.path().join("root").is_dir());
         assert!(make_rolling_fmt_layer(&dir.path().join("worker/worker.log")).is_ok());
         assert!(dir.path().join("worker").is_dir());
+    }
+
+    #[test]
+    fn the_worker_log_rolls_by_size_and_keeps_at_most_max_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let layer = make_rolling_fmt_layer_with(&dir.path().join("worker.log"), 1024, 3).unwrap();
+        tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), || {
+            for i in 0..200 {
+                tracing::info!("line {i:04} {}", "x".repeat(80));
+            }
+        });
+        let sizes: Vec<u64> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().metadata().unwrap().len())
+            .collect();
+        assert_eq!(sizes.len(), 3, "active file plus rotated ones are capped at max_files: {sizes:?}");
+        // A file rolls once it passes the limit, so it may overshoot by one line at most.
+        assert!(sizes.iter().all(|s| *s < 1024 + 256), "no file grows past the limit: {sizes:?}");
     }
 
     #[test]

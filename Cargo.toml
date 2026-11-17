@@ -31,6 +31,7 @@ edgli = { git = "https://github.com/hoprnet/edge-client.git", branch = "main", d
   "telemetry",
 ] }
 exitcode = "~1.1.2"
+file-rotate = "~0.8.0"
 futures = "~0.3.34"
 futures-util = "~0.3.34"
 # only for the feature: edgli's `telemetry` doesn't forward `hopr-strategy/telemetry`
