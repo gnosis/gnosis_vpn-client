@@ -1060,7 +1060,11 @@ impl Core {
                         (Some(chunks), Some(id)) if awaiting_payment && !stall.is_zero() => chunks.surbs_consumed(id),
                         _ => None,
                     };
-                    let verdict = conn.judge_stall(stall, awaiting_payment, surbs_consumed, SystemTime::now());
+                    let unpaid = match (&pix_chunks, &main_session_id) {
+                        (Some(chunks), Some(id)) => chunks.unpaid(id),
+                        _ => None,
+                    };
+                    let verdict = conn.judge_stall(stall, awaiting_payment, surbs_consumed, unpaid, SystemTime::now());
                     self.phase = Phase::Connected(conn.clone());
                     let session_id = main_session_id.unwrap_or_default();
                     match verdict {
@@ -1076,6 +1080,11 @@ impl Core {
                         }
                         StallVerdict::HoldBroken { held_for } => {
                             tracing::warn!(%conn, %session_id, ?held_for, ?stall, "exit went silent during PIX payment hold - reconnecting");
+                            self.reconnecting_since = Some(SystemTime::now());
+                            self.reconnect_in_place(conn, true, results_sender).await;
+                        }
+                        StallVerdict::HoldFailed { held_for, reason } => {
+                            tracing::warn!(%conn, %session_id, ?held_for, %reason, "PIX deposit failed during payment hold - reconnecting");
                             self.reconnecting_since = Some(SystemTime::now());
                             self.reconnect_in_place(conn, true, results_sender).await;
                         }
