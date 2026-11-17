@@ -789,6 +789,7 @@ impl Core {
 
             Results::NodeBalance { res } => self.on_results_node_balance(res, results_sender).await,
             Results::QuerySafe { res } => self.on_results_query_safe(res, results_sender).await,
+            Results::CachedSafe { cached, res } => self.on_results_cached_safe(cached, res, results_sender).await,
             Results::DeploySafe { res } => self.on_results_deploy_safe(res, results_sender).await,
             Results::FundingTool { res } => self.on_results_funding_tool(res),
 
@@ -1594,9 +1595,15 @@ impl Core {
         let res = hopr_config::read_safe(&self.worker_params.network_cache_dir()).await;
         match res {
             Ok(safe_module) => {
-                tracing::debug!(?safe_module, "found existing safe module - starting hopr runner");
-                // start edge client with existing safe module
-                self.start_hopr_runner(safe_module, results_sender, Duration::ZERO);
+                tracing::debug!(
+                    ?safe_module,
+                    "found existing safe module - confirming it before starting hopr runner"
+                );
+                self.phase = Phase::Starting {
+                    edgli_init_state: None,
+                    issue: None,
+                };
+                self.spawn_confirm_cached_safe_runner(safe_module, results_sender);
             }
             Err(err) => {
                 if matches!(err, hopr_config::Error::NoFile) {
@@ -1607,15 +1614,53 @@ impl Core {
                         "error deserializing existing safe module - querying incentive operations"
                     );
                 }
-                self.phase = Phase::CheckingSafe {
-                    node_balance: Querying::Init,
-                    query_safe: Querying::Init,
-                    deploy_safe_issue: None,
-                };
-                self.spawn_query_safe_runner(results_sender, Duration::ZERO);
-                self.spawn_node_balance_runner(results_sender, Duration::ZERO);
+                self.check_safe_on_chain(results_sender);
             }
         }
+    }
+
+    fn check_safe_on_chain(&mut self, results_sender: &mpsc::Sender<Results>) {
+        self.phase = Phase::CheckingSafe {
+            node_balance: Querying::Init,
+            query_safe: Querying::Init,
+            deploy_safe_issue: None,
+        };
+        self.spawn_query_safe_runner(results_sender, Duration::ZERO);
+        self.spawn_node_balance_runner(results_sender, Duration::ZERO);
+    }
+
+    // A cache carried over from another network otherwise fails hopr construction forever.
+    async fn on_results_cached_safe(
+        &mut self,
+        cached: SafeModule,
+        res: Result<Option<SafeModule>, runner::Error>,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
+        if !matches!(self.phase, Phase::Starting { .. }) {
+            tracing::warn!(?res, ?self.phase, "ignoring cached safe confirmation in unexpected phase");
+            return;
+        }
+        let chain_safe = match res {
+            Ok(chain_safe) => chain_safe,
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    ?cached,
+                    "could not confirm cached safe - starting hopr runner with it"
+                );
+                self.start_hopr_runner(cached, results_sender, Duration::ZERO);
+                return;
+            }
+        };
+        if chain_safe.as_ref().is_some_and(|chain| is_same_safe(chain, &cached)) {
+            self.start_hopr_runner(cached, results_sender, Duration::ZERO);
+            return;
+        }
+        tracing::warn!(?cached, ?chain_safe, "cached safe unknown to blokli - setting it aside");
+        if let Err(err) = hopr_config::set_aside_safe(&self.worker_params.network_cache_dir()).await {
+            tracing::warn!(?err, "failed to set aside cached safe module");
+        }
+        self.check_safe_on_chain(results_sender);
     }
 
     fn spawn_query_safe_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
@@ -1628,6 +1673,22 @@ impl Core {
                         time::sleep(delay).await;
                         runner::query_safe(incentive_operations, results_sender).await
                     })
+                    .await
+            });
+        }
+    }
+
+    fn spawn_confirm_cached_safe_runner(&self, cached: SafeModule, results_sender: &mpsc::Sender<Results>) {
+        let cancel = self.cancel_on_shutdown.clone();
+        let results_sender = results_sender.clone();
+        if let Some(incentive_operations) = self.incentive_operations.clone() {
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(runner::confirm_cached_safe(
+                        incentive_operations,
+                        cached,
+                        results_sender,
+                    ))
                     .await
             });
         }
@@ -2847,6 +2908,13 @@ fn trackers_to_drop(before: &HashSet<ExitKey>, after: &HashSet<ExitKey>, active:
         .collect()
 }
 
+// An installer-carried cache may spell addresses in a different case than blokli.
+fn is_same_safe(a: &SafeModule, b: &SafeModule) -> bool {
+    let same_safe = a.safe_address.eq_ignore_ascii_case(&b.safe_address);
+    let same_module = a.module_address.eq_ignore_ascii_case(&b.module_address);
+    same_safe && same_module
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2950,6 +3018,75 @@ mod tests {
             from_core.try_recv(),
             Ok(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
         )
+    }
+
+    fn cached_safe() -> SafeModule {
+        SafeModule {
+            safe_address: "0xfd7c0a50b9f0bac4967040c03219e2d452786cd4".to_string(),
+            module_address: "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739".to_string(),
+        }
+    }
+
+    async fn core_starting_with_cached_safe() -> TestCore {
+        let mut test = fresh_core().await;
+        hopr_config::store_safe(&test.core.worker_params.network_cache_dir(), &cached_safe())
+            .await
+            .expect("store cached safe");
+        test.core.phase = Phase::Starting {
+            edgli_init_state: None,
+            issue: None,
+        };
+        test
+    }
+
+    #[tokio::test]
+    async fn a_cached_safe_unknown_to_blokli_is_set_aside() {
+        let TestCore {
+            mut core,
+            results,
+            _state_home,
+            ..
+        } = core_starting_with_cached_safe().await;
+        let cache_dir = core.worker_params.network_cache_dir();
+
+        core.on_results(
+            Results::CachedSafe {
+                cached: cached_safe(),
+                res: Ok(None),
+            },
+            &results,
+        )
+        .await;
+
+        assert!(matches!(core.phase, Phase::CheckingSafe { .. }));
+        assert!(!hopr_config::safe_file(&cache_dir).exists());
+        assert!(cache_dir.join("hopr.safe.stale").exists());
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_blokli_keeps_the_cached_safe() {
+        let TestCore {
+            mut core,
+            results,
+            _state_home,
+            ..
+        } = core_starting_with_cached_safe().await;
+        let cache_dir = core.worker_params.network_cache_dir();
+
+        core.on_results(
+            Results::CachedSafe {
+                cached: cached_safe(),
+                res: Err(runner::Error::Chain(edgli::errors::EdgliError::OsError(
+                    "connection refused".to_string(),
+                ))),
+            },
+            &results,
+        )
+        .await;
+        core.cancel_on_shutdown.cancel();
+
+        assert!(matches!(core.phase, Phase::Starting { .. }));
+        assert!(hopr_config::safe_file(&cache_dir).exists());
     }
 
     #[tokio::test]

@@ -46,6 +46,10 @@ pub(crate) enum Results {
     QuerySafe {
         res: Result<Option<SafeModule>, Error>,
     },
+    CachedSafe {
+        cached: SafeModule,
+        res: Result<Option<SafeModule>, Error>,
+    },
     DeploySafe {
         res: Result<SafeModule, Error>,
     },
@@ -249,6 +253,20 @@ pub(crate) async fn query_safe(
 ) {
     let res = run_query_safe(incentive_operations).await;
     let _ = results_sender.send(Results::QuerySafe { res }).await;
+}
+
+// Single attempt: on error the caller starts with the cache anyway, so retrying only delays startup.
+pub(crate) async fn confirm_cached_safe(
+    incentive_operations: Arc<dyn IncentiveOperations>,
+    cached: SafeModule,
+    results_sender: mpsc::Sender<Results>,
+) {
+    let res = incentive_operations
+        .retrieve_safe()
+        .await
+        .map_err(Error::Chain)
+        .map(|b| b.map(SafeModule::from));
+    let _ = results_sender.send(Results::CachedSafe { cached, res }).await;
 }
 
 pub(crate) async fn funding_tool(worker_params: WorkerParams, code: String, results_sender: mpsc::Sender<Results>) {
@@ -827,6 +845,11 @@ impl Display for Results {
                 Ok(Some(_)) => write!(f, "QuerySafe: Safe found"),
                 Ok(None) => write!(f, "QuerySafe: No safe found"),
                 Err(err) => write!(f, "QuerySafe: Error({})", err),
+            },
+            Results::CachedSafe { res, .. } => match res {
+                Ok(Some(_)) => write!(f, "CachedSafe: Safe found"),
+                Ok(None) => write!(f, "CachedSafe: No safe found"),
+                Err(err) => write!(f, "CachedSafe: Error({})", err),
             },
             Results::Probe { generation, event } => write!(f, "Probe (gen {generation}): {event:?}"),
             Results::RetryReactor => write!(f, "RetryReactor"),
