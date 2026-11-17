@@ -3706,14 +3706,16 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "5.3.0"
-source = "git+https://github.com/hoprnet/edge-client.git?branch=main#0a71aa7eca8dc62c51b3c0f5ca12f7a0572a5539"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=main#1329b46453652a1eb7c4fa7ccb9559afaf74b867"
 dependencies = [
  "anyhow",
  "async-signal",
  "async-trait",
+ "blokli-client",
  "bytesize",
  "cfg-if",
  "clap",
+ "cynic",
  "futures",
  "hopr-chain-connector",
  "hopr-ct-full-network",
@@ -3727,6 +3729,8 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "serde_yaml",
