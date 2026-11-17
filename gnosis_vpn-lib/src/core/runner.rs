@@ -46,14 +46,6 @@ pub(crate) enum Results {
     QuerySafe {
         res: Result<Option<SafeModule>, Error>,
     },
-    QuerySafeRetry {
-        kind: StartupIssueKind,
-        message: String,
-    },
-    ConfirmSafe {
-        safe_module: SafeModule,
-        res: Result<Option<SafeModule>, Error>,
-    },
     DeploySafe {
         res: Result<SafeModule, Error>,
     },
@@ -78,7 +70,6 @@ pub(crate) enum Results {
     },
     Hopr {
         res: Result<Hopr, Error>,
-        safe_module: SafeModule,
     },
     IncentiveOperations {
         res: Result<Arc<dyn IncentiveOperations>, Error>,
@@ -255,17 +246,8 @@ pub(crate) async fn query_safe(
     incentive_operations: Arc<dyn IncentiveOperations>,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = run_query_safe(incentive_operations, results_sender.clone()).await;
+    let res = run_query_safe(incentive_operations).await;
     let _ = results_sender.send(Results::QuerySafe { res }).await;
-}
-
-pub(crate) async fn confirm_safe(
-    incentive_operations: Arc<dyn IncentiveOperations>,
-    safe_module: SafeModule,
-    results_sender: mpsc::Sender<Results>,
-) {
-    let res = run_query_safe(incentive_operations, results_sender.clone()).await;
-    let _ = results_sender.send(Results::ConfirmSafe { safe_module, res }).await;
 }
 
 pub(crate) async fn funding_tool(worker_params: WorkerParams, code: String, results_sender: mpsc::Sender<Results>) {
@@ -314,12 +296,7 @@ pub(crate) async fn hopr(
         &results_sender,
     )
     .await;
-    let _ = results_sender
-        .send(Results::Hopr {
-            res,
-            safe_module: safe_module.clone(),
-        })
-        .await;
+    let _ = results_sender.send(Results::Hopr { res }).await;
 }
 
 pub(crate) async fn node_wxhopr_withdraw(
@@ -526,10 +503,7 @@ async fn run_node_wxhopr_withdraw(
     .await
 }
 
-async fn run_query_safe(
-    incentive_operations: Arc<dyn IncentiveOperations>,
-    results_sender: mpsc::Sender<Results>,
-) -> Result<Option<SafeModule>, Error> {
+async fn run_query_safe(incentive_operations: Arc<dyn IncentiveOperations>) -> Result<Option<SafeModule>, Error> {
     tracing::debug!("starting query safe runner");
     (|| {
         let ops = incentive_operations.clone();
@@ -541,14 +515,8 @@ async fn run_query_safe(
         }
     })
     .retry(remote_data::backoff_expo_long_delay())
-    .notify(move |err: &Error, delay| {
+    .notify(|err, delay| {
         tracing::warn!(?err, ?delay, "Safe query attempt failed, retrying...");
-        let sender = results_sender.clone();
-        let kind = err.startup_issue_kind();
-        let message = err.to_string();
-        tokio::spawn(async move {
-            let _ = sender.send(Results::QuerySafeRetry { kind, message }).await;
-        });
     })
     .await
 }
@@ -788,7 +756,7 @@ impl Display for Results {
                 Ok(Some(msg)) => write!(f, "FundingTool: Message({})", msg),
                 Err(err) => write!(f, "FundingTool: Error({})", err),
             },
-            Results::Hopr { res, safe_module: _ } => match res {
+            Results::Hopr { res } => match res {
                 Ok(_) => write!(f, "Hopr: Initialized Successfully"),
                 Err(err) => write!(f, "Hopr: Error({})", err),
             },
@@ -853,12 +821,6 @@ impl Display for Results {
                 Ok(Some(_)) => write!(f, "QuerySafe: Safe found"),
                 Ok(None) => write!(f, "QuerySafe: No safe found"),
                 Err(err) => write!(f, "QuerySafe: Error({})", err),
-            },
-            Results::QuerySafeRetry { message, .. } => write!(f, "QuerySafeRetry: Error({})", message),
-            Results::ConfirmSafe { res, .. } => match res {
-                Ok(Some(_)) => write!(f, "ConfirmSafe: Safe found"),
-                Ok(None) => write!(f, "ConfirmSafe: No safe found"),
-                Err(err) => write!(f, "ConfirmSafe: Error({})", err),
             },
             Results::Probe { generation, event } => write!(f, "Probe (gen {generation}): {event:?}"),
             Results::RetryReactor => write!(f, "RetryReactor"),

@@ -789,10 +789,6 @@ impl Core {
 
             Results::NodeBalance { res } => self.on_results_node_balance(res, results_sender).await,
             Results::QuerySafe { res } => self.on_results_query_safe(res, results_sender).await,
-            Results::QuerySafeRetry { kind, message } => self.on_query_safe_retry(kind, message),
-            Results::ConfirmSafe { safe_module, res } => {
-                self.on_results_confirm_safe(safe_module, res, results_sender).await
-            }
             Results::DeploySafe { res } => self.on_results_deploy_safe(res, results_sender).await,
             Results::FundingTool { res } => self.on_results_funding_tool(res),
 
@@ -806,7 +802,7 @@ impl Core {
                 }
             },
 
-            Results::Hopr { res, safe_module } => match res {
+            Results::Hopr { res } => match res {
                 Ok(hopr) => {
                     tracing::info!("hopr runner started successfully");
                     self.phase = Phase::HoprSyncing;
@@ -817,11 +813,12 @@ impl Core {
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
-                    tracing::error!(
-                        ?err,
-                        "hopr runner failed to start - confirming safe before trying again"
-                    );
-                    self.retry_hopr_runner(&err, safe_module, results_sender);
+                    // A cached safe from another network otherwise fails hopr construction forever.
+                    tracing::error!(?err, "hopr runner failed to start - re-checking safe on chain");
+                    if let Err(err) = hopr_config::set_aside_safe(&self.worker_params.network_cache_dir()).await {
+                        tracing::warn!(?err, "failed to set aside cached safe module");
+                    }
+                    self.check_safe_on_chain(results_sender);
                 }
             },
 
@@ -1629,57 +1626,6 @@ impl Core {
         self.spawn_node_balance_runner(results_sender, Duration::ZERO);
     }
 
-    // Shows a Blokli outage while the safe query is still backing off, not only after it gives up.
-    fn on_query_safe_retry(&mut self, kind: ipc::StartupIssueKind, message: String) {
-        match &mut self.phase {
-            Phase::Starting { issue, .. } => {
-                *issue = Some(startup_issue::retrying(issue.as_ref(), kind, message));
-            }
-            Phase::CheckingSafe { query_safe, .. } => {
-                *query_safe = Querying::Error(startup_issue::retrying(query_safe.issue(), kind, message));
-            }
-            _ => {}
-        }
-    }
-
-    // A cached safe from another network otherwise fails hopr construction forever.
-    async fn on_results_confirm_safe(
-        &mut self,
-        safe_module: SafeModule,
-        res: Result<Option<SafeModule>, runner::Error>,
-        results_sender: &mpsc::Sender<Results>,
-    ) {
-        if !matches!(self.phase, Phase::Starting { .. }) {
-            tracing::warn!(?res, ?self.phase, "ignoring safe confirmation in unexpected phase");
-            return;
-        }
-        let chain_safe = match res {
-            Ok(chain_safe) => chain_safe,
-            Err(err) => {
-                // Each failed attempt was already logged by the query's retry loop.
-                tracing::debug!(?err, "could not confirm safe - retrying hopr runner with it");
-                self.spawn_hopr_runner(safe_module, results_sender, Duration::from_secs(10));
-                return;
-            }
-        };
-        let blokli_agrees = chain_safe
-            .as_ref()
-            .is_some_and(|chain| is_same_safe(chain, &safe_module));
-        if blokli_agrees {
-            self.spawn_hopr_runner(safe_module, results_sender, Duration::from_secs(10));
-            return;
-        }
-        tracing::warn!(
-            ?safe_module,
-            ?chain_safe,
-            "safe unknown to blokli - setting cached safe aside"
-        );
-        if let Err(err) = hopr_config::set_aside_safe(&self.worker_params.network_cache_dir()).await {
-            tracing::warn!(?err, "failed to set aside cached safe module");
-        }
-        self.check_safe_on_chain(results_sender);
-    }
-
     fn spawn_query_safe_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         let cancel = self.cancel_presafe_queries.clone();
         let results_sender = results_sender.clone();
@@ -1690,18 +1636,6 @@ impl Core {
                         time::sleep(delay).await;
                         runner::query_safe(incentive_operations, results_sender).await
                     })
-                    .await
-            });
-        }
-    }
-
-    fn spawn_confirm_safe_runner(&self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>) {
-        let cancel = self.cancel_on_shutdown.clone();
-        let results_sender = results_sender.clone();
-        if let Some(incentive_operations) = self.incentive_operations.clone() {
-            tokio::spawn(async move {
-                cancel
-                    .run_until_cancelled(runner::confirm_safe(incentive_operations, safe_module, results_sender))
                     .await
             });
         }
@@ -1793,23 +1727,6 @@ impl Core {
             issue: None,
         };
         self.spawn_hopr_runner(safe_module, results_sender, delay);
-    }
-
-    fn retry_hopr_runner(
-        &mut self,
-        err: &runner::Error,
-        safe_module: SafeModule,
-        results_sender: &mpsc::Sender<Results>,
-    ) {
-        let previous = match &self.phase {
-            Phase::Starting { issue, .. } => issue.clone(),
-            _ => None,
-        };
-        self.phase = Phase::Starting {
-            edgli_init_state: None,
-            issue: Some(startup_issue::failed(previous.as_ref(), err)),
-        };
-        self.spawn_confirm_safe_runner(safe_module, results_sender);
     }
 
     fn spawn_minimum_balance_recommendation_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
@@ -2920,13 +2837,6 @@ fn trackers_to_drop(before: &HashSet<ExitKey>, after: &HashSet<ExitKey>, active:
         .collect()
 }
 
-// An installer-carried cache may spell addresses in a different case than blokli.
-fn is_same_safe(a: &SafeModule, b: &SafeModule) -> bool {
-    let same_safe = a.safe_address.eq_ignore_ascii_case(&b.safe_address);
-    let same_module = a.module_address.eq_ignore_ascii_case(&b.module_address);
-    same_safe && same_module
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3052,7 +2962,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_start_with_a_safe_unknown_to_blokli_sets_the_cache_aside() {
+    async fn a_failed_start_sets_the_cached_safe_aside_and_checks_the_chain() {
         let TestCore {
             mut core,
             results,
@@ -3062,34 +2972,9 @@ mod tests {
         let cache_dir = core.worker_params.network_cache_dir();
 
         core.on_results(
-            Results::ConfirmSafe {
-                safe_module: cached_safe(),
-                res: Ok(None),
-            },
-            &results,
-        )
-        .await;
-
-        assert!(matches!(core.phase, Phase::CheckingSafe { .. }));
-        assert!(!hopr_config::safe_file(&cache_dir).exists());
-        assert!(cache_dir.join("hopr.safe.stale").exists());
-    }
-
-    #[tokio::test]
-    async fn a_failed_start_with_blokli_unreachable_keeps_the_cached_safe() {
-        let TestCore {
-            mut core,
-            results,
-            _state_home,
-            ..
-        } = core_starting_with_cached_safe().await;
-        let cache_dir = core.worker_params.network_cache_dir();
-
-        core.on_results(
-            Results::ConfirmSafe {
-                safe_module: cached_safe(),
+            Results::Hopr {
                 res: Err(runner::Error::Chain(edgli::errors::EdgliError::OsError(
-                    "connection refused".to_string(),
+                    "safe does not exist".to_string(),
                 ))),
             },
             &results,
@@ -3097,57 +2982,9 @@ mod tests {
         .await;
         core.cancel_on_shutdown.cancel();
 
-        assert!(matches!(core.phase, Phase::Starting { .. }));
-        assert!(hopr_config::safe_file(&cache_dir).exists());
-    }
-
-    fn safe_query_retry() -> Results {
-        Results::QuerySafeRetry {
-            kind: ipc::StartupIssueKind::Unreachable,
-            message: "blokli unreachable".to_string(),
-        }
-    }
-
-    #[tokio::test]
-    async fn a_safe_query_retry_during_a_failed_start_keeps_the_streak() {
-        let TestCore { mut core, results, .. } = fresh_core().await;
-        let since = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
-        core.phase = Phase::Starting {
-            edgli_init_state: None,
-            issue: Some(ipc::StartupIssue {
-                kind: ipc::StartupIssueKind::Other,
-                message: "safe does not exist".to_string(),
-                since,
-            }),
-        };
-
-        core.on_results(safe_query_retry(), &results).await;
-
-        let Phase::Starting { issue: Some(issue), .. } = &core.phase else {
-            panic!("expected a startup issue, got {:?}", core.phase);
-        };
-        assert_eq!(issue.kind, ipc::StartupIssueKind::Unreachable);
-        assert_eq!(issue.since, since);
-    }
-
-    #[tokio::test]
-    async fn a_safe_query_retry_while_checking_the_safe_shows_the_error() {
-        let TestCore { mut core, results, .. } = fresh_core().await;
-        core.phase = Phase::CheckingSafe {
-            node_balance: Querying::Init,
-            query_safe: Querying::Init,
-            deploy_safe_issue: None,
-        };
-
-        core.on_results(safe_query_retry(), &results).await;
-
-        let Phase::CheckingSafe { query_safe, .. } = &core.phase else {
-            panic!("expected CheckingSafe, got {:?}", core.phase);
-        };
-        assert_eq!(
-            query_safe.issue().map(|issue| issue.kind),
-            Some(ipc::StartupIssueKind::Unreachable)
-        );
+        assert!(matches!(core.phase, Phase::CheckingSafe { .. }));
+        assert!(!hopr_config::safe_file(&cache_dir).exists());
+        assert!(cache_dir.join("hopr.safe.stale").exists());
     }
 
     #[tokio::test]

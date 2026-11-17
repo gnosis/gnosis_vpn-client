@@ -15,15 +15,6 @@ pub(super) fn failed(previous: Option<&StartupIssue>, err: &runner::Error) -> St
     }
 }
 
-/// A retry loop reported an attempt failure: same streak rule as [`failed`].
-pub(super) fn retrying(previous: Option<&StartupIssue>, kind: StartupIssueKind, message: String) -> StartupIssue {
-    StartupIssue {
-        kind,
-        message,
-        since: previous.map_or_else(SystemTime::now, |issue| issue.since),
-    }
-}
-
 /// The issue that has blocked startup longest.
 pub(super) fn longest<'a>(issues: impl IntoIterator<Item = Option<&'a StartupIssue>>) -> Option<StartupIssue> {
     issues.into_iter().flatten().min_by_key(|issue| issue.since).cloned()
