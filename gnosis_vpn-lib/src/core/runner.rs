@@ -30,7 +30,9 @@ use crate::probe;
 use crate::route_health::RouteWalk;
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, connection, event, peer, ping, remote_data};
-use gnosis_vpn_ipc::{Response, TicketStatsStatus};
+use gnosis_vpn_ipc::{Response, StartupIssueKind, TicketStatsStatus};
+
+use super::startup_issue;
 
 /// Announced peers only feed killswitch exemptions, which tolerate a slow refresh.
 const ANNOUNCED_PEERS_INTERVAL: Duration = Duration::from_secs(90);
@@ -74,7 +76,8 @@ pub(crate) enum Results {
         res: Result<Arc<dyn IncentiveOperations>, Error>,
     },
     IncentiveOperationsRetry {
-        error: String,
+        kind: StartupIssueKind,
+        message: String,
     },
     ExitNodesUpdated {
         nodes: std::collections::HashMap<Address, edgli::ExitNodeInfo>,
@@ -149,7 +152,7 @@ pub(crate) enum Error {
     #[error(transparent)]
     WorkerParams(#[from] worker_params::Error),
     #[error("chain error: {0}")]
-    Chain(String),
+    Chain(#[from] edgli::errors::EdgliError),
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
     #[error(transparent)]
@@ -161,7 +164,18 @@ pub(crate) enum Error {
     #[error("Funding tool error: {0}")]
     FundingTool(String),
     #[error("IncentiveOperations creation error: {0}")]
-    IncentiveOperationsCreation(String),
+    IncentiveOperationsCreation(#[source] edgli::errors::EdgliError),
+}
+
+impl Error {
+    pub(crate) fn startup_issue_kind(&self) -> StartupIssueKind {
+        let failure = match self {
+            Error::Chain(err) | Error::IncentiveOperationsCreation(err) => err.failure_kind(),
+            Error::Hopr(HoprError::Start(err)) => err.failure_kind(),
+            _ => return StartupIssueKind::Other,
+        };
+        startup_issue::kind(failure)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -184,10 +198,7 @@ pub(crate) async fn ideal_balance_recommendation(
     cfg: edgli::strategy::IncentiveConfiguration,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = hopr
-        .ideal_balance_recommendation(&cfg)
-        .await
-        .map_err(|e| Error::Chain(e.to_string()));
+    let res = hopr.ideal_balance_recommendation(&cfg).await.map_err(Error::Hopr);
     let _ = results_sender.send(Results::IdealBalanceRecommendation { res }).await;
 }
 
@@ -197,10 +208,7 @@ pub(crate) async fn capacity_allocations(
     price_per_byte: balance::Balance<balance::WxHOPR>,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let mut res = hopr
-        .capacity_allocations()
-        .await
-        .map_err(|e| Error::Chain(e.to_string()));
+    let mut res = hopr.capacity_allocations().await.map_err(Error::Hopr);
     if let (Ok(caps), Some(float)) = (res.as_mut(), pix_float) {
         // The pool sums its own notes in memory, so a failure won't clear on the next poll.
         match float.balance().await {
@@ -476,16 +484,13 @@ async fn run_node_wxhopr_withdraw(
     (|| {
         let incentive_operations = incentive_operations.clone();
         async move {
-            let (wxhopr, _xdai) = incentive_operations
-                .balances()
-                .await
-                .map_err(|e| Error::Chain(e.to_string()))?;
+            let (wxhopr, _xdai) = incentive_operations.balances().await.map_err(Error::Chain)?;
             if !wxhopr.is_zero() {
                 tracing::info!(%wxhopr, %safe_address, "withdrawing node wxHOPR to safe");
                 incentive_operations
                     .withdraw_wxhopr(safe_address, wxhopr)
                     .await
-                    .map_err(|e| Error::Chain(e.to_string()))?;
+                    .map_err(Error::Chain)?;
             }
             Ok(())
         }
@@ -511,7 +516,7 @@ async fn run_query_safe(incentive_operations: Arc<dyn IncentiveOperations>) -> R
         async move {
             ops.retrieve_safe()
                 .await
-                .map_err(|e| Error::Chain(e.to_string()))
+                .map_err(Error::Chain)
                 .map(|b| b.map(SafeModule::from))
         }
     })
@@ -527,7 +532,7 @@ async fn run_node_balance(incentive_operations: Arc<dyn IncentiveOperations>) ->
     (|| {
         let ops = incentive_operations.clone();
         async move {
-            let (balance_wxhopr, balance_xdai) = ops.balances().await.map_err(|e| Error::Chain(e.to_string()))?;
+            let (balance_wxhopr, balance_xdai) = ops.balances().await.map_err(Error::Chain)?;
             Ok(balance::PreSafe {
                 node_xdai: balance_xdai,
                 node_wxhopr: balance_wxhopr,
@@ -553,7 +558,7 @@ async fn run_minimum_balance_recommendation(
         async move {
             let rec = edgli::strategy::minimum_balance_recommendation(&*ops, &cfg, pix_float)
                 .await
-                .map_err(|e| Error::Chain(e.to_string()))?;
+                .map_err(Error::Chain)?;
             Ok(rec.into())
         }
     })
@@ -578,7 +583,7 @@ async fn run_safe_deployment(
         async move {
             ops.deploy_safe(presafe.node_wxhopr)
                 .await
-                .map_err(|e| Error::Chain(e.to_string()))
+                .map_err(Error::Chain)
                 .map(SafeModule::from)
         }
     })
@@ -691,16 +696,17 @@ async fn run_create_incentive_operations(
     (|| async {
         let ops = make_incentive_operations(blokli_endpoint.clone(), &chain_key, Some(connector_config))
             .await
-            .map_err(|e| Error::IncentiveOperationsCreation(e.to_string()))?;
+            .map_err(Error::IncentiveOperationsCreation)?;
         Ok(Arc::from(ops))
     })
     .retry(remote_data::backoff_expo_long_delay())
     .notify(move |err: &Error, delay| {
         tracing::warn!(?err, ?delay, "IncentiveOperations creation attempt failed, retrying...");
         let sender = results_sender.clone();
-        let error = err.to_string();
+        let kind = err.startup_issue_kind();
+        let message = err.to_string();
         tokio::spawn(async move {
-            let _ = sender.send(Results::IncentiveOperationsRetry { error }).await;
+            let _ = sender.send(Results::IncentiveOperationsRetry { kind, message }).await;
         });
     })
     .await
@@ -779,8 +785,8 @@ impl Display for Results {
                 Ok(_) => write!(f, "IncentiveOperations: Created Successfully"),
                 Err(err) => write!(f, "IncentiveOperations: Error({})", err),
             },
-            Results::IncentiveOperationsRetry { error } => {
-                write!(f, "IncentiveOperationsRetry: Error({})", error)
+            Results::IncentiveOperationsRetry { message, .. } => {
+                write!(f, "IncentiveOperationsRetry: Error({})", message)
             }
             Results::ExitNodesUpdated { nodes } => {
                 write!(f, "ExitNodesUpdated: {} node(s)", nodes.len())

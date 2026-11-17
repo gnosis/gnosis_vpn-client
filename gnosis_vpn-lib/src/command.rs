@@ -132,7 +132,7 @@ pub fn preparing_safe(
     node_address: Address,
     pre_safe: &Option<balance::PreSafe>,
     funding_tool: Option<String>,
-    error: Option<String>,
+    issue: Option<ipc::StartupIssue>,
     balance_recommendation: Option<balance::BalanceRecommendation>,
 ) -> ipc::RunMode {
     ipc::RunMode::PreparingSafe {
@@ -140,7 +140,7 @@ pub fn preparing_safe(
         node_xdai: wire::xdai(pre_safe.as_ref().map(|s| s.node_xdai).unwrap_or_default()),
         node_wxhopr: wire::wxhopr(pre_safe.as_ref().map(|s| s.node_wxhopr).unwrap_or_default()),
         funding_tool,
-        error,
+        issue,
         balance_recommendation: balance_recommendation.as_ref().map(|r| Box::new(r.into())),
     }
 }
@@ -154,11 +154,11 @@ pub fn deploying_safe(node_address: Address) -> ipc::RunMode {
 pub fn warmup(
     edgli_init_state: Option<EdgliInitState>,
     hopr_state: Option<HoprState>,
-    last_error: Option<String>,
+    issue: Option<ipc::StartupIssue>,
 ) -> ipc::RunMode {
     ipc::RunMode::Warmup {
         stage: warmup_stage(edgli_init_state, hopr_state),
-        last_error,
+        issue,
     }
 }
 

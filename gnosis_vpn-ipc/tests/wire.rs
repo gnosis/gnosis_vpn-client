@@ -46,7 +46,7 @@ fn a_request_travels_in_a_versioned_envelope() {
     };
     round_trips(
         &envelope,
-        json!({"protocol": 1, "request": {"type": "connect", "destination": "berlin"}}),
+        json!({"protocol": 2, "request": {"type": "connect", "destination": "berlin"}}),
     );
 }
 
@@ -145,12 +145,32 @@ fn the_connection_is_one_tagged_state() {
 fn warmup_reports_one_merged_stage() {
     let warmup = RunMode::Warmup {
         stage: WarmupStage::WaitingForFunds,
-        last_error: None,
+        issue: None,
     };
     let json = serde_json::to_value(&warmup).expect("serialize");
     assert_eq!(
         json,
-        json!({"type": "warmup", "stage": {"type": "waiting_for_funds"}, "last_error": null})
+        json!({"type": "warmup", "stage": {"type": "waiting_for_funds"}, "issue": null})
+    );
+}
+
+#[test]
+fn a_startup_issue_carries_a_tagged_kind_and_its_streak_start() {
+    let init = RunMode::Init {
+        issue: Some(StartupIssue {
+            kind: StartupIssueKind::Unreachable,
+            message: "connection refused".to_string(),
+            since: at(1_700_000_000_000),
+        }),
+    };
+    let json = serde_json::to_value(&init).expect("serialize");
+    assert_eq!(
+        json,
+        json!({"type": "init", "issue": {
+            "kind": {"type": "unreachable"},
+            "message": "connection refused",
+            "since": 1_700_000_000_000u64,
+        }})
     );
 }
 
