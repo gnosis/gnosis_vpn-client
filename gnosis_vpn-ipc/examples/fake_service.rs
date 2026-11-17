@@ -79,7 +79,7 @@ fn run_mode_at(elapsed: Duration, step: Duration) -> RunMode {
     if let Some(stage) = WARMUP.get(index - 1) {
         return RunMode::Warmup {
             stage: *stage,
-            last_error: None,
+            issue: None,
         };
     }
     // No exits keeps the app on "Looking for exits" until its own watchdog moves on.

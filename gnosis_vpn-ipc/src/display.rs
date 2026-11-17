@@ -130,14 +130,14 @@ impl Display for Destination {
 impl Display for RunMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            RunMode::Init { last_error: None } => write!(f, "Initializing"),
-            RunMode::Init { last_error: Some(err) } => write!(f, "Initializing (last error: {err})"),
+            RunMode::Init { issue: None } => write!(f, "Initializing"),
+            RunMode::Init { issue: Some(issue) } => write!(f, "Initializing (last error: {})", issue.message),
             RunMode::PreparingSafe {
                 node_address,
                 node_xdai,
                 node_wxhopr,
                 funding_tool,
-                error,
+                issue,
                 balance_recommendation,
             } => {
                 let wxhopr_sci = scientific_suffix(node_wxhopr);
@@ -156,15 +156,15 @@ impl Display for RunMode {
                 if let Some(tool) = funding_tool {
                     write!(f, ", funding tool: {tool}")?;
                 }
-                if let Some(error) = error {
-                    write!(f, ", error: {error}")?;
+                if let Some(issue) = issue {
+                    write!(f, ", error: {}", issue.message)?;
                 }
                 write!(f, ")")
             }
             RunMode::DeployingSafe { node_address } => write!(f, "Deploying Safe (node: {node_address})"),
-            RunMode::Warmup { stage, last_error } => match last_error {
+            RunMode::Warmup { stage, issue } => match issue {
                 None => write!(f, "Warmup ({stage})"),
-                Some(err) => write!(f, "Warmup ({stage}, last error: {err})"),
+                Some(issue) => write!(f, "Warmup ({stage}, last error: {})", issue.message),
             },
             RunMode::Running {
                 hopr_status,

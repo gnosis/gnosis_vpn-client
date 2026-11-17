@@ -3,6 +3,9 @@ pub enum HoprError {
     #[error("Construction error: {0}")]
     Construction(String),
 
+    #[error("edge client start error: {0}")]
+    Start(#[source] edgli::errors::EdgliError),
+
     #[error("HoprLib error: {0}")]
     HoprLib(#[from] edgli::hopr_lib::errors::HoprLibError),
 

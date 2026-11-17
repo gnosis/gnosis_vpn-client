@@ -82,7 +82,7 @@ impl Hopr {
             init_visitor,
         )
         .await
-        .map_err(|e| HoprError::Construction(e.to_string()))?;
+        .map_err(HoprError::Start)?;
 
         tracing::debug!("hopr edge node finished setup");
         let pix_params = edge_node

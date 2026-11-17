@@ -13,7 +13,7 @@ use crate::values::{
 };
 
 /// Bumped on every incompatible wire change; the service refuses requests of any other version.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
@@ -229,14 +229,14 @@ pub enum DisconnectPhase {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RunMode {
     Init {
-        last_error: Option<String>,
+        issue: Option<StartupIssue>,
     },
     PreparingSafe {
         node_address: Address,
         node_xdai: Balance<XDai>,
         node_wxhopr: Balance<WxHopr>,
         funding_tool: Option<String>,
-        error: Option<String>,
+        issue: Option<StartupIssue>,
         balance_recommendation: Option<Box<BalanceRecommendation>>,
     },
     DeployingSafe {
@@ -244,7 +244,7 @@ pub enum RunMode {
     },
     Warmup {
         stage: WarmupStage,
-        last_error: Option<String>,
+        issue: Option<StartupIssue>,
     },
     Running {
         hopr_status: Option<HoprStatus>,
@@ -254,6 +254,27 @@ pub enum RunMode {
     Shutdown,
     Restarting,
     NotRunning,
+}
+
+/// A step the worker needs before running keeps failing; `since` is the first failure of the streak.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StartupIssue {
+    pub kind: StartupIssueKind,
+    pub message: String,
+    #[serde(with = "unix_ms")]
+    pub since: SystemTime,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StartupIssueKind {
+    /// DNS, connect or TLS failure: the user's network, proxy or firewall.
+    Unreachable,
+    /// The chain service answers but is unhealthy, overloaded or too slow.
+    ServiceUnavailable,
+    /// The chain service's answer cannot be understood: this version needs an update.
+    Incompatible,
+    Other,
 }
 
 /// Edge-client start-up followed by node start-up, as one progression.

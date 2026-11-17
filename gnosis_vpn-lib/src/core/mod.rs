@@ -34,6 +34,7 @@ use crate::{balance, log_output, wire, wireguard};
 
 mod channel_maintenance;
 pub(crate) mod runner;
+mod startup_issue;
 
 use runner::Results;
 
@@ -116,6 +117,8 @@ pub struct Core {
     incentive_operations: Option<Arc<dyn IncentiveOperations>>,
     hopr: Option<Arc<Hopr>>,
     minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
+    // Safe deployment waits on the recommendation, so its failure blocks startup too.
+    minimum_balance_recommendation_issue: Option<ipc::StartupIssue>,
     ideal_balance_recommendation: Option<balance::BalanceRecommendation>,
     capacity_allocations: Option<balance::CapacityAllocations>,
     capacity_reconciler: balance::CapacityReconciler,
@@ -174,23 +177,25 @@ enum Phase {
     // initial phase — create the IncentiveOperations handle (Blokli-backed)
     // and determine if a Safe has been deployed for this node
     Initial {
-        last_error: Option<String>,
+        issue: Option<ipc::StartupIssue>,
     },
     /// safe absent or safe deployment error - repeatedly query node balance and safe info
     CheckingSafe {
         node_balance: Querying<balance::PreSafe>,
         query_safe: Querying<Option<SafeModule>>,
-        deploy_safe_error: Option<String>,
+        deploy_safe_issue: Option<ipc::StartupIssue>,
     },
     /// enough funds and no deployed safe - run safe deployment
     DeployingSafe {
         node_balance: Querying<balance::PreSafe>,
         query_safe: Querying<Option<SafeModule>>,
+        // Carried through the attempt so a repeated failure keeps its `since`.
+        previous_issue: Option<ipc::StartupIssue>,
     },
     /// construct edge client
     Starting {
         edgli_init_state: Option<EdgliInitState>,
-        last_error: Option<String>,
+        issue: Option<ipc::StartupIssue>,
     },
     /// start edge client
     HoprSyncing,
@@ -208,7 +213,16 @@ enum Phase {
 enum Querying<T> {
     Init,
     Success(T),
-    Error(String),
+    Error(ipc::StartupIssue),
+}
+
+impl<T> Querying<T> {
+    fn issue(&self) -> Option<&ipc::StartupIssue> {
+        match self {
+            Querying::Error(issue) => Some(issue),
+            _ => None,
+        }
+    }
 }
 
 impl Core {
@@ -264,11 +278,12 @@ impl Core {
             target,
 
             // runtime data
-            phase: Phase::Initial { last_error: None },
+            phase: Phase::Initial { issue: None },
             funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
             incentive_operations: None,
             minimum_balance_recommendation: None,
+            minimum_balance_recommendation_issue: None,
             ideal_balance_recommendation: None,
             capacity_allocations: None,
             capacity_reconciler: balance::CapacityReconciler::default(),
@@ -692,14 +707,13 @@ impl Core {
         tracing::debug!(%results, phase = ?self.phase, "on runner results");
         match results {
             Results::IncentiveOperations { res } => {
-                if !self.on_results_incentive_operations(res, results_sender).await {
-                    return false;
-                }
+                self.on_results_incentive_operations(res, results_sender).await;
             }
-            Results::IncentiveOperationsRetry { error } => {
-                if matches!(self.phase, Phase::Initial { .. }) {
+            Results::IncentiveOperationsRetry { kind, message } => {
+                if let Phase::Initial { issue } = &self.phase {
+                    let since = issue.as_ref().map_or_else(SystemTime::now, |issue| issue.since);
                     self.phase = Phase::Initial {
-                        last_error: Some(error),
+                        issue: Some(ipc::StartupIssue { kind, message, since }),
                     };
                 }
             }
@@ -711,10 +725,11 @@ impl Core {
                 self.spawn_exit_node_discovery_runner(results_sender, Duration::from_secs(30));
             }
             Results::HoprConstruction(edgli_state) => {
-                if matches!(self.phase, Phase::Starting { .. }) {
+                if let Phase::Starting { issue, .. } = &self.phase {
+                    // Progress within an attempt isn't recovery; only a started node clears the issue.
                     self.phase = Phase::Starting {
                         edgli_init_state: Some(edgli_state),
-                        last_error: None,
+                        issue: issue.clone(),
                     };
                 } else {
                     tracing::warn!(?self.phase, "hopr construction result received in unexpected phase");
@@ -724,11 +739,16 @@ impl Core {
                 Ok(rec) => {
                     tracing::info!(?rec, "received minimum balance recommendation");
                     self.minimum_balance_recommendation = Some(rec);
+                    self.minimum_balance_recommendation_issue = None;
                     // safe deployment may be waiting on this recommendation
                     self.trigger_deploy_safe(results_sender);
                 }
                 Err(err) => {
                     tracing::error!(?err, "failed to fetch minimum balance recommendation - retrying");
+                    self.minimum_balance_recommendation_issue = Some(startup_issue::failed(
+                        self.minimum_balance_recommendation_issue.as_ref(),
+                        &err,
+                    ));
                     self.spawn_minimum_balance_recommendation_runner(results_sender, Duration::from_secs(10));
                 }
             },
@@ -794,7 +814,7 @@ impl Core {
                 }
                 Err(err) => {
                     tracing::error!(?err, "hopr runner failed to start - trying again in 10 seconds");
-                    self.retry_hopr_runner(err.to_string(), safe_module, results_sender, Duration::from_secs(10));
+                    self.retry_hopr_runner(&err, safe_module, results_sender, Duration::from_secs(10));
                 }
             },
 
@@ -1266,26 +1286,30 @@ impl Core {
         return true;
     }
 
-    // Returns false to signal core exit, which lets root restart the worker.
     async fn on_results_incentive_operations(
         &mut self,
         res: Result<Arc<dyn IncentiveOperations>, runner::Error>,
         results_sender: &mpsc::Sender<Results>,
-    ) -> bool {
+    ) {
         match res {
             Ok(incentive_operations) => {
                 tracing::info!("incentive operations handle created successfully");
                 self.incentive_operations = Some(incentive_operations);
                 self.spawn_minimum_balance_recommendation_runner(results_sender, Duration::ZERO);
                 self.determine_next_phase_from_safe_disk_query(results_sender).await;
-                true
             }
             Err(err) => {
+                // Retrying in place keeps the issue's `since`; a worker restart would reset it.
                 tracing::error!(
                     ?err,
-                    "failed to create incentive operations handle after all retries - restarting core"
+                    "failed to create incentive operations handle after all retries - trying again in 10 seconds"
                 );
-                false
+                if let Phase::Initial { issue } = &self.phase {
+                    self.phase = Phase::Initial {
+                        issue: Some(startup_issue::failed(issue.as_ref(), &err)),
+                    };
+                }
+                self.spawn_initial_runner(results_sender, Duration::from_secs(10));
             }
         }
     }
@@ -1301,14 +1325,14 @@ impl Core {
                 Phase::CheckingSafe {
                     node_balance: _,
                     query_safe,
-                    deploy_safe_error,
+                    deploy_safe_issue,
                 },
             ) => {
                 tracing::info!(%presafe, "on presafe node balance");
                 self.phase = Phase::CheckingSafe {
                     node_balance: Querying::Success(presafe.clone()),
                     query_safe,
-                    deploy_safe_error,
+                    deploy_safe_issue,
                 };
                 // trigger retry - will be canceled if safe deployment starts
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
@@ -1317,16 +1341,16 @@ impl Core {
             (
                 Err(err),
                 Phase::CheckingSafe {
-                    node_balance: _,
+                    node_balance: previous_balance,
                     query_safe,
-                    deploy_safe_error,
+                    deploy_safe_issue,
                 },
             ) => {
                 tracing::error!(?err, "failed to fetch presafe node balance - retrying");
                 self.phase = Phase::CheckingSafe {
-                    node_balance: Querying::Error(err.to_string()),
+                    node_balance: Querying::Error(startup_issue::failed(previous_balance.issue(), &err)),
                     query_safe,
-                    deploy_safe_error,
+                    deploy_safe_issue,
                 };
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
             }
@@ -1356,14 +1380,14 @@ impl Core {
                 Phase::CheckingSafe {
                     node_balance,
                     query_safe: _,
-                    deploy_safe_error,
+                    deploy_safe_issue,
                 },
             ) => {
                 tracing::info!("found no deployed safe module");
                 self.phase = Phase::CheckingSafe {
                     node_balance,
                     query_safe: Querying::Success(None),
-                    deploy_safe_error,
+                    deploy_safe_issue,
                 };
                 // trigger retry - will be canceled if safe deployment starts
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
@@ -1373,15 +1397,15 @@ impl Core {
                 Err(err),
                 Phase::CheckingSafe {
                     node_balance,
-                    query_safe: _,
-                    deploy_safe_error,
+                    query_safe: previous_query,
+                    deploy_safe_issue,
                 },
             ) => {
                 tracing::error!(?err, "failed to query safe module - retrying");
                 self.phase = Phase::CheckingSafe {
                     node_balance,
-                    query_safe: Querying::Error(err.to_string()),
-                    deploy_safe_error,
+                    query_safe: Querying::Error(startup_issue::failed(previous_query.issue(), &err)),
+                    deploy_safe_issue,
                 };
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
             }
@@ -1409,13 +1433,14 @@ impl Core {
                 Phase::DeployingSafe {
                     node_balance,
                     query_safe,
+                    previous_issue,
                 },
             ) => {
                 tracing::error!(?err, "failed to deploy safe module - retrying from balance check");
                 self.phase = Phase::CheckingSafe {
                     node_balance,
                     query_safe,
-                    deploy_safe_error: Some(err.to_string()),
+                    deploy_safe_issue: Some(startup_issue::failed(previous_issue.as_ref(), &err)),
                 };
                 self.spawn_node_balance_runner(results_sender, Duration::from_secs(10));
                 self.spawn_query_safe_runner(results_sender, Duration::from_secs(10));
@@ -1438,7 +1463,7 @@ impl Core {
         if let Phase::CheckingSafe {
             node_balance: Querying::Success(presafe),
             query_safe: Querying::Success(None),
-            deploy_safe_error: _,
+            deploy_safe_issue,
         } = self.phase.clone()
         {
             let Some(recommendation) = self.minimum_balance_recommendation else {
@@ -1456,6 +1481,7 @@ impl Core {
                 self.phase = Phase::DeployingSafe {
                     node_balance: Querying::Success(presafe.clone()),
                     query_safe: Querying::Success(None),
+                    previous_issue: deploy_safe_issue,
                 };
                 self.cancel_presafe_queries.cancel();
                 self.cancel_presafe_queries = self.cancel_on_shutdown.child_token();
@@ -1584,7 +1610,7 @@ impl Core {
                 self.phase = Phase::CheckingSafe {
                     node_balance: Querying::Init,
                     query_safe: Querying::Init,
-                    deploy_safe_error: None,
+                    deploy_safe_issue: None,
                 };
                 self.spawn_query_safe_runner(results_sender, Duration::ZERO);
                 self.spawn_node_balance_runner(results_sender, Duration::ZERO);
@@ -1690,21 +1716,25 @@ impl Core {
     fn start_hopr_runner(&mut self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         self.phase = Phase::Starting {
             edgli_init_state: None,
-            last_error: None,
+            issue: None,
         };
         self.spawn_hopr_runner(safe_module, results_sender, delay);
     }
 
     fn retry_hopr_runner(
         &mut self,
-        error: String,
+        err: &runner::Error,
         safe_module: SafeModule,
         results_sender: &mpsc::Sender<Results>,
         delay: Duration,
     ) {
+        let previous = match &self.phase {
+            Phase::Starting { issue, .. } => issue.clone(),
+            _ => None,
+        };
         self.phase = Phase::Starting {
             edgli_init_state: None,
-            last_error: Some(error),
+            issue: Some(startup_issue::failed(previous.as_ref(), err)),
         };
         self.spawn_hopr_runner(safe_module, results_sender, delay);
     }
@@ -2226,49 +2256,41 @@ impl Core {
     /// Snapshot of everything `Command::Status` reports.
     fn build_status(&self) -> ipc::Status {
         let runmode = match self.phase.clone() {
-            Phase::Initial { last_error } => RunMode::Init { last_error },
+            Phase::Initial { issue } => RunMode::Init { issue },
             Phase::CheckingSafe {
                 node_balance,
                 query_safe,
-                deploy_safe_error,
+                deploy_safe_issue,
             } => {
                 let balance = match node_balance {
                     Querying::Success(ref b) => Some(b.clone()),
                     _ => None,
                 };
-                let mut errors = "".to_string();
-                if let Querying::Error(err) = node_balance {
-                    errors = err
-                };
-                if let Querying::Error(err) = query_safe {
-                    errors = format!("{} {}", errors, err);
-                }
-                if let Some(deploy_err) = deploy_safe_error {
-                    errors = format!("{} {}", errors, deploy_err);
-                }
+                let issue = startup_issue::longest([
+                    node_balance.issue(),
+                    query_safe.issue(),
+                    deploy_safe_issue.as_ref(),
+                    self.minimum_balance_recommendation_issue.as_ref(),
+                ]);
                 let funding_tool = match self.funding_tool.clone() {
                     balance::FundingTool::NotStarted => None,
                     balance::FundingTool::InProgress => Some("Funding tool running".to_string()),
                     balance::FundingTool::CompletedSuccess(_) => Some("Funding tool ran successfully".to_string()),
                     balance::FundingTool::CompletedError(error) => Some(format!("Funding tool error: {error}")),
                 };
-                let error = if errors.is_empty() { None } else { Some(errors) };
                 command::preparing_safe(
                     self.node_address,
                     &balance,
                     funding_tool,
-                    error,
+                    issue,
                     self.minimum_balance_recommendation,
                 )
             }
-            Phase::DeployingSafe {
-                node_balance: _,
-                query_safe: _,
-            } => command::deploying_safe(self.node_address),
+            Phase::DeployingSafe { .. } => command::deploying_safe(self.node_address),
             Phase::Starting {
                 edgli_init_state,
-                last_error,
-            } => command::warmup(edgli_init_state, None, last_error),
+                issue,
+            } => command::warmup(edgli_init_state, None, issue),
             Phase::HoprSyncing => command::warmup(None, self.hopr.as_ref().map(|h| h.status()), None),
             Phase::HoprRunning | Phase::Connecting(_) | Phase::Connected(_) => {
                 let funding_status = match (
