@@ -789,6 +789,7 @@ impl Core {
 
             Results::NodeBalance { res } => self.on_results_node_balance(res, results_sender).await,
             Results::QuerySafe { res } => self.on_results_query_safe(res, results_sender).await,
+            Results::QuerySafeRetry { kind, message } => self.on_query_safe_retry(kind, message),
             Results::ConfirmSafe { safe_module, res } => {
                 self.on_results_confirm_safe(safe_module, res, results_sender).await
             }
@@ -1628,6 +1629,19 @@ impl Core {
         self.spawn_node_balance_runner(results_sender, Duration::ZERO);
     }
 
+    // Shows a Blokli outage while the safe query is still backing off, not only after it gives up.
+    fn on_query_safe_retry(&mut self, kind: ipc::StartupIssueKind, message: String) {
+        match &mut self.phase {
+            Phase::Starting { issue, .. } => {
+                *issue = Some(startup_issue::retrying(issue.as_ref(), kind, message));
+            }
+            Phase::CheckingSafe { query_safe, .. } => {
+                *query_safe = Querying::Error(startup_issue::retrying(query_safe.issue(), kind, message));
+            }
+            _ => {}
+        }
+    }
+
     // A cached safe from another network otherwise fails hopr construction forever.
     async fn on_results_confirm_safe(
         &mut self,
@@ -1642,7 +1656,7 @@ impl Core {
         let chain_safe = match res {
             Ok(chain_safe) => chain_safe,
             Err(err) => {
-                // The runner failure is already logged each round; blokli being down changes nothing here.
+                // Each failed attempt was already logged by the query's retry loop.
                 tracing::debug!(?err, "could not confirm safe - retrying hopr runner with it");
                 self.spawn_hopr_runner(safe_module, results_sender, Duration::from_secs(10));
                 return;
@@ -3085,6 +3099,55 @@ mod tests {
 
         assert!(matches!(core.phase, Phase::Starting { .. }));
         assert!(hopr_config::safe_file(&cache_dir).exists());
+    }
+
+    fn safe_query_retry() -> Results {
+        Results::QuerySafeRetry {
+            kind: ipc::StartupIssueKind::Unreachable,
+            message: "blokli unreachable".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_safe_query_retry_during_a_failed_start_keeps_the_streak() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        let since = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        core.phase = Phase::Starting {
+            edgli_init_state: None,
+            issue: Some(ipc::StartupIssue {
+                kind: ipc::StartupIssueKind::Other,
+                message: "safe does not exist".to_string(),
+                since,
+            }),
+        };
+
+        core.on_results(safe_query_retry(), &results).await;
+
+        let Phase::Starting { issue: Some(issue), .. } = &core.phase else {
+            panic!("expected a startup issue, got {:?}", core.phase);
+        };
+        assert_eq!(issue.kind, ipc::StartupIssueKind::Unreachable);
+        assert_eq!(issue.since, since);
+    }
+
+    #[tokio::test]
+    async fn a_safe_query_retry_while_checking_the_safe_shows_the_error() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        core.phase = Phase::CheckingSafe {
+            node_balance: Querying::Init,
+            query_safe: Querying::Init,
+            deploy_safe_issue: None,
+        };
+
+        core.on_results(safe_query_retry(), &results).await;
+
+        let Phase::CheckingSafe { query_safe, .. } = &core.phase else {
+            panic!("expected CheckingSafe, got {:?}", core.phase);
+        };
+        assert_eq!(
+            query_safe.issue().map(|issue| issue.kind),
+            Some(ipc::StartupIssueKind::Unreachable)
+        );
     }
 
     #[tokio::test]

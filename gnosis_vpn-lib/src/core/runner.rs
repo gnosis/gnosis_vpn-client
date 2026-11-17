@@ -46,6 +46,10 @@ pub(crate) enum Results {
     QuerySafe {
         res: Result<Option<SafeModule>, Error>,
     },
+    QuerySafeRetry {
+        kind: StartupIssueKind,
+        message: String,
+    },
     ConfirmSafe {
         safe_module: SafeModule,
         res: Result<Option<SafeModule>, Error>,
@@ -251,21 +255,16 @@ pub(crate) async fn query_safe(
     incentive_operations: Arc<dyn IncentiveOperations>,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = run_query_safe(incentive_operations).await;
+    let res = run_query_safe(incentive_operations, results_sender.clone()).await;
     let _ = results_sender.send(Results::QuerySafe { res }).await;
 }
 
-// Single attempt: on error the caller retries the hopr runner anyway.
 pub(crate) async fn confirm_safe(
     incentive_operations: Arc<dyn IncentiveOperations>,
     safe_module: SafeModule,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = incentive_operations
-        .retrieve_safe()
-        .await
-        .map_err(Error::Chain)
-        .map(|b| b.map(SafeModule::from));
+    let res = run_query_safe(incentive_operations, results_sender.clone()).await;
     let _ = results_sender.send(Results::ConfirmSafe { safe_module, res }).await;
 }
 
@@ -527,7 +526,10 @@ async fn run_node_wxhopr_withdraw(
     .await
 }
 
-async fn run_query_safe(incentive_operations: Arc<dyn IncentiveOperations>) -> Result<Option<SafeModule>, Error> {
+async fn run_query_safe(
+    incentive_operations: Arc<dyn IncentiveOperations>,
+    results_sender: mpsc::Sender<Results>,
+) -> Result<Option<SafeModule>, Error> {
     tracing::debug!("starting query safe runner");
     (|| {
         let ops = incentive_operations.clone();
@@ -539,8 +541,14 @@ async fn run_query_safe(incentive_operations: Arc<dyn IncentiveOperations>) -> R
         }
     })
     .retry(remote_data::backoff_expo_long_delay())
-    .notify(|err, delay| {
+    .notify(move |err: &Error, delay| {
         tracing::warn!(?err, ?delay, "Safe query attempt failed, retrying...");
+        let sender = results_sender.clone();
+        let kind = err.startup_issue_kind();
+        let message = err.to_string();
+        tokio::spawn(async move {
+            let _ = sender.send(Results::QuerySafeRetry { kind, message }).await;
+        });
     })
     .await
 }
@@ -846,6 +854,7 @@ impl Display for Results {
                 Ok(None) => write!(f, "QuerySafe: No safe found"),
                 Err(err) => write!(f, "QuerySafe: Error({})", err),
             },
+            Results::QuerySafeRetry { message, .. } => write!(f, "QuerySafeRetry: Error({})", message),
             Results::ConfirmSafe { res, .. } => match res {
                 Ok(Some(_)) => write!(f, "ConfirmSafe: Safe found"),
                 Ok(None) => write!(f, "ConfirmSafe: No safe found"),
