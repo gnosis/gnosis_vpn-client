@@ -789,7 +789,9 @@ impl Core {
 
             Results::NodeBalance { res } => self.on_results_node_balance(res, results_sender).await,
             Results::QuerySafe { res } => self.on_results_query_safe(res, results_sender).await,
-            Results::CachedSafe { cached, res } => self.on_results_cached_safe(cached, res, results_sender).await,
+            Results::ConfirmSafe { safe_module, res } => {
+                self.on_results_confirm_safe(safe_module, res, results_sender).await
+            }
             Results::DeploySafe { res } => self.on_results_deploy_safe(res, results_sender).await,
             Results::FundingTool { res } => self.on_results_funding_tool(res),
 
@@ -814,8 +816,11 @@ impl Core {
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
-                    tracing::error!(?err, "hopr runner failed to start - trying again in 10 seconds");
-                    self.retry_hopr_runner(&err, safe_module, results_sender, Duration::from_secs(10));
+                    tracing::error!(
+                        ?err,
+                        "hopr runner failed to start - confirming safe before trying again"
+                    );
+                    self.retry_hopr_runner(&err, safe_module, results_sender);
                 }
             },
 
@@ -1595,15 +1600,9 @@ impl Core {
         let res = hopr_config::read_safe(&self.worker_params.network_cache_dir()).await;
         match res {
             Ok(safe_module) => {
-                tracing::debug!(
-                    ?safe_module,
-                    "found existing safe module - confirming it before starting hopr runner"
-                );
-                self.phase = Phase::Starting {
-                    edgli_init_state: None,
-                    issue: None,
-                };
-                self.spawn_confirm_cached_safe_runner(safe_module, results_sender);
+                tracing::debug!(?safe_module, "found existing safe module - starting hopr runner");
+                // start edge client with existing safe module
+                self.start_hopr_runner(safe_module, results_sender, Duration::ZERO);
             }
             Err(err) => {
                 if matches!(err, hopr_config::Error::NoFile) {
@@ -1629,34 +1628,38 @@ impl Core {
         self.spawn_node_balance_runner(results_sender, Duration::ZERO);
     }
 
-    // A cache carried over from another network otherwise fails hopr construction forever.
-    async fn on_results_cached_safe(
+    // A cached safe from another network otherwise fails hopr construction forever.
+    async fn on_results_confirm_safe(
         &mut self,
-        cached: SafeModule,
+        safe_module: SafeModule,
         res: Result<Option<SafeModule>, runner::Error>,
         results_sender: &mpsc::Sender<Results>,
     ) {
         if !matches!(self.phase, Phase::Starting { .. }) {
-            tracing::warn!(?res, ?self.phase, "ignoring cached safe confirmation in unexpected phase");
+            tracing::warn!(?res, ?self.phase, "ignoring safe confirmation in unexpected phase");
             return;
         }
         let chain_safe = match res {
             Ok(chain_safe) => chain_safe,
             Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    ?cached,
-                    "could not confirm cached safe - starting hopr runner with it"
-                );
-                self.start_hopr_runner(cached, results_sender, Duration::ZERO);
+                // The runner failure is already logged each round; blokli being down changes nothing here.
+                tracing::debug!(?err, "could not confirm safe - retrying hopr runner with it");
+                self.spawn_hopr_runner(safe_module, results_sender, Duration::from_secs(10));
                 return;
             }
         };
-        if chain_safe.as_ref().is_some_and(|chain| is_same_safe(chain, &cached)) {
-            self.start_hopr_runner(cached, results_sender, Duration::ZERO);
+        let blokli_agrees = chain_safe
+            .as_ref()
+            .is_some_and(|chain| is_same_safe(chain, &safe_module));
+        if blokli_agrees {
+            self.spawn_hopr_runner(safe_module, results_sender, Duration::from_secs(10));
             return;
         }
-        tracing::warn!(?cached, ?chain_safe, "cached safe unknown to blokli - setting it aside");
+        tracing::warn!(
+            ?safe_module,
+            ?chain_safe,
+            "safe unknown to blokli - setting cached safe aside"
+        );
         if let Err(err) = hopr_config::set_aside_safe(&self.worker_params.network_cache_dir()).await {
             tracing::warn!(?err, "failed to set aside cached safe module");
         }
@@ -1678,17 +1681,13 @@ impl Core {
         }
     }
 
-    fn spawn_confirm_cached_safe_runner(&self, cached: SafeModule, results_sender: &mpsc::Sender<Results>) {
+    fn spawn_confirm_safe_runner(&self, safe_module: SafeModule, results_sender: &mpsc::Sender<Results>) {
         let cancel = self.cancel_on_shutdown.clone();
         let results_sender = results_sender.clone();
         if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
-                    .run_until_cancelled(runner::confirm_cached_safe(
-                        incentive_operations,
-                        cached,
-                        results_sender,
-                    ))
+                    .run_until_cancelled(runner::confirm_safe(incentive_operations, safe_module, results_sender))
                     .await
             });
         }
@@ -1787,7 +1786,6 @@ impl Core {
         err: &runner::Error,
         safe_module: SafeModule,
         results_sender: &mpsc::Sender<Results>,
-        delay: Duration,
     ) {
         let previous = match &self.phase {
             Phase::Starting { issue, .. } => issue.clone(),
@@ -1797,7 +1795,7 @@ impl Core {
             edgli_init_state: None,
             issue: Some(startup_issue::failed(previous.as_ref(), err)),
         };
-        self.spawn_hopr_runner(safe_module, results_sender, delay);
+        self.spawn_confirm_safe_runner(safe_module, results_sender);
     }
 
     fn spawn_minimum_balance_recommendation_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
@@ -3040,7 +3038,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cached_safe_unknown_to_blokli_is_set_aside() {
+    async fn a_failed_start_with_a_safe_unknown_to_blokli_sets_the_cache_aside() {
         let TestCore {
             mut core,
             results,
@@ -3050,8 +3048,8 @@ mod tests {
         let cache_dir = core.worker_params.network_cache_dir();
 
         core.on_results(
-            Results::CachedSafe {
-                cached: cached_safe(),
+            Results::ConfirmSafe {
+                safe_module: cached_safe(),
                 res: Ok(None),
             },
             &results,
@@ -3064,7 +3062,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unreachable_blokli_keeps_the_cached_safe() {
+    async fn a_failed_start_with_blokli_unreachable_keeps_the_cached_safe() {
         let TestCore {
             mut core,
             results,
@@ -3074,8 +3072,8 @@ mod tests {
         let cache_dir = core.worker_params.network_cache_dir();
 
         core.on_results(
-            Results::CachedSafe {
-                cached: cached_safe(),
+            Results::ConfirmSafe {
+                safe_module: cached_safe(),
                 res: Err(runner::Error::Chain(edgli::errors::EdgliError::OsError(
                     "connection refused".to_string(),
                 ))),
