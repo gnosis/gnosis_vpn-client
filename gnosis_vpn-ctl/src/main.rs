@@ -261,9 +261,12 @@ fn pretty_print(resp: &Response) {
                 "Node Address: {}\nSafe Address: {}\n",
                 info.node_address, info.safe_address
             ));
-            let safe_sci = ipc::scientific_suffix(safe);
-            str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\n"));
             let allocations = capacity_allocations.as_ref();
+            str_resp.push_str(&format!(
+                "---\nNode Balance: {node}\nSafe Balance: {safe}{}{}\n",
+                ipc::scientific_suffix(safe),
+                format_capacity(allocations.map(|a| &a.safe))
+            ));
             if let Some(float) = pix_float {
                 let exit_traffic = allocations
                     .map(|a| {
@@ -291,8 +294,7 @@ fn pretty_print(resp: &Response) {
             if channels_out.is_empty() {
                 str_resp.push_str("---\nNo outgoing channels.\n");
             } else {
-                let safe_cap = allocations.map(|a| &a.safe);
-                str_resp.push_str(&format!("Safe: {safe}{safe_sci}{}\n", format_capacity(safe_cap)));
+                str_resp.push_str("---\n");
                 for ch in channels_out {
                     let ch_cap = allocations.and_then(|a| a.peer_allocations.get(&ch.address));
                     str_resp.push_str(&format!("{ch}{}\n", format_capacity(ch_cap)));
