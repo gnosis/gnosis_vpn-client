@@ -13,7 +13,7 @@ use crate::values::{
 };
 
 /// Bumped on every incompatible wire change; the service refuses requests of any other version.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
