@@ -625,7 +625,7 @@ impl Core {
                         let _ = resp.send(Response::ProbingBoost);
                     }
 
-                    WorkerCommand::FundPixFloat { amount } => self.spawn_fund_pix_float(amount, resp),
+                    WorkerCommand::FundPixFloat { amount } => self.spawn_fund_pix_float(amount, resp, results_sender),
 
                     WorkerCommand::Balance => {
                         let result = match (&self.hopr, &self.balances) {
@@ -775,6 +775,7 @@ impl Core {
                     self.spawn_capacity_allocations_runner(results_sender, Duration::from_secs(10));
                 }
             },
+            Results::PixFloatShielded { amount } => self.capacity_reconciler.record_shield(amount),
             Results::Balances { res } => match res {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
@@ -1919,7 +1920,12 @@ impl Core {
     }
 
     /// Shielding waits for a chain transaction, so it answers from its own task.
-    fn spawn_fund_pix_float(&mut self, amount: ipc::Balance<ipc::WxHopr>, resp: oneshot::Sender<Response>) {
+    fn spawn_fund_pix_float(
+        &mut self,
+        amount: ipc::Balance<ipc::WxHopr>,
+        resp: oneshot::Sender<Response>,
+        results_sender: &mpsc::Sender<Results>,
+    ) {
         let Some(float) = self.pix_float.clone() else {
             let _ = resp.send(Response::FundPixFloat(ipc::FundPixFloatResponse::NotReady));
             return;
@@ -1932,11 +1938,14 @@ impl Core {
             return;
         }
         let cancel = self.cancel_on_shutdown.clone();
+        let results_sender = results_sender.clone();
         let task = tokio::spawn(async move {
-            let funding = cancel.run_until_cancelled(float.fund(wire::from_wxhopr(amount))).await;
+            let shield = wire::from_wxhopr(amount);
+            let funding = cancel.run_until_cancelled(float.fund(shield)).await;
             let response = match funding {
                 Some(Ok(())) => {
                     tracing::info!(%amount, "funded the PIX float");
+                    let _ = results_sender.send(Results::PixFloatShielded { amount: shield }).await;
                     ipc::FundPixFloatResponse::Funded { amount }
                 }
                 // a shield already submitted may still land
