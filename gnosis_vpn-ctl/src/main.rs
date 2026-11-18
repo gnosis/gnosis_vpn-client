@@ -436,11 +436,11 @@ fn format_total_balance(allocations: &ipc::CapacityAllocations) -> String {
     );
     let exit = &allocations.exit_traffic;
     let total: ipc::Balance<ipc::WxHopr> = [relays.stake, exit.stake].into_iter().sum();
-    let at_pix = total
-        .wei()
-        .checked_div(exit.price_per_byte.wei())
-        .map(|bytes| format!(", at PIX value: {}", ByteSize(u64::try_from(bytes).unwrap_or(u64::MAX))))
-        .unwrap_or_default();
+    let at_pix = if exit.price_per_byte.is_zero() {
+        String::new()
+    } else {
+        format!(", at PIX value: {}", ByteSize(exit.total_bytes_at_pix_price))
+    };
     format!(
         "Total Balance: {total} [{} msgs, {}{at_pix}]\n",
         human_msgs(relays.expected_messages),

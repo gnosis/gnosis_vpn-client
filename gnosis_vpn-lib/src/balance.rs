@@ -125,11 +125,9 @@ fn bytes_at_price(funds: Balance<WxHOPR>, price_per_byte: Balance<WxHOPR>) -> u6
 }
 
 impl CapacityAllocations {
-    /// Data exits sell for the PIX pool plus the Safe and node funds that top it up.
-    /// Channel stakes are left out: they pay only relays and never reach the pool.
-    pub fn bytes_from_exits_with_safe(&self) -> u64 {
-        let funds = self.exit_traffic.capacity.stake + self.safe.stake + self.node.stake;
-        bytes_at_price(funds, self.exit_traffic.price_per_byte)
+    /// All wxHOPR, channel stakes included, valued at the PIX price.
+    pub fn total_bytes_at_pix_price(&self) -> u64 {
+        bytes_at_price(SnapshotTotals::of(self).stake, self.exit_traffic.price_per_byte)
     }
 }
 
@@ -545,7 +543,7 @@ impl From<&CapacityAllocations> for gnosis_vpn_ipc::CapacityAllocations {
                 stake: wire::wxhopr(allocations.exit_traffic.capacity.stake),
                 byte_capacity: allocations.exit_traffic.capacity.byte_capacity,
                 bytes_from_exits: allocations.exit_traffic.bytes_from_exits,
-                bytes_from_exits_with_safe: allocations.bytes_from_exits_with_safe(),
+                total_bytes_at_pix_price: allocations.total_bytes_at_pix_price(),
                 price_per_byte: wire::wxhopr(allocations.exit_traffic.price_per_byte),
             },
         }
@@ -1002,31 +1000,31 @@ mod tests {
     }
 
     #[test]
-    fn data_from_exits_counts_the_safe_and_node_but_not_channels() {
+    fn total_at_pix_price_counts_every_balance() {
         let caps = CapacityAllocations {
             exit_traffic: ExitTrafficFunds::new(Balance::from(1000u64), Balance::from(10u64)),
             ..allocs(Some(capacity(5000, 0)), capacity(200, 0), capacity(800, 0))
         };
-        assert_eq!(caps.bytes_from_exits_with_safe(), 200);
+        assert_eq!(caps.total_bytes_at_pix_price(), 700);
         let wire = gnosis_vpn_ipc::CapacityAllocations::from(&caps);
         assert_eq!(wire.exit_traffic.bytes_from_exits, 100);
-        assert_eq!(wire.exit_traffic.bytes_from_exits_with_safe, 200);
+        assert_eq!(wire.exit_traffic.total_bytes_at_pix_price, 700);
         assert_eq!(wire.exit_traffic.price_per_byte, gnosis_vpn_ipc::Balance::from_wei(10));
     }
 
     #[test]
-    fn data_from_exits_is_zero_without_a_pix_pool() {
+    fn total_at_pix_price_is_zero_without_a_pix_pool() {
         let caps = allocs(None, Capacity::default(), capacity(800, 0));
-        assert_eq!(caps.bytes_from_exits_with_safe(), 0);
+        assert_eq!(caps.total_bytes_at_pix_price(), 0);
     }
 
     #[test]
-    fn data_from_exits_counts_in_flight_stake_folded_into_the_safe() {
+    fn total_at_pix_price_counts_in_flight_stake_folded_into_the_safe() {
         let mut r = CapacityReconciler::default();
         r.reconcile(with_exit(50, 100));
         let out = r.reconcile(with_exit(50, 60));
         assert_eq!(out.safe.stake, Balance::<WxHOPR>::from(100u64));
-        assert_eq!(out.bytes_from_exits_with_safe(), 150);
+        assert_eq!(out.total_bytes_at_pix_price(), 150);
     }
 
     #[test]
