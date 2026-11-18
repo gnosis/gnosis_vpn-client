@@ -69,6 +69,12 @@ pub async fn read_safe(network_cache_dir: &Path) -> Result<SafeModule, Error> {
     serde_saphyr::from_str::<SafeModule>(&content).map_err(Into::into)
 }
 
+/// Keeps the rejected file next to the cache for log bundles instead of deleting it.
+pub async fn set_aside_safe(network_cache_dir: &Path) -> Result<(), Error> {
+    let stale = network_cache_dir.join(format!("{SAFE_FILE}.stale"));
+    fs::rename(safe_file(network_cache_dir), stale).await.map_err(Error::IO)
+}
+
 pub async fn generate(
     safe_module: &SafeModule,
     options: crate::connection::options::HoprConfigOptions,

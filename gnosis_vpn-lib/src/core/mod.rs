@@ -809,7 +809,7 @@ impl Core {
                 }
             },
 
-            Results::Hopr { res, safe_module } => match res {
+            Results::Hopr { res } => match res {
                 Ok(hopr) => {
                     tracing::info!("hopr runner started successfully");
                     self.phase = Phase::HoprSyncing;
@@ -820,8 +820,12 @@ impl Core {
                     self.spawn_wait_for_running(results_sender, Duration::from_secs(1));
                 }
                 Err(err) => {
-                    tracing::error!(?err, "hopr runner failed to start - trying again in 10 seconds");
-                    self.retry_hopr_runner(&err, safe_module, results_sender, Duration::from_secs(10));
+                    // A cached safe from another network otherwise fails hopr construction forever.
+                    tracing::error!(?err, "hopr runner failed to start - re-checking safe on chain");
+                    if let Err(err) = hopr_config::set_aside_safe(&self.worker_params.network_cache_dir()).await {
+                        tracing::warn!(?err, "failed to set aside cached safe module");
+                    }
+                    self.check_safe_on_chain(results_sender);
                 }
             },
 
@@ -1640,15 +1644,19 @@ impl Core {
                         "error deserializing existing safe module - querying incentive operations"
                     );
                 }
-                self.phase = Phase::CheckingSafe {
-                    node_balance: Querying::Init,
-                    query_safe: Querying::Init,
-                    deploy_safe_issue: None,
-                };
-                self.spawn_query_safe_runner(results_sender, Duration::ZERO);
-                self.spawn_node_balance_runner(results_sender, Duration::ZERO);
+                self.check_safe_on_chain(results_sender);
             }
         }
+    }
+
+    fn check_safe_on_chain(&mut self, results_sender: &mpsc::Sender<Results>) {
+        self.phase = Phase::CheckingSafe {
+            node_balance: Querying::Init,
+            query_safe: Querying::Init,
+            deploy_safe_issue: None,
+        };
+        self.spawn_query_safe_runner(results_sender, Duration::ZERO);
+        self.spawn_node_balance_runner(results_sender, Duration::ZERO);
     }
 
     fn spawn_query_safe_runner(&mut self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
@@ -1750,24 +1758,6 @@ impl Core {
         self.phase = Phase::Starting {
             edgli_init_state: None,
             issue: None,
-        };
-        self.spawn_hopr_runner(safe_module, results_sender, delay);
-    }
-
-    fn retry_hopr_runner(
-        &mut self,
-        err: &runner::Error,
-        safe_module: SafeModule,
-        results_sender: &mpsc::Sender<Results>,
-        delay: Duration,
-    ) {
-        let previous = match &self.phase {
-            Phase::Starting { issue, .. } => issue.clone(),
-            _ => None,
-        };
-        self.phase = Phase::Starting {
-            edgli_init_state: None,
-            issue: Some(startup_issue::failed(previous.as_ref(), err)),
         };
         self.spawn_hopr_runner(safe_module, results_sender, delay);
     }
@@ -3030,6 +3020,51 @@ mod tests {
             from_core.try_recv(),
             Ok(CoreToWorker::RequestToRoot(RequestToRoot::TearDownWg))
         )
+    }
+
+    fn cached_safe() -> SafeModule {
+        SafeModule {
+            safe_address: "0xfd7c0a50b9f0bac4967040c03219e2d452786cd4".to_string(),
+            module_address: "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739".to_string(),
+        }
+    }
+
+    async fn core_starting_with_cached_safe() -> TestCore {
+        let mut test = fresh_core().await;
+        hopr_config::store_safe(&test.core.worker_params.network_cache_dir(), &cached_safe())
+            .await
+            .expect("store cached safe");
+        test.core.phase = Phase::Starting {
+            edgli_init_state: None,
+            issue: None,
+        };
+        test
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_sets_the_cached_safe_aside_and_checks_the_chain() {
+        let TestCore {
+            mut core,
+            results,
+            _state_home,
+            ..
+        } = core_starting_with_cached_safe().await;
+        let cache_dir = core.worker_params.network_cache_dir();
+
+        core.on_results(
+            Results::Hopr {
+                res: Err(runner::Error::Chain(edgli::errors::EdgliError::OsError(
+                    "safe does not exist".to_string(),
+                ))),
+            },
+            &results,
+        )
+        .await;
+        core.cancel_on_shutdown.cancel();
+
+        assert!(matches!(core.phase, Phase::CheckingSafe { .. }));
+        assert!(!hopr_config::safe_file(&cache_dir).exists());
+        assert!(cache_dir.join("hopr.safe.stale").exists());
     }
 
     #[tokio::test]
