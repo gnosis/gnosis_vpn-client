@@ -2335,6 +2335,7 @@ impl Core {
                     funding_tool,
                     issue,
                     self.minimum_balance_recommendation,
+                    self.config.pix_strategy.price_per_byte,
                 )
             }
             Phase::DeployingSafe { .. } => command::deploying_safe(self.node_address),

@@ -139,6 +139,7 @@ impl Display for RunMode {
                 funding_tool,
                 issue,
                 balance_recommendation,
+                ..
             } => {
                 let wxhopr_sci = scientific_suffix(node_wxhopr);
                 write!(

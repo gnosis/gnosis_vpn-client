@@ -238,6 +238,9 @@ pub enum RunMode {
         funding_tool: Option<String>,
         issue: Option<StartupIssue>,
         balance_recommendation: Option<Box<BalanceRecommendation>>,
+        /// The PIX price exit traffic is bought at, so wxHOPR reads as data before the node runs.
+        #[serde(default)]
+        price_per_byte: Balance<WxHopr>,
     },
     DeployingSafe {
         node_address: Address,

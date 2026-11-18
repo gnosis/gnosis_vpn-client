@@ -134,6 +134,7 @@ pub fn preparing_safe(
     funding_tool: Option<String>,
     issue: Option<ipc::StartupIssue>,
     balance_recommendation: Option<balance::BalanceRecommendation>,
+    price_per_byte: Balance<WxHOPR>,
 ) -> ipc::RunMode {
     ipc::RunMode::PreparingSafe {
         node_address: wire::address(&node_address),
@@ -142,6 +143,7 @@ pub fn preparing_safe(
         funding_tool,
         issue,
         balance_recommendation: balance_recommendation.as_ref().map(|r| Box::new(r.into())),
+        price_per_byte: wire::wxhopr(price_per_byte),
     }
 }
 
