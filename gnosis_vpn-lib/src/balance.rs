@@ -113,25 +113,16 @@ impl ExitTrafficFunds {
                 stake: funds,
                 ..Capacity::default()
             },
-            bytes_from_exits: bytes_at_price(funds, price_per_byte),
+            bytes_from_exits: edgli::strategy::bytes_at_pix_price(funds, price_per_byte),
             price_per_byte,
         }
-    }
-}
-
-/// Data `funds` buy from exits at `price_per_byte`; none at a zero price.
-fn bytes_at_price(funds: Balance<WxHOPR>, price_per_byte: Balance<WxHOPR>) -> u64 {
-    if price_per_byte.is_zero() {
-        0
-    } else {
-        u64::try_from(funds.amount() / price_per_byte.amount()).unwrap_or(u64::MAX)
     }
 }
 
 impl CapacityAllocations {
     /// All wxHOPR, channel stakes included, valued at the PIX price.
     pub fn total_bytes_at_pix_price(&self) -> u64 {
-        bytes_at_price(SnapshotTotals::of(self).stake, self.exit_traffic.price_per_byte)
+        edgli::strategy::bytes_at_pix_price(SnapshotTotals::of(self).stake, self.exit_traffic.price_per_byte)
     }
 }
 
@@ -400,7 +391,7 @@ pub struct BalanceRecommendation {
     pub topup_headroom: Balance<WxHOPR>,
     /// wxHOPR one PIX pool refill shields from the Safe; zero without a pool.
     pub pix_top_up: Balance<WxHOPR>,
-    /// wxHOPR one channel top-up stakes; zero until the ticket economics are known.
+    /// wxHOPR one channel top-up stakes, as edgli resolves it; zero leaves the funding levels uncountable.
     pub channel_top_up: Balance<WxHOPR>,
 }
 
@@ -416,7 +407,7 @@ impl From<edgli::strategy::BalanceRecommendation> for BalanceRecommendation {
             xdai_fee_per_tx: rec.xdai_fee_per_tx,
             topup_headroom: rec.topup_headroom,
             pix_top_up: Balance::zero(),
-            channel_top_up: Balance::zero(),
+            channel_top_up: rec.channel_top_up,
         }
     }
 }
@@ -814,6 +805,7 @@ mod tests {
             xdai_fee_per_tx: Balance::<XDai>::from(100u64),
             xdai_fund_amount: Balance::<XDai>::from(5_000u64),
             topup_headroom: Balance::<WxHOPR>::from(42u64),
+            channel_top_up: Balance::<WxHOPR>::from(15u64),
         };
         let mirrored: BalanceRecommendation = rec.into();
         assert_eq!(mirrored.wxhopr, Balance::<WxHOPR>::from(11_000u64));
@@ -832,6 +824,7 @@ mod tests {
         assert_eq!(mirrored.fee_to_start, Balance::<WxHOPR>::from(10_000u64));
         assert_eq!(mirrored.txs_to_start, 3);
         assert_eq!(mirrored.xdai_fee_per_tx, Balance::<XDai>::from(100u64));
+        assert_eq!(mirrored.channel_top_up, Balance::<WxHOPR>::from(15u64));
     }
 
     #[test]

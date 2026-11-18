@@ -164,8 +164,6 @@ pub(crate) enum Error {
     FundingTool(String),
     #[error("IncentiveOperations creation error: {0}")]
     IncentiveOperationsCreation(#[source] edgli::errors::EdgliError),
-    #[error("cannot size a channel top-up: {0}")]
-    ChannelTopUp(&'static str),
 }
 
 impl Error {
@@ -197,44 +195,15 @@ pub(crate) async fn minimum_balance_recommendation(
 pub(crate) async fn ideal_balance_recommendation(
     hopr: Arc<Hopr>,
     cfg: edgli::strategy::IncentiveConfiguration,
-    incentive_operations: Option<Arc<dyn IncentiveOperations>>,
     pix_top_up: HoprBalance,
     results_sender: mpsc::Sender<Results>,
 ) {
-    // Without a channel top-up size the funding levels can't be counted, so the recommendation fails.
-    let res = async {
-        let mut rec = hopr.ideal_balance_recommendation(&cfg).await?;
-        rec.pix_top_up = pix_top_up;
-        rec.channel_top_up = channel_top_up(incentive_operations.as_deref(), &cfg).await?;
-        Ok::<_, Error>(rec)
-    }
-    .await;
+    let res = hopr
+        .ideal_balance_recommendation(&cfg)
+        .await
+        .map(|rec| balance::BalanceRecommendation { pix_top_up, ..rec })
+        .map_err(Error::from);
     let _ = results_sender.send(Results::IdealBalanceRecommendation { res }).await;
-}
-
-/// Feeds the strategy's funding resolution the same packet payload edgli does.
-struct PacketPayload;
-
-impl edgli::hopr_lib::api::node::PacketTransport for PacketPayload {
-    fn packet_payload_size() -> usize {
-        edgli::hopr_lib::exports::transport::PACKET_PAYLOAD_SIZE
-    }
-}
-
-/// One channel top-up's stake as the channel strategy resolves it at the live ticket economics.
-async fn channel_top_up(
-    ops: Option<&dyn IncentiveOperations>,
-    cfg: &edgli::strategy::IncentiveConfiguration,
-) -> Result<HoprBalance, Error> {
-    let ops = ops.ok_or(Error::ChannelTopUp("no ticket economics yet"))?;
-    let stats = ops.ticket_stats().await?;
-    let size = edgli::strategy::compute_funding_config(cfg)?
-        .resolve::<PacketPayload>(stats.ticket_price, stats.winning_probability.as_f64())
-        .topup_balance;
-    if size.is_zero() {
-        return Err(Error::ChannelTopUp("the ticket economics size it to zero"));
-    }
-    Ok(size)
 }
 
 pub(crate) async fn capacity_allocations(
@@ -870,21 +839,5 @@ impl Display for Results {
                 Err(err) => write!(f, "QuickProbe {destination}: Error({err})"),
             },
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn channel_top_up_matches_the_strategy_at_piz_palu_prices() {
-        let funding =
-            edgli::strategy::compute_funding_config(&edgli::strategy::IncentiveConfiguration::default()).unwrap();
-        // 2.16e-6 wxHOPR tickets at a win probability of 8.64e-7: two winning tickets, as piz-palu-prod channels hold.
-        let top_up = funding
-            .resolve::<PacketPayload>(HoprBalance::from(2_160_000_000_000_u64), 8.64e-7)
-            .topup_balance;
-        assert_eq!(top_up, HoprBalance::from(15_000_000_000_185_455_596_u64));
     }
 }
