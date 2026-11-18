@@ -860,6 +860,9 @@ pub struct ExitTrafficFunds {
     /// Data exits sell for these funds plus the Safe and node account that top them up; channel stakes pay only relays.
     #[serde(default)]
     pub bytes_from_exits_with_safe: u64,
+    /// This client's PIX price per byte; zero without a PIX pool.
+    #[serde(default)]
+    pub price_per_byte: Balance<WxHopr>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

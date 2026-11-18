@@ -546,6 +546,7 @@ impl From<&CapacityAllocations> for gnosis_vpn_ipc::CapacityAllocations {
                 byte_capacity: allocations.exit_traffic.capacity.byte_capacity,
                 bytes_from_exits: allocations.exit_traffic.bytes_from_exits,
                 bytes_from_exits_with_safe: allocations.bytes_from_exits_with_safe(),
+                price_per_byte: wire::wxhopr(allocations.exit_traffic.price_per_byte),
             },
         }
     }
@@ -1010,6 +1011,7 @@ mod tests {
         let wire = gnosis_vpn_ipc::CapacityAllocations::from(&caps);
         assert_eq!(wire.exit_traffic.bytes_from_exits, 100);
         assert_eq!(wire.exit_traffic.bytes_from_exits_with_safe, 200);
+        assert_eq!(wire.exit_traffic.price_per_byte, gnosis_vpn_ipc::Balance::from_wei(10));
     }
 
     #[test]
