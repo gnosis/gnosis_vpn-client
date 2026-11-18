@@ -3706,7 +3706,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "5.3.0"
-source = "git+https://github.com/hoprnet/edge-client.git?branch=mj%2Fpix%2Fchannel-top-up-and-pix-bytes#4258e34e8a8376eae8739a127869b5f54b82cfae"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=main#6455a823cd943de04db2f236bbb1110bfbf52c82"
 dependencies = [
  "anyhow",
  "async-signal",
