@@ -25,6 +25,9 @@ pub struct FundingStatus {
 // Retuned for the reconciled (pooled) quota counting; bounds inclusive.
 const TRAFFIC_EMPTY_MAX_BYTES: u64 = 768 * 1024 * 1024;
 const TRAFFIC_LOW_MAX_BYTES: u64 = 1536 * 1024 * 1024;
+// All wxHOPR at the PIX price, the figure the app shows; bounds inclusive.
+const PIX_TRAFFIC_EMPTY_MAX_BYTES: u64 = 6 * 1024 * 1024 * 1024;
+const PIX_TRAFFIC_LOW_MAX_BYTES: u64 = 12 * 1024 * 1024 * 1024;
 // 0.0015 / 0.0035 xDAI, in wei
 const XDAI_EMPTY_BELOW_WEI: u64 = 1_500_000_000_000_000;
 const XDAI_LOW_BELOW_WEI: u64 = 3_500_000_000_000_000;
@@ -453,13 +456,30 @@ impl Display for Balances {
     }
 }
 
-fn traffic_level(bytes: u64) -> FundingLevel {
-    if bytes <= TRAFFIC_EMPTY_MAX_BYTES {
+fn level(bytes: u64, empty_max: u64, low_max: u64) -> FundingLevel {
+    if bytes <= empty_max {
         FundingLevel::Empty
-    } else if bytes <= TRAFFIC_LOW_MAX_BYTES {
+    } else if bytes <= low_max {
         FundingLevel::Low
     } else {
         FundingLevel::Good
+    }
+}
+
+fn traffic_level(bytes: u64) -> FundingLevel {
+    level(bytes, TRAFFIC_EMPTY_MAX_BYTES, TRAFFIC_LOW_MAX_BYTES)
+}
+
+/// All wxHOPR at the PIX price when there is one, else every allocation at the relay rate.
+fn overall_traffic_level(caps: &CapacityAllocations) -> FundingLevel {
+    if caps.exit_traffic.price_per_byte.is_zero() {
+        traffic_level(SnapshotTotals::of(caps).byte_capacity)
+    } else {
+        level(
+            caps.total_bytes_at_pix_price(),
+            PIX_TRAFFIC_EMPTY_MAX_BYTES,
+            PIX_TRAFFIC_LOW_MAX_BYTES,
+        )
     }
 }
 
@@ -470,7 +490,7 @@ pub fn to_funding_status(
     node_xdai: Balance<XDai>,
     safe_wxhopr: Balance<WxHOPR>,
 ) -> FundingStatus {
-    let traffic = traffic_level(SnapshotTotals::of(capacity_allocations).byte_capacity);
+    let traffic = overall_traffic_level(capacity_allocations);
     // Funds paying for exit traffic can't pay for relays, so the deficit follows the relay funds alone.
     let relays = SnapshotTotals::relays(capacity_allocations);
 
@@ -678,6 +698,51 @@ mod tests {
             Balance::<WxHOPR>::zero(),
         );
         assert_eq!(status.traffic, FundingLevel::Good);
+    }
+
+    /// Exits priced at one wei per byte, so each stake in wei reads as bytes.
+    fn pix_priced(safe_wei: u64, channel_wei: u64, relay_bytes: u64) -> CapacityAllocations {
+        CapacityAllocations {
+            exit_traffic: ExitTrafficFunds::new(Balance::zero(), Balance::from(1u64)),
+            ..allocs(
+                Some(capacity(channel_wei, relay_bytes)),
+                Capacity::default(),
+                capacity(safe_wei, relay_bytes),
+            )
+        }
+    }
+
+    fn pix_traffic(allocations: &CapacityAllocations) -> FundingLevel {
+        to_funding_status(
+            ideal(0, 0),
+            allocations,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
+        )
+        .traffic
+    }
+
+    #[test]
+    fn pix_traffic_empty_up_to_6gib_inclusive() {
+        assert_eq!(pix_traffic(&pix_priced(6 * GB, 0, 0)), FundingLevel::Empty);
+    }
+
+    #[test]
+    fn pix_traffic_low_up_to_12gib_inclusive() {
+        for safe in [6 * GB + 1, 12 * GB] {
+            assert_eq!(pix_traffic(&pix_priced(safe, 0, 0)), FundingLevel::Low);
+        }
+    }
+
+    #[test]
+    fn pix_traffic_good_above_12gib_counting_channel_stakes() {
+        assert_eq!(pix_traffic(&pix_priced(6 * GB, 6 * GB + 1, 0)), FundingLevel::Good);
+    }
+
+    #[test]
+    fn pix_traffic_ignores_the_relay_rate_bytes() {
+        // 200 GiB at the relay rate buys only 2 GiB from exits.
+        assert_eq!(pix_traffic(&pix_priced(GB, GB, 100 * GB)), FundingLevel::Empty);
     }
 
     #[test]
