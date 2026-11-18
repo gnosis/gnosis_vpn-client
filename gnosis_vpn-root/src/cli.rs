@@ -78,7 +78,7 @@ pub fn parse() -> Cli {
 }
 
 impl Cli {
-    /// The worker's view of these arguments plus what root resolved at startup and who owns the worker.
+    /// The worker's view of these arguments, its owner's dirs and the Blokli pin while the killswitch blocks DNS.
     pub fn spawn_params(&self, pinned_blokli_ip: Option<Ipv4Addr>, user_dirs: UserDirs) -> SpawnParams {
         let config_mode = match self.hopr_config_path.clone() {
             Some(path) => worker_params::ConfigFileMode::Manual(path),
