@@ -164,6 +164,8 @@ pub(crate) enum Error {
     FundingTool(String),
     #[error("IncentiveOperations creation error: {0}")]
     IncentiveOperationsCreation(#[source] edgli::errors::EdgliError),
+    #[error("cannot size a channel top-up: {0}")]
+    ChannelTopUp(&'static str),
 }
 
 impl Error {
@@ -199,13 +201,14 @@ pub(crate) async fn ideal_balance_recommendation(
     pix_top_up: HoprBalance,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let mut res = hopr.ideal_balance_recommendation(&cfg).await.map_err(Error::Hopr);
-    if let Ok(rec) = res.as_mut() {
+    // Without a channel top-up size the funding levels can't be counted, so the recommendation fails.
+    let res = async {
+        let mut rec = hopr.ideal_balance_recommendation(&cfg).await?;
         rec.pix_top_up = pix_top_up;
-        if let Some(ops) = incentive_operations {
-            rec.channel_top_up = channel_top_up(ops.as_ref(), &cfg).await;
-        }
+        rec.channel_top_up = channel_top_up(incentive_operations.as_deref(), &cfg).await?;
+        Ok::<_, Error>(rec)
     }
+    .await;
     let _ = results_sender.send(Results::IdealBalanceRecommendation { res }).await;
 }
 
@@ -218,26 +221,20 @@ impl edgli::hopr_lib::api::node::PacketTransport for PacketPayload {
     }
 }
 
-/// One channel top-up's stake as the channel strategy resolves it at the live ticket economics; zero when unknown.
-async fn channel_top_up(ops: &dyn IncentiveOperations, cfg: &edgli::strategy::IncentiveConfiguration) -> HoprBalance {
-    let stats = match ops.ticket_stats().await {
-        Ok(stats) => stats,
-        Err(err) => {
-            tracing::warn!(%err, "failed to read ticket stats for the channel top-up size");
-            return HoprBalance::zero();
-        }
-    };
-    match edgli::strategy::compute_funding_config(cfg) {
-        Ok(funding) => {
-            funding
-                .resolve::<PacketPayload>(stats.ticket_price, stats.winning_probability.as_f64())
-                .topup_balance
-        }
-        Err(err) => {
-            tracing::warn!(%err, "failed to size a channel top-up");
-            HoprBalance::zero()
-        }
+/// One channel top-up's stake as the channel strategy resolves it at the live ticket economics.
+async fn channel_top_up(
+    ops: Option<&dyn IncentiveOperations>,
+    cfg: &edgli::strategy::IncentiveConfiguration,
+) -> Result<HoprBalance, Error> {
+    let ops = ops.ok_or(Error::ChannelTopUp("no ticket economics yet"))?;
+    let stats = ops.ticket_stats().await?;
+    let size = edgli::strategy::compute_funding_config(cfg)?
+        .resolve::<PacketPayload>(stats.ticket_price, stats.winning_probability.as_f64())
+        .topup_balance;
+    if size.is_zero() {
+        return Err(Error::ChannelTopUp("the ticket economics size it to zero"));
     }
+    Ok(size)
 }
 
 pub(crate) async fn capacity_allocations(

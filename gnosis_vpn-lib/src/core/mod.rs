@@ -647,12 +647,14 @@ impl Core {
                             (Some(hopr), Some(balances)) => {
                                 let funding_status =
                                     match (&self.ideal_balance_recommendation, &self.capacity_allocations) {
-                                        (Some(ideal), Some(allocs)) => Some(balance::to_funding_status(
+                                        (Some(ideal), Some(allocs)) => balance::to_funding_status(
                                             *ideal,
                                             allocs,
                                             balances.node_xdai,
                                             balances.safe_wxhopr,
-                                        )),
+                                        )
+                                        .inspect_err(|err| tracing::error!(%err, "no funding status"))
+                                        .ok(),
                                         _ => None,
                                     };
                                 ipc::BalanceResponse::Available(Box::new(command::balances(
@@ -2347,12 +2349,11 @@ impl Core {
                     &self.capacity_allocations,
                     &self.balances,
                 ) {
-                    (Some(ideal), Some(allocs), Some(bals)) => Some(balance::to_funding_status(
-                        *ideal,
-                        allocs,
-                        bals.node_xdai,
-                        bals.safe_wxhopr,
-                    )),
+                    (Some(ideal), Some(allocs), Some(bals)) => {
+                        balance::to_funding_status(*ideal, allocs, bals.node_xdai, bals.safe_wxhopr)
+                            .inspect_err(|err| tracing::error!(%err, "no funding status"))
+                            .ok()
+                    }
                     _ => None,
                 };
                 command::running(
