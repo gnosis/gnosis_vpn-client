@@ -9,6 +9,7 @@ use crate::connection::destination::Destination;
 use crate::connection::options::{SurbConfigError, SurbRampOptions};
 use crate::gvpn_client::Registration;
 use crate::hopr::HoprError;
+use crate::hopr::pix_chunks::Deposit;
 use crate::hopr::types::SessionClientMetadata;
 use crate::wg_tunnel::{self, TunnelStatsSample};
 use crate::wireguard::WireGuard;
@@ -201,6 +202,11 @@ pub enum StallVerdict {
     /// The exit went quiet on the session during the hold, so the gate no longer explains the stall.
     HoldBroken {
         held_for: Duration,
+    },
+    /// The deposit for an unconfirmed chunk will not be paid, so the gate will not open.
+    HoldFailed {
+        held_for: Duration,
+        reason: Deposit,
     },
     Reconnect,
 }
@@ -440,6 +446,7 @@ impl Up {
         stall: Duration,
         awaiting_payment: bool,
         surbs_consumed: Option<u64>,
+        unpaid: Option<Deposit>,
         now: SystemTime,
     ) -> StallVerdict {
         if stall.is_zero() {
@@ -472,8 +479,22 @@ impl Up {
             return StallVerdict::Fine;
         }
 
+        if let (Some(since), Some(reason)) = (self.payment_hold_since, unpaid) {
+            self.payment_hold_since = None;
+            self.awaiting_payment_since = None;
+            let held_for = now.duration_since(since).unwrap_or(Duration::ZERO);
+            return StallVerdict::HoldFailed { held_for, reason };
+        }
+
         match (gate_block, self.payment_hold_since) {
             (true, None) => {
+                if let Some(reason) = unpaid {
+                    self.awaiting_payment_since = None;
+                    return StallVerdict::HoldFailed {
+                        held_for: Duration::ZERO,
+                        reason,
+                    };
+                }
                 self.payment_hold_since = Some(now);
                 StallVerdict::HoldStarted
             }
@@ -882,13 +903,14 @@ mod tunnel_ping_tests {
         awaiting: bool,
         consumed: &mut u64,
         exit_step: u64,
+        unpaid: Option<Deposit>,
     ) -> Vec<StallVerdict> {
         (0..count)
             .map(|_| {
                 record_samples(up, 1, false);
                 *consumed += exit_step;
                 let now = up.wg_stats.back().expect("sample").at;
-                up.judge_stall(up.tunnel_ping.counter_stall, awaiting, Some(*consumed), now)
+                up.judge_stall(up.tunnel_ping.counter_stall, awaiting, Some(*consumed), unpaid, now)
             })
             .collect()
     }
@@ -897,7 +919,7 @@ mod tunnel_ping_tests {
     fn held_up(consumed: &mut u64) -> Up {
         let mut up = up();
         record_samples(&mut up, 2, true);
-        let verdicts = judge_stalled(&mut up, 5, true, consumed, 3);
+        let verdicts = judge_stalled(&mut up, 5, true, consumed, 3, None);
         assert_eq!(verdicts.last(), Some(&StallVerdict::HoldStarted), "{verdicts:?}");
         up
     }
@@ -907,16 +929,108 @@ mod tunnel_ping_tests {
         let mut consumed = 0;
         let mut up = held_up(&mut consumed);
         // ~2 min of gate block, as on piz-palu-prod.
-        let verdicts = judge_stalled(&mut up, 30, true, &mut consumed, 3);
+        let verdicts = judge_stalled(&mut up, 30, true, &mut consumed, 3, None);
         assert!(verdicts.iter().all(|v| *v == StallVerdict::Held), "{verdicts:?}");
         assert!(up.payment_held());
+    }
+
+    #[test]
+    fn a_failed_deposit_ends_the_hold() {
+        for reason in [Deposit::Failed, Deposit::Deferred, Deposit::Refused] {
+            let mut consumed = 0;
+            let mut up = held_up(&mut consumed);
+            let verdicts = judge_stalled(&mut up, 1, true, &mut consumed, 3, Some(reason));
+            assert_eq!(
+                verdicts,
+                vec![StallVerdict::HoldFailed {
+                    held_for: SAMPLE_GAP,
+                    reason,
+                }]
+            );
+            assert!(!up.payment_held());
+            assert!(up.awaiting_payment_since.is_none());
+        }
+    }
+
+    #[test]
+    fn a_failed_deposit_before_the_hold_reconnects_without_holding() {
+        for reason in [Deposit::Failed, Deposit::Deferred, Deposit::Refused] {
+            let mut up = up();
+            record_samples(&mut up, 2, true);
+            let verdicts = judge_stalled(&mut up, 5, true, &mut 0, 3, Some(reason));
+            assert!(verdicts[..4].iter().all(|verdict| *verdict == StallVerdict::Fine));
+            assert_eq!(
+                verdicts.last(),
+                Some(&StallVerdict::HoldFailed {
+                    held_for: Duration::ZERO,
+                    reason,
+                })
+            );
+            assert!(!up.payment_held());
+            assert!(up.awaiting_payment_since.is_none());
+        }
+    }
+
+    #[test]
+    fn a_pending_deposit_keeps_the_hold() {
+        let mut consumed = 0;
+        let mut up = held_up(&mut consumed);
+        let held_since = up.payment_hold_since;
+        let awaiting_since = up.awaiting_payment_since;
+        assert_eq!(
+            judge_stalled(&mut up, 1, true, &mut consumed, 3, None),
+            vec![StallVerdict::Held]
+        );
+        assert_eq!(up.payment_hold_since, held_since);
+        assert_eq!(up.awaiting_payment_since, awaiting_since);
+    }
+
+    #[test]
+    fn a_resumed_inbound_still_wins_over_an_unpaid_chunk() {
+        let mut consumed = 0;
+        let mut up = held_up(&mut consumed);
+        up.tunnel_ping.failures = 3;
+        up.tunnel_ping.failing_since = Some(UNIX_EPOCH);
+        record_samples(&mut up, 1, true);
+        let now = up.wg_stats.back().expect("sample").at;
+        assert_eq!(
+            up.judge_stall(up.tunnel_ping.counter_stall, true, None, Some(Deposit::Failed), now),
+            StallVerdict::HoldResumed { held_for: SAMPLE_GAP }
+        );
+        assert!(!up.payment_held());
+        assert!(up.awaiting_payment_since.is_none());
+        assert_eq!(up.tunnel_ping.failures, 0);
+        assert!(up.tunnel_ping.failing_since.is_none());
+    }
+
+    #[test]
+    fn a_failed_deposit_while_inbound_flows_does_not_reconnect() {
+        let mut up = up();
+        record_samples(&mut up, 2, true);
+        let now = up.wg_stats.back().expect("sample").at;
+        assert_eq!(
+            up.judge_stall(up.tunnel_ping.counter_stall, true, Some(3), Some(Deposit::Failed), now),
+            StallVerdict::Fine
+        );
+        assert!(!up.payment_held());
+        assert!(up.awaiting_payment_since.is_none());
+    }
+
+    #[test]
+    fn a_failed_deposit_with_a_short_stall_does_not_reconnect() {
+        let mut up = up();
+        record_samples(&mut up, 2, true);
+        let verdicts = judge_stalled(&mut up, 4, true, &mut 0, 3, Some(Deposit::Failed));
+        assert!(up.tunnel_ping.counter_stall < COUNTER_STALL_RECONNECT);
+        assert_eq!(verdicts, vec![StallVerdict::Fine; 4]);
+        assert!(!up.payment_held());
     }
 
     #[test]
     fn a_silent_exit_reconnects_even_while_awaiting_payment() {
         let mut up = up();
         record_samples(&mut up, 2, true);
-        let verdicts = judge_stalled(&mut up, 5, true, &mut 0, 0);
+        let verdicts = judge_stalled(&mut up, 5, true, &mut 0, 0, None);
         assert_eq!(verdicts.last(), Some(&StallVerdict::Reconnect), "{verdicts:?}");
     }
 
@@ -924,7 +1038,7 @@ mod tunnel_ping_tests {
     fn a_stall_without_a_pending_payment_reconnects() {
         let mut up = up();
         record_samples(&mut up, 2, true);
-        let verdicts = judge_stalled(&mut up, 5, false, &mut 0, 3);
+        let verdicts = judge_stalled(&mut up, 5, false, &mut 0, 3, None);
         assert_eq!(verdicts.last(), Some(&StallVerdict::Reconnect), "{verdicts:?}");
     }
 
@@ -932,7 +1046,7 @@ mod tunnel_ping_tests {
     fn the_hold_breaks_once_the_exit_goes_silent() {
         let mut consumed = 0;
         let mut up = held_up(&mut consumed);
-        let verdicts = judge_stalled(&mut up, 5, true, &mut consumed, 0);
+        let verdicts = judge_stalled(&mut up, 5, true, &mut consumed, 0, None);
         assert!(
             matches!(verdicts.last(), Some(StallVerdict::HoldBroken { .. })),
             "{verdicts:?}"
@@ -944,13 +1058,13 @@ mod tunnel_ping_tests {
     fn inbound_resuming_ends_the_hold_and_forgives_the_gated_pings() {
         let mut consumed = 0;
         let mut up = held_up(&mut consumed);
-        judge_stalled(&mut up, 10, true, &mut consumed, 3);
+        judge_stalled(&mut up, 10, true, &mut consumed, 3, None);
         up.tunnel_ping.failures = 3;
         up.tunnel_ping.failing_since = Some(UNIX_EPOCH);
 
         record_samples(&mut up, 1, true);
         let now = up.wg_stats.back().expect("sample").at;
-        let verdict = up.judge_stall(up.tunnel_ping.counter_stall, true, None, now);
+        let verdict = up.judge_stall(up.tunnel_ping.counter_stall, true, None, None, now);
         assert_eq!(
             verdict,
             StallVerdict::HoldResumed {
@@ -967,11 +1081,11 @@ mod tunnel_ping_tests {
         record_samples(&mut up, 2, true);
         let mut consumed = 0;
 
-        let at_four = judge_stalled(&mut up, 1, true, &mut consumed, 3);
+        let at_four = judge_stalled(&mut up, 1, true, &mut consumed, 3, None);
         assert_eq!(at_four, vec![StallVerdict::Fine]);
         assert!(up.awaiting_payment_since.is_none());
 
-        let at_eight = judge_stalled(&mut up, 1, true, &mut consumed, 3);
+        let at_eight = judge_stalled(&mut up, 1, true, &mut consumed, 3, None);
         assert_eq!(at_eight, vec![StallVerdict::Fine]);
         assert_eq!(up.awaiting_payment_since, up.wg_stats.back().map(|s| s.at));
         assert!(!up.payment_held());
@@ -982,10 +1096,10 @@ mod tunnel_ping_tests {
         let mut up = up();
         record_samples(&mut up, 2, true);
         let mut consumed = 0;
-        judge_stalled(&mut up, 2, true, &mut consumed, 3);
+        judge_stalled(&mut up, 2, true, &mut consumed, 3, None);
         let shown_at = up.awaiting_payment_since;
 
-        let verdicts = judge_stalled(&mut up, 3, true, &mut consumed, 3);
+        let verdicts = judge_stalled(&mut up, 3, true, &mut consumed, 3, None);
         assert_eq!(verdicts.last(), Some(&StallVerdict::HoldStarted), "{verdicts:?}");
         assert_eq!(up.awaiting_payment_since, shown_at);
     }
@@ -995,7 +1109,7 @@ mod tunnel_ping_tests {
         let mut up = up();
         record_samples(&mut up, 2, true);
         for _ in 0..5 {
-            judge_stalled(&mut up, 1, false, &mut 0, 3);
+            judge_stalled(&mut up, 1, false, &mut 0, 3, None);
             assert!(up.awaiting_payment_since.is_none());
         }
     }
@@ -1005,10 +1119,10 @@ mod tunnel_ping_tests {
         let mut up = up();
         record_samples(&mut up, 2, true);
         for _ in 0..4 {
-            judge_stalled(&mut up, 1, true, &mut 0, 0);
+            judge_stalled(&mut up, 1, true, &mut 0, 0, None);
             assert!(up.awaiting_payment_since.is_none());
         }
-        let verdicts = judge_stalled(&mut up, 1, true, &mut 0, 0);
+        let verdicts = judge_stalled(&mut up, 1, true, &mut 0, 0, None);
         assert_eq!(verdicts, vec![StallVerdict::Reconnect]);
         assert!(up.awaiting_payment_since.is_none());
     }
@@ -1021,7 +1135,7 @@ mod tunnel_ping_tests {
 
         record_samples(&mut up, 1, true);
         let now = up.wg_stats.back().expect("sample").at;
-        up.judge_stall(up.tunnel_ping.counter_stall, true, None, now);
+        up.judge_stall(up.tunnel_ping.counter_stall, true, None, None, now);
         assert!(up.awaiting_payment_since.is_none());
     }
 
