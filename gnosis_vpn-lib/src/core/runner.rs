@@ -70,7 +70,6 @@ pub(crate) enum Results {
     },
     Hopr {
         res: Result<Hopr, Error>,
-        safe_module: SafeModule,
     },
     IncentiveOperations {
         res: Result<Arc<dyn IncentiveOperations>, Error>,
@@ -297,12 +296,7 @@ pub(crate) async fn hopr(
         &results_sender,
     )
     .await;
-    let _ = results_sender
-        .send(Results::Hopr {
-            res,
-            safe_module: safe_module.clone(),
-        })
-        .await;
+    let _ = results_sender.send(Results::Hopr { res }).await;
 }
 
 pub(crate) async fn node_wxhopr_withdraw(
@@ -762,7 +756,7 @@ impl Display for Results {
                 Ok(Some(msg)) => write!(f, "FundingTool: Message({})", msg),
                 Err(err) => write!(f, "FundingTool: Error({})", err),
             },
-            Results::Hopr { res, safe_module: _ } => match res {
+            Results::Hopr { res } => match res {
                 Ok(_) => write!(f, "Hopr: Initialized Successfully"),
                 Err(err) => write!(f, "Hopr: Error({})", err),
             },
