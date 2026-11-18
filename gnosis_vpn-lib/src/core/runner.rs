@@ -25,7 +25,7 @@ use crate::compat::SafeModule;
 use crate::connection::destination::{Destination, ExitKey};
 use crate::hopr::blokli_config::BlokliConfig;
 use crate::hopr::types::SessionClientMetadata;
-use crate::hopr::{Hopr, HoprError, PixFloat, config as hopr_config};
+use crate::hopr::{Hopr, HoprError, PixPool, config as hopr_config};
 use crate::probe;
 use crate::route_health::RouteWalk;
 use crate::worker_params::{self, WorkerParams};
@@ -185,10 +185,10 @@ struct UnauthorizedError {
 pub(crate) async fn minimum_balance_recommendation(
     incentive_operations: Arc<dyn IncentiveOperations>,
     cfg: edgli::strategy::IncentiveConfiguration,
-    pix_float: HoprBalance,
+    pix_pool: HoprBalance,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = run_minimum_balance_recommendation(incentive_operations, cfg, pix_float).await;
+    let res = run_minimum_balance_recommendation(incentive_operations, cfg, pix_pool).await;
     let _ = results_sender.send(Results::MinimumBalanceRecommendation { res }).await;
 }
 
@@ -208,14 +208,14 @@ pub(crate) async fn ideal_balance_recommendation(
 
 pub(crate) async fn capacity_allocations(
     hopr: Arc<Hopr>,
-    pix_float: Option<PixFloat>,
+    pix_pool: Option<PixPool>,
     price_per_byte: balance::Balance<balance::WxHOPR>,
     results_sender: mpsc::Sender<Results>,
 ) {
     let mut res = hopr.capacity_allocations().await.map_err(Error::Hopr);
-    if let (Ok(caps), Some(float)) = (res.as_mut(), pix_float) {
+    if let (Ok(caps), Some(pool)) = (res.as_mut(), pix_pool) {
         // The pool sums its own notes in memory, so a failure won't clear on the next poll.
-        match float.balance().await {
+        match pool.balance().await {
             Ok(funds) => caps.exit_traffic = balance::ExitTrafficFunds::new(funds, price_per_byte),
             Err(err) => {
                 tracing::warn!(%err, "failed to read the funds paying for exit traffic - leaving them out of capacity")
@@ -225,12 +225,12 @@ pub(crate) async fn capacity_allocations(
     let _ = results_sender.send(Results::CapacityAllocations { res }).await;
 }
 
-pub(crate) async fn balances(hopr: Arc<Hopr>, pix_float: Option<PixFloat>, results_sender: mpsc::Sender<Results>) {
+pub(crate) async fn balances(hopr: Arc<Hopr>, pix_pool: Option<PixPool>, results_sender: mpsc::Sender<Results>) {
     tracing::debug!("starting balances runner");
     let mut res = hopr.balances().await.map_err(Error::from);
-    if let (Ok(balances), Some(float)) = (res.as_mut(), pix_float) {
-        // A missing float figure must not hide the Safe and channel balances.
-        balances.pix_float_wxhopr = float
+    if let (Ok(balances), Some(pool)) = (res.as_mut(), pix_pool) {
+        // A missing pool figure must not hide the Safe and channel balances.
+        balances.pix_pool_wxhopr = pool
             .balance()
             .await
             .inspect_err(|err| tracing::warn!(%err, "failed to read the PIX pool balance"))
@@ -548,14 +548,14 @@ async fn run_node_balance(incentive_operations: Arc<dyn IncentiveOperations>) ->
 async fn run_minimum_balance_recommendation(
     incentive_operations: Arc<dyn IncentiveOperations>,
     cfg: edgli::strategy::IncentiveConfiguration,
-    pix_float: HoprBalance,
+    pix_pool: HoprBalance,
 ) -> Result<balance::BalanceRecommendation, Error> {
     tracing::debug!("starting minimum balance recommendation runner");
     (|| {
         let ops = incentive_operations.clone();
         let cfg = cfg.clone();
         async move {
-            let rec = edgli::strategy::minimum_balance_recommendation(&*ops, &cfg, pix_float)
+            let rec = edgli::strategy::minimum_balance_recommendation(&*ops, &cfg, pix_pool)
                 .await
                 .map_err(Error::Chain)?;
             Ok(rec.into())

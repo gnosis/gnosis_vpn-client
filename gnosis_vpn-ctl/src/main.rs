@@ -159,16 +159,16 @@ fn pretty_print(resp: &Response) {
         Response::ProbingBoost => {
             println!("Network probing stepped up");
         }
-        Response::FundPixFloat(ipc::FundPixFloatResponse::Funded { amount }) => {
+        Response::FundPixPool(ipc::FundPixPoolResponse::Funded { amount }) => {
             println!("Shielded {amount} into the PIX pool");
         }
-        Response::FundPixFloat(ipc::FundPixFloatResponse::NotReady) => {
+        Response::FundPixPool(ipc::FundPixPoolResponse::NotReady) => {
             eprintln!("No PIX pool yet - it starts with the edge node");
         }
-        Response::FundPixFloat(ipc::FundPixFloatResponse::AlreadyFunding) => {
+        Response::FundPixPool(ipc::FundPixPoolResponse::AlreadyFunding) => {
             eprintln!("PIX pool funding is already running - check `balance` for the pool balance");
         }
-        Response::FundPixFloat(ipc::FundPixFloatResponse::Failed { reason }) => {
+        Response::FundPixPool(ipc::FundPixPoolResponse::Failed { reason }) => {
             eprintln!("Funding the PIX pool failed: {reason}");
         }
         Response::QuickProbe(
@@ -258,7 +258,7 @@ fn pretty_print(resp: &Response) {
                 capacity_allocations,
                 ideal_balance: _,
                 funding_status,
-                pix_float,
+                pix_pool,
             } = balances.as_ref();
             let mut str_resp = String::new();
             str_resp.push_str(&format!(
@@ -279,7 +279,7 @@ fn pretty_print(resp: &Response) {
                     format_capacity(Some(&channels))
                 ));
             }
-            if let Some(pool) = pix_float {
+            if let Some(pool) = pix_pool {
                 let exit_traffic = allocations
                     .map(|a| format!(" [buys {} of exit traffic]", ByteSize(a.exit_traffic.bytes_from_exits)))
                     .unwrap_or_default();
@@ -490,10 +490,10 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Unprobe(ipc::UnprobeResponse::InUse { .. }) => exitcode::PROTOCOL,
         Response::Unprobe(ipc::UnprobeResponse::NotProbing) => exitcode::PROTOCOL,
         Response::ProbingBoost => exitcode::OK,
-        Response::FundPixFloat(ipc::FundPixFloatResponse::Funded { .. }) => exitcode::OK,
-        Response::FundPixFloat(ipc::FundPixFloatResponse::NotReady) => exitcode::UNAVAILABLE,
-        Response::FundPixFloat(ipc::FundPixFloatResponse::AlreadyFunding) => exitcode::UNAVAILABLE,
-        Response::FundPixFloat(ipc::FundPixFloatResponse::Failed { .. }) => exitcode::SOFTWARE,
+        Response::FundPixPool(ipc::FundPixPoolResponse::Funded { .. }) => exitcode::OK,
+        Response::FundPixPool(ipc::FundPixPoolResponse::NotReady) => exitcode::UNAVAILABLE,
+        Response::FundPixPool(ipc::FundPixPoolResponse::AlreadyFunding) => exitcode::UNAVAILABLE,
+        Response::FundPixPool(ipc::FundPixPoolResponse::Failed { .. }) => exitcode::SOFTWARE,
         Response::Status(..) => exitcode::OK,
         Response::Balance(ipc::BalanceResponse::Available(..)) => exitcode::OK,
         Response::Balance(ipc::BalanceResponse::Unavailable { .. }) => exitcode::SOFTWARE,

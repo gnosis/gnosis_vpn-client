@@ -52,8 +52,8 @@ pub enum Request {
     },
     /// Steps network probing up one level; route readiness steps it back down.
     ProbingBoost,
-    /// Shield wxHOPR from the Safe into the PIX float deposits are paid from.
-    FundPixFloat {
+    /// Shield wxHOPR from the Safe into the PIX pool deposits are paid from.
+    FundPixPool {
         amount: Balance<WxHopr>,
     },
     /// List interfaces the service may capture traffic on
@@ -113,7 +113,7 @@ pub enum Response {
     Unprobe(UnprobeResponse),
     QuickProbe(QuickProbeResponse),
     ProbingBoost,
-    FundPixFloat(FundPixFloatResponse),
+    FundPixPool(FundPixPoolResponse),
     TrafficInterfaces(Vec<traffic::Interface>),
     TrafficStart(traffic::StartReply),
     TrafficRead(traffic::ReadResponse),
@@ -796,12 +796,12 @@ pub struct Balances {
     pub funding_status: Option<FundingStatus>,
     /// wxHOPR shielded for PIX deposits, as the pool accounts it; none without a Curvy PIX pool.
     #[serde(default)]
-    pub pix_float: Option<Balance<WxHopr>>,
+    pub pix_pool: Option<Balance<WxHopr>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum FundPixFloatResponse {
+pub enum FundPixPoolResponse {
     Funded {
         amount: Balance<WxHopr>,
     },
@@ -870,14 +870,14 @@ pub struct ExitTrafficFunds {
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BalanceRecommendation {
-    /// Total wxHOPR to fund: channel stakes, the PIX float and the fee to start.
+    /// Total wxHOPR to fund: channel stakes, the PIX pool and the fee to start.
     pub wxhopr: Balance<WxHopr>,
     /// The total xDai to fund the node with for gas.
     pub xdai: Balance<XDai>,
     pub channel_stakes: Balance<WxHopr>,
-    /// Curvy float shielded from the Safe once; only onboarding counts it.
+    /// PIX pool funding shielded from the Safe once; only onboarding counts it.
     #[serde(default)]
-    pub pix_float: Balance<WxHopr>,
+    pub pix_pool: Balance<WxHopr>,
     /// One-time key-binding fee; zero once the key is bound on-chain.
     pub fee_to_start: Balance<WxHopr>,
     /// On-chain transactions still needed before channel funding can begin.

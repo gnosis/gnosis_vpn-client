@@ -33,7 +33,7 @@ pub enum HoprError {
     NoTicketPrice,
 
     #[error("PIX pool error: {0}")]
-    PixFloat(String),
+    PixPool(String),
 
     #[error("Failed to start telemetry reactor: {0}")]
     TelemetryReactorStart(String),
