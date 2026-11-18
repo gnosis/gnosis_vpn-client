@@ -889,7 +889,7 @@ pub struct BalanceRecommendation {
 pub struct FundingStatus {
     pub traffic: FundingLevel,
     pub gas: FundingLevel,
-    /// wxHOPR still needed to reach the ideal recommendation.
+    /// wxHOPR still needed to reach the ideal recommendation, or to lift all wxHOPR above the Low bound at the PIX price.
     pub wxhopr_deficit: Option<Balance<WxHopr>>,
     /// xDai still needed to reach the ideal recommendation.
     pub xdai_deficit: Option<Balance<XDai>>,

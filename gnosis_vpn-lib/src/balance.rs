@@ -14,7 +14,8 @@ pub use gnosis_vpn_ipc::FundingLevel;
 pub struct FundingStatus {
     pub traffic: FundingLevel,
     pub gas: FundingLevel,
-    /// wxHOPR still needed to reach the ideal recommendation; can be `None` even while `traffic` isn't `Good`.
+    /// wxHOPR still needed to reach the ideal recommendation, or to lift all wxHOPR above the Low bound at the PIX price,
+    /// whichever is more; can be `None` even while `traffic` isn't `Good`.
     pub wxhopr_deficit: Option<Balance<WxHOPR>>,
     /// xDAI still needed to reach the ideal recommendation; `None` while `gas` is `Good`.
     pub xdai_deficit: Option<Balance<XDai>>,
@@ -470,6 +471,12 @@ fn traffic_level(bytes: u64) -> FundingLevel {
     level(bytes, TRAFFIC_EMPTY_MAX_BYTES, TRAFFIC_LOW_MAX_BYTES)
 }
 
+/// wxHOPR that lifts all wxHOPR above the Low bound at the PIX price; `None` without a PIX price.
+fn pix_deficit(caps: &CapacityAllocations) -> Option<Balance<WxHOPR>> {
+    let price = caps.exit_traffic.price_per_byte;
+    (!price.is_zero()).then(|| price * (PIX_TRAFFIC_LOW_MAX_BYTES + 1) - SnapshotTotals::of(caps).stake)
+}
+
 /// All wxHOPR at the PIX price when there is one, else every allocation at the relay rate.
 fn overall_traffic_level(caps: &CapacityAllocations) -> FundingLevel {
     if caps.exit_traffic.price_per_byte.is_zero() {
@@ -509,8 +516,12 @@ pub fn to_funding_status(
     };
 
     // `-` on Balance saturates at zero; wxhopr_deficit is relative to `ideal` only, which ignores drained stake on already-open channels.
-    let wxhopr_deficit = (traffic_level(relays.byte_capacity) != FundingLevel::Good)
-        .then(|| ideal.wxhopr - relays.stake)
+    let relay_deficit =
+        (traffic_level(relays.byte_capacity) != FundingLevel::Good).then(|| ideal.wxhopr - relays.stake);
+    let wxhopr_deficit = relay_deficit
+        .into_iter()
+        .chain(pix_deficit(capacity_allocations))
+        .max()
         .filter(|d| !d.is_zero());
     // Floored at xdai_low_below so this can't go None while gas isn't Good, even if `ideal` dips below it.
     let xdai_deficit = (gas != FundingLevel::Good)
@@ -737,6 +748,41 @@ mod tests {
     #[test]
     fn pix_traffic_good_above_12gib_counting_channel_stakes() {
         assert_eq!(pix_traffic(&pix_priced(6 * GB, 6 * GB + 1, 0)), FundingLevel::Good);
+    }
+
+    #[test]
+    fn pix_deficit_lifts_all_wxhopr_above_12gib() {
+        let status = to_funding_status(
+            ideal(0, 0),
+            &pix_priced(10 * GB, 0, 0),
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
+        );
+        assert_eq!(status.traffic, FundingLevel::Low);
+        assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(2 * GB + 1)));
+    }
+
+    #[test]
+    fn pix_deficit_is_none_once_good() {
+        let status = to_funding_status(
+            ideal(0, 0),
+            &pix_priced(12 * GB + 1, 0, 0),
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
+        );
+        assert_eq!(status.wxhopr_deficit, None);
+    }
+
+    #[test]
+    fn wxhopr_deficit_takes_the_larger_of_relay_and_pix() {
+        // The relays lack 5 GiB of the ideal, more than the 2 GiB the PIX bound wants.
+        let status = to_funding_status(
+            ideal(15 * GB, 0),
+            &pix_priced(8 * GB, 2 * GB, 0),
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
+        );
+        assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(5 * GB)));
     }
 
     #[test]
