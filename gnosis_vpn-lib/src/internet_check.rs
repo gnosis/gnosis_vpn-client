@@ -1,4 +1,5 @@
 //! Tells an offline user from a Blokli outage by asking public resolvers whether the internet answers.
+//! Only the startup network lookup uses it; later steps keep `internet` unknown.
 use gnosis_vpn_ipc::{Internet, RunMode, StartupIssue, StartupIssueKind};
 use rand::seq::SliceRandom;
 use tokio::net::TcpStream;
@@ -26,7 +27,7 @@ const HTTPS_PORT: u16 = 443;
 const REPROBE_AFTER: Duration = Duration::from_secs(30);
 const REPROBE_JITTER_MS: u64 = 10_000;
 
-/// Cached answer shared by status calls; probes only while an unreachable issue is reported.
+/// Cached answer for status calls; probes only while an unreachable issue is reported.
 #[derive(Clone, Default)]
 pub struct InternetCheck {
     state: Arc<Mutex<State>>,
