@@ -129,6 +129,18 @@ impl SpawnParams {
         }
     }
 
+    /// Root lifted the killswitch, so DNS works again and the pin would only hide a move.
+    pub fn without_pin(self) -> Self {
+        Self {
+            pinned_blokli_ip: None,
+            ..self
+        }
+    }
+
+    pub fn is_pinned(&self) -> bool {
+        self.pinned_blokli_ip.is_some()
+    }
+
     /// Retries until Blokli names a usable network; every failure goes to `on_failure` for status.
     pub async fn query_network(
         self,
@@ -375,7 +387,8 @@ impl WorkerParams {
 fn valid_network_name(name: &str) -> bool {
     let mut components = std::path::Path::new(name).components();
     let single_plain = matches!(components.next(), Some(std::path::Component::Normal(_)));
-    single_plain && components.next().is_none()
+    // std leaves NUL to the syscall, which would fail only after the lookup ended.
+    single_plain && components.next().is_none() && !name.contains('\0')
 }
 
 fn log_path_diagnostics(path: &std::path::Path) {
@@ -500,7 +513,7 @@ mod tests {
                 "{good:?} refused"
             );
         }
-        for bad in ["", ".", "..", "../jura", "jura/dev", "/etc"] {
+        for bad in ["", ".", "..", "../jura", "jura/dev", "/etc", "jura\0dev"] {
             let spawn = spawn(url("https://blokli.example.com/"), dirs.clone());
             assert!(
                 WorkerParams::new(spawn, BLOKLI_IP, bad.to_string()).is_err(),

@@ -1168,6 +1168,13 @@ impl DaemonState {
                 if let Some(resp_sender) = self.pending_responses.remove(&id) {
                     let _ = resp_sender.send(Reply::Err { error });
                 }
+                // A refused Connect or Probe was suspended on the way in and holds nothing.
+                if self.target_dest_id.is_none() && !self.probing {
+                    let _ = self
+                        .keep_alive_instruction_sender
+                        .send(KeepAliveInstruction::Resume)
+                        .await;
+                }
                 Ok(())
             }
             WorkerToRoot::RequestToRoot(request) => self.incoming_worker_request(request).await,
@@ -1236,6 +1243,11 @@ impl DaemonState {
                 blokli_ip,
                 interface,
             } => {
+                // A stop may have lifted the killswitch while this request was in flight; never re-arm after it.
+                if !matches!(self.shutdown_ongoing, Shutdown::None) {
+                    tracing::info!(request_id, "ignoring killswitch lockdown during worker shutdown");
+                    return Ok(());
+                }
                 self.blokli_ip = Some(blokli_ip);
                 let mut ips: Vec<IpAddr> = peer_ips.into_iter().map(IpAddr::V4).collect();
                 ips.push(IpAddr::V4(blokli_ip));

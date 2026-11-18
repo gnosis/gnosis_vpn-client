@@ -37,6 +37,8 @@ struct State {
 /// Core init waits until Blokli names the network that keys the identity; status answers from here meanwhile.
 struct PendingStartup {
     config: config::Config,
+    /// Kept so a Disconnect can restart the lookup without the pin.
+    spawn_params: worker_params::SpawnParams,
     target_dest_id: Option<String>,
     issue: Option<ipc::StartupIssue>,
     lookup: tokio::task::JoinHandle<()>,
@@ -133,7 +135,19 @@ async fn incoming_socket(
     tokio::spawn(async move {
         loop {
             tokio::select! {
-                Ok(Some(line)) = lines_reader.next_line() => {
+                read = lines_reader.next_line() => {
+                    // Root gone: dropping the sender ends the daemon loop instead of retrying unsupervised.
+                    let line = match read {
+                        Ok(Some(line)) => line,
+                        Ok(None) => {
+                            tracing::warn!("root closed the control socket");
+                            break;
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "reading the control socket failed");
+                            break;
+                        }
+                    };
                     tracing::debug!(line = %line, "incoming from root service");
                     let res_cmd = serde_json::from_str::<RootToWorker>(&line);
                     match res_cmd {
@@ -352,6 +366,11 @@ impl State {
             } => self.cmd_startup_params(*config, *spawn_params, target_dest_id),
             RootToWorker::WorkerCommand { cmd, id } => {
                 tracing::debug!(?cmd, id, "received command from root");
+                let pending_disconnect =
+                    self.pending_startup.is_some() && matches!(cmd, command::WorkerCommand::Disconnect);
+                if pending_disconnect {
+                    return self.disconnect_before_core(id);
+                }
                 match &self.pending_startup {
                     Some(pending) => IncomingResolution::ToRoot(Box::new(pending.answer(cmd, id))),
                     None => IncomingResolution::RoundtripViaCore(Box::new((cmd, id))),
@@ -393,9 +412,25 @@ impl State {
             return IncomingResolution::SustainLoop;
         }
         tracing::debug!(?config, ?spawn_params, "received startup params from root");
+        let lookup = self.spawn_network_lookup(&config, spawn_params.clone());
+        self.pending_startup = Some(PendingStartup {
+            config,
+            spawn_params,
+            target_dest_id,
+            issue: None,
+            lookup,
+        });
+        IncomingResolution::SustainLoop
+    }
+
+    fn spawn_network_lookup(
+        &self,
+        config: &config::Config,
+        spawn_params: worker_params::SpawnParams,
+    ) -> tokio::task::JoinHandle<()> {
         let sender = self.lookup_sender.clone();
         let (request_timeout, resolve_timeout) = (config.blokli.request_timeout, config.blokli.resolve_timeout);
-        let lookup = tokio::spawn(async move {
+        tokio::spawn(async move {
             let on_failure = |kind, message| {
                 // Failures come seconds apart, so the queue never fills.
                 let _ = sender.try_send(NetworkLookup::Failed { kind, message });
@@ -404,14 +439,29 @@ impl State {
                 .query_network(request_timeout, resolve_timeout, on_failure)
                 .await;
             let _ = sender.send(NetworkLookup::Found(Box::new(params))).await;
-        });
-        self.pending_startup = Some(PendingStartup {
-            config,
-            target_dest_id,
-            issue: None,
-            lookup,
-        });
-        IncomingResolution::SustainLoop
+        })
+    }
+
+    /// Root already cleared its target and lifted the killswitch; the core must not resurrect either.
+    fn disconnect_before_core(&mut self, id: u64) -> IncomingResolution {
+        let Some(mut pending) = self.pending_startup.take() else {
+            return IncomingResolution::SustainLoop;
+        };
+        pending.target_dest_id = None;
+        if pending.spawn_params.is_pinned() {
+            tracing::info!("killswitch lifted before core init - looking blokli up again");
+            pending.lookup.abort();
+            // A fresh channel drops anything the pinned lookup already queued.
+            (self.lookup_sender, self.lookup_receiver) = mpsc::channel(8);
+            pending.spawn_params = pending.spawn_params.without_pin();
+            pending.lookup = self.spawn_network_lookup(&pending.config, pending.spawn_params.clone());
+        }
+        self.pending_startup = Some(pending);
+        let resp = ipc::Response::Disconnect(ipc::DisconnectResponse::NotConnected);
+        IncomingResolution::ToRoot(Box::new(WorkerToRoot::Response {
+            resp: Box::new(resp),
+            id,
+        }))
     }
 
     async fn incoming_lookup(
@@ -519,7 +569,12 @@ impl State {
                         return Err(code);
                     }
                 }
-                Some(cmd) = socket_receiver.recv() => match self.incoming_command(cmd).await {
+                cmd = socket_receiver.recv() => {
+                    let Some(cmd) = cmd else {
+                        tracing::error!("control socket to root closed - exiting");
+                        return Err(exitcode::IOERR);
+                    };
+                    match self.incoming_command(cmd).await {
                     IncomingResolution::ResponseToCore(resp) => {
                         let _ = worker_to_core_sender.send(WorkerToCore::ResponseFromRoot(*resp)).await;
                     }
@@ -556,7 +611,8 @@ impl State {
                         let _ = worker_to_core_sender.send(WorkerToCore::ForceReconnect).await;
                     }
                     IncomingResolution::SustainLoop => {}
-                },
+                    }
+                }
                 Some(event) = core_to_worker_receiver.recv() => match event {
                     CoreToWorker::RequestToRoot(req) => {
                         tracing::debug!(?req, "incoming request to root from core");
@@ -593,6 +649,13 @@ mod tests {
     fn pending(issue: Option<ipc::StartupIssue>) -> PendingStartup {
         PendingStartup {
             config: config::parse("version = 7").expect("minimal config"),
+            spawn_params: worker_params::SpawnParams::new(
+                worker_params::ConfigFileMode::Generated,
+                worker_params::AllowFlags::default(),
+                "https://blokli.invalid".parse().expect("valid url"),
+                None,
+                gnosis_vpn_lib::dirs::user_dirs(std::path::Path::new("/tmp")),
+            ),
             target_dest_id: None,
             issue,
             lookup: tokio::spawn(async {}),
@@ -616,6 +679,38 @@ mod tests {
             panic!("status must answer with a status");
         };
         assert!(matches!(status.run_mode, ipc::RunMode::Init { issue: Some(reported) } if reported == issue));
+    }
+
+    #[tokio::test]
+    async fn disconnect_before_core_init_drops_the_target_and_the_pin() {
+        let (root_end, _worker_end) = TokioUnixStream::pair().expect("socket pair");
+        let (_, writer) = io::split(root_end);
+        let mut state = State::new(BufWriter::new(writer));
+        let mut startup = pending(None);
+        startup.target_dest_id = Some("exit-1".to_string());
+        startup.spawn_params = worker_params::SpawnParams::new(
+            worker_params::ConfigFileMode::Generated,
+            worker_params::AllowFlags::default(),
+            "https://blokli.invalid".parse().expect("valid url"),
+            Some(std::net::Ipv4Addr::new(203, 0, 113, 7)),
+            gnosis_vpn_lib::dirs::user_dirs(std::path::Path::new("/tmp")),
+        );
+        state.pending_startup = Some(startup);
+
+        let resolution = state.disconnect_before_core(7);
+
+        let IncomingResolution::ToRoot(answer) = resolution else {
+            panic!("disconnect must be answered");
+        };
+        assert!(matches!(
+            *answer,
+            WorkerToRoot::Response { ref resp, id: 7 }
+                if matches!(**resp, ipc::Response::Disconnect(ipc::DisconnectResponse::NotConnected))
+        ));
+        let pending = state.pending_startup.take().expect("still pending");
+        assert_eq!(pending.target_dest_id, None);
+        assert!(!pending.spawn_params.is_pinned());
+        pending.lookup.abort();
     }
 
     #[tokio::test]
