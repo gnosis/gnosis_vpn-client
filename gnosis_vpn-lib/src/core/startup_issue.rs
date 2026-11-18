@@ -6,11 +6,15 @@ use std::time::SystemTime;
 
 use super::runner;
 
-/// The step failed again: keep the streak's `since` so the app can tell a blip from a blocker.
 pub(super) fn failed(previous: Option<&StartupIssue>, err: &runner::Error) -> StartupIssue {
+    continued(previous, err.startup_issue_kind(), err.to_string())
+}
+
+/// The step failed again: keep the streak's `since` so the app can tell a blip from a blocker.
+pub fn continued(previous: Option<&StartupIssue>, kind: StartupIssueKind, message: String) -> StartupIssue {
     StartupIssue {
-        kind: err.startup_issue_kind(),
-        message: err.to_string(),
+        kind,
+        message,
         since: previous.map_or_else(SystemTime::now, |issue| issue.since),
     }
 }

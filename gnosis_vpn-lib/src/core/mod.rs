@@ -34,7 +34,7 @@ use crate::{balance, log_output, wire, wireguard};
 
 mod channel_maintenance;
 pub(crate) mod runner;
-pub(crate) mod startup_issue;
+pub mod startup_issue;
 
 use runner::Results;
 
@@ -2900,14 +2900,15 @@ mod tests {
         let toml = format!("version = 7\ngeoip_db = {geoip_db:?}\ncurvy_zk_dir = {fixtures:?}\n");
         tokio::fs::write(&path, toml).await.expect("write config");
         let config = crate::config::read(&path).await.expect("valid config");
-        let worker_params = crate::worker_params::WorkerParams::new(
+        let spawn = crate::worker_params::SpawnParams::new(
             crate::worker_params::ConfigFileMode::Manual(path),
             crate::worker_params::AllowFlags::default(),
             "https://blokli.invalid".parse().expect("valid url"),
             net::Ipv4Addr::new(203, 0, 113, 7),
             crate::dirs::user_dirs(state_home.path()),
-            "test-net".to_string(),
         );
+        let worker_params =
+            crate::worker_params::WorkerParams::new(spawn, "test-net".to_string()).expect("valid network");
         // The worker creates this before Core::init; the generated pass file lands in it.
         worker_params.ensure_dirs().expect("state home layout");
         let (outgoing, from_core) = mpsc::channel(32);

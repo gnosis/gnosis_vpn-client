@@ -6,12 +6,12 @@ use tokio::sync::oneshot;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use gnosis_vpn_ipc::Response;
+use gnosis_vpn_ipc::{Response, ServiceError};
 
 use crate::command::WorkerCommand;
 use crate::config::Config;
 use crate::ping;
-use crate::worker_params::WorkerParams;
+use crate::worker_params::SpawnParams;
 
 /// Messages sent from worker to core application logic
 #[derive(Debug)]
@@ -43,7 +43,7 @@ pub enum RootToWorker {
     /// Startup parameters
     StartupParams {
         config: Box<Config>,
-        worker_params: Box<WorkerParams>,
+        spawn_params: Box<SpawnParams>,
         target_dest_id: Option<String>,
     },
     /// Socket command received by root
@@ -59,6 +59,8 @@ pub enum RootToWorker {
 pub enum WorkerToRoot {
     /// Response to a socket command
     Response { resp: Box<Response>, id: u64 },
+    /// A socket command the worker cannot answer yet
+    Refused { error: ServiceError, id: u64 },
     /// Request to root execution
     RequestToRoot(RequestToRoot),
 }
