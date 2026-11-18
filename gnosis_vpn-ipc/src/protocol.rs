@@ -135,7 +135,6 @@ pub struct Status {
     /// Data an exit sells per PIX chunk; none until the node runs.
     pub pix_chunk_bytes: Option<u64>,
     /// The PIX price exit traffic is bought at, from the config, so wxHOPR reads as data in every run mode.
-    #[serde(default)]
     pub pix_price_per_byte: Balance<WxHopr>,
     /// Network probing as applied to the edge client; none until the node runs.
     pub probing: Option<ProbingView>,
@@ -192,7 +191,7 @@ pub struct TunnelStall {
     pub failed_pings: u32,
     pub reconnect_at: u32,
     /// Inbound stalled while the exit parks data until this session's PIX chunk is paid.
-    #[serde(default, with = "unix_ms::option")]
+    #[serde(with = "unix_ms::option")]
     pub awaiting_payment_since: Option<SystemTime>,
 }
 
@@ -795,7 +794,6 @@ pub struct Balances {
     pub ideal_balance: Option<BalanceRecommendation>,
     pub funding_status: Option<FundingStatus>,
     /// wxHOPR shielded for PIX deposits, as the pool accounts it; none without a Curvy PIX pool.
-    #[serde(default)]
     pub pix_pool: Option<Balance<WxHopr>>,
 }
 
@@ -848,7 +846,6 @@ pub struct CapacityAllocations {
     /// The unallocated wxHOPR in the Safe.
     pub safe: Capacity,
     /// Pays for exit traffic; zero without a Curvy PIX pool.
-    #[serde(default)]
     pub exit_traffic: ExitTrafficFunds,
 }
 
@@ -861,10 +858,8 @@ pub struct ExitTrafficFunds {
     /// Data the funds buy from exits.
     pub bytes_from_exits: u64,
     /// All wxHOPR, channel stakes included, valued at the PIX price.
-    #[serde(default)]
     pub total_bytes_at_pix_price: u64,
     /// This client's PIX price per byte; zero without a PIX pool.
-    #[serde(default)]
     pub price_per_byte: Balance<WxHopr>,
 }
 
@@ -876,7 +871,6 @@ pub struct BalanceRecommendation {
     pub xdai: Balance<XDai>,
     pub channel_stakes: Balance<WxHopr>,
     /// PIX pool funding shielded from the Safe once; only onboarding counts it.
-    #[serde(default)]
     pub pix_pool: Balance<WxHopr>,
     /// One-time key-binding fee; zero once the key is bound on-chain.
     pub fee_to_start: Balance<WxHopr>,
@@ -1011,10 +1005,9 @@ pub struct PixChunkStats {
     pub bytes_spent: Option<u64>,
     pub bytes_left: Option<u64>,
     /// Session data the exit sent since the first chunk; its keep-alives and PIX fill spend shares too but aren't counted.
-    #[serde(default)]
     pub bytes_received: Option<u64>,
     /// At the current SURB rate, ignoring chunks not yet asked for.
-    #[serde(default, with = "duration_ms::option")]
+    #[serde(with = "duration_ms::option")]
     pub empty_in: Option<Duration>,
 }
 

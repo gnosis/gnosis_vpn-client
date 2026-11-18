@@ -211,25 +211,6 @@ fn balances_are_wei_strings() {
 }
 
 #[test]
-fn balances_without_pix_pool_still_parse() {
-    let json = json!({
-        "type": "available",
-        "node": "0",
-        "safe": "0",
-        "channels_out": [],
-        "info": {"node_address": address(3), "node_peer_id": "12D3KooW", "safe_address": address(4)},
-        "capacity_allocations": null,
-        "ideal_balance": null,
-        "funding_status": null,
-    });
-    let parsed: BalanceResponse = serde_json::from_value(json).expect("an older service omits pix_pool");
-    let BalanceResponse::Available(balances) = parsed else {
-        panic!("expected available balances");
-    };
-    assert!(balances.pix_pool.is_none());
-}
-
-#[test]
 fn exit_traffic_funds_carry_only_stake_and_bytes() {
     let funds = ExitTrafficFunds {
         stake: Balance::from_wei(84),
@@ -245,14 +226,6 @@ fn exit_traffic_funds_carry_only_stake_and_bytes() {
 }
 
 #[test]
-fn exit_traffic_funds_without_the_pix_price_figures_still_parse() {
-    let json = json!({"stake": "84", "byte_capacity": 17, "bytes_from_exits": 78});
-    let parsed: ExitTrafficFunds = serde_json::from_value(json).expect("an older service omits them");
-    assert_eq!(parsed.total_bytes_at_pix_price, 0);
-    assert_eq!(parsed.price_per_byte, Balance::zero());
-}
-
-#[test]
 fn status_carries_the_pix_price() {
     let json = json!({"run_mode": {"type": "not_running"}, "destinations": [], "target": null,
         "connection": {"type": "disconnected"}, "disconnecting": [], "probe": null, "pix_chunk_bytes": null,
@@ -260,23 +233,6 @@ fn status_carries_the_pix_price() {
     let parsed: Status = serde_json::from_value(json.clone()).expect("parse");
     assert_eq!(parsed.pix_price_per_byte, Balance::from_wei(9));
     assert_eq!(serde_json::to_value(&parsed).expect("serialize"), json);
-}
-
-#[test]
-fn status_without_the_pix_price_still_parses() {
-    let json = json!({"run_mode": {"type": "not_running"}, "destinations": [], "target": null,
-        "connection": {"type": "disconnected"}, "disconnecting": [], "probe": null, "pix_chunk_bytes": null,
-        "probing": null, "recent": []});
-    let parsed: Status = serde_json::from_value(json).expect("an older service omits it");
-    assert_eq!(parsed.pix_price_per_byte, Balance::zero());
-}
-
-#[test]
-fn capacity_allocations_without_exit_traffic_still_parse() {
-    let zero = json!({"stake": "0", "expected_messages": 0, "min_guaranteed_messages": 0, "byte_capacity": 0});
-    let json = json!({"peer_allocations": {}, "node": zero, "safe": zero});
-    let parsed: CapacityAllocations = serde_json::from_value(json).expect("an older service omits exit_traffic");
-    assert_eq!(parsed.exit_traffic, ExitTrafficFunds::default());
 }
 
 #[test]
@@ -491,13 +447,6 @@ fn a_stall_shows_only_while_pings_fail() {
     .to_string();
     assert!(held.contains("held for PIX payment"), "{held}");
     assert!(!held.contains("(2/3)"), "{held}");
-}
-
-#[test]
-fn a_stall_from_an_older_service_has_no_payment_hold() {
-    let stall: TunnelStall =
-        serde_json::from_value(json!({"since": 3_000, "failed_pings": 2, "reconnect_at": 3})).expect("deserialize");
-    assert_eq!(stall.awaiting_payment_since, None);
 }
 
 #[test]
