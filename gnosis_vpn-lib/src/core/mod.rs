@@ -26,6 +26,7 @@ use crate::event::{CoreToWorker, RequestToRoot, ResponseFromRoot, RunnerToRoot, 
 use crate::geoip::{self, GeoIp};
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
+use crate::internet_check::InternetCheck;
 use crate::network_probing::{self, Activity, NetworkProbing, Plan};
 use crate::probe::{self, Probe};
 use crate::route_health::RouteHealth;
@@ -85,6 +86,7 @@ pub struct Core {
     worker_params: WorkerParams,
     /// Mirrors root's killswitch: armed by a successful lockdown, lifted by Disconnect; DNS only works while false.
     killswitch_armed: bool,
+    internet_check: InternetCheck,
     node_address: Address,
     outgoing_sender: mpsc::Sender<CoreToWorker>,
     incoming_receiver: mpsc::Receiver<WorkerToCore>,
@@ -259,6 +261,7 @@ impl Core {
 
             // static data
             killswitch_armed: worker_params.spawned_armed(),
+            internet_check: InternetCheck::default(),
             worker_params,
             node_address,
             outgoing_sender,
@@ -2264,7 +2267,7 @@ impl Core {
 
     /// Snapshot of everything `Command::Status` reports.
     fn build_status(&self) -> ipc::Status {
-        let runmode = match self.phase.clone() {
+        let mut runmode = match self.phase.clone() {
             Phase::Initial { issue } => RunMode::Init { issue },
             Phase::CheckingSafe {
                 node_balance,
@@ -2323,6 +2326,7 @@ impl Core {
             }
             Phase::ShuttingDown => RunMode::Shutdown,
         };
+        self.internet_check.annotate(&mut runmode, self.killswitch_armed);
 
         let reconnect_at = self.config.connection.health_check_intervals.tunnel_ping_max_failures;
         let pix = self.main_session_pix();

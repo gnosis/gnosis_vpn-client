@@ -26,7 +26,7 @@ pub(super) fn longest<'a>(issues: impl IntoIterator<Item = Option<&'a StartupIss
 
 pub(crate) fn kind(failure: FailureKind) -> StartupIssueKind {
     match failure {
-        FailureKind::Unreachable => StartupIssueKind::Unreachable,
+        FailureKind::Unreachable => StartupIssueKind::UNREACHABLE,
         FailureKind::ServiceUnavailable => StartupIssueKind::ServiceUnavailable,
         FailureKind::Incompatible => StartupIssueKind::Incompatible,
         FailureKind::Other => StartupIssueKind::Other,

@@ -16,6 +16,7 @@ use gnosis_vpn_ipc as ipc;
 use gnosis_vpn_lib::core::{self, Core, startup_issue};
 use gnosis_vpn_lib::event::{CoreToWorker, ResponseFromRoot, RootToWorker, WorkerToCore, WorkerToRoot};
 use gnosis_vpn_lib::hopr::hopr_lib;
+use gnosis_vpn_lib::internet_check::InternetCheck;
 use gnosis_vpn_lib::{command, config, logging, socket, worker_params};
 
 mod cli;
@@ -41,6 +42,7 @@ struct PendingStartup {
     spawn_params: worker_params::SpawnParams,
     target_dest_id: Option<String>,
     issue: Option<ipc::StartupIssue>,
+    internet_check: InternetCheck,
     lookup: tokio::task::JoinHandle<()>,
 }
 
@@ -313,9 +315,11 @@ impl PendingStartup {
     fn answer(&self, cmd: command::WorkerCommand, id: u64) -> WorkerToRoot {
         let resp = match cmd {
             command::WorkerCommand::Status => {
-                let run_mode = ipc::RunMode::Init {
+                let mut run_mode = ipc::RunMode::Init {
                     issue: self.issue.clone(),
                 };
+                self.internet_check
+                    .annotate(&mut run_mode, self.spawn_params.is_pinned());
                 let status = self.config.offline_status(run_mode, self.target_dest_id.as_deref());
                 ipc::Response::Status(Box::new(status))
             }
@@ -418,6 +422,7 @@ impl State {
             spawn_params,
             target_dest_id,
             issue: None,
+            internet_check: InternetCheck::default(),
             lookup,
         });
         IncomingResolution::SustainLoop
@@ -658,6 +663,7 @@ mod tests {
             ),
             target_dest_id: None,
             issue,
+            internet_check: InternetCheck::default(),
             lookup: tokio::spawn(async {}),
         }
     }
@@ -665,8 +671,8 @@ mod tests {
     #[tokio::test]
     async fn status_before_core_init_reports_the_lookup_issue() {
         let issue = ipc::StartupIssue {
-            kind: ipc::StartupIssueKind::Unreachable,
-            message: "connection refused".to_string(),
+            kind: ipc::StartupIssueKind::ServiceUnavailable,
+            message: "503 service unavailable".to_string(),
             since: std::time::SystemTime::UNIX_EPOCH,
         };
 

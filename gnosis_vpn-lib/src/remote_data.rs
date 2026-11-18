@@ -30,7 +30,7 @@ impl Error {
     pub fn startup_issue_kind(&self) -> StartupIssueKind {
         match self {
             // Only the system resolver does IO here.
-            Error::IO(_) | Error::NoIpv4 | Error::ResolveTimeout => StartupIssueKind::Unreachable,
+            Error::IO(_) | Error::NoIpv4 | Error::ResolveTimeout => StartupIssueKind::UNREACHABLE,
             Error::Blokli { kind, .. } => crate::core::startup_issue::kind(*kind),
             Error::NoHost | Error::UnknownPort => StartupIssueKind::Other,
         }
@@ -119,9 +119,9 @@ mod tests {
     fn a_failed_lookup_is_unreachable_and_a_bad_url_is_not() {
         assert_eq!(
             Error::IO(io::Error::other("no such host")).startup_issue_kind(),
-            StartupIssueKind::Unreachable
+            StartupIssueKind::UNREACHABLE
         );
-        assert_eq!(Error::NoIpv4.startup_issue_kind(), StartupIssueKind::Unreachable);
+        assert_eq!(Error::NoIpv4.startup_issue_kind(), StartupIssueKind::UNREACHABLE);
         assert_eq!(Error::NoHost.startup_issue_kind(), StartupIssueKind::Other);
     }
 }

@@ -268,13 +268,34 @@ pub struct StartupIssue {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StartupIssueKind {
-    /// DNS, connect or TLS failure: the user's network, proxy or firewall.
-    Unreachable,
+    /// DNS, connect or TLS failure: the user's network, proxy or firewall, or Blokli itself.
+    Unreachable {
+        #[serde(default)]
+        internet: Internet,
+    },
     /// The chain service answers but is unhealthy, overloaded or too slow.
     ServiceUnavailable,
     /// The chain service's answer cannot be understood: this version needs an update.
     Incompatible,
     Other,
+}
+
+impl StartupIssueKind {
+    /// What a failed step reports; the worker fills in `internet` when it answers status.
+    pub const UNREACHABLE: Self = Self::Unreachable {
+        internet: Internet::Unknown,
+    };
+}
+
+/// Whether public resolvers answer while Blokli does not, telling an offline user from a Blokli outage.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Internet {
+    Up,
+    Down,
+    /// Not probed yet, or the killswitch blocks the probe targets.
+    #[default]
+    Unknown,
 }
 
 /// Edge-client start-up followed by node start-up, as one progression.

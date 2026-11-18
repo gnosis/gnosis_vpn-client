@@ -10,6 +10,7 @@ pub mod dirs;
 pub mod event;
 pub mod geoip;
 pub mod hopr;
+pub mod internet_check;
 pub mod logging;
 pub mod network_probing;
 pub mod ping;
