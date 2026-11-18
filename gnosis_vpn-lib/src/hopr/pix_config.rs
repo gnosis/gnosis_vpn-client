@@ -48,13 +48,13 @@ pub struct PixConfig {
 
     /// Attempts *in addition to* the first for a deposit transfer; unset keeps the pool's default.
     /// `pix-test` pool only: edgli warns about and ignores it under the Curvy pool, which allocates
-    /// deposits out of a shielded float rather than transferring each.
+    /// deposits out of a shielded pool rather than transferring each.
     #[serde(default)]
     pub max_deposit_retries: Option<usize>,
 
     /// wxHOPR the Safe must still hold after a deposit; a deposit that would breach it is refused.
     /// Unset keeps the pool's default. `pix-test` pool only: edgli warns about and ignores it under
-    /// the Curvy pool, whose float is shielded once rather than paid out of the Safe per deposit.
+    /// the Curvy pool, whose funds are shielded once rather than paid out of the Safe per deposit.
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[serde(default)]
     pub min_safe_hopr_reserve: Option<HoprBalance>,
@@ -64,7 +64,7 @@ pub struct PixConfig {
     #[serde(default = "PixConfig::default_relayer_url")]
     pub relayer_url: Url,
 
-    /// Curvy float below which the pool tops itself up from the Safe ahead of a deposit flush.
+    /// Curvy PIX pool balance below which the pool tops itself up from the Safe ahead of a deposit flush.
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default = "PixConfig::default_funding_min_available")]
     pub funding_min_available: HoprBalance,
@@ -74,7 +74,7 @@ pub struct PixConfig {
     #[serde(default = "PixConfig::default_funding_top_up")]
     pub funding_top_up: HoprBalance,
 
-    /// Top up once at startup; off because the first float is funded manually (`fund-pix-float`).
+    /// Top up once at startup; off because the PIX pool is first funded manually (`fundpixpool`).
     #[serde(default)]
     pub fund_at_startup: bool,
 
@@ -145,13 +145,13 @@ impl PixConfig {
         "2 wxHOPR".parse().expect("default funding floor is valid")
     }
 
-    /// The GNO-1151 onboarding float.
+    /// The GNO-1151 onboarding PIX pool funding.
     fn default_funding_top_up() -> HoprBalance {
         "35.35 wxHOPR".parse().expect("default funding top-up is valid")
     }
 
-    /// What one top-up shields from the Safe; the `pix-test` pool has no float.
-    pub fn float(&self) -> HoprBalance {
+    /// What one top-up shields from the Safe; the `pix-test` pool shields nothing.
+    pub fn pool_top_up(&self) -> HoprBalance {
         #[cfg(feature = "pix-curvy")]
         return self.funding_top_up;
         #[cfg(not(feature = "pix-curvy"))]

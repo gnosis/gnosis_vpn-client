@@ -74,9 +74,9 @@ pub enum Command {
     #[command()]
     Balance {},
 
-    /// Shield wxHOPR from the Safe into the PIX float, e.g. `fund-pix-float 10`
-    #[command(name = "fund-pix-float")]
-    FundPixFloat {
+    /// Shield wxHOPR from the Safe into the PIX pool, e.g. `fundpixpool 10`
+    #[command(name = "fundpixpool")]
+    FundPixPool {
         /// wxHOPR amount, decimals allowed
         amount: ipc::Balance<ipc::WxHopr>,
     },
@@ -139,7 +139,7 @@ impl From<Command> for Request {
             Command::QuickProbe { id } => Request::QuickProbe { destination: id.into() },
             Command::ProbingBoost {} => Request::ProbingBoost,
             Command::Balance {} => Request::Balance,
-            Command::FundPixFloat { amount } => Request::FundPixFloat { amount },
+            Command::FundPixPool { amount } => Request::FundPixPool { amount },
             Command::FundingTool { secret } => Request::FundingTool {
                 secret: FundingSecret::new(secret),
             },

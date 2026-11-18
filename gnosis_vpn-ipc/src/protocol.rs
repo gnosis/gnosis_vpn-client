@@ -13,7 +13,7 @@ use crate::values::{
 };
 
 /// Bumped on every incompatible wire change; the service refuses requests of any other version.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
@@ -52,8 +52,8 @@ pub enum Request {
     },
     /// Steps network probing up one level; route readiness steps it back down.
     ProbingBoost,
-    /// Shield wxHOPR from the Safe into the PIX float deposits are paid from.
-    FundPixFloat {
+    /// Shield wxHOPR from the Safe into the PIX pool deposits are paid from.
+    FundPixPool {
         amount: Balance<WxHopr>,
     },
     /// List interfaces the service may capture traffic on
@@ -113,7 +113,7 @@ pub enum Response {
     Unprobe(UnprobeResponse),
     QuickProbe(QuickProbeResponse),
     ProbingBoost,
-    FundPixFloat(FundPixFloatResponse),
+    FundPixPool(FundPixPoolResponse),
     TrafficInterfaces(Vec<traffic::Interface>),
     TrafficStart(traffic::StartReply),
     TrafficRead(traffic::ReadResponse),
@@ -134,6 +134,8 @@ pub struct Status {
     pub probe: Option<ProbeView>,
     /// Data an exit sells per PIX chunk; none until the node runs.
     pub pix_chunk_bytes: Option<u64>,
+    /// The PIX price exit traffic is bought at, from the config, so wxHOPR reads as data in every run mode.
+    pub pix_price_per_byte: Balance<WxHopr>,
     /// Network probing as applied to the edge client; none until the node runs.
     pub probing: Option<ProbingView>,
     /// Recently connected exits on this network, newest first.
@@ -189,7 +191,7 @@ pub struct TunnelStall {
     pub failed_pings: u32,
     pub reconnect_at: u32,
     /// Inbound stalled while the exit parks data until this session's PIX chunk is paid.
-    #[serde(default, with = "unix_ms::option")]
+    #[serde(with = "unix_ms::option")]
     pub awaiting_payment_since: Option<SystemTime>,
 }
 
@@ -792,13 +794,12 @@ pub struct Balances {
     pub ideal_balance: Option<BalanceRecommendation>,
     pub funding_status: Option<FundingStatus>,
     /// wxHOPR shielded for PIX deposits, as the pool accounts it; none without a Curvy PIX pool.
-    #[serde(default)]
-    pub pix_float: Option<Balance<WxHopr>>,
+    pub pix_pool: Option<Balance<WxHopr>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum FundPixFloatResponse {
+pub enum FundPixPoolResponse {
     Funded {
         amount: Balance<WxHopr>,
     },
@@ -845,7 +846,6 @@ pub struct CapacityAllocations {
     /// The unallocated wxHOPR in the Safe.
     pub safe: Capacity,
     /// Pays for exit traffic; zero without a Curvy PIX pool.
-    #[serde(default)]
     pub exit_traffic: ExitTrafficFunds,
 }
 
@@ -857,18 +857,21 @@ pub struct ExitTrafficFunds {
     pub byte_capacity: u64,
     /// Data the funds buy from exits.
     pub bytes_from_exits: u64,
+    /// All wxHOPR, channel stakes included, valued at the PIX price.
+    pub total_bytes_at_pix_price: u64,
+    /// This client's PIX price per byte; zero without a PIX pool.
+    pub price_per_byte: Balance<WxHopr>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BalanceRecommendation {
-    /// Total wxHOPR to fund: channel stakes, the PIX float and the fee to start.
+    /// Total wxHOPR to fund: channel stakes, the PIX pool and the fee to start.
     pub wxhopr: Balance<WxHopr>,
     /// The total xDai to fund the node with for gas.
     pub xdai: Balance<XDai>,
     pub channel_stakes: Balance<WxHopr>,
-    /// Curvy float shielded from the Safe once; only onboarding counts it.
-    #[serde(default)]
-    pub pix_float: Balance<WxHopr>,
+    /// PIX pool funding shielded from the Safe once; only onboarding counts it.
+    pub pix_pool: Balance<WxHopr>,
     /// One-time key-binding fee; zero once the key is bound on-chain.
     pub fee_to_start: Balance<WxHopr>,
     /// On-chain transactions still needed before channel funding can begin.
@@ -883,7 +886,7 @@ pub struct BalanceRecommendation {
 pub struct FundingStatus {
     pub traffic: FundingLevel,
     pub gas: FundingLevel,
-    /// wxHOPR still needed to reach the ideal recommendation.
+    /// wxHOPR still needed to reach the ideal recommendation, or to bring the Safe's refills back to Good.
     pub wxhopr_deficit: Option<Balance<WxHopr>>,
     /// xDai still needed to reach the ideal recommendation.
     pub xdai_deficit: Option<Balance<XDai>>,
@@ -1002,10 +1005,9 @@ pub struct PixChunkStats {
     pub bytes_spent: Option<u64>,
     pub bytes_left: Option<u64>,
     /// Session data the exit sent since the first chunk; its keep-alives and PIX fill spend shares too but aren't counted.
-    #[serde(default)]
     pub bytes_received: Option<u64>,
     /// At the current SURB rate, ignoring chunks not yet asked for.
-    #[serde(default, with = "duration_ms::option")]
+    #[serde(with = "duration_ms::option")]
     pub empty_in: Option<Duration>,
 }
 

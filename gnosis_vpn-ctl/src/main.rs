@@ -159,17 +159,17 @@ fn pretty_print(resp: &Response) {
         Response::ProbingBoost => {
             println!("Network probing stepped up");
         }
-        Response::FundPixFloat(ipc::FundPixFloatResponse::Funded { amount }) => {
-            println!("Shielded {amount} into the PIX float");
+        Response::FundPixPool(ipc::FundPixPoolResponse::Funded { amount }) => {
+            println!("Shielded {amount} into the PIX pool");
         }
-        Response::FundPixFloat(ipc::FundPixFloatResponse::NotReady) => {
-            eprintln!("No PIX float yet - the Curvy pool starts with the edge node");
+        Response::FundPixPool(ipc::FundPixPoolResponse::NotReady) => {
+            eprintln!("No PIX pool yet - it starts with the edge node");
         }
-        Response::FundPixFloat(ipc::FundPixFloatResponse::AlreadyFunding) => {
-            eprintln!("A PIX float funding is already running - check `balance` for the float balance");
+        Response::FundPixPool(ipc::FundPixPoolResponse::AlreadyFunding) => {
+            eprintln!("PIX pool funding is already running - check `balance` for the pool balance");
         }
-        Response::FundPixFloat(ipc::FundPixFloatResponse::Failed { reason }) => {
-            eprintln!("Funding the PIX float failed: {reason}");
+        Response::FundPixPool(ipc::FundPixPoolResponse::Failed { reason }) => {
+            eprintln!("Funding the PIX pool failed: {reason}");
         }
         Response::QuickProbe(
             res @ (ipc::QuickProbeResponse::Checking { .. } | ipc::QuickProbeResponse::AlreadyChecking { .. }),
@@ -194,12 +194,16 @@ fn pretty_print(resp: &Response) {
                 disconnecting,
                 probe,
                 pix_chunk_bytes,
+                pix_price_per_byte,
                 probing,
                 recent,
             } = status.as_ref();
             let mut str_resp = format!("{run_mode}\n");
             if let Some(bytes) = pix_chunk_bytes {
                 str_resp.push_str(&format!("PIX chunk per exit: {}\n", ByteSize(*bytes)));
+            }
+            if !pix_price_per_byte.is_zero() {
+                str_resp.push_str(&format!("PIX price per byte: {pix_price_per_byte}\n"));
             }
             if let Some(id) = target {
                 let is_active = connection.destination() == Some(id);
@@ -254,29 +258,34 @@ fn pretty_print(resp: &Response) {
                 capacity_allocations,
                 ideal_balance: _,
                 funding_status,
-                pix_float,
+                pix_pool,
             } = balances.as_ref();
             let mut str_resp = String::new();
             str_resp.push_str(&format!(
                 "Node Address: {}\nSafe Address: {}\n",
                 info.node_address, info.safe_address
             ));
-            let safe_sci = ipc::scientific_suffix(safe);
-            str_resp.push_str(&format!("---\nNode Balance: {node}\nSafe Balance: {safe}{safe_sci}\n"));
             let allocations = capacity_allocations.as_ref();
-            if let Some(float) = pix_float {
+            str_resp.push_str(&format!(
+                "---\nNode Balance: {node}\nSafe Balance: {safe}{}{}\n",
+                ipc::scientific_suffix(safe),
+                format_capacity(allocations.map(|a| &a.safe))
+            ));
+            if let Some(a) = allocations {
+                let channels = sum_capacities(a.peer_allocations.values());
+                str_resp.push_str(&format!(
+                    "Channels Balance: {}{}\n",
+                    channels.stake,
+                    format_capacity(Some(&channels))
+                ));
+            }
+            if let Some(pool) = pix_pool {
                 let exit_traffic = allocations
-                    .map(|a| {
-                        format!(
-                            " [{} in total, buys {} of exit traffic]",
-                            ByteSize(a.exit_traffic.byte_capacity),
-                            ByteSize(a.exit_traffic.bytes_from_exits)
-                        )
-                    })
+                    .map(|a| format!(" [buys {} of exit traffic]", ByteSize(a.exit_traffic.bytes_from_exits)))
                     .unwrap_or_default();
                 str_resp.push_str(&format!(
-                    "PIX Float: {float}{}{exit_traffic}\n",
-                    ipc::scientific_suffix(float)
+                    "PIX Pool: {pool}{}{exit_traffic}\n",
+                    ipc::scientific_suffix(pool)
                 ));
             }
             if let Some(nc) = allocations.map(|a| a.node).filter(|c| !c.stake.is_zero()) {
@@ -287,11 +296,13 @@ fn pretty_print(resp: &Response) {
                     format_capacity(Some(&nc))
                 ));
             }
+            if let Some(a) = allocations {
+                str_resp.push_str(&format_total_balance(a));
+            }
             if channels_out.is_empty() {
                 str_resp.push_str("---\nNo outgoing channels.\n");
             } else {
-                let safe_cap = allocations.map(|a| &a.safe);
-                str_resp.push_str(&format!("Safe: {safe}{safe_sci}{}\n", format_capacity(safe_cap)));
+                str_resp.push_str("---\n");
                 for ch in channels_out {
                     let ch_cap = allocations.and_then(|a| a.peer_allocations.get(&ch.address));
                     str_resp.push_str(&format!("{ch}{}\n", format_capacity(ch_cap)));
@@ -409,6 +420,38 @@ fn format_capacity(capacity: Option<&ipc::Capacity>) -> String {
     }
 }
 
+fn sum_capacities<'a>(capacities: impl IntoIterator<Item = &'a ipc::Capacity>) -> ipc::Capacity {
+    capacities
+        .into_iter()
+        .fold(ipc::Capacity::default(), |sum, c| ipc::Capacity {
+            stake: [sum.stake, c.stake].into_iter().sum(),
+            expected_messages: sum.expected_messages.saturating_add(c.expected_messages),
+            min_guaranteed_messages: sum.min_guaranteed_messages.saturating_add(c.min_guaranteed_messages),
+            byte_capacity: sum.byte_capacity.saturating_add(c.byte_capacity),
+        })
+}
+
+/// All wxHOPR; msgs and bytes leave out the PIX pool, which never pays relays.
+fn format_total_balance(allocations: &ipc::CapacityAllocations) -> String {
+    let relays = sum_capacities(
+        [&allocations.node, &allocations.safe]
+            .into_iter()
+            .chain(allocations.peer_allocations.values()),
+    );
+    let exit = &allocations.exit_traffic;
+    let total: ipc::Balance<ipc::WxHopr> = [relays.stake, exit.stake].into_iter().sum();
+    let at_pix = if exit.price_per_byte.is_zero() {
+        String::new()
+    } else {
+        format!(", at PIX value: {}", ByteSize(exit.total_bytes_at_pix_price))
+    };
+    format!(
+        "Total Balance: {total} [{} msgs, {}{at_pix}]\n",
+        human_msgs(relays.expected_messages),
+        ByteSize(relays.byte_capacity)
+    )
+}
+
 fn human_msgs(msgs: u64) -> String {
     const K: u64 = 1_000;
     const M: u64 = 1_000 * K;
@@ -447,10 +490,10 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Unprobe(ipc::UnprobeResponse::InUse { .. }) => exitcode::PROTOCOL,
         Response::Unprobe(ipc::UnprobeResponse::NotProbing) => exitcode::PROTOCOL,
         Response::ProbingBoost => exitcode::OK,
-        Response::FundPixFloat(ipc::FundPixFloatResponse::Funded { .. }) => exitcode::OK,
-        Response::FundPixFloat(ipc::FundPixFloatResponse::NotReady) => exitcode::UNAVAILABLE,
-        Response::FundPixFloat(ipc::FundPixFloatResponse::AlreadyFunding) => exitcode::UNAVAILABLE,
-        Response::FundPixFloat(ipc::FundPixFloatResponse::Failed { .. }) => exitcode::SOFTWARE,
+        Response::FundPixPool(ipc::FundPixPoolResponse::Funded { .. }) => exitcode::OK,
+        Response::FundPixPool(ipc::FundPixPoolResponse::NotReady) => exitcode::UNAVAILABLE,
+        Response::FundPixPool(ipc::FundPixPoolResponse::AlreadyFunding) => exitcode::UNAVAILABLE,
+        Response::FundPixPool(ipc::FundPixPoolResponse::Failed { .. }) => exitcode::SOFTWARE,
         Response::Status(..) => exitcode::OK,
         Response::Balance(ipc::BalanceResponse::Available(..)) => exitcode::OK,
         Response::Balance(ipc::BalanceResponse::Unavailable { .. }) => exitcode::SOFTWARE,
