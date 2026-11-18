@@ -228,7 +228,7 @@ pub(crate) async fn balances(hopr: Arc<Hopr>, pix_float: Option<PixFloat>, resul
         balances.pix_float_wxhopr = float
             .balance()
             .await
-            .inspect_err(|err| tracing::warn!(%err, "failed to read the PIX float balance"))
+            .inspect_err(|err| tracing::warn!(%err, "failed to read the PIX pool balance"))
             .ok();
     }
     let _ = results_sender.send(Results::Balances { res }).await;

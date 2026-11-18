@@ -1966,7 +1966,7 @@ impl Core {
         // a ctl retry after its 30 s timeout must not shield the amount twice
         let is_funding = self.pix_funding.as_ref().is_some_and(|task| !task.is_finished());
         if is_funding {
-            tracing::info!(%amount, "refused PIX float funding while one is running");
+            tracing::info!(%amount, "refused PIX pool funding while one is running");
             let _ = resp.send(Response::FundPixFloat(ipc::FundPixFloatResponse::AlreadyFunding));
             return;
         }
@@ -1975,18 +1975,18 @@ impl Core {
             let funding = cancel.run_until_cancelled(float.fund(wire::from_wxhopr(amount))).await;
             let response = match funding {
                 Some(Ok(())) => {
-                    tracing::info!(%amount, "funded the PIX float");
+                    tracing::info!(%amount, "funded the PIX pool");
                     ipc::FundPixFloatResponse::Funded { amount }
                 }
                 // a shield already submitted may still land
                 None => {
-                    tracing::warn!(%amount, "PIX float funding interrupted by shutdown");
+                    tracing::warn!(%amount, "PIX pool funding interrupted by shutdown");
                     ipc::FundPixFloatResponse::Failed {
                         reason: "service shut down while shielding".to_string(),
                     }
                 }
                 Some(Err(err)) => {
-                    tracing::error!(%err, %amount, "failed to fund the PIX float");
+                    tracing::error!(%err, %amount, "failed to fund the PIX pool");
                     ipc::FundPixFloatResponse::Failed {
                         reason: err.to_string(),
                     }

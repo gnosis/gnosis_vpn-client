@@ -160,16 +160,16 @@ fn pretty_print(resp: &Response) {
             println!("Network probing stepped up");
         }
         Response::FundPixFloat(ipc::FundPixFloatResponse::Funded { amount }) => {
-            println!("Shielded {amount} into the PIX float");
+            println!("Shielded {amount} into the PIX pool");
         }
         Response::FundPixFloat(ipc::FundPixFloatResponse::NotReady) => {
-            eprintln!("No PIX float yet - the Curvy pool starts with the edge node");
+            eprintln!("No PIX pool yet - it starts with the edge node");
         }
         Response::FundPixFloat(ipc::FundPixFloatResponse::AlreadyFunding) => {
-            eprintln!("A PIX float funding is already running - check `balance` for the float balance");
+            eprintln!("PIX pool funding is already running - check `balance` for the pool balance");
         }
         Response::FundPixFloat(ipc::FundPixFloatResponse::Failed { reason }) => {
-            eprintln!("Funding the PIX float failed: {reason}");
+            eprintln!("Funding the PIX pool failed: {reason}");
         }
         Response::QuickProbe(
             res @ (ipc::QuickProbeResponse::Checking { .. } | ipc::QuickProbeResponse::AlreadyChecking { .. }),
@@ -267,7 +267,7 @@ fn pretty_print(resp: &Response) {
                 ipc::scientific_suffix(safe),
                 format_capacity(allocations.map(|a| &a.safe))
             ));
-            if let Some(float) = pix_float {
+            if let Some(pool) = pix_float {
                 let exit_traffic = allocations
                     .map(|a| {
                         format!(
@@ -279,8 +279,8 @@ fn pretty_print(resp: &Response) {
                     })
                     .unwrap_or_default();
                 str_resp.push_str(&format!(
-                    "PIX Float: {float}{}{exit_traffic}\n",
-                    ipc::scientific_suffix(float)
+                    "PIX Pool: {pool}{}{exit_traffic}\n",
+                    ipc::scientific_suffix(pool)
                 ));
             }
             if let Some(nc) = allocations.map(|a| a.node).filter(|c| !c.stake.is_zero()) {
