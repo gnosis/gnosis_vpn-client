@@ -83,6 +83,8 @@ pub struct Core {
 
     // static data
     worker_params: WorkerParams,
+    /// Mirrors root's killswitch: armed by a successful lockdown, lifted by Disconnect; DNS only works while false.
+    killswitch_armed: bool,
     node_address: Address,
     outgoing_sender: mpsc::Sender<CoreToWorker>,
     incoming_receiver: mpsc::Receiver<WorkerToCore>,
@@ -256,6 +258,7 @@ impl Core {
             geoip,
 
             // static data
+            killswitch_armed: worker_params.spawned_armed(),
             worker_params,
             node_address,
             outgoing_sender,
@@ -355,34 +358,38 @@ impl Core {
         }
     }
 
+    async fn shut_down(&mut self) {
+        self.phase = Phase::ShuttingDown;
+        // no need to recreate cancellation tokens after shutdown
+        self.cancel_on_shutdown.cancel();
+        // Dropping the probe detaches its session close before hopr aborts the listeners.
+        self.probe.take();
+        if let Some(hopr) = self.hopr.clone() {
+            let shutdown_tracker = TaskTracker::new();
+            if let Some(handle) = self.strategy_handle.take() {
+                self.strategy_state = None;
+                self.pix_float = None;
+                shutdown_tracker.spawn(async move {
+                    tracing::debug!("aborting strategy task");
+                    handle.abort();
+                });
+            }
+            shutdown_tracker.spawn(async move {
+                tracing::debug!("shutting down hopr");
+                hopr.shutdown().await;
+            });
+            shutdown_tracker.close();
+            shutdown_tracker.wait().await;
+        }
+    }
+
     /// receive an event from the worker main thread
     #[tracing::instrument(skip(self, results_sender), level = "debug")]
     async fn on_event(&mut self, event: WorkerToCore, results_sender: &mpsc::Sender<Results>) -> bool {
         match event {
             WorkerToCore::Shutdown => {
                 tracing::debug!("incoming shutdown request");
-                self.phase = Phase::ShuttingDown;
-                // no need to recreate cancellation tokens after shutdown
-                self.cancel_on_shutdown.cancel();
-                // Dropping the probe detaches its session close before hopr aborts the listeners.
-                self.probe.take();
-                if let Some(hopr) = self.hopr.clone() {
-                    let shutdown_tracker = TaskTracker::new();
-                    if let Some(handle) = self.strategy_handle.take() {
-                        self.strategy_state = None;
-                        self.pix_float = None;
-                        shutdown_tracker.spawn(async move {
-                            tracing::debug!("aborting strategy task");
-                            handle.abort();
-                        });
-                    }
-                    shutdown_tracker.spawn(async move {
-                        tracing::debug!("shutting down hopr");
-                        hopr.shutdown().await;
-                    });
-                    shutdown_tracker.close();
-                    shutdown_tracker.wait().await;
-                }
+                self.shut_down().await;
                 false
             }
 
@@ -390,6 +397,7 @@ impl Core {
                 tracing::debug!(?resp, "incoming response from root");
                 match resp {
                     ResponseFromRoot::KillswitchLockdown { request_id, res } => {
+                        self.killswitch_armed |= res.is_ok();
                         if let Some(Responder::Unit(tx)) = self.responders.remove(&request_id) {
                             let _ = tx.send(res).map_err(|_| {
                                 tracing::warn!("responder channel closed for killswitch lockdown response");
@@ -554,6 +562,8 @@ impl Core {
                     }
 
                     WorkerCommand::Disconnect => {
+                        // Root lifts the killswitch on every disconnect.
+                        self.killswitch_armed = false;
                         self.target = None;
                         self.reconnecting_since = None;
                         self.connect_retries = None;
@@ -1113,11 +1123,19 @@ impl Core {
                     interface,
                     resp,
                 } => {
+                    // Last chance before DNS closes: edgli keeps its spawn-time address, so only a new worker follows a move.
+                    let resolve_timeout = self.config.blokli.resolve_timeout;
+                    if !self.killswitch_armed && self.worker_params.blokli_moved(resolve_timeout).await {
+                        tracing::info!("blokli moved - exiting so root restarts the worker on the new address");
+                        self.shut_down().await;
+                        return false;
+                    }
                     let request_id = self.next_request_id();
                     self.responders.insert(request_id, Responder::Unit(resp));
                     let request = RequestToRoot::KillswitchLockdown {
                         request_id,
                         peer_ips,
+                        blokli_ip: self.worker_params.blokli_ip(),
                         interface,
                     };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
@@ -1138,6 +1156,7 @@ impl Core {
                         mtu,
                         dns,
                         peer_ips,
+                        blokli_ip: self.worker_params.blokli_ip(),
                     };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
@@ -2904,11 +2923,12 @@ mod tests {
             crate::worker_params::ConfigFileMode::Manual(path),
             crate::worker_params::AllowFlags::default(),
             "https://blokli.invalid".parse().expect("valid url"),
-            net::Ipv4Addr::new(203, 0, 113, 7),
+            None,
             crate::dirs::user_dirs(state_home.path()),
         );
+        let blokli_ip = net::Ipv4Addr::new(203, 0, 113, 7);
         let worker_params =
-            crate::worker_params::WorkerParams::new(spawn, "test-net".to_string()).expect("valid network");
+            crate::worker_params::WorkerParams::new(spawn, blokli_ip, "test-net".to_string()).expect("valid network");
         // The worker creates this before Core::init; the generated pass file lands in it.
         worker_params.ensure_dirs().expect("state home layout");
         let (outgoing, from_core) = mpsc::channel(32);

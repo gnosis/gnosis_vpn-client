@@ -79,7 +79,7 @@ pub fn parse() -> Cli {
 
 impl Cli {
     /// The worker's view of these arguments plus what root resolved at startup and who owns the worker.
-    pub fn spawn_params(&self, blokli_ip: Ipv4Addr, user_dirs: UserDirs) -> SpawnParams {
+    pub fn spawn_params(&self, pinned_blokli_ip: Option<Ipv4Addr>, user_dirs: UserDirs) -> SpawnParams {
         let config_mode = match self.hopr_config_path.clone() {
             Some(path) => worker_params::ConfigFileMode::Manual(path),
             None => worker_params::ConfigFileMode::Generated,
@@ -90,7 +90,13 @@ impl Cli {
             funding_tool_rerun: self.allow_funding_tool_rerun,
         };
 
-        SpawnParams::new(config_mode, allow, self.hopr_blokli_url.clone(), blokli_ip, user_dirs)
+        SpawnParams::new(
+            config_mode,
+            allow,
+            self.hopr_blokli_url.clone(),
+            pinned_blokli_ip,
+            user_dirs,
+        )
     }
 }
 

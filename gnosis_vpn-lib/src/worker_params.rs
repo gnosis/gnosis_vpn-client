@@ -47,8 +47,8 @@ pub struct SpawnParams {
     allow_experimental: bool,
     allow_funding_tool_rerun: bool,
     blokli_url: Url,
-    /// Resolved by root while DNS still works; the killswitch blocks it later.
-    blokli_ip: Ipv4Addr,
+    /// Set while root's killswitch blocks DNS: the address the previous worker used.
+    pinned_blokli_ip: Option<Ipv4Addr>,
     user_dirs: UserDirs,
 }
 
@@ -59,7 +59,10 @@ pub struct WorkerParams {
     allow_experimental: bool,
     allow_funding_tool_rerun: bool,
     blokli_url: Url,
+    /// Fixed for edgli's lifetime; a move is only picked up by a new worker.
     blokli_ip: Ipv4Addr,
+    /// The killswitch was armed when this worker spawned, so DNS stays blocked.
+    spawned_armed: bool,
     user_dirs: UserDirs,
     /// Blokli's `chainInfo.network`; it keys identity, safe cache and PIX state.
     network: String,
@@ -75,6 +78,13 @@ enum NetworkLookupError {
     RemoteData(#[from] remote_data::Error),
     #[error(transparent)]
     NetworkName(#[from] InvalidNetworkName),
+}
+
+/// Bounded, since a resolver behind a blocking firewall never answers.
+async fn resolve_blokli_ips(url: &Url, timeout: Duration) -> Result<Vec<Ipv4Addr>, remote_data::Error> {
+    tokio::time::timeout(timeout, remote_data::resolve_blokli_ips(url))
+        .await
+        .map_err(|_| remote_data::Error::ResolveTimeout)?
 }
 
 impl NetworkLookupError {
@@ -105,7 +115,7 @@ impl SpawnParams {
         config_mode: ConfigFileMode,
         allow: AllowFlags,
         blokli_url: Url,
-        blokli_ip: Ipv4Addr,
+        pinned_blokli_ip: Option<Ipv4Addr>,
         user_dirs: UserDirs,
     ) -> Self {
         Self {
@@ -114,28 +124,21 @@ impl SpawnParams {
             allow_experimental: allow.experimental,
             allow_funding_tool_rerun: allow.funding_tool_rerun,
             blokli_url,
-            blokli_ip,
+            pinned_blokli_ip,
             user_dirs,
         }
-    }
-
-    pub fn blokli_url(&self) -> &Url {
-        &self.blokli_url
-    }
-
-    pub fn blokli_ip(&self) -> Ipv4Addr {
-        self.blokli_ip
     }
 
     /// Retries until Blokli names a usable network; every failure goes to `on_failure` for status.
     pub async fn query_network(
         self,
         request_timeout: Duration,
+        resolve_timeout: Duration,
         on_failure: impl Fn(StartupIssueKind, String),
     ) -> WorkerParams {
         let mut delays = remote_data::backoff_expo_long_delay().without_max_times().build();
         loop {
-            let error = match self.try_network(request_timeout).await {
+            let error = match self.try_network(request_timeout, resolve_timeout).await {
                 Ok(params) => return params,
                 Err(error) => error,
             };
@@ -146,15 +149,26 @@ impl SpawnParams {
         }
     }
 
-    async fn try_network(&self, request_timeout: Duration) -> Result<WorkerParams, NetworkLookupError> {
-        let network = remote_data::query_blokli_network(&self.blokli_url, self.blokli_ip, request_timeout).await?;
-        Ok(WorkerParams::new(self.clone(), network)?)
+    async fn try_network(
+        &self,
+        request_timeout: Duration,
+        resolve_timeout: Duration,
+    ) -> Result<WorkerParams, NetworkLookupError> {
+        let blokli_ip = match self.pinned_blokli_ip {
+            Some(pinned) => pinned,
+            None => {
+                let ips = resolve_blokli_ips(&self.blokli_url, resolve_timeout).await?;
+                ips.first().copied().ok_or(remote_data::Error::NoIpv4)?
+            }
+        };
+        let network = remote_data::query_blokli_network(&self.blokli_url, blokli_ip, request_timeout).await?;
+        Ok(WorkerParams::new(self.clone(), blokli_ip, network)?)
     }
 }
 
 impl WorkerParams {
     /// The network name becomes a directory name under the user's home.
-    pub fn new(spawn: SpawnParams, network: String) -> Result<Self, InvalidNetworkName> {
+    pub fn new(spawn: SpawnParams, blokli_ip: Ipv4Addr, network: String) -> Result<Self, InvalidNetworkName> {
         if !valid_network_name(&network) {
             return Err(InvalidNetworkName(network));
         }
@@ -164,7 +178,7 @@ impl WorkerParams {
             allow_experimental,
             allow_funding_tool_rerun,
             blokli_url,
-            blokli_ip,
+            pinned_blokli_ip,
             user_dirs,
         } = spawn;
         Ok(Self {
@@ -174,6 +188,7 @@ impl WorkerParams {
             allow_funding_tool_rerun,
             blokli_url,
             blokli_ip,
+            spawned_armed: pinned_blokli_ip.is_some(),
             user_dirs,
             network,
         })
@@ -295,9 +310,28 @@ impl WorkerParams {
         self.blokli_url.clone()
     }
 
-    /// The address edgli's clients are built with; root keeps its own copy, re-resolved before each first arm.
+    /// The address edgli's clients are built with; root exempts it from the killswitch and routes it via the WAN.
     pub fn blokli_ip(&self) -> Ipv4Addr {
         self.blokli_ip
+    }
+
+    pub fn spawned_armed(&self) -> bool {
+        self.spawned_armed
+    }
+
+    /// Only meaningful while DNS is open; a failed lookup keeps the current address.
+    pub async fn blokli_moved(&self, resolve_timeout: Duration) -> bool {
+        match resolve_blokli_ips(&self.blokli_url, resolve_timeout).await {
+            Ok(ips) if ips.is_empty() || ips.contains(&self.blokli_ip) => false,
+            Ok(ips) => {
+                tracing::info!(old = %self.blokli_ip, new = ?ips, "blokli address changed");
+                true
+            }
+            Err(error) => {
+                tracing::warn!(%error, current = %self.blokli_ip, "blokli host not resolvable before connect - keeping the current address");
+                false
+            }
+        }
     }
 
     /// The Blokli endpoint to talk to, including how its host is resolved and how long a single
@@ -383,7 +417,7 @@ mod tests {
             ConfigFileMode::Generated,
             AllowFlags::default(),
             blokli_url,
-            BLOKLI_IP,
+            Some(BLOKLI_IP),
             user_dirs,
         )
     }
@@ -394,7 +428,7 @@ mod tests {
             cache: PathBuf::from("/tmp/gnosisvpn/cache"),
             logs: PathBuf::from("/tmp/gnosisvpn/logs"),
         };
-        WorkerParams::new(spawn(blokli_url, user_dirs), "jura-dev".to_string()).unwrap()
+        WorkerParams::new(spawn(blokli_url, user_dirs), BLOKLI_IP, "jura-dev".to_string()).unwrap()
     }
 
     fn url(raw: &str) -> Url {
@@ -424,7 +458,7 @@ mod tests {
         assert!(endpoint.dns_override.is_some());
     }
 
-    /// Root hands `SpawnParams` to the worker serialized, so the address must survive that hop.
+    /// Root hands `SpawnParams` to the worker serialized, so the pin must survive that hop.
     #[test]
     fn the_pinned_address_survives_a_serde_roundtrip() {
         let spawn = spawn(
@@ -435,7 +469,25 @@ mod tests {
         let json = serde_json::to_string(&spawn).unwrap();
         let restored: SpawnParams = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(restored.blokli_ip(), BLOKLI_IP);
+        assert_eq!(restored.pinned_blokli_ip, Some(BLOKLI_IP));
+    }
+
+    #[test]
+    fn a_pinned_spawn_starts_armed() {
+        let params = params(url("https://blokli.example.com/"));
+
+        assert!(params.spawned_armed());
+        assert_eq!(params.blokli_ip(), BLOKLI_IP);
+    }
+
+    /// An IP literal host resolves without DNS, so these run offline.
+    #[tokio::test]
+    async fn blokli_moved_only_when_the_lookup_drops_the_current_address() {
+        let same = params(url("https://203.0.113.7/"));
+        let moved = params(url("https://198.51.100.7/"));
+
+        assert!(!same.blokli_moved(TEST_REQUEST_TIMEOUT).await);
+        assert!(moved.blokli_moved(TEST_REQUEST_TIMEOUT).await);
     }
 
     #[test]
@@ -443,11 +495,17 @@ mod tests {
         let dirs = dirs::user_dirs(std::path::Path::new("/tmp"));
         for good in ["jura-dev", "piz-palu-dev", "Jura_Dev"] {
             let spawn = spawn(url("https://blokli.example.com/"), dirs.clone());
-            assert!(WorkerParams::new(spawn, good.to_string()).is_ok(), "{good:?} refused");
+            assert!(
+                WorkerParams::new(spawn, BLOKLI_IP, good.to_string()).is_ok(),
+                "{good:?} refused"
+            );
         }
         for bad in ["", ".", "..", "../jura", "jura/dev", "/etc"] {
             let spawn = spawn(url("https://blokli.example.com/"), dirs.clone());
-            assert!(WorkerParams::new(spawn, bad.to_string()).is_err(), "{bad:?} accepted");
+            assert!(
+                WorkerParams::new(spawn, BLOKLI_IP, bad.to_string()).is_err(),
+                "{bad:?} accepted"
+            );
         }
     }
 
@@ -474,7 +532,7 @@ mod tests {
 
     fn params_in(tmp: &std::path::Path) -> WorkerParams {
         let spawn = spawn(url("https://blokli.example.com/"), dirs::user_dirs(tmp));
-        WorkerParams::new(spawn, "jura-dev".to_string()).unwrap()
+        WorkerParams::new(spawn, BLOKLI_IP, "jura-dev".to_string()).unwrap()
     }
 
     #[tokio::test]

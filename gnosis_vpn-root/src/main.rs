@@ -27,7 +27,7 @@ use gnosis_vpn_lib::command::{CommandRoute, RootCommand, WorkerCommand};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::worker::{self, WorkerOwner};
-use gnosis_vpn_lib::{dirs, hopr, logging, ping, remote_data, socket};
+use gnosis_vpn_lib::{dirs, hopr, logging, ping, socket};
 
 mod cli;
 mod device_monitor;
@@ -69,12 +69,10 @@ struct DaemonState {
     worker_owner: Option<WorkerOwner>,
     /// Whose killswitch is armed; outlives a crashed owner so no other user can lift it.
     killswitch_holder: Option<u32>,
-    /// Resolved at every spawn and again before every first arm; the fallback while the killswitch blocks DNS.
+    /// The last address a worker reported; pins the next spawn while the killswitch blocks DNS.
     blokli_ip: Option<Ipv4Addr>,
-    /// Mirrors the routing actor's policy: a lookup is only possible while this is false.
+    /// Mirrors the routing actor's policy: a worker can only look Blokli up while this is false.
     killswitch_armed: bool,
-    /// The next spawn follows a Blokli move, so its first arm trusts the address just resolved.
-    blokli_just_resolved: bool,
     config: Config,
     config_path: PathBuf,
     reload_handle: Option<LogReloadHandle>,
@@ -138,10 +136,6 @@ struct WorkerChild {
     _child_tun_socket: UnixStream,
     /// SIGKILLs the worker; its exit is still reported through the exit channel.
     kill: CancellationToken,
-    /// edgli's Blokli DNS override; fixed for this worker's lifetime.
-    blokli_ip: Ipv4Addr,
-    /// Skips this worker's first lookup so flapping DNS cannot loop restarts.
-    blokli_just_resolved: bool,
 }
 
 #[derive(Debug)]
@@ -553,7 +547,6 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         killswitch_holder: None,
         blokli_ip: None,
         killswitch_armed: false,
-        blokli_just_resolved: false,
         config,
         config_path,
         incoming_worker_channel: mpsc::channel(32),
@@ -709,24 +702,6 @@ async fn spawn_ping(options: ping::Options) -> Result<Duration, String> {
         tracing::debug!(error = ?e, "ping error");
         e.to_string()
     })
-}
-
-/// A failed lookup with DNS open is unexpected but not fatal: the last known address still works until Blokli moves.
-fn choose_blokli_ip(resolved: Result<Ipv4Addr, String>, current: Ipv4Addr) -> Ipv4Addr {
-    match resolved {
-        Ok(ip) if ip == current => {
-            tracing::debug!(%ip, "blokli address unchanged");
-            ip
-        }
-        Ok(ip) => {
-            tracing::info!(old = %current, new = %ip, "blokli address changed - restarting the worker on it");
-            ip
-        }
-        Err(error) => {
-            tracing::warn!(%error, fallback = %current, "blokli host not resolvable before connect - keeping the current address");
-            current
-        }
-    }
 }
 
 /// Root reads and stops but never owns; everyone else must be the owner.
@@ -1258,16 +1233,12 @@ impl DaemonState {
             RequestToRoot::KillswitchLockdown {
                 request_id,
                 peer_ips,
+                blokli_ip,
                 interface,
             } => {
-                let blokli_moved = self.refresh_blokli_ip().await;
-                if blokli_moved && matches!(self.shutdown_ongoing, Shutdown::None) {
-                    // Nothing is armed yet; the respawned worker reconnects to the kept target on the new address.
-                    self.restart_worker_on_new_blokli().await;
-                    return Ok(());
-                }
+                self.blokli_ip = Some(blokli_ip);
                 let mut ips: Vec<IpAddr> = peer_ips.into_iter().map(IpAddr::V4).collect();
-                ips.extend(self.blokli_ip.map(IpAddr::V4));
+                ips.push(IpAddr::V4(blokli_ip));
                 let res = self.apply_killswitch(interface, ips).await;
                 self.killswitch_armed |= res.is_ok();
                 if matches!(self.shutdown_ongoing, Shutdown::None)
@@ -1287,10 +1258,15 @@ impl DaemonState {
                 mtu,
                 dns,
                 mut peer_ips,
+                blokli_ip,
             } => {
+                self.blokli_ip = Some(blokli_ip);
                 // Blokli stays on the WAN like the peers, or the worker's chain access would depend on its own tunnel.
-                peer_ips.extend(self.blokli_ip);
-                let res = match self.setup_static_routing(interface_address, mtu, dns, peer_ips).await {
+                peer_ips.push(blokli_ip);
+                let res = match self
+                    .setup_static_routing(interface_address, mtu, dns, peer_ips, blokli_ip)
+                    .await
+                {
                     Ok((interface, tun_fd)) => match self.worker_child {
                         // Pass the fd out-of-band first; the worker recv_fd's it only
                         // after seeing TunnelReady below (a simple happens-before).
@@ -1482,7 +1458,6 @@ impl DaemonState {
             .worker_owner
             .clone()
             .ok_or_else(|| "no worker owner recorded".to_string())?;
-        let blokli_ip = self.blokli_ip_for_spawn().await?;
         worker::probe_version(&self.worker_binary, &owner, env!("CARGO_PKG_VERSION"))
             .await
             .map_err(|error| {
@@ -1566,7 +1541,9 @@ impl DaemonState {
         let mut socket_writer = BufWriter::new(writer_half);
 
         // send initial configuration and resources to worker
-        let spawn_params = self.cli.spawn_params(blokli_ip, owner.dirs.clone());
+        // Armed means DNS is blocked, so the new worker cannot look Blokli up itself.
+        let pinned_blokli_ip = self.blokli_ip.filter(|_| self.killswitch_armed);
+        let spawn_params = self.cli.spawn_params(pinned_blokli_ip, owner.dirs.clone());
         let delivered = send_to_worker(
             RootToWorker::StartupParams {
                 config: Box::new(self.config.clone()),
@@ -1626,8 +1603,6 @@ impl DaemonState {
             tun_fd_socket: parent_tun_socket,
             _child_tun_socket: child_tun_socket,
             kill,
-            blokli_ip,
-            blokli_just_resolved: std::mem::take(&mut self.blokli_just_resolved),
         });
         Ok(())
     }
@@ -1666,71 +1641,14 @@ impl DaemonState {
             .await;
     }
 
-    /// Before the first arm only (later arms have DNS closed); true when Blokli left the worker's address.
-    async fn refresh_blokli_ip(&mut self) -> bool {
-        let Some(child) = self.worker_child.as_mut() else {
-            return false;
-        };
-        let just_resolved = std::mem::take(&mut child.blokli_just_resolved);
-        let worker_ip = child.blokli_ip;
-        if self.killswitch_armed || just_resolved {
-            return false;
-        }
-        let resolved = self.resolve_blokli_ip().await;
-        let ip = choose_blokli_ip(resolved, self.blokli_ip.unwrap_or(worker_ip));
-        self.blokli_ip = Some(ip);
-        ip != worker_ip
-    }
-
-    /// Armed means DNS is blocked and just resolved means a lookup ran a moment ago: both keep the pin.
-    async fn blokli_ip_for_spawn(&mut self) -> Result<Ipv4Addr, String> {
-        let keep_pin = self.killswitch_armed || self.blokli_just_resolved;
-        if keep_pin && let Some(pin) = self.blokli_ip {
-            return Ok(pin);
-        }
-        let ip = match (self.resolve_blokli_ip().await, self.blokli_ip) {
-            (Ok(ip), _) => ip,
-            (Err(error), Some(pin)) => {
-                tracing::warn!(%error, fallback = %pin, "blokli host not resolvable before spawn - keeping the current address");
-                pin
-            }
-            (Err(error), None) => {
-                tracing::warn!(%error, blokli_url = %self.cli.hopr_blokli_url, "blokli host not resolvable before spawn");
-                return Err(format!("cannot resolve blokli host: {error}"));
-            }
-        };
-        self.blokli_ip = Some(ip);
-        Ok(ip)
-    }
-
-    async fn resolve_blokli_ip(&self) -> Result<Ipv4Addr, String> {
-        let url = &self.cli.hopr_blokli_url;
-        let timeout = self.config.blokli.resolve_timeout;
-        match time::timeout(timeout, remote_data::resolve_blokli_ip(url)).await {
-            Ok(res) => res.map_err(|e| e.to_string()),
-            Err(_) => Err("timed out".to_string()),
-        }
-    }
-
-    /// edgli keeps its spawn-time Blokli address, so only a respawn moves the worker; same path as a config reload.
-    async fn restart_worker_on_new_blokli(&mut self) {
-        let Some(ref mut child) = self.worker_child else {
-            return;
-        };
-        self.shutdown_ongoing = Shutdown::RestartWorker;
-        self.blokli_just_resolved = true;
-        send_to_worker_lossy(RootToWorker::Shutdown, &mut child.socket_writer).await;
-        self.cleanup_worker_resources().await;
-    }
-
     async fn setup_static_routing(
         &self,
         interface_address: String,
         mtu: u32,
         dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
+        blokli_ip: Ipv4Addr,
     ) -> Result<(String, OwnedFd), String> {
-        let blokli_ip = self.blokli_ip.ok_or("blokli address unknown")?;
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = self
             .routing_actor_sender
@@ -1816,20 +1734,6 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
-
-    const CURRENT: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 9);
-
-    #[test]
-    fn fresh_blokli_address_replaces_the_current_one() {
-        let fresh = Ipv4Addr::new(198, 51, 100, 7);
-        assert_eq!(choose_blokli_ip(Ok(fresh), CURRENT), fresh);
-        assert_eq!(choose_blokli_ip(Ok(CURRENT), CURRENT), CURRENT);
-    }
-
-    #[test]
-    fn unresolvable_blokli_host_keeps_the_current_address() {
-        assert_eq!(choose_blokli_ip(Err("no answer".to_string()), CURRENT), CURRENT);
-    }
 
     // The caller is blocked on this oneshot; dropping it is what produced the EOF.
     #[tokio::test]

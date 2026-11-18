@@ -244,8 +244,8 @@ path    = { hops = 1 }
 # (distinct from connection_sync_timeout, which bounds the whole initial sync, and from
 # connection.http_timeout, which applies to exit node requests)
 # request_timeout = "10s"
-# bound on the lookup of the blokli host before the first killswitch arm of a connection;
-# on timeout the address resolved at startup is kept
+# bound on the worker's lookups of the blokli host, at startup and before the first
+# killswitch arm of a connection; before an arm a timeout keeps the current address
 # resolve_timeout = "3s"
 
 ###

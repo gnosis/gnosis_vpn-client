@@ -394,13 +394,15 @@ impl State {
         }
         tracing::debug!(?config, ?spawn_params, "received startup params from root");
         let sender = self.lookup_sender.clone();
-        let request_timeout = config.blokli.request_timeout;
+        let (request_timeout, resolve_timeout) = (config.blokli.request_timeout, config.blokli.resolve_timeout);
         let lookup = tokio::spawn(async move {
             let on_failure = |kind, message| {
                 // Failures come seconds apart, so the queue never fills.
                 let _ = sender.try_send(NetworkLookup::Failed { kind, message });
             };
-            let params = spawn_params.query_network(request_timeout, on_failure).await;
+            let params = spawn_params
+                .query_network(request_timeout, resolve_timeout, on_failure)
+                .await;
             let _ = sender.send(NetworkLookup::Found(Box::new(params))).await;
         });
         self.pending_startup = Some(PendingStartup {

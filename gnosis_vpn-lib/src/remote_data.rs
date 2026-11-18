@@ -19,6 +19,8 @@ pub enum Error {
     NoIpv4,
     #[error("IO error: {0}")]
     IO(#[from] io::Error),
+    #[error("resolving the blokli host timed out")]
+    ResolveTimeout,
     #[error("Blokli query failed: {message}")]
     Blokli { kind: FailureKind, message: String },
 }
@@ -28,7 +30,7 @@ impl Error {
     pub fn startup_issue_kind(&self) -> StartupIssueKind {
         match self {
             // Only the system resolver does IO here.
-            Error::IO(_) | Error::NoIpv4 => StartupIssueKind::Unreachable,
+            Error::IO(_) | Error::NoIpv4 | Error::ResolveTimeout => StartupIssueKind::Unreachable,
             Error::Blokli { kind, .. } => crate::core::startup_issue::kind(*kind),
             Error::NoHost | Error::UnknownPort => StartupIssueKind::Other,
         }
@@ -64,7 +66,12 @@ pub fn backoff_expo_short_delay() -> ExponentialBuilder {
 
 /// The one IPv4 address the whole session pins Blokli to (client, killswitch exemption, WAN probe).
 pub async fn resolve_blokli_ip(url: &url::Url) -> Result<Ipv4Addr, Error> {
-    resolve_ips(url).await?.first().copied().ok_or(Error::NoIpv4)
+    resolve_blokli_ips(url).await?.first().copied().ok_or(Error::NoIpv4)
+}
+
+/// Every address, so a round-robin answer does not read as Blokli moving.
+pub async fn resolve_blokli_ips(url: &url::Url) -> Result<Vec<Ipv4Addr>, Error> {
+    resolve_ips(url).await
 }
 
 /// Blokli's `chainInfo.network`, through the already pinned address.

@@ -103,6 +103,8 @@ pub enum RequestToRoot {
     KillswitchLockdown {
         request_id: u64,
         peer_ips: Vec<Ipv4Addr>,
+        /// Exempt like the peers, or the worker loses chain access once armed.
+        blokli_ip: Ipv4Addr,
         interface: Option<String>,
     },
     SetupTunnel {
@@ -111,6 +113,7 @@ pub enum RequestToRoot {
         mtu: u32,
         dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
+        blokli_ip: Ipv4Addr,
     },
     TearDownWg,
     Ping {
@@ -186,6 +189,7 @@ mod tests {
             mtu: 1420,
             dns: Some("1.1.1.1,8.8.8.8".to_string()),
             peer_ips: vec![Ipv4Addr::new(192, 0, 2, 1), Ipv4Addr::new(198, 51, 100, 42)],
+            blokli_ip: Ipv4Addr::new(203, 0, 113, 7),
         };
         let json = serde_json::to_string(&request).expect("serialize");
         let decoded: RequestToRoot = serde_json::from_str(&json).expect("deserialize");
@@ -196,8 +200,10 @@ mod tests {
                 mtu,
                 dns,
                 peer_ips,
+                blokli_ip,
             } => {
                 assert_eq!(request_id, 7);
+                assert_eq!(blokli_ip, Ipv4Addr::new(203, 0, 113, 7));
                 assert_eq!(interface_address, "10.128.0.5/9");
                 assert_eq!(mtu, 1420);
                 assert_eq!(dns.as_deref(), Some("1.1.1.1,8.8.8.8"));
