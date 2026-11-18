@@ -97,23 +97,39 @@ pub struct ExitTrafficFunds {
     pub capacity: Capacity,
     /// Data the funds buy from exits at this client's price per byte.
     pub bytes_from_exits: u64,
+    /// This client's PIX price per byte; zero without a PIX pool.
+    pub price_per_byte: Balance<WxHOPR>,
 }
 
 impl ExitTrafficFunds {
     /// Unvalued until [`CapacityReconciler::reconcile`] fills in the capacity.
     pub fn new(funds: Balance<WxHOPR>, price_per_byte: Balance<WxHOPR>) -> Self {
-        let bytes_from_exits = if price_per_byte.is_zero() {
-            0
-        } else {
-            u64::try_from(funds.amount() / price_per_byte.amount()).unwrap_or(u64::MAX)
-        };
         Self {
             capacity: Capacity {
                 stake: funds,
                 ..Capacity::default()
             },
-            bytes_from_exits,
+            bytes_from_exits: bytes_at_price(funds, price_per_byte),
+            price_per_byte,
         }
+    }
+}
+
+/// Data `funds` buy from exits at `price_per_byte`; none at a zero price.
+fn bytes_at_price(funds: Balance<WxHOPR>, price_per_byte: Balance<WxHOPR>) -> u64 {
+    if price_per_byte.is_zero() {
+        0
+    } else {
+        u64::try_from(funds.amount() / price_per_byte.amount()).unwrap_or(u64::MAX)
+    }
+}
+
+impl CapacityAllocations {
+    /// Data exits sell for the PIX pool plus the Safe and node funds that top it up.
+    /// Channel stakes are left out: they pay only relays and never reach the pool.
+    pub fn bytes_from_exits_with_safe(&self) -> u64 {
+        let funds = self.exit_traffic.capacity.stake + self.safe.stake + self.node.stake;
+        bytes_at_price(funds, self.exit_traffic.price_per_byte)
     }
 }
 
@@ -525,17 +541,12 @@ impl From<&CapacityAllocations> for gnosis_vpn_ipc::CapacityAllocations {
                 .collect(),
             node: (&allocations.node).into(),
             safe: (&allocations.safe).into(),
-            exit_traffic: (&allocations.exit_traffic).into(),
-        }
-    }
-}
-
-impl From<&ExitTrafficFunds> for gnosis_vpn_ipc::ExitTrafficFunds {
-    fn from(funds: &ExitTrafficFunds) -> Self {
-        Self {
-            stake: wire::wxhopr(funds.capacity.stake),
-            byte_capacity: funds.capacity.byte_capacity,
-            bytes_from_exits: funds.bytes_from_exits,
+            exit_traffic: gnosis_vpn_ipc::ExitTrafficFunds {
+                stake: wire::wxhopr(allocations.exit_traffic.capacity.stake),
+                byte_capacity: allocations.exit_traffic.capacity.byte_capacity,
+                bytes_from_exits: allocations.exit_traffic.bytes_from_exits,
+                bytes_from_exits_with_safe: allocations.bytes_from_exits_with_safe(),
+            },
         }
     }
 }
@@ -599,6 +610,7 @@ mod tests {
         ExitTrafficFunds {
             capacity: capacity(stake, bytes),
             bytes_from_exits: 0,
+            price_per_byte: Balance::zero(),
         }
     }
 
@@ -986,6 +998,33 @@ mod tests {
         assert_eq!(funds.capacity.byte_capacity, 0);
         let free = ExitTrafficFunds::new(Balance::from(1000u64), Balance::zero());
         assert_eq!(free.bytes_from_exits, 0);
+    }
+
+    #[test]
+    fn data_from_exits_counts_the_safe_and_node_but_not_channels() {
+        let caps = CapacityAllocations {
+            exit_traffic: ExitTrafficFunds::new(Balance::from(1000u64), Balance::from(10u64)),
+            ..allocs(Some(capacity(5000, 0)), capacity(200, 0), capacity(800, 0))
+        };
+        assert_eq!(caps.bytes_from_exits_with_safe(), 200);
+        let wire = gnosis_vpn_ipc::CapacityAllocations::from(&caps);
+        assert_eq!(wire.exit_traffic.bytes_from_exits, 100);
+        assert_eq!(wire.exit_traffic.bytes_from_exits_with_safe, 200);
+    }
+
+    #[test]
+    fn data_from_exits_is_zero_without_a_pix_pool() {
+        let caps = allocs(None, Capacity::default(), capacity(800, 0));
+        assert_eq!(caps.bytes_from_exits_with_safe(), 0);
+    }
+
+    #[test]
+    fn data_from_exits_counts_in_flight_stake_folded_into_the_safe() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(with_exit(50, 100));
+        let out = r.reconcile(with_exit(50, 60));
+        assert_eq!(out.safe.stake, Balance::<WxHOPR>::from(100u64));
+        assert_eq!(out.bytes_from_exits_with_safe(), 150);
     }
 
     #[test]

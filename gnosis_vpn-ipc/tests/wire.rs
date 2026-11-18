@@ -235,11 +235,19 @@ fn exit_traffic_funds_carry_only_stake_and_bytes() {
         stake: Balance::from_wei(84),
         byte_capacity: 17,
         bytes_from_exits: 78,
+        bytes_from_exits_with_safe: 90,
     };
     assert_eq!(
         serde_json::to_value(funds).expect("serialize"),
-        json!({"stake": "84", "byte_capacity": 17, "bytes_from_exits": 78})
+        json!({"stake": "84", "byte_capacity": 17, "bytes_from_exits": 78, "bytes_from_exits_with_safe": 90})
     );
+}
+
+#[test]
+fn exit_traffic_funds_without_the_safe_figure_still_parse() {
+    let json = json!({"stake": "84", "byte_capacity": 17, "bytes_from_exits": 78});
+    let parsed: ExitTrafficFunds = serde_json::from_value(json).expect("an older service omits it");
+    assert_eq!(parsed.bytes_from_exits_with_safe, 0);
 }
 
 #[test]

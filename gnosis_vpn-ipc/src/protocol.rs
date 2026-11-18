@@ -857,6 +857,9 @@ pub struct ExitTrafficFunds {
     pub byte_capacity: u64,
     /// Data the funds buy from exits.
     pub bytes_from_exits: u64,
+    /// Data exits sell for these funds plus the Safe and node account that top them up; channel stakes pay only relays.
+    #[serde(default)]
+    pub bytes_from_exits_with_safe: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
