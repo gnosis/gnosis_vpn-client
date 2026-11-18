@@ -61,6 +61,7 @@ impl Config {
             disconnecting: vec![],
             probe: None,
             pix_chunk_bytes: None,
+            pix_price_per_byte: crate::wire::wxhopr(self.pix_strategy.price_per_byte),
             probing: None,
             recent: vec![],
         }

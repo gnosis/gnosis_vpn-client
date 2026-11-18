@@ -253,26 +253,22 @@ fn exit_traffic_funds_without_the_pix_price_figures_still_parse() {
 }
 
 #[test]
-fn preparing_safe_carries_the_pix_price() {
-    let json = json!({"type": "preparing_safe", "node_address": address(1), "node_xdai": "5", "node_wxhopr": "7",
-        "funding_tool": null, "issue": null, "balance_recommendation": null, "price_per_byte": "9"});
-    let parsed: RunMode = serde_json::from_value(json.clone()).expect("parse");
-    let RunMode::PreparingSafe { price_per_byte, .. } = &parsed else {
-        panic!("expected preparing_safe");
-    };
-    assert_eq!(*price_per_byte, Balance::from_wei(9));
+fn status_carries_the_pix_price() {
+    let json = json!({"run_mode": {"type": "not_running"}, "destinations": [], "target": null,
+        "connection": {"type": "disconnected"}, "disconnecting": [], "probe": null, "pix_chunk_bytes": null,
+        "pix_price_per_byte": "9", "probing": null, "recent": []});
+    let parsed: Status = serde_json::from_value(json.clone()).expect("parse");
+    assert_eq!(parsed.pix_price_per_byte, Balance::from_wei(9));
     assert_eq!(serde_json::to_value(&parsed).expect("serialize"), json);
 }
 
 #[test]
-fn preparing_safe_without_the_pix_price_still_parses() {
-    let json = json!({"type": "preparing_safe", "node_address": address(1), "node_xdai": "5", "node_wxhopr": "7",
-        "funding_tool": null, "issue": null, "balance_recommendation": null});
-    let parsed: RunMode = serde_json::from_value(json).expect("an older service omits it");
-    let RunMode::PreparingSafe { price_per_byte, .. } = parsed else {
-        panic!("expected preparing_safe");
-    };
-    assert_eq!(price_per_byte, Balance::zero());
+fn status_without_the_pix_price_still_parses() {
+    let json = json!({"run_mode": {"type": "not_running"}, "destinations": [], "target": null,
+        "connection": {"type": "disconnected"}, "disconnecting": [], "probe": null, "pix_chunk_bytes": null,
+        "probing": null, "recent": []});
+    let parsed: Status = serde_json::from_value(json).expect("an older service omits it");
+    assert_eq!(parsed.pix_price_per_byte, Balance::zero());
 }
 
 #[test]

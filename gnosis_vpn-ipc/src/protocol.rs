@@ -134,6 +134,9 @@ pub struct Status {
     pub probe: Option<ProbeView>,
     /// Data an exit sells per PIX chunk; none until the node runs.
     pub pix_chunk_bytes: Option<u64>,
+    /// The PIX price exit traffic is bought at, from the config, so wxHOPR reads as data in every run mode.
+    #[serde(default)]
+    pub pix_price_per_byte: Balance<WxHopr>,
     /// Network probing as applied to the edge client; none until the node runs.
     pub probing: Option<ProbingView>,
     /// Recently connected exits on this network, newest first.
@@ -238,9 +241,6 @@ pub enum RunMode {
         funding_tool: Option<String>,
         issue: Option<StartupIssue>,
         balance_recommendation: Option<Box<BalanceRecommendation>>,
-        /// The PIX price exit traffic is bought at, so wxHOPR reads as data before the node runs.
-        #[serde(default)]
-        price_per_byte: Balance<WxHopr>,
     },
     DeployingSafe {
         node_address: Address,

@@ -100,6 +100,7 @@ fn respond(request: Request, run_mode: RunMode) -> Response {
             disconnecting: vec![],
             probe: None,
             pix_chunk_bytes: None,
+            pix_price_per_byte: Balance::from_wei(9_000_000_000),
             probing: None,
             recent: vec![],
         })),

@@ -2335,7 +2335,6 @@ impl Core {
                     funding_tool,
                     issue,
                     self.minimum_balance_recommendation,
-                    self.config.pix_strategy.price_per_byte,
                 )
             }
             Phase::DeployingSafe { .. } => command::deploying_safe(self.node_address),
@@ -2401,6 +2400,7 @@ impl Core {
             disconnecting,
             probe: self.probe.as_ref().map(Probe::view),
             pix_chunk_bytes: self.hopr.as_ref().map(|h| h.pix_chunk_bytes()),
+            pix_price_per_byte: wire::wxhopr(self.config.pix_strategy.price_per_byte),
             probing: self.probing_plan.as_ref().map(|plan| self.probing_view(plan)),
             recent: self
                 .network_probing
