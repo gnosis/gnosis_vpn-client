@@ -6,12 +6,12 @@ use tokio::sync::oneshot;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use gnosis_vpn_ipc::Response;
+use gnosis_vpn_ipc::{Response, ServiceError};
 
 use crate::command::WorkerCommand;
 use crate::config::Config;
 use crate::ping;
-use crate::worker_params::WorkerParams;
+use crate::worker_params::SpawnParams;
 
 /// Messages sent from worker to core application logic
 #[derive(Debug)]
@@ -43,7 +43,7 @@ pub enum RootToWorker {
     /// Startup parameters
     StartupParams {
         config: Box<Config>,
-        worker_params: Box<WorkerParams>,
+        spawn_params: Box<SpawnParams>,
         target_dest_id: Option<String>,
     },
     /// Socket command received by root
@@ -59,6 +59,8 @@ pub enum RootToWorker {
 pub enum WorkerToRoot {
     /// Response to a socket command
     Response { resp: Box<Response>, id: u64 },
+    /// A socket command the worker cannot answer yet
+    Refused { error: ServiceError, id: u64 },
     /// Request to root execution
     RequestToRoot(RequestToRoot),
 }
@@ -101,6 +103,8 @@ pub enum RequestToRoot {
     KillswitchLockdown {
         request_id: u64,
         peer_ips: Vec<Ipv4Addr>,
+        /// Exempt like the peers, or the worker loses chain access once armed.
+        blokli_ip: Ipv4Addr,
         interface: Option<String>,
     },
     SetupTunnel {
@@ -109,6 +113,7 @@ pub enum RequestToRoot {
         mtu: u32,
         dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
+        blokli_ip: Ipv4Addr,
     },
     TearDownWg,
     Ping {
@@ -184,6 +189,7 @@ mod tests {
             mtu: 1420,
             dns: Some("1.1.1.1,8.8.8.8".to_string()),
             peer_ips: vec![Ipv4Addr::new(192, 0, 2, 1), Ipv4Addr::new(198, 51, 100, 42)],
+            blokli_ip: Ipv4Addr::new(203, 0, 113, 7),
         };
         let json = serde_json::to_string(&request).expect("serialize");
         let decoded: RequestToRoot = serde_json::from_str(&json).expect("deserialize");
@@ -194,8 +200,10 @@ mod tests {
                 mtu,
                 dns,
                 peer_ips,
+                blokli_ip,
             } => {
                 assert_eq!(request_id, 7);
+                assert_eq!(blokli_ip, Ipv4Addr::new(203, 0, 113, 7));
                 assert_eq!(interface_address, "10.128.0.5/9");
                 assert_eq!(mtu, 1420);
                 assert_eq!(dns.as_deref(), Some("1.1.1.1,8.8.8.8"));

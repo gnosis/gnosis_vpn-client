@@ -41,6 +41,32 @@ pub struct Config {
     pub curvy_zk_dir: PathBuf,
 }
 
+impl Config {
+    /// Status from the config file alone, while no core runs to answer it.
+    pub fn offline_status(&self, run_mode: gnosis_vpn_ipc::RunMode, target: Option<&str>) -> gnosis_vpn_ipc::Status {
+        let mut vals: Vec<_> = self.destinations.values().collect();
+        vals.sort_unstable_by(|a, b| a.connect_id.cmp(&b.connect_id));
+        let destinations = vals
+            .into_iter()
+            .map(|dest| gnosis_vpn_ipc::DestinationStatus {
+                destination: dest.into(),
+                route_health: None,
+            })
+            .collect();
+        gnosis_vpn_ipc::Status {
+            run_mode,
+            destinations,
+            target: target.map(Into::into),
+            connection: gnosis_vpn_ipc::Connection::Disconnected,
+            disconnecting: vec![],
+            probe: None,
+            pix_chunk_bytes: None,
+            probing: None,
+            recent: vec![],
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Configuration file not found")]

@@ -5,7 +5,7 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
 use gnosis_vpn_lib::dirs::UserDirs;
-use gnosis_vpn_lib::worker_params::{self, WorkerParams};
+use gnosis_vpn_lib::worker_params::{self, SpawnParams};
 use gnosis_vpn_lib::{config, hopr, logging};
 
 use crate::{ENV_VAR_PID_FILE, worker};
@@ -78,8 +78,8 @@ pub fn parse() -> Cli {
 }
 
 impl Cli {
-    /// The worker's view of these arguments plus what root resolved at startup and who owns the worker.
-    pub fn worker_params(&self, blokli_ip: Ipv4Addr, network: &str, user_dirs: UserDirs) -> WorkerParams {
+    /// The worker's view of these arguments, its owner's dirs and the Blokli pin while the killswitch blocks DNS.
+    pub fn spawn_params(&self, pinned_blokli_ip: Option<Ipv4Addr>, user_dirs: UserDirs) -> SpawnParams {
         let config_mode = match self.hopr_config_path.clone() {
             Some(path) => worker_params::ConfigFileMode::Manual(path),
             None => worker_params::ConfigFileMode::Generated,
@@ -90,13 +90,12 @@ impl Cli {
             funding_tool_rerun: self.allow_funding_tool_rerun,
         };
 
-        WorkerParams::new(
+        SpawnParams::new(
             config_mode,
             allow,
             self.hopr_blokli_url.clone(),
-            blokli_ip,
+            pinned_blokli_ip,
             user_dirs,
-            network.to_string(),
         )
     }
 }

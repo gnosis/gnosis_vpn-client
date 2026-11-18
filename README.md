@@ -61,8 +61,8 @@ caller's uid on the control socket, so nothing is configured for this.
 
 ### Per-user directories
 
-The network name comes from the Blokli `chainInfo.network` the service talks
-to; it is never configured. Per user and network:
+The worker asks Blokli for `chainInfo.network` before it touches any state;
+the name is never configured. Per user and network:
 
 | Content                                          | Linux                                          | macOS                                                         |
 | ------------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------- |
