@@ -1800,12 +1800,21 @@ impl Core {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_on_shutdown.clone();
             let cfg = self.config.strategy.clone().into();
+            let incentive_operations = self.incentive_operations.clone();
+            let pix_top_up = self.config.pix_strategy.float();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::ideal_balance_recommendation(hopr, cfg, results_sender).await;
+                        runner::ideal_balance_recommendation(
+                            hopr,
+                            cfg,
+                            incentive_operations,
+                            pix_top_up,
+                            results_sender,
+                        )
+                        .await;
                     })
                     .await
             });

@@ -14,7 +14,7 @@ pub use gnosis_vpn_ipc::FundingLevel;
 pub struct FundingStatus {
     pub traffic: FundingLevel,
     pub gas: FundingLevel,
-    /// wxHOPR still needed to reach the ideal recommendation, or to lift all wxHOPR above the Low bound at the PIX price,
+    /// wxHOPR still needed to reach the ideal recommendation, or to bring the Safe's refills back to Good,
     /// whichever is more; can be `None` even while `traffic` isn't `Good`.
     pub wxhopr_deficit: Option<Balance<WxHOPR>>,
     /// xDAI still needed to reach the ideal recommendation; `None` while `gas` is `Good`.
@@ -26,9 +26,9 @@ pub struct FundingStatus {
 // Retuned for the reconciled (pooled) quota counting; bounds inclusive.
 const TRAFFIC_EMPTY_MAX_BYTES: u64 = 768 * 1024 * 1024;
 const TRAFFIC_LOW_MAX_BYTES: u64 = 1536 * 1024 * 1024;
-// All wxHOPR at the PIX price, the figure the app shows; bounds inclusive.
-const PIX_TRAFFIC_EMPTY_MAX_BYTES: u64 = 6 * 1024 * 1024 * 1024;
-const PIX_TRAFFIC_LOW_MAX_BYTES: u64 = 12 * 1024 * 1024 * 1024;
+// Low once the Safe can refill the PIX pool only this often, or top up channels at most this often.
+const PIX_REFILLS_LOW: u64 = 1;
+const CHANNEL_TOP_UPS_LOW: u64 = 2;
 // 0.0015 / 0.0035 xDAI, in wei
 const XDAI_EMPTY_BELOW_WEI: u64 = 1_500_000_000_000_000;
 const XDAI_LOW_BELOW_WEI: u64 = 3_500_000_000_000_000;
@@ -398,6 +398,10 @@ pub struct BalanceRecommendation {
     pub xdai_fee_per_tx: Balance<XDai>,
     /// wxHOPR the next top-up pass over open channels will try to spend; not part of `wxhopr`.
     pub topup_headroom: Balance<WxHOPR>,
+    /// wxHOPR one PIX pool refill shields from the Safe; zero without a pool.
+    pub pix_top_up: Balance<WxHOPR>,
+    /// wxHOPR one channel top-up stakes; zero until the ticket economics are known.
+    pub channel_top_up: Balance<WxHOPR>,
 }
 
 impl From<edgli::strategy::BalanceRecommendation> for BalanceRecommendation {
@@ -411,6 +415,8 @@ impl From<edgli::strategy::BalanceRecommendation> for BalanceRecommendation {
             txs_to_start: rec.txs_to_start,
             xdai_fee_per_tx: rec.xdai_fee_per_tx,
             topup_headroom: rec.topup_headroom,
+            pix_top_up: Balance::zero(),
+            channel_top_up: Balance::zero(),
         }
     }
 }
@@ -457,37 +463,38 @@ impl Display for Balances {
     }
 }
 
-fn level(bytes: u64, empty_max: u64, low_max: u64) -> FundingLevel {
-    if bytes <= empty_max {
+fn traffic_level(bytes: u64) -> FundingLevel {
+    if bytes <= TRAFFIC_EMPTY_MAX_BYTES {
         FundingLevel::Empty
-    } else if bytes <= low_max {
+    } else if bytes <= TRAFFIC_LOW_MAX_BYTES {
         FundingLevel::Low
     } else {
         FundingLevel::Good
     }
 }
 
-fn traffic_level(bytes: u64) -> FundingLevel {
-    level(bytes, TRAFFIC_EMPTY_MAX_BYTES, TRAFFIC_LOW_MAX_BYTES)
+/// How many `top_up`s `available` pays for; `None` when the size is unknown.
+fn refills(available: Balance<WxHOPR>, top_up: Balance<WxHOPR>) -> Option<u64> {
+    (!top_up.is_zero()).then(|| u64::try_from(available.amount() / top_up.amount()).unwrap_or(u64::MAX))
 }
 
-/// wxHOPR that lifts all wxHOPR above the Low bound at the PIX price; `None` without a PIX price.
-fn pix_deficit(caps: &CapacityAllocations) -> Option<Balance<WxHOPR>> {
-    let price = caps.exit_traffic.price_per_byte;
-    (!price.is_zero()).then(|| price * (PIX_TRAFFIC_LOW_MAX_BYTES + 1) - SnapshotTotals::of(caps).stake)
-}
-
-/// All wxHOPR at the PIX price when there is one, else every allocation at the relay rate.
-fn overall_traffic_level(caps: &CapacityAllocations) -> FundingLevel {
-    if caps.exit_traffic.price_per_byte.is_zero() {
-        traffic_level(SnapshotTotals::of(caps).byte_capacity)
-    } else {
-        level(
-            caps.total_bytes_at_pix_price(),
-            PIX_TRAFFIC_EMPTY_MAX_BYTES,
-            PIX_TRAFFIC_LOW_MAX_BYTES,
-        )
+/// What the Safe can still refill: funds can't move between the PIX pool and channels, so each needs its own.
+/// The level, and the wxHOPR back to Good; `None` without either refill size.
+fn refill_level(available: Balance<WxHOPR>, ideal: &BalanceRecommendation) -> Option<(FundingLevel, Balance<WxHOPR>)> {
+    let pix = refills(available, ideal.pix_top_up);
+    let channel = refills(available, ideal.channel_top_up);
+    if pix.is_none() && channel.is_none() {
+        return None;
     }
+    let level = if pix == Some(0) || channel == Some(0) {
+        FundingLevel::Empty
+    } else if pix.is_some_and(|n| n <= PIX_REFILLS_LOW) || channel.is_some_and(|n| n <= CHANNEL_TOP_UPS_LOW) {
+        FundingLevel::Low
+    } else {
+        FundingLevel::Good
+    };
+    let good = (ideal.pix_top_up * (PIX_REFILLS_LOW + 1)).max(ideal.channel_top_up * (CHANNEL_TOP_UPS_LOW + 1));
+    Some((level, good - available))
 }
 
 /// Pools every allocation location so funds unswept on the node EOA or paying for exit traffic still count.
@@ -497,7 +504,13 @@ pub fn to_funding_status(
     node_xdai: Balance<XDai>,
     safe_wxhopr: Balance<WxHOPR>,
 ) -> FundingStatus {
-    let traffic = overall_traffic_level(capacity_allocations);
+    // Unswept node wxHOPR lands in the Safe, so it refills too.
+    let available = safe_wxhopr + capacity_allocations.node.stake;
+    let refill = refill_level(available, &ideal);
+    let traffic = refill.map_or_else(
+        || traffic_level(SnapshotTotals::of(capacity_allocations).byte_capacity),
+        |(level, _)| level,
+    );
     // Funds paying for exit traffic can't pay for relays, so the deficit follows the relay funds alone.
     let relays = SnapshotTotals::relays(capacity_allocations);
 
@@ -518,9 +531,10 @@ pub fn to_funding_status(
     // `-` on Balance saturates at zero; wxhopr_deficit is relative to `ideal` only, which ignores drained stake on already-open channels.
     let relay_deficit =
         (traffic_level(relays.byte_capacity) != FundingLevel::Good).then(|| ideal.wxhopr - relays.stake);
+    let refill_deficit = refill.filter(|(level, _)| *level != FundingLevel::Good).map(|(_, d)| d);
     let wxhopr_deficit = relay_deficit
         .into_iter()
-        .chain(pix_deficit(capacity_allocations))
+        .chain(refill_deficit)
         .max()
         .filter(|d| !d.is_zero());
     // Floored at xdai_low_below so this can't go None while gas isn't Good, even if `ideal` dips below it.
@@ -610,6 +624,8 @@ mod tests {
             txs_to_start: 0,
             xdai_fee_per_tx: Balance::<XDai>::from(xdai),
             topup_headroom: Balance::<WxHOPR>::zero(),
+            pix_top_up: Balance::<WxHOPR>::zero(),
+            channel_top_up: Balance::<WxHOPR>::zero(),
         }
     }
 
@@ -711,84 +727,80 @@ mod tests {
         assert_eq!(status.traffic, FundingLevel::Good);
     }
 
-    /// Exits priced at one wei per byte, so each stake in wei reads as bytes.
-    fn pix_priced(safe_wei: u64, channel_wei: u64, relay_bytes: u64) -> CapacityAllocations {
-        CapacityAllocations {
-            exit_traffic: ExitTrafficFunds::new(Balance::zero(), Balance::from(1u64)),
-            ..allocs(
-                Some(capacity(channel_wei, relay_bytes)),
-                Capacity::default(),
-                capacity(safe_wei, relay_bytes),
-            )
+    /// Stands in for one wxHOPR, small enough that the stakes below fit a u64.
+    const W: u64 = 1_000_000_000;
+
+    /// A recommendation that knows both refill sizes, in `W`.
+    fn ideal_refills(pix: u64, channel: u64) -> BalanceRecommendation {
+        BalanceRecommendation {
+            pix_top_up: Balance::<WxHOPR>::from(pix * W),
+            channel_top_up: Balance::<WxHOPR>::from(channel * W),
+            ..ideal(0, 0)
         }
     }
 
-    fn pix_traffic(allocations: &CapacityAllocations) -> FundingLevel {
+    fn refill_status(ideal: BalanceRecommendation, safe: u64, node: u64) -> FundingStatus {
         to_funding_status(
-            ideal(0, 0),
-            allocations,
+            ideal,
+            &allocs(None, capacity(node * W, 0), Capacity::default()),
             Balance::<XDai>::zero(),
-            Balance::<WxHOPR>::zero(),
+            Balance::<WxHOPR>::from(safe * W),
         )
-        .traffic
     }
 
     #[test]
-    fn pix_traffic_empty_up_to_6gib_inclusive() {
-        assert_eq!(pix_traffic(&pix_priced(6 * GB, 0, 0)), FundingLevel::Empty);
+    fn empty_once_the_safe_cannot_refill_the_pix_pool() {
+        let status = refill_status(ideal_refills(35, 15), 34, 0);
+        assert_eq!(status.traffic, FundingLevel::Empty);
+        assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(36 * W)));
     }
 
     #[test]
-    fn pix_traffic_low_up_to_12gib_inclusive() {
-        for safe in [6 * GB + 1, 12 * GB] {
-            assert_eq!(pix_traffic(&pix_priced(safe, 0, 0)), FundingLevel::Low);
-        }
+    fn empty_once_the_safe_cannot_top_up_a_channel() {
+        assert_eq!(refill_status(ideal_refills(0, 15), 14, 0).traffic, FundingLevel::Empty);
     }
 
     #[test]
-    fn pix_traffic_good_above_12gib_counting_channel_stakes() {
-        assert_eq!(pix_traffic(&pix_priced(6 * GB, 6 * GB + 1, 0)), FundingLevel::Good);
+    fn low_with_one_pix_refill_left() {
+        assert_eq!(refill_status(ideal_refills(35, 15), 69, 0).traffic, FundingLevel::Low);
     }
 
     #[test]
-    fn pix_deficit_lifts_all_wxhopr_above_12gib() {
-        let status = to_funding_status(
-            ideal(0, 0),
-            &pix_priced(10 * GB, 0, 0),
-            Balance::<XDai>::zero(),
-            Balance::<WxHOPR>::zero(),
-        );
+    fn low_with_two_channel_top_ups_left() {
+        let status = refill_status(ideal_refills(10, 15), 44, 0);
         assert_eq!(status.traffic, FundingLevel::Low);
-        assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(2 * GB + 1)));
+        assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(W)));
     }
 
     #[test]
-    fn pix_deficit_is_none_once_good() {
-        let status = to_funding_status(
-            ideal(0, 0),
-            &pix_priced(12 * GB + 1, 0, 0),
-            Balance::<XDai>::zero(),
-            Balance::<WxHOPR>::zero(),
-        );
+    fn good_with_two_pix_refills_and_three_channel_top_ups() {
+        let status = refill_status(ideal_refills(35, 15), 70, 0);
+        assert_eq!(status.traffic, FundingLevel::Good);
         assert_eq!(status.wxhopr_deficit, None);
     }
 
     #[test]
-    fn wxhopr_deficit_takes_the_larger_of_relay_and_pix() {
-        // The relays lack 5 GiB of the ideal, more than the 2 GiB the PIX bound wants.
-        let status = to_funding_status(
-            ideal(15 * GB, 0),
-            &pix_priced(8 * GB, 2 * GB, 0),
-            Balance::<XDai>::zero(),
-            Balance::<WxHOPR>::zero(),
-        );
-        assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(5 * GB)));
+    fn unswept_node_wxhopr_counts_toward_refills() {
+        assert_eq!(refill_status(ideal_refills(35, 15), 35, 35).traffic, FundingLevel::Good);
     }
 
     #[test]
-    fn pix_traffic_ignores_the_relay_rate_bytes() {
-        // 200 GiB at the relay rate buys only 2 GiB from exits.
-        assert_eq!(pix_traffic(&pix_priced(GB, GB, 100 * GB)), FundingLevel::Empty);
+    fn refills_ignore_what_the_pix_pool_and_channels_hold() {
+        let allocations = CapacityAllocations {
+            exit_traffic: valued_exit_funds(500 * W, 100 * GB),
+            ..allocs(
+                Some(capacity(500 * W, 100 * GB)),
+                Capacity::default(),
+                Capacity::default(),
+            )
+        };
+        let status = to_funding_status(
+            ideal_refills(35, 15),
+            &allocations,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::from(10 * W),
+        );
+        assert_eq!(status.traffic, FundingLevel::Empty);
     }
 
     #[test]

@@ -195,10 +195,49 @@ pub(crate) async fn minimum_balance_recommendation(
 pub(crate) async fn ideal_balance_recommendation(
     hopr: Arc<Hopr>,
     cfg: edgli::strategy::IncentiveConfiguration,
+    incentive_operations: Option<Arc<dyn IncentiveOperations>>,
+    pix_top_up: HoprBalance,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = hopr.ideal_balance_recommendation(&cfg).await.map_err(Error::Hopr);
+    let mut res = hopr.ideal_balance_recommendation(&cfg).await.map_err(Error::Hopr);
+    if let Ok(rec) = res.as_mut() {
+        rec.pix_top_up = pix_top_up;
+        if let Some(ops) = incentive_operations {
+            rec.channel_top_up = channel_top_up(ops.as_ref(), &cfg).await;
+        }
+    }
     let _ = results_sender.send(Results::IdealBalanceRecommendation { res }).await;
+}
+
+/// Feeds the strategy's funding resolution the same packet payload edgli does.
+struct PacketPayload;
+
+impl edgli::hopr_lib::api::node::PacketTransport for PacketPayload {
+    fn packet_payload_size() -> usize {
+        edgli::hopr_lib::exports::transport::PACKET_PAYLOAD_SIZE
+    }
+}
+
+/// One channel top-up's stake as the channel strategy resolves it at the live ticket economics; zero when unknown.
+async fn channel_top_up(ops: &dyn IncentiveOperations, cfg: &edgli::strategy::IncentiveConfiguration) -> HoprBalance {
+    let stats = match ops.ticket_stats().await {
+        Ok(stats) => stats,
+        Err(err) => {
+            tracing::warn!(%err, "failed to read ticket stats for the channel top-up size");
+            return HoprBalance::zero();
+        }
+    };
+    match edgli::strategy::compute_funding_config(cfg) {
+        Ok(funding) => {
+            funding
+                .resolve::<PacketPayload>(stats.ticket_price, stats.winning_probability.as_f64())
+                .topup_balance
+        }
+        Err(err) => {
+            tracing::warn!(%err, "failed to size a channel top-up");
+            HoprBalance::zero()
+        }
+    }
 }
 
 pub(crate) async fn capacity_allocations(
@@ -834,5 +873,21 @@ impl Display for Results {
                 Err(err) => write!(f, "QuickProbe {destination}: Error({err})"),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_top_up_matches_the_strategy_at_piz_palu_prices() {
+        let funding =
+            edgli::strategy::compute_funding_config(&edgli::strategy::IncentiveConfiguration::default()).unwrap();
+        // 2.16e-6 wxHOPR tickets at a win probability of 8.64e-7: two winning tickets, as piz-palu-prod channels hold.
+        let top_up = funding
+            .resolve::<PacketPayload>(HoprBalance::from(2_160_000_000_000_u64), 8.64e-7)
+            .topup_balance;
+        assert_eq!(top_up, HoprBalance::from(15_000_000_000_185_455_596_u64));
     }
 }
