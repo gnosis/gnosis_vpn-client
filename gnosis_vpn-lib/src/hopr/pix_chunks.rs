@@ -7,6 +7,8 @@ use futures_util::StreamExt;
 use gnosis_vpn_ipc as ipc;
 
 use std::collections::{BTreeMap, VecDeque};
+use std::fmt;
+use std::ops::Bound::{Excluded, Included};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -53,18 +55,47 @@ struct SessionChunks {
     outcomes: BTreeMap<u32, Deposit>,
 }
 
+impl SessionChunks {
+    fn unpaid(&self) -> Option<Deposit> {
+        // `committed` is the highest requested index, not the last event received.
+        // An older failure may have been tolerated without ever starting a hold.
+        let outcome = *self.outcomes.get(&self.committed)?;
+        (self.confirmed < self.committed && outcome != Deposit::Paid).then_some(outcome)
+    }
+
+    fn has_refused(&self) -> bool {
+        self.outcomes
+            .range((Excluded(self.confirmed), Included(self.committed)))
+            .any(|(_, outcome)| *outcome == Deposit::Refused)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Deposit {
+pub enum Deposit {
     Paid,
     Failed,
     /// The strategy never retries it on its own, so the chunk stays unpaid.
     Deferred,
+    /// The strategy refused to pay this chunk; paying again on a new session would be refused too.
+    Refused,
+}
+
+impl fmt::Display for Deposit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Paid => "paid",
+            Self::Failed => "failed",
+            Self::Deferred => "deferred",
+            Self::Refused => "refused",
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Deposits {
     sent: u64,
     failed: u64,
+    refused: u64,
     deferred: u64,
 }
 
@@ -74,8 +105,8 @@ impl Deposits {
         let count = |metric| unlabeled_u64(telemetry, metric).unwrap_or(0);
         Self {
             sent: count("hopr_strategy_pix_deposits_total"),
-            failed: count("hopr_strategy_pix_deposits_failed_total")
-                + count("hopr_strategy_pix_deposits_rejected_total")
+            failed: count("hopr_strategy_pix_deposits_failed_total"),
+            refused: count("hopr_strategy_pix_deposits_rejected_total")
                 + count("hopr_strategy_pix_deposits_over_budget_total"),
             deferred: count("hopr_strategy_pix_deposits_pending_total"),
         }
@@ -124,6 +155,9 @@ impl PixChunks {
             ledger.unsettled.push_back(entry);
         }
         if let Some(mut known) = take(&mut ledger.sessions, session_id) {
+            if !is_unsettled && !is_paid {
+                known.outcomes.remove(&chunk_index);
+            }
             known.committed = known.committed.max(chunk_index);
             known.chunk_bytes = chunk_bytes;
             ledger.sessions.push_back(known);
@@ -155,6 +189,25 @@ impl PixChunks {
             .is_some_and(|s| s.confirmed < s.committed)
     }
 
+    /// Latest unpaid outcome and any unconfirmed refusal, from one ledger snapshot.
+    ///
+    /// Batches can be prepared ahead of service. Do not interrupt a pending deposit just
+    /// because another chunk failed: without the exit's front index, wait for all known
+    /// unconfirmed requests to settle before allowing early recovery.
+    pub fn payment_outcome(&self, session_id: &str) -> (Option<Deposit>, bool) {
+        let ledger = self.ledger.lock().expect("pix chunks lock poisoned");
+        let Some(session) = ledger.sessions.iter().find(|s| s.session_id == session_id) else {
+            return (None, false);
+        };
+        let pending = ledger
+            .unsettled
+            .iter()
+            .any(|(id, index)| id == session_id && session.confirmed < *index && *index <= session.committed);
+        let unpaid = if pending { None } else { session.unpaid() };
+        // Keep this independent of the latest outcome: an older refusal still rules out recovery.
+        (unpaid, session.has_refused())
+    }
+
     /// The exit served the session again after a payment hold, so every chunk asked for so far is funded.
     pub fn confirm(&self, session_id: &str) {
         let mut ledger = self.ledger.lock().expect("pix chunks lock poisoned");
@@ -163,12 +216,19 @@ impl PixChunks {
         }
     }
 
-    /// Fresh rather than cached: a hold is judged on whether this grew between two 4 s samples.
+    /// Fresh every 4 s during a stall: settle deposits too, so a hold does not depend on status polling.
     pub fn surbs_consumed(&self, session_id: &str) -> Option<u64> {
         let telemetry = super::telemetry()
             .inspect_err(|err| tracing::warn!(%err, "no telemetry for PIX hold"))
             .ok()?;
-        gauge_u64(&telemetry, SURBS_CONSUMED, session_id)
+        self.surbs_consumed_with(session_id, &telemetry)
+    }
+
+    fn surbs_consumed_with(&self, session_id: &str, telemetry: &str) -> Option<u64> {
+        if !telemetry.is_empty() {
+            self.ledger.lock().expect("pix chunks lock poisoned").settle(telemetry);
+        }
+        gauge_u64(telemetry, SURBS_CONSUMED, session_id)
     }
 
     /// Reads telemetry only once the session has chunks, and at most every `TELEMETRY_MAX_AGE`.
@@ -210,6 +270,8 @@ impl PixChunks {
 
 impl Ledger {
     /// Oldest unsettled chunk first: node-wide counters force assuming request order, so an uncounted drop shifts later chunks.
+    /// Mixed outcomes in one scrape are credited by category, not completion order. Until
+    /// per-chunk strategy events replace this (#803), attribution can cause a spurious reconnect.
     fn settle(&mut self, telemetry: &str) {
         // a failed scrape reads as all-zero counters, which would look like a reset
         if telemetry.is_empty() {
@@ -224,16 +286,21 @@ impl Ledger {
         self.counted = Some(Deposits {
             sent: counted.sent.max(now.sent),
             failed: counted.failed.max(now.failed),
+            refused: counted.refused.max(now.refused),
             deferred: counted.deferred.max(now.deferred),
         });
         let new_sent = now.sent.saturating_sub(counted.sent);
         let new_failed = now.failed.saturating_sub(counted.failed);
+        let new_refused = now.refused.saturating_sub(counted.refused);
         let new_deferred = now.deferred.saturating_sub(counted.deferred);
         for _ in 0..new_sent {
             self.credit(Deposit::Paid);
         }
         for _ in 0..new_failed {
             self.credit(Deposit::Failed);
+        }
+        for _ in 0..new_refused {
+            self.credit(Deposit::Refused);
         }
         for _ in 0..new_deferred {
             self.credit(Deposit::Deferred);
@@ -277,11 +344,11 @@ fn derive(session: &SessionChunks, telemetry: &str, price_per_byte: HoprBalance)
     let committed = u64::from(session.committed);
     let count = |wanted: Deposit| session.outcomes.values().filter(|outcome| **outcome == wanted).count() as u64;
     let paid = count(Deposit::Paid);
-    let failed = count(Deposit::Failed);
+    let failed = count(Deposit::Failed) + count(Deposit::Refused);
     // An early failure the exit got over must not mark the whole session failed.
     let phase = match session.outcomes.get(&session.committed) {
         Some(Deposit::Paid) => ipc::PixPhase::Funded,
-        Some(Deposit::Failed) => ipc::PixPhase::PaymentFailed,
+        Some(Deposit::Failed | Deposit::Refused) => ipc::PixPhase::PaymentFailed,
         Some(Deposit::Deferred) | None => ipc::PixPhase::PaymentPending,
     };
 
@@ -349,6 +416,242 @@ mod tests {
         let stats = PixChunks::default().stats("s1", price());
         assert_eq!(stats.phase, ipc::PixPhase::Free);
         assert_eq!(stats.bytes_bought, 0);
+    }
+
+    #[test]
+    fn reading_surbs_consumed_settles_new_deposit_outcomes() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        assert_eq!(chunks.payment_outcome("s1").0, None);
+
+        let scrape = format!("{}{SURBS_CONSUMED}{{session_id=\"s1\"}} 42\n", telemetry(0, 0.0, 0, 1));
+        assert_eq!(chunks.surbs_consumed_with("s1", &scrape), Some(42));
+        assert_eq!(chunks.payment_outcome("s1").0, Some(Deposit::Failed));
+    }
+
+    #[test]
+    fn a_refused_deposit_is_kept_apart_from_a_failed_one() {
+        let chunks = PixChunks::default();
+        for index in 1..=3 {
+            chunks.record("s1", index, CHUNK, &telemetry(0, 0.0, 0, 0));
+        }
+        let scrape = format!(
+            "{}hopr_strategy_pix_deposits_rejected_total 1\n\
+             hopr_strategy_pix_deposits_over_budget_total 1\n",
+            telemetry(0, 0.0, 0, 1)
+        );
+        let deposits = Deposits::read(&scrape);
+        assert_eq!((deposits.failed, deposits.refused), (1, 2));
+        let stats = stats_with(&chunks, "s1", &scrape);
+        assert_eq!(stats.phase, ipc::PixPhase::PaymentFailed);
+        assert_eq!(stats.chunks_failed, 3);
+        assert_eq!(
+            chunks.ledger.lock().unwrap().sessions[0].outcomes,
+            BTreeMap::from([(1, Deposit::Failed), (2, Deposit::Refused), (3, Deposit::Refused)])
+        );
+
+        chunks.record("s2", 1, CHUNK, &scrape);
+        stats_with(&chunks, "s2", &telemetry(0, 0.0, 0, 0));
+        stats_with(&chunks, "s2", &scrape);
+        assert_eq!(chunks.payment_outcome("s2").0, None);
+    }
+
+    #[test]
+    fn an_unconfirmed_chunk_with_a_failed_deposit_is_unpaid() {
+        for (metric, outcome) in [
+            ("failed", Deposit::Failed),
+            ("pending", Deposit::Deferred),
+            ("rejected", Deposit::Refused),
+            ("over_budget", Deposit::Refused),
+        ] {
+            let chunks = PixChunks::default();
+            chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+            stats_with(&chunks, "s1", &format!("hopr_strategy_pix_deposits_{metric}_total 1\n"));
+            assert_eq!(chunks.payment_outcome("s1").0, Some(outcome));
+        }
+    }
+
+    #[test]
+    fn an_unconfirmed_chunk_without_an_outcome_is_not_unpaid() {
+        let chunks = PixChunks::default();
+        assert_eq!(chunks.payment_outcome("s1").0, None);
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        assert_eq!(chunks.payment_outcome("s1").0, None);
+
+        stats_with(&chunks, "s1", &telemetry(0, 0.0, 1, 0));
+        assert_eq!(chunks.payment_outcome("s1").0, None);
+        assert!(chunks.awaiting_payment("s1"));
+    }
+
+    #[test]
+    fn an_old_failed_chunk_does_not_end_a_hold_for_a_pending_chunk() {
+        use crate::connection::destination::{Address, Destination, DestinationSource, HopRouting, Meta};
+        use crate::connection::up::{StallVerdict, Up};
+        use std::time::SystemTime;
+
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        chunks.record("s1", 2, CHUNK, &telemetry(0, 0.0, 0, 1));
+        // No hold was needed for chunk 1, so there has been no confirm().
+        let mut conn = Up::new(Destination::new(
+            "exit".to_string(),
+            Address::from([7u8; 20]),
+            HopRouting::try_from(1).unwrap(),
+            Meta::default(),
+            "172.30.0.1:8000".parse().unwrap(),
+            "172.30.0.1:51820".parse().unwrap(),
+            DestinationSource::Configured,
+        ));
+        let mut verdict = StallVerdict::Fine;
+        for sample in 1..=5 {
+            let stall = Duration::from_secs(sample * 4);
+            verdict = conn.judge_stall(
+                stall,
+                chunks.awaiting_payment("s1"),
+                Some(sample * 3),
+                chunks.payment_outcome("s1").0,
+                SystemTime::UNIX_EPOCH + stall,
+            );
+        }
+        assert_eq!(verdict, StallVerdict::HoldStarted);
+    }
+
+    #[test]
+    fn a_confirmed_chunk_with_a_failed_deposit_is_not_unpaid() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        stats_with(&chunks, "s1", &telemetry(0, 0.0, 0, 1));
+        assert_eq!(chunks.payment_outcome("s1").0, Some(Deposit::Failed));
+        chunks.confirm("s1");
+        assert_eq!(chunks.payment_outcome("s1").0, None);
+    }
+
+    #[test]
+    fn a_re_requested_chunk_is_pending_again() {
+        for metric in ["failed", "pending", "rejected", "over_budget"] {
+            let chunks = PixChunks::default();
+            chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+            let scrape = format!("hopr_strategy_pix_deposits_{metric}_total 1\n");
+            stats_with(&chunks, "s1", &scrape);
+            assert!(chunks.payment_outcome("s1").0.is_some());
+            chunks.record("s1", 1, CHUNK, &scrape);
+            chunks.record("s1", 1, CHUNK, &scrape);
+            assert_eq!(chunks.payment_outcome("s1").0, None);
+            assert_eq!(stats_with(&chunks, "s1", &scrape).phase, ipc::PixPhase::PaymentPending);
+            let ledger = chunks.ledger.lock().unwrap();
+            assert!(ledger.sessions[0].outcomes.is_empty());
+            assert_eq!(ledger.unsettled, VecDeque::from([("s1".to_string(), 1)]));
+        }
+    }
+
+    #[test]
+    fn the_highest_requested_chunk_controls_recovery_even_when_events_arrive_out_of_order() {
+        let chunks = PixChunks::default();
+        // Gaps are allowed too; only requests actually observed can be pending.
+        for index in [7, 3, 1] {
+            chunks.record("s1", index, CHUNK, &telemetry(0, 0.0, 0, 0));
+        }
+        let scrape = format!(
+            "{}hopr_strategy_pix_deposits_rejected_total 1\n\
+             hopr_strategy_pix_deposits_pending_total 1\n",
+            telemetry(0, 0.0, 0, 1)
+        );
+        stats_with(&chunks, "s1", &scrape);
+        assert_eq!(chunks.payment_outcome("s1"), (Some(Deposit::Failed), true));
+    }
+
+    #[test]
+    fn an_older_failure_does_not_override_a_paid_latest_chunk() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        chunks.record("s1", 2, CHUNK, &telemetry(0, 0.0, 0, 1));
+        chunks.surbs_consumed_with("s1", &telemetry(0, 0.0, 1, 1));
+        assert_eq!(chunks.payment_outcome("s1"), (None, false));
+    }
+
+    #[test]
+    fn a_pending_lower_index_prevents_recovery_until_it_settles() {
+        for metric in ["failed", "pending"] {
+            let chunks = PixChunks::default();
+            // A delayed lower-index request must not be interrupted by the newer failure.
+            chunks.record("s1", 2, CHUNK, &telemetry(0, 0.0, 0, 0));
+            let failed = format!("hopr_strategy_pix_deposits_{metric}_total 1\n");
+            chunks.record("s1", 1, CHUNK, &failed);
+            assert_eq!(chunks.payment_outcome("s1"), (None, false));
+            chunks.surbs_consumed_with("s1", &format!("{failed}hopr_strategy_pix_deposits_total 1\n"));
+            let reason = if metric == "failed" {
+                Deposit::Failed
+            } else {
+                Deposit::Deferred
+            };
+            assert_eq!(chunks.payment_outcome("s1"), (Some(reason), false));
+        }
+    }
+
+    #[test]
+    fn pending_chunks_on_another_session_do_not_block_recovery() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        chunks.record("s2", 1, CHUNK, &telemetry(0, 0.0, 0, 1));
+        assert_eq!(chunks.payment_outcome("s1"), (Some(Deposit::Failed), false));
+        assert_eq!(chunks.payment_outcome("s2"), (None, false));
+        assert_eq!(chunks.payment_outcome("unknown"), (None, false));
+    }
+
+    #[test]
+    fn a_snapshot_keeps_an_older_refusal_alongside_the_latest_failure() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        let refused = "hopr_strategy_pix_deposits_rejected_total 1\n";
+        chunks.record("s1", 2, CHUNK, refused);
+        assert_eq!(chunks.payment_outcome("s1"), (None, true));
+        chunks.surbs_consumed_with("s1", &format!("{refused}hopr_strategy_pix_deposits_failed_total 1\n"));
+        assert_eq!(chunks.payment_outcome("s1"), (Some(Deposit::Failed), true));
+        chunks.confirm("s1");
+        assert_eq!(chunks.payment_outcome("s1"), (None, false));
+    }
+
+    #[test]
+    fn an_earlier_unpaid_chunk_does_not_hide_a_refused_deposit() {
+        for metric in ["failed", "pending"] {
+            let chunks = PixChunks::default();
+            chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+            let first = format!("hopr_strategy_pix_deposits_{metric}_total 1\n");
+            chunks.record("s1", 2, CHUNK, &first);
+            let scrape = format!("{first}hopr_strategy_pix_deposits_rejected_total 1\n");
+            chunks.surbs_consumed_with("s1", &scrape);
+
+            assert_eq!(chunks.payment_outcome("s1"), (Some(Deposit::Refused), true));
+            chunks.record("s2", 1, CHUNK, &scrape);
+            assert!(!chunks.payment_outcome("s2").1);
+            assert!(!chunks.payment_outcome("unknown").1);
+        }
+    }
+
+    #[test]
+    fn a_confirmed_refusal_does_not_restrict_a_later_failed_chunk() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        let refused = "hopr_strategy_pix_deposits_rejected_total 1\n";
+        chunks.surbs_consumed_with("s1", refused);
+        assert!(chunks.payment_outcome("s1").1);
+        chunks.confirm("s1");
+        assert!(!chunks.payment_outcome("s1").1);
+        chunks.record("s1", 2, CHUNK, refused);
+        chunks.surbs_consumed_with("s1", &format!("{refused}hopr_strategy_pix_deposits_failed_total 1\n"));
+        assert_eq!(chunks.payment_outcome("s1").0, Some(Deposit::Failed));
+        assert!(!chunks.payment_outcome("s1").1);
+    }
+
+    #[test]
+    fn a_re_requested_refused_chunk_is_no_longer_refused() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        let refused = "hopr_strategy_pix_deposits_rejected_total 1\n";
+        chunks.surbs_consumed_with("s1", refused);
+        assert!(chunks.payment_outcome("s1").1);
+        chunks.record("s1", 1, CHUNK, refused);
+        assert!(!chunks.payment_outcome("s1").1);
     }
 
     #[test]
