@@ -74,7 +74,7 @@ pub struct PixConfig {
     #[serde(default = "PixConfig::default_funding_top_up")]
     pub funding_top_up: HoprBalance,
 
-    /// Top up once at startup; off because the PIX pool is first funded manually (`fund-pix-pool`).
+    /// Top up once at startup; off because the PIX pool is first funded manually (`fundpixpool`).
     #[serde(default)]
     pub fund_at_startup: bool,
 

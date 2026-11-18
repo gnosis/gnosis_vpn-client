@@ -303,7 +303,7 @@ path    = { hops = 1 }
 # Curvy relayer that submits deposit proofs; the client never submits them itself; Curvy staging is https://api.curvy.dev; default: https://api.curvy.box
 # relayer_url = "https://api.curvy.box"
 # Curvy pool only: the PIX pool is topped up from the Safe ahead of a deposit flush whenever it can pay less than funding_min_available;
-# fund it first with `gnosis_vpn-ctl fund-pix-pool`, else the first deposit triggers a top-up itself
+# fund it first with `gnosis_vpn-ctl fundpixpool`, else the first deposit triggers a top-up itself
 # PIX pool balance below which a top-up is shielded; keep it at most half of funding_top_up; default: 2 wxHOPR
 # funding_min_available = "2 wxHOPR"
 # wxHOPR one top-up shields from the Safe, gross of the shield fee; default: 35.35 wxHOPR

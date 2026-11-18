@@ -74,8 +74,8 @@ pub enum Command {
     #[command()]
     Balance {},
 
-    /// Shield wxHOPR from the Safe into the PIX pool, e.g. `fund-pix-pool 10`
-    #[command(name = "fund-pix-pool", alias = "fund-pix-float")]
+    /// Shield wxHOPR from the Safe into the PIX pool, e.g. `fundpixpool 10`
+    #[command(name = "fundpixpool", alias = "fund-pix-float")]
     FundPixFloat {
         /// wxHOPR amount, decimals allowed
         amount: ipc::Balance<ipc::WxHopr>,
