@@ -271,8 +271,7 @@ fn pretty_print(resp: &Response) {
                 let exit_traffic = allocations
                     .map(|a| {
                         format!(
-                            " [{} in total, buys {} of exit traffic, {} with the Safe]",
-                            ByteSize(a.exit_traffic.byte_capacity),
+                            " [buys {} of exit traffic, {} with the Safe]",
                             ByteSize(a.exit_traffic.bytes_from_exits),
                             ByteSize(a.exit_traffic.bytes_from_exits_with_safe)
                         )
