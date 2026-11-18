@@ -267,15 +267,17 @@ fn pretty_print(resp: &Response) {
                 ipc::scientific_suffix(safe),
                 format_capacity(allocations.map(|a| &a.safe))
             ));
+            if let Some(a) = allocations {
+                let channels = sum_capacities(a.peer_allocations.values());
+                str_resp.push_str(&format!(
+                    "Channels Balance: {}{}\n",
+                    channels.stake,
+                    format_capacity(Some(&channels))
+                ));
+            }
             if let Some(pool) = pix_float {
                 let exit_traffic = allocations
-                    .map(|a| {
-                        format!(
-                            " [buys {} of exit traffic, {} with the Safe]",
-                            ByteSize(a.exit_traffic.bytes_from_exits),
-                            ByteSize(a.exit_traffic.bytes_from_exits_with_safe)
-                        )
-                    })
+                    .map(|a| format!(" [buys {} of exit traffic]", ByteSize(a.exit_traffic.bytes_from_exits)))
                     .unwrap_or_default();
                 str_resp.push_str(&format!(
                     "PIX Pool: {pool}{}{exit_traffic}\n",
@@ -289,6 +291,9 @@ fn pretty_print(resp: &Response) {
                     ipc::scientific_suffix(&nc.stake),
                     format_capacity(Some(&nc))
                 ));
+            }
+            if let Some(a) = allocations {
+                str_resp.push_str(&format_total_balance(a));
             }
             if channels_out.is_empty() {
                 str_resp.push_str("---\nNo outgoing channels.\n");
@@ -409,6 +414,38 @@ fn format_capacity(capacity: Option<&ipc::Capacity>) -> String {
             ByteSize(c.byte_capacity)
         ),
     }
+}
+
+fn sum_capacities<'a>(capacities: impl IntoIterator<Item = &'a ipc::Capacity>) -> ipc::Capacity {
+    capacities
+        .into_iter()
+        .fold(ipc::Capacity::default(), |sum, c| ipc::Capacity {
+            stake: [sum.stake, c.stake].into_iter().sum(),
+            expected_messages: sum.expected_messages.saturating_add(c.expected_messages),
+            min_guaranteed_messages: sum.min_guaranteed_messages.saturating_add(c.min_guaranteed_messages),
+            byte_capacity: sum.byte_capacity.saturating_add(c.byte_capacity),
+        })
+}
+
+/// All wxHOPR; msgs and bytes leave out the PIX pool, which never pays relays.
+fn format_total_balance(allocations: &ipc::CapacityAllocations) -> String {
+    let relays = sum_capacities(
+        [&allocations.node, &allocations.safe]
+            .into_iter()
+            .chain(allocations.peer_allocations.values()),
+    );
+    let exit = &allocations.exit_traffic;
+    let total: ipc::Balance<ipc::WxHopr> = [relays.stake, exit.stake].into_iter().sum();
+    let at_pix = total
+        .wei()
+        .checked_div(exit.price_per_byte.wei())
+        .map(|bytes| format!(", at PIX value: {}", ByteSize(u64::try_from(bytes).unwrap_or(u64::MAX))))
+        .unwrap_or_default();
+    format!(
+        "Total Balance: {total} [{} msgs, {}{at_pix}]\n",
+        human_msgs(relays.expected_messages),
+        ByteSize(relays.byte_capacity)
+    )
 }
 
 fn human_msgs(msgs: u64) -> String {
