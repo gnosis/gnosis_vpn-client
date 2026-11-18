@@ -3055,9 +3055,9 @@ dependencies = [
 
 [[package]]
 name = "curvy-abi"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d1ab2fcd735e691e4d98e2aabdbb451aed5369a116fa4c6a78f56c1661de6b8"
+checksum = "1e2ec9d9cef0ed87b754db1cda3e7b7ccc459592b653271c8b78f57005ac3572"
 dependencies = [
  "alloy 1.8.3",
  "anyhow",
@@ -3068,9 +3068,9 @@ dependencies = [
 
 [[package]]
 name = "curvy-chain-api"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "696a7297647f388dcee03eba12a271e2b5efee8c9058191bd25850d3511fe323"
+checksum = "ed7ece0880663561f610388ee8a4d9f7026e0694dace8dbba9fb25e9a88b9a97"
 dependencies = [
  "async-trait",
  "curvy-types",
@@ -3079,9 +3079,9 @@ dependencies = [
 
 [[package]]
 name = "curvy-chain-blokli"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5827733945f3f551c7c9140dd0a29caa1b58bc40f99e340735ea8752a0898e9"
+checksum = "44fe8b6a131b1ac7bfc5495415a3c752ad19dccdf7884abc35cd6746e7d09f1d"
 dependencies = [
  "async-trait",
  "curvy-chain-api",
@@ -3093,9 +3093,9 @@ dependencies = [
 
 [[package]]
 name = "curvy-core"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff91eb5c647d11ab9d4fb4eed504cbf36ee47375ad2a749e47f471b92b57ea38"
+checksum = "22918e9637abb05ea5a6b3e0ab987d1df634e1203af871040eee8362b2823c8d"
 dependencies = [
  "aes 0.9.3",
  "ark-bn254 0.6.0",
@@ -3117,9 +3117,9 @@ dependencies = [
 
 [[package]]
 name = "curvy-prover"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daf81d5040593ef402496b7041af24ff699f8782229a051861bf477933912c17"
+checksum = "605087e328ea8b94487da00bc0592fd5a8fcc140bdb986a4e709ed6d0683084b"
 dependencies = [
  "ark-bn254 0.6.0",
  "ark-ec 0.6.0",
@@ -3134,6 +3134,7 @@ dependencies = [
  "getrandom 0.2.17",
  "num-bigint 0.5.1",
  "rayon",
+ "ruzstd",
  "sha2 0.11.0",
  "thiserror 2.0.21",
  "zeroize",
@@ -3141,9 +3142,9 @@ dependencies = [
 
 [[package]]
 name = "curvy-sdk"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59640f209a21c8e444280a79eca57cb07da040ddaba38d1a72bf5c351bd0113e"
+checksum = "d11922561c89b55e76f2bf573edfff96e18061a78aa967f4ad806aea33a92d44"
 dependencies = [
  "anyhow",
  "ark-bn254 0.6.0",
@@ -3162,18 +3163,18 @@ dependencies = [
 
 [[package]]
 name = "curvy-types"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6377facda73ea91c91946b519dc3e6e4ae6b8fee10e03c362dc527cf5fc1b081"
+checksum = "d0be1c564f915c7dc0b8e24056e61a783724fabafb62e00a9597a9f228818e0a"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "curvy-witness"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "533e8947dbe9f935eb9ad6a5226759463b9b2468a8af50fdbcd59b5fe9ffca84"
+checksum = "57d8139dd8b03c80c0cf0f2e2d1bd6c1788ec4776d49701aa9c729cb6d72dc62"
 dependencies = [
  "ark-bn254 0.6.0",
  "ark-ff 0.6.0",
@@ -3188,9 +3189,9 @@ dependencies = [
 
 [[package]]
 name = "curvy-witnesscalc"
-version = "0.2.0"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adba11d164153a68eaafe861821e4cc3d76e235f92d7477d1dfc4b2826e92295"
+checksum = "c4c6cffcac6f1326ed45679557c6fe91f2bafe6cae0c4cbcabbad4d9871db6de"
 dependencies = [
  "anyhow",
  "ark-bn254 0.6.0",
@@ -3706,7 +3707,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "5.3.0"
-source = "git+https://github.com/hoprnet/edge-client.git?branch=main#1329b46453652a1eb7c4fa7ccb9559afaf74b867"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=ronnyesterluss%2Fgno-1194-pix-deposits-go-through-the-tunnel#b952b54b7f48d9c7fbe8adf8998a7a80e90af2c0"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -5218,9 +5219,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-strategy"
-version = "9.0.0"
+version = "9.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf4296a69e01af54ceea370e7d4c4d19326dbe93408e3a5ca1b9b741bb6cda69"
+checksum = "095b98139979667e5e9b6ab53b82ab3fdef907ada3d1f264d085616de5bded61"
 dependencies = [
  "anyhow",
  "async-trait",
