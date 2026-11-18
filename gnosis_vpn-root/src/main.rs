@@ -1,4 +1,3 @@
-use backon::Retryable;
 use gnosis_vpn_lib::logging::LogReloadHandle;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use tokio::fs;
@@ -26,10 +25,9 @@ use std::time::Duration;
 use gnosis_vpn_ipc::{self as ipc, Reply, Request, Response, ServiceError};
 use gnosis_vpn_lib::command::{CommandRoute, RootCommand, WorkerCommand};
 use gnosis_vpn_lib::config::{self, Config};
-use gnosis_vpn_lib::connection::destination::Destination;
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
 use gnosis_vpn_lib::worker::{self, WorkerOwner};
-use gnosis_vpn_lib::{dirs, hopr, logging, ping, remote_data, socket};
+use gnosis_vpn_lib::{dirs, hopr, logging, ping, socket};
 
 mod cli;
 mod device_monitor;
@@ -71,14 +69,10 @@ struct DaemonState {
     worker_owner: Option<WorkerOwner>,
     /// Whose killswitch is armed; outlives a crashed owner so no other user can lift it.
     killswitch_holder: Option<u32>,
-    /// Resolved at startup and again before every first arm; frozen while the killswitch blocks DNS.
-    blokli_ip: Ipv4Addr,
-    /// Mirrors the routing actor's policy: a lookup is only possible while this is false.
+    /// The last address a worker reported; pins the next spawn while the killswitch blocks DNS.
+    blokli_ip: Option<Ipv4Addr>,
+    /// Mirrors the routing actor's policy: a worker can only look Blokli up while this is false.
     killswitch_armed: bool,
-    /// The next spawn follows a Blokli move, so its first arm trusts the address just resolved.
-    blokli_just_resolved: bool,
-    /// Blokli's `chainInfo.network`; keys every user's identity directory.
-    network: String,
     config: Config,
     config_path: PathBuf,
     reload_handle: Option<LogReloadHandle>,
@@ -142,10 +136,6 @@ struct WorkerChild {
     _child_tun_socket: UnixStream,
     /// SIGKILLs the worker; its exit is still reported through the exit channel.
     kill: CancellationToken,
-    /// edgli's Blokli DNS override; fixed for this worker's lifetime.
-    blokli_ip: Ipv4Addr,
-    /// Skips this worker's first lookup so flapping DNS cannot loop restarts.
-    blokli_just_resolved: bool,
 }
 
 #[derive(Debug)]
@@ -524,41 +514,13 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         exitcode::NOINPUT
     })?;
 
-    // Once, while DNS still works (the killswitch blocks it later); without blokli nothing works, so exit and get restarted.
-    let blokli_url = args.hopr_blokli_url.clone();
-    let blokli_ip = (|| remote_data::resolve_blokli_ip(&blokli_url))
-        .retry(remote_data::backoff_expo_long_delay().with_max_times(5))
-        .notify(|error, delay| tracing::warn!(%error, ?delay, %blokli_url, "blokli host not resolvable - retrying"))
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, %blokli_url, "cannot resolve blokli host - exiting");
-            exitcode::NOHOST
-        })?;
-    tracing::info!(%blokli_url, %blokli_ip, "resolved blokli host - pinning it for this session");
-
-    // The chain says which network this is; the name keys every user's identity, so it also has to be a safe dir name.
-    let request_timeout = config.blokli.request_timeout;
-    let network = (|| remote_data::query_blokli_network(&blokli_url, blokli_ip, request_timeout))
-        .retry(remote_data::backoff_expo_long_delay().with_max_times(5))
-        .notify(|error, delay| tracing::warn!(%error, ?delay, %blokli_url, "blokli network not queryable - retrying"))
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, %blokli_url, "cannot query blokli network - exiting");
-            exitcode::NOHOST
-        })?;
-    if !valid_network_name(&network) {
-        tracing::error!(%network, "blokli reported a network name unusable as a directory name - exiting");
-        return Err(exitcode::DATAERR);
-    }
-    tracing::info!(%network, "blokli network");
-
     // Write root pidfile for the newsyslog service to send signals to
     write_pidfile(&args.pid_file).await?;
 
     // set up signal handlers
     let (cancel_signal_handlers, signal_receiver) = signal_channel().await?;
 
-    // set up system socket
+    // Before any Blokli contact, or an unreachable Blokli reads as a stopped service to every client.
     let socket_path = args.socket_path.clone();
     let (cancel_socket_listener, socket_listener) = socket_listener(&args.socket_path).await?;
 
@@ -583,10 +545,8 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         worker_binary,
         worker_owner: None,
         killswitch_holder: None,
-        blokli_ip,
+        blokli_ip: None,
         killswitch_armed: false,
-        blokli_just_resolved: false,
-        network,
         config,
         config_path,
         incoming_worker_channel: mpsc::channel(32),
@@ -742,30 +702,6 @@ async fn spawn_ping(options: ping::Options) -> Result<Duration, String> {
         tracing::debug!(error = ?e, "ping error");
         e.to_string()
     })
-}
-
-/// The network name becomes a directory name under every user's home.
-fn valid_network_name(name: &str) -> bool {
-    let safe_char = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-';
-    !name.is_empty() && name.bytes().all(safe_char)
-}
-
-/// A failed lookup with DNS open is unexpected but not fatal: the last known address still works until Blokli moves.
-fn choose_blokli_ip(resolved: Result<Ipv4Addr, String>, current: Ipv4Addr) -> Ipv4Addr {
-    match resolved {
-        Ok(ip) if ip == current => {
-            tracing::debug!(%ip, "blokli address unchanged");
-            ip
-        }
-        Ok(ip) => {
-            tracing::info!(old = %current, new = %ip, "blokli address changed - restarting the worker on it");
-            ip
-        }
-        Err(error) => {
-            tracing::warn!(%error, fallback = %current, "blokli host not resolvable before connect - keeping the current address");
-            current
-        }
-    }
 }
 
 /// Root reads and stops but never owns; everyone else must be the owner.
@@ -1079,30 +1015,12 @@ impl DaemonState {
     }
 
     fn status_response_offline(&self) -> Response {
-        let mut vals: Vec<&Destination> = self.config.destinations.values().collect();
-        vals.sort_unstable_by(|a, b| a.connect_id.cmp(&b.connect_id));
-        let destinations = vals
-            .into_iter()
-            .map(|dest| ipc::DestinationStatus {
-                destination: dest.into(),
-                route_health: None,
-            })
-            .collect();
         let run_mode = match self.shutdown_ongoing {
             Shutdown::RestartWorker => ipc::RunMode::Restarting,
             _ => ipc::RunMode::NotRunning,
         };
-        Response::Status(Box::new(ipc::Status {
-            run_mode,
-            destinations,
-            target: self.target_dest_id.as_deref().map(Into::into),
-            connection: ipc::Connection::Disconnected,
-            disconnecting: vec![],
-            probe: None,
-            pix_chunk_bytes: None,
-            probing: None,
-            recent: vec![],
-        }))
+        let status = self.config.offline_status(run_mode, self.target_dest_id.as_deref());
+        Response::Status(Box::new(status))
     }
 
     async fn incoming_root_command(&mut self, cmd: RootCommand, peer_uid: u32) -> Result<Response, exitcode::ExitCode> {
@@ -1246,6 +1164,19 @@ impl DaemonState {
         };
         match cmd {
             WorkerToRoot::Response { id, resp } => self.incoming_worker_response(id, *resp).await,
+            WorkerToRoot::Refused { id, error } => {
+                if let Some(resp_sender) = self.pending_responses.remove(&id) {
+                    let _ = resp_sender.send(Reply::Err { error });
+                }
+                // A refused Connect or Probe was suspended on the way in and holds nothing.
+                if self.target_dest_id.is_none() && !self.probing {
+                    let _ = self
+                        .keep_alive_instruction_sender
+                        .send(KeepAliveInstruction::Resume)
+                        .await;
+                }
+                Ok(())
+            }
             WorkerToRoot::RequestToRoot(request) => self.incoming_worker_request(request).await,
         }
     }
@@ -1309,16 +1240,17 @@ impl DaemonState {
             RequestToRoot::KillswitchLockdown {
                 request_id,
                 peer_ips,
+                blokli_ip,
                 interface,
             } => {
-                let blokli_moved = self.refresh_blokli_ip().await;
-                if blokli_moved && matches!(self.shutdown_ongoing, Shutdown::None) {
-                    // Nothing is armed yet; the respawned worker reconnects to the kept target on the new address.
-                    self.restart_worker_on_new_blokli().await;
+                // A stop may have lifted the killswitch while this request was in flight; never re-arm after it.
+                if !matches!(self.shutdown_ongoing, Shutdown::None) {
+                    tracing::info!(request_id, "ignoring killswitch lockdown during worker shutdown");
                     return Ok(());
                 }
+                self.blokli_ip = Some(blokli_ip);
                 let mut ips: Vec<IpAddr> = peer_ips.into_iter().map(IpAddr::V4).collect();
-                ips.push(IpAddr::V4(self.blokli_ip));
+                ips.push(IpAddr::V4(blokli_ip));
                 let res = self.apply_killswitch(interface, ips).await;
                 self.killswitch_armed |= res.is_ok();
                 if matches!(self.shutdown_ongoing, Shutdown::None)
@@ -1338,10 +1270,15 @@ impl DaemonState {
                 mtu,
                 dns,
                 mut peer_ips,
+                blokli_ip,
             } => {
+                self.blokli_ip = Some(blokli_ip);
                 // Blokli stays on the WAN like the peers, or the worker's chain access would depend on its own tunnel.
-                peer_ips.push(self.blokli_ip);
-                let res = match self.setup_static_routing(interface_address, mtu, dns, peer_ips).await {
+                peer_ips.push(blokli_ip);
+                let res = match self
+                    .setup_static_routing(interface_address, mtu, dns, peer_ips, blokli_ip)
+                    .await
+                {
                     Ok((interface, tun_fd)) => match self.worker_child {
                         // Pass the fd out-of-band first; the worker recv_fd's it only
                         // after seeing TunnelReady below (a simple happens-before).
@@ -1616,13 +1553,13 @@ impl DaemonState {
         let mut socket_writer = BufWriter::new(writer_half);
 
         // send initial configuration and resources to worker
-        let worker_params = self
-            .cli
-            .worker_params(self.blokli_ip, &self.network, owner.dirs.clone());
+        // Armed means DNS is blocked, so the new worker cannot look Blokli up itself.
+        let pinned_blokli_ip = self.blokli_ip.filter(|_| self.killswitch_armed);
+        let spawn_params = self.cli.spawn_params(pinned_blokli_ip, owner.dirs.clone());
         let delivered = send_to_worker(
             RootToWorker::StartupParams {
                 config: Box::new(self.config.clone()),
-                worker_params: Box::new(worker_params),
+                spawn_params: Box::new(spawn_params),
                 target_dest_id: self.target_dest_id.clone(),
             },
             &mut socket_writer,
@@ -1678,8 +1615,6 @@ impl DaemonState {
             tun_fd_socket: parent_tun_socket,
             _child_tun_socket: child_tun_socket,
             kill,
-            blokli_ip: self.blokli_ip,
-            blokli_just_resolved: std::mem::take(&mut self.blokli_just_resolved),
         });
         Ok(())
     }
@@ -1718,43 +1653,13 @@ impl DaemonState {
             .await;
     }
 
-    /// Before the first arm only (later arms have DNS closed); true when Blokli left the worker's address.
-    async fn refresh_blokli_ip(&mut self) -> bool {
-        let Some(child) = self.worker_child.as_mut() else {
-            return false;
-        };
-        let just_resolved = std::mem::take(&mut child.blokli_just_resolved);
-        let worker_ip = child.blokli_ip;
-        if self.killswitch_armed || just_resolved {
-            return false;
-        }
-        let url = self.cli.hopr_blokli_url.clone();
-        let timeout = self.config.blokli.resolve_timeout;
-        let resolved = match time::timeout(timeout, remote_data::resolve_blokli_ip(&url)).await {
-            Ok(res) => res.map_err(|e| e.to_string()),
-            Err(_) => Err("timed out".to_string()),
-        };
-        self.blokli_ip = choose_blokli_ip(resolved, self.blokli_ip);
-        self.blokli_ip != worker_ip
-    }
-
-    /// edgli keeps its spawn-time Blokli address, so only a respawn moves the worker; same path as a config reload.
-    async fn restart_worker_on_new_blokli(&mut self) {
-        let Some(ref mut child) = self.worker_child else {
-            return;
-        };
-        self.shutdown_ongoing = Shutdown::RestartWorker;
-        self.blokli_just_resolved = true;
-        send_to_worker_lossy(RootToWorker::Shutdown, &mut child.socket_writer).await;
-        self.cleanup_worker_resources().await;
-    }
-
     async fn setup_static_routing(
         &self,
         interface_address: String,
         mtu: u32,
         dns: Option<String>,
         peer_ips: Vec<Ipv4Addr>,
+        blokli_ip: Ipv4Addr,
     ) -> Result<(String, OwnedFd), String> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = self
@@ -1764,7 +1669,7 @@ impl DaemonState {
                 mtu,
                 dns,
                 peer_ips,
-                blokli_ip: self.blokli_ip,
+                blokli_ip,
                 reply: reply_tx,
             })
             .await;
@@ -1841,20 +1746,6 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
-
-    const CURRENT: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 9);
-
-    #[test]
-    fn fresh_blokli_address_replaces_the_current_one() {
-        let fresh = Ipv4Addr::new(198, 51, 100, 7);
-        assert_eq!(choose_blokli_ip(Ok(fresh), CURRENT), fresh);
-        assert_eq!(choose_blokli_ip(Ok(CURRENT), CURRENT), CURRENT);
-    }
-
-    #[test]
-    fn unresolvable_blokli_host_keeps_the_current_address() {
-        assert_eq!(choose_blokli_ip(Err("no answer".to_string()), CURRENT), CURRENT);
-    }
 
     // The caller is blocked on this oneshot; dropping it is what produced the EOF.
     #[tokio::test]
@@ -1961,15 +1852,6 @@ mod tests {
         .await;
         assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::EINVAL));
         assert_eq!(attempts.get(), 2);
-    }
-
-    #[test]
-    fn network_names_must_be_plain_directory_names() {
-        assert!(valid_network_name("jura-dev"));
-        assert!(valid_network_name("piz-palu-dev"));
-        for bad in ["", "Jura", "jura dev", "../jura", "jura/dev", "jura_dev"] {
-            assert!(!valid_network_name(bad), "{bad:?} accepted");
-        }
     }
 
     const ALICE: u32 = 1000;

@@ -4515,7 +4515,6 @@ version = "1.0.1"
 dependencies = [
  "anyhow",
  "async-trait",
- "backon",
  "cfg-if",
  "clap",
  "exitcode",
@@ -4566,6 +4565,7 @@ version = "1.0.1"
 dependencies = [
  "clap",
  "exitcode",
+ "gnosis_vpn-ipc",
  "gnosis_vpn-lib",
  "serde_json",
  "tikv-jemallocator",
