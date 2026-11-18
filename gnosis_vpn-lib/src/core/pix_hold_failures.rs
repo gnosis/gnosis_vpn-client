@@ -6,6 +6,7 @@ use crate::hopr::pix_chunks::Deposit;
 pub(super) struct PixHoldFailures {
     destination: Option<ExitKey>,
     count: u32,
+    failure_logged: bool,
 }
 
 impl PixHoldFailures {
@@ -13,11 +14,27 @@ impl PixHoldFailures {
         if self.destination != Some(destination) {
             self.destination = Some(destination);
             self.count = 0;
+            self.failure_logged = false;
         }
     }
 
-    pub(super) fn may_end_hold(&self, destination: &ExitKey, reason: Deposit) -> bool {
-        reason != Deposit::Refused && (self.destination != Some(*destination) || self.count == 0)
+    /// `unpaid` and `has_refused` must come from the same PixChunks snapshot.
+    pub(super) fn end_hold_for(
+        &self,
+        destination: &ExitKey,
+        unpaid: Option<Deposit>,
+        has_refused: bool,
+    ) -> Option<Deposit> {
+        unpaid.filter(|_| !has_refused && (self.destination != Some(*destination) || self.count == 0))
+    }
+
+    pub(super) fn hold_started(&mut self) {
+        self.failure_logged = false;
+    }
+
+    /// Returns true only for the first retained failure in this hold.
+    pub(super) fn note_retained_failure(&mut self) -> bool {
+        !std::mem::replace(&mut self.failure_logged, true)
     }
 
     pub(super) fn record_failed(&mut self, destination: ExitKey) {
@@ -28,6 +45,7 @@ impl PixHoldFailures {
     pub(super) fn hold_resumed(&mut self, destination: ExitKey) {
         if self.destination == Some(destination) {
             self.count = 0;
+            self.failure_logged = false;
         }
     }
 }
@@ -47,7 +65,9 @@ mod tests {
     #[test]
     fn a_refused_deposit_does_not_end_the_hold_early() {
         let failures = PixHoldFailures::default();
-        assert!(!failures.may_end_hold(&destination(1), Deposit::Refused));
+        for reason in [Deposit::Failed, Deposit::Deferred, Deposit::Refused] {
+            assert_eq!(failures.end_hold_for(&destination(1), Some(reason), true), None);
+        }
     }
 
     #[test]
@@ -56,12 +76,12 @@ mod tests {
             let destination = destination(1);
             let mut failures = PixHoldFailures::default();
             failures.move_to(destination);
-            assert!(failures.may_end_hold(&destination, reason));
-            assert!(failures.may_end_hold(&destination, reason));
+            assert_eq!(failures.end_hold_for(&destination, Some(reason), false), Some(reason));
+            assert_eq!(failures.end_hold_for(&destination, Some(reason), false), Some(reason));
             failures.record_failed(destination);
             failures.move_to(destination);
-            assert!(!failures.may_end_hold(&destination, reason));
-            assert!(!failures.may_end_hold(&destination, reason));
+            assert_eq!(failures.end_hold_for(&destination, Some(reason), false), None);
+            assert_eq!(failures.end_hold_for(&destination, Some(reason), false), None);
         }
     }
 
@@ -70,11 +90,17 @@ mod tests {
         let destination = destination(1);
         let mut failures = PixHoldFailures::default();
         failures.record_failed(destination);
-        assert!(!failures.may_end_hold(&destination, Deposit::Failed));
+        assert_eq!(failures.end_hold_for(&destination, Some(Deposit::Failed), false), None);
         failures.hold_resumed(destination);
-        assert!(failures.may_end_hold(&destination, Deposit::Failed));
-        assert!(failures.may_end_hold(&destination, Deposit::Deferred));
-        assert!(!failures.may_end_hold(&destination, Deposit::Refused));
+        assert_eq!(
+            failures.end_hold_for(&destination, Some(Deposit::Failed), false),
+            Some(Deposit::Failed)
+        );
+        assert_eq!(
+            failures.end_hold_for(&destination, Some(Deposit::Deferred), false),
+            Some(Deposit::Deferred)
+        );
+        assert_eq!(failures.end_hold_for(&destination, Some(Deposit::Refused), true), None);
     }
 
     #[test]
@@ -83,12 +109,38 @@ mod tests {
         let second = destination(2);
         let mut failures = PixHoldFailures::default();
         failures.record_failed(first);
-        assert!(!failures.may_end_hold(&first, Deposit::Failed));
+        assert_eq!(failures.end_hold_for(&first, Some(Deposit::Failed), false), None);
         failures.hold_resumed(second);
-        assert!(!failures.may_end_hold(&first, Deposit::Failed));
+        assert_eq!(failures.end_hold_for(&first, Some(Deposit::Failed), false), None);
         failures.move_to(second);
-        assert!(failures.may_end_hold(&second, Deposit::Failed));
+        assert_eq!(
+            failures.end_hold_for(&second, Some(Deposit::Failed), false),
+            Some(Deposit::Failed)
+        );
         failures.move_to(first);
-        assert!(failures.may_end_hold(&first, Deposit::Failed));
+        assert_eq!(
+            failures.end_hold_for(&first, Some(Deposit::Failed), false),
+            Some(Deposit::Failed)
+        );
+    }
+
+    #[test]
+    fn an_unknown_outcome_does_not_end_the_hold() {
+        let failures = PixHoldFailures::default();
+        assert_eq!(failures.end_hold_for(&destination(1), None, false), None);
+    }
+
+    #[test]
+    fn a_retained_failure_is_logged_once_per_hold() {
+        let mut failures = PixHoldFailures::default();
+        let destination = destination(1);
+        failures.record_failed(destination);
+        for _ in 0..2 {
+            failures.hold_started();
+            assert!(failures.note_retained_failure());
+            assert!(!failures.note_retained_failure());
+            // A new hold clears the warning, but must not grant another early reconnect.
+            assert_eq!(failures.end_hold_for(&destination, Some(Deposit::Failed), false), None);
+        }
     }
 }

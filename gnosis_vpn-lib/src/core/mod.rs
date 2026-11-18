@@ -152,8 +152,6 @@ pub struct Core {
     pending_unregisters: Vec<PendingUnregister>,
     reconnecting_since: Option<SystemTime>,
     pix_hold_failures: PixHoldFailures,
-    /// Repeated samples of the same unpaid chunk must not repeat the warning within a hold.
-    pix_hold_failure_logged: bool,
     /// Retry budget of the current connect attempts; reset once connected or on a user disconnect or switch.
     connect_retries: Option<ExponentialBackoff>,
     /// Bumped on every connection teardown so an already-queued RetryConnect of an older attempt is dropped.
@@ -309,7 +307,6 @@ impl Core {
             responders: HashMap::new(),
             reconnecting_since: None,
             pix_hold_failures: PixHoldFailures::default(),
-            pix_hold_failure_logged: false,
             connect_retries: None,
             connection_generation: 0,
         };
@@ -564,6 +561,7 @@ impl Core {
                         self.target = None;
                         self.reconnecting_since = None;
                         self.connect_retries = None;
+                        self.pix_hold_failures = PixHoldFailures::default();
                         self.abandon_resume(results_sender).await;
                         match self.phase.clone() {
                             Phase::Connected(conn) | Phase::Connecting(conn) => {
@@ -1072,25 +1070,24 @@ impl Core {
                         _ => None,
                     };
                     let (unpaid, has_refused) = match (&pix_chunks, &main_session_id) {
-                        (Some(chunks), Some(id)) => (chunks.unpaid(id), chunks.has_refused(id)),
+                        (Some(chunks), Some(id)) => chunks.payment_outcome(id),
                         _ => (None, false),
                     };
-                    let end_hold_for = unpaid.filter(|reason| {
-                        !has_refused && self.pix_hold_failures.may_end_hold(&conn.destination.key(), *reason)
-                    });
+                    let end_hold_for =
+                        self.pix_hold_failures
+                            .end_hold_for(&conn.destination.key(), unpaid, has_refused);
                     let verdict =
                         conn.judge_stall(stall, awaiting_payment, surbs_consumed, end_hold_for, SystemTime::now());
                     self.phase = Phase::Connected(conn.clone());
                     let session_id = main_session_id.unwrap_or_default();
                     if verdict == StallVerdict::HoldStarted {
-                        self.pix_hold_failure_logged = false;
+                        self.pix_hold_failures.hold_started();
                     }
                     if matches!(verdict, StallVerdict::HoldStarted | StallVerdict::Held)
                         && let Some(reason) = unpaid
                         && end_hold_for.is_none()
-                        && !self.pix_hold_failure_logged
+                        && self.pix_hold_failures.note_retained_failure()
                     {
-                        self.pix_hold_failure_logged = true;
                         tracing::warn!(%conn, %session_id, %reason, "PIX deposit will not be paid - keeping the hold until the exit closes the session");
                     }
                     match verdict {
@@ -2893,8 +2890,7 @@ mod tests {
             if previously_failed {
                 failures.record_failed(conn.destination.key());
             }
-            let unpaid =
-                Some(reason).filter(|reason| !has_refused && failures.may_end_hold(&conn.destination.key(), *reason));
+            let unpaid = failures.end_hold_for(&conn.destination.key(), Some(reason), has_refused);
             assert_eq!(unpaid, None);
             conn.record_wg_stats(TunnelStatsSample {
                 at: SystemTime::UNIX_EPOCH,
@@ -3084,6 +3080,41 @@ mod tests {
         assert!(matches!(core.phase, Phase::HoprRunning));
         let resume = core.resume.as_ref().expect("key kept");
         assert_eq!(resume.wireguard.key_pair.public_key, "pub");
+    }
+
+    #[tokio::test]
+    async fn automatic_reconnect_preserves_pix_failures_but_user_disconnect_resets_them() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        let conn = connected_with_key("exit");
+        let destination = conn.destination.key();
+        core.phase = Phase::Connected(conn.clone());
+        core.pix_hold_failures.record_failed(destination);
+
+        core.reconnect_in_place(conn, true, &results).await;
+        assert_eq!(
+            core.pix_hold_failures
+                .end_hold_for(&destination, Some(Deposit::Failed), false),
+            None
+        );
+
+        // Also cover a user disconnect between attempts, when there is no active connection.
+        let (resp, response) = tokio::sync::oneshot::channel();
+        core.on_event(
+            WorkerToCore::WorkerCommand {
+                cmd: WorkerCommand::Disconnect,
+                resp,
+            },
+            &results,
+        )
+        .await;
+        assert!(matches!(response.await.unwrap(), Response::Disconnect(_)));
+        core.pix_hold_failures.move_to(destination);
+        assert_eq!(
+            core.pix_hold_failures
+                .end_hold_for(&destination, Some(Deposit::Failed), false),
+            Some(Deposit::Failed)
+        );
+        core.cancel_on_shutdown.cancel();
     }
 
     #[tokio::test]
