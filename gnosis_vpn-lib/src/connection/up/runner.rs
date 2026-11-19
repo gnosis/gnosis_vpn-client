@@ -263,9 +263,6 @@ async fn open_spliced_wg_session(
     paid_pseudonym: Option<HoprPseudonym>,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SplicedWgSession, HoprError> {
-    if let Some(pseudonym) = &paid_pseudonym {
-        tracing::info!(%pseudonym, "reusing paid session pseudonym");
-    }
     let cfg = HoprSessionClientConfig {
         capabilities: options.sessions.wg.capabilities,
         forward_path: destination.routing,
@@ -274,7 +271,6 @@ async fn open_spliced_wg_session(
         surb_management: surb.management,
         // Robust tail-tolerance profile for the WireGuard data session.
         flow_control: Some(FlowControlConfig::robust()),
-        pseudonym: paid_pseudonym,
         ..Default::default()
     };
     let cfg = if options.pix.ping_main.enabled {
@@ -282,6 +278,25 @@ async fn open_spliced_wg_session(
     } else {
         cfg
     };
+    // One try only: exits that cannot take over the paid session refuse it, and a fresh one must not wait.
+    if let Some(pseudonym) = paid_pseudonym {
+        let reused = HoprSessionClientConfig {
+            pseudonym: Some(pseudonym),
+            ..cfg.clone()
+        };
+        match hopr
+            .open_wg_session(destination.address, destination.wg_target(), reused)
+            .await
+        {
+            Ok(session) => {
+                tracing::info!(%pseudonym, "reused paid session pseudonym");
+                return Ok(session);
+            }
+            Err(err) => {
+                tracing::info!(%pseudonym, error = %err, "exit refused paid session pseudonym - opening a fresh session")
+            }
+        }
+    }
     (|| async {
         tracing::debug!(%destination, "attempting to open spliced wg session");
         hopr.open_wg_session(destination.address, destination.wg_target(), cfg.clone())
