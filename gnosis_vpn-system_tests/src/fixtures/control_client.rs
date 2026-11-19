@@ -1,8 +1,8 @@
 use gnosis_vpn_ipc::{
     self as ipc, Address, Balances, CallError, ConnectResponse, Connection, Destination, DestinationId,
     DestinationSource, DestinationStatus, DisconnectResponse, PixChunkStats, PixPhase, QuickProbeCheck,
-    QuickProbeResponse, QuickProbeState, Request, Response, RouteHealthState, RouteWalk, RunMode, StartClientResponse,
-    Status, StopClientResponse,
+    QuickProbeResponse, QuickProbeState, Request, Response, RouteHealthState, RunMode, StartClientResponse, Status,
+    StopClientResponse,
 };
 use std::{
     path::PathBuf,
@@ -12,8 +12,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::fixtures::lib::{self, ConditionCheck};
 
-const STRONG_PATH_VALUE: f64 = 0.9;
 const STRONG_DESTINATIONS: usize = 3;
+const STRONG_PERCENT_OF_BEST: u8 = 60;
 
 /// Thin wrapper around the gnosis_vpn control socket used during system tests.
 pub struct ControlClient {
@@ -212,7 +212,7 @@ impl ControlClient {
         Ok(())
     }
 
-    /// Lets path values settle for `settle`, or less once enough destinations have strong paths.
+    /// Lets signals settle for `settle`, or less once enough destinations are close to the best.
     pub async fn wait_for_ready_destinations(
         &self,
         settle: Duration,
@@ -231,17 +231,17 @@ impl ControlClient {
                 let strong = readiness
                     .ready()
                     .iter()
-                    .filter(|ranked| ranked.path_value > STRONG_PATH_VALUE)
+                    .filter(|ranked| ranked.percent_of_best >= STRONG_PERCENT_OF_BEST)
                     .count();
 
                 if strong >= STRONG_DESTINATIONS {
-                    info!(strong, "enough destinations with strong paths");
+                    info!(strong, "enough destinations close to the best");
                     return Ok(ConditionCheck::Ready(readiness));
                 }
 
                 let settled = start.elapsed() >= settle;
                 if settled && !readiness.ready().is_empty() {
-                    info!(ready = readiness.ready().len(), "path values settled");
+                    info!(ready = readiness.ready().len(), "signals settled");
                     return Ok(ConditionCheck::Ready(readiness));
                 }
 
@@ -249,7 +249,7 @@ impl ControlClient {
                     ready = readiness.ready().len(),
                     not_ready = readiness.not_ready().len(),
                     strong,
-                    "waiting for path values to settle"
+                    "waiting for signals to settle"
                 );
                 Ok(ConditionCheck::PendingWithValue(readiness))
             },
@@ -464,13 +464,12 @@ fn discovered_exits(status: &Status, addresses: &[Address]) -> Vec<Option<Destin
 #[derive(Debug, Clone)]
 pub struct RankedDestination {
     pub destination: Destination,
-    /// The weaker of the forward and return best path values, in (0.0, 1.0].
-    pub path_value: f64,
+    pub percent_of_best: u8,
 }
 
 #[derive(Debug, Clone)]
 pub struct DestinationReadiness {
-    /// Best path value first.
+    /// Closest to the best exit first, then by id.
     ready: Vec<RankedDestination>,
     not_ready: Vec<Destination>,
 }
@@ -485,21 +484,20 @@ impl DestinationReadiness {
                 .route_health
                 .as_ref()
                 .is_some_and(|rh| matches!(rh.state, RouteHealthState::Routable));
-            let walk = state.route_health.and_then(|rh| rh.walk);
-            match walk {
-                // A session needs both directions, so the weaker one bounds it
-                Some(RouteWalk::Paths {
-                    best_value,
-                    return_best_value,
-                    ..
-                }) if is_routable => ready.push(RankedDestination {
+            let percent_of_best = state.route_health.and_then(|rh| rh.percent_of_best);
+            match percent_of_best {
+                Some(percent_of_best) if is_routable => ready.push(RankedDestination {
                     destination: state.destination,
-                    path_value: best_value.min(return_best_value),
+                    percent_of_best,
                 }),
                 _ => not_ready.push(state.destination),
             }
         }
-        ready.sort_by(|a, b| b.path_value.total_cmp(&a.path_value));
+        ready.sort_by(|a, b| {
+            b.percent_of_best
+                .cmp(&a.percent_of_best)
+                .then_with(|| a.destination.id.to_string().cmp(&b.destination.id.to_string()))
+        });
 
         Self { ready, not_ready }
     }
