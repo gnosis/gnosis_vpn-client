@@ -4547,7 +4547,6 @@ dependencies = [
  "clap",
  "exitcode",
  "gnosis_vpn-ipc",
- "gnosis_vpn-lib",
  "reqwest",
  "rustix",
  "serde",
