@@ -13,7 +13,7 @@ use crate::values::{
 };
 
 /// Bumped on every incompatible wire change; the service refuses requests of any other version.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
@@ -449,7 +449,11 @@ pub fn exit_discriminator(address: &Address, hops: Hops) -> String {
 pub struct RouteHealthView {
     pub state: RouteHealthState,
     pub last_error: Option<String>,
-    pub walk: Option<RouteWalk>,
+    /// None before the first graph walk, which tells "checking" apart from "no route".
+    #[serde(with = "unix_ms::option")]
+    pub walked_at: Option<SystemTime>,
+    /// This exit's path value as a share of the best exit's right now, 0–100; None while it has no route.
+    pub percent_of_best: Option<u8>,
     pub quick_probe: Option<QuickProbeState>,
 }
 
@@ -475,38 +479,6 @@ pub enum UnrecoverableReason {
     },
     CannotOpenSession {
         error: String,
-    },
-}
-
-/// The last graph walk for an exit.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum RouteWalk {
-    /// The exit's chain address maps to no packet key - it never announced itself.
-    NotAnnounced {
-        #[serde(with = "unix_ms")]
-        walked_at: SystemTime,
-    },
-    /// No path survived selection and chain validation in at least one direction.
-    NoPath {
-        #[serde(with = "unix_ms")]
-        walked_at: SystemTime,
-        forward_count: u32,
-        return_count: u32,
-    },
-    Paths {
-        #[serde(with = "unix_ms")]
-        walked_at: SystemTime,
-        count: u32,
-        /// 1 means a single point of failure; 0 only on a direct route.
-        distinct_first_relays: u32,
-        /// Relays of the best-valued path, in path order.
-        best_relays: Vec<Address>,
-        /// In (0.0, 1.0]; higher is better.
-        best_value: f64,
-        return_count: u32,
-        return_best_relays: Vec<Address>,
-        return_best_value: f64,
     },
 }
 

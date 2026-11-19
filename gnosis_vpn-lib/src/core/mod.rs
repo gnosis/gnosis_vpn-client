@@ -28,7 +28,7 @@ use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{self, Hopr, HoprError, config as hopr_config, identity};
 use crate::network_probing::{self, Activity, NetworkProbing, Plan};
 use crate::probe::{self, Probe};
-use crate::route_health::RouteHealth;
+use crate::route_health::{self, RouteHealth};
 use crate::worker_params::{self, WorkerParams};
 use crate::{balance, log_output, wire, wireguard};
 
@@ -2377,11 +2377,17 @@ impl Core {
             .collect();
         let mut vals = self.config.destinations.values().collect::<Vec<&Destination>>();
         vals.sort_unstable_by(|a, b| a.connect_id.cmp(&b.connect_id));
+        // A connection keeps its tracker past discovery dropping the exit; it must not set the best.
+        let reported = vals.iter().filter_map(|v| self.route_healths.get(&v.key()));
+        let percents_of_best = route_health::percents_of_best(reported);
         let destinations = vals
             .into_iter()
             .map(|v| ipc::DestinationStatus {
                 destination: v.into(),
-                route_health: self.route_healths.get(&v.key()).map(RouteHealth::view),
+                route_health: self
+                    .route_healths
+                    .get(&v.key())
+                    .map(|rh| rh.view(percents_of_best.get(&v.key()).copied())),
             })
             .collect();
         ipc::Status {

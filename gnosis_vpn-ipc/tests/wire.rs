@@ -46,7 +46,7 @@ fn a_request_travels_in_a_versioned_envelope() {
     };
     round_trips(
         &envelope,
-        json!({"protocol": 3, "request": {"type": "connect", "destination": "berlin"}}),
+        json!({"protocol": 4, "request": {"type": "connect", "destination": "berlin"}}),
     );
 }
 
@@ -310,28 +310,21 @@ fn an_incompatible_exit_names_its_api_labels() {
 }
 
 #[test]
-fn a_route_walk_lists_relays_as_checksum_addresses() {
+fn route_health_reports_a_share_of_the_best_exit() {
     round_trips(
-        &RouteWalk::Paths {
-            walked_at: at(5_000),
-            count: 3,
-            distinct_first_relays: 2,
-            best_relays: vec![address(7)],
-            best_value: 0.75,
-            return_count: 2,
-            return_best_relays: vec![],
-            return_best_value: 0.5,
+        &RouteHealthView {
+            state: RouteHealthState::Routable,
+            last_error: None,
+            walked_at: Some(at(5_000)),
+            percent_of_best: Some(72),
+            quick_probe: None,
         },
         json!({
-            "type": "paths",
+            "state": {"type": "routable"},
+            "last_error": null,
             "walked_at": 5_000,
-            "count": 3,
-            "distinct_first_relays": 2,
-            "best_relays": [address(7).to_string()],
-            "best_value": 0.75,
-            "return_count": 2,
-            "return_best_relays": [],
-            "return_best_value": 0.5
+            "percent_of_best": 72,
+            "quick_probe": null
         }),
     );
 }

@@ -239,8 +239,8 @@ fn pretty_print(resp: &Response) {
                 str_resp.push_str(&format!("---\n{dest}\n"));
                 if let Some(rh) = &dest_state.route_health {
                     str_resp.push_str(&format!("{} Route health: {}\n", dest.id, rh));
-                    if let Some(walk) = &rh.walk {
-                        str_resp.push_str(&format!("{} Route walk: {}\n", dest.id, walk));
+                    if let Some(percent) = rh.percent_of_best {
+                        str_resp.push_str(&format!("{} Path: {percent}% of the best exit\n", dest.id));
                     }
                     if let Some(quick) = &rh.quick_probe {
                         str_resp.push_str(&format!("{} Quick check: {}\n", dest.id, quick));
