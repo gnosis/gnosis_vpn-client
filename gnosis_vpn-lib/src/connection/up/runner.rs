@@ -4,6 +4,7 @@
 use backon::{FibonacciBuilder, Retryable};
 use edgli::FlowControlConfig;
 use edgli::hopr_lib::HoprSessionClientConfig;
+use edgli::hopr_lib::api::types::internal::protocol::HoprPseudonym;
 use ipnetwork::IpNetwork;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -138,7 +139,15 @@ impl Runner {
             session: hopr_session,
             configurator,
             metadata: session,
-        } = open_spliced_wg_session(&self.hopr, &self.destination, &self.options, ping_surb, &results_sender).await?;
+        } = open_spliced_wg_session(
+            &self.hopr,
+            &self.destination,
+            &self.options,
+            ping_surb,
+            self.prev_conn.resume.as_ref().and_then(|r| r.paid_pseudonym),
+            &results_sender,
+        )
+        .await?;
         // Split now so the guard owns the write half from the open on: an abort before the pump must not leak the session.
         let (read_half, write_half) = tokio::io::split(hopr_session);
         let net_tx = wg_tunnel::SessionSender::new(wg_tunnel::CloseOnDrop::new(write_half));
@@ -251,8 +260,12 @@ async fn open_spliced_wg_session(
     destination: &Destination,
     options: &Options,
     surb: SurbParams,
+    paid_pseudonym: Option<HoprPseudonym>,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SplicedWgSession, HoprError> {
+    if let Some(pseudonym) = &paid_pseudonym {
+        tracing::info!(%pseudonym, "reusing paid session pseudonym");
+    }
     let cfg = HoprSessionClientConfig {
         capabilities: options.sessions.wg.capabilities,
         forward_path: destination.routing,
@@ -261,6 +274,7 @@ async fn open_spliced_wg_session(
         surb_management: surb.management,
         // Robust tail-tolerance profile for the WireGuard data session.
         flow_control: Some(FlowControlConfig::robust()),
+        pseudonym: paid_pseudonym,
         ..Default::default()
     };
     let cfg = if options.pix.ping_main.enabled {
