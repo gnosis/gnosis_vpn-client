@@ -81,12 +81,12 @@ impl SystemTestWorkflow {
             "destinations ready to be used",
         );
 
-        let mut readiness_report = ReportTable::new("destination", &["path value"]);
+        let mut readiness_report = ReportTable::new("destination", &["% of best"]);
         for ranked in readiness.ready() {
             readiness_report.add_row(
                 ranked.destination.id.to_string(),
                 RowStatus::Ready,
-                vec![format!("{:.3}", ranked.path_value)],
+                vec![ranked.percent_of_best.to_string()],
             );
         }
         for destination in readiness.not_ready() {

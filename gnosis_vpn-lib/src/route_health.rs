@@ -1,12 +1,49 @@
 //! Per-destination routability from Core's graph walks; exit health lives in [`crate::probe`].
+use std::collections::HashMap;
 use std::time::SystemTime;
 
 pub use gnosis_vpn_ipc::{
-    ApiVersion, QuickProbeCheck, QuickProbeState, RouteHealthState, RouteHealthView, RouteWalk, UnrecoverableReason,
+    ApiVersion, QuickProbeCheck, QuickProbeState, RouteHealthState, RouteHealthView, UnrecoverableReason,
 };
 
 use crate::connection::destination::{Destination, ExitKey, HopRouting};
 use crate::probe::{QuickProbeOutcome, select_api_version};
+
+/// The last graph walk for an exit; planner internals, kept off the wire.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RouteWalk {
+    /// The exit's chain address maps to no packet key - it never announced itself.
+    NotAnnounced { walked_at: SystemTime },
+    /// No path survived selection and chain validation in at least one direction.
+    NoPath {
+        walked_at: SystemTime,
+        forward_count: u32,
+        return_count: u32,
+    },
+    Paths {
+        walked_at: SystemTime,
+        count: u32,
+        /// 1 means a single point of failure; 0 only on a direct route.
+        distinct_first_relays: u32,
+        /// Relays of the best-valued path, in path order.
+        best_relays: Vec<gnosis_vpn_ipc::Address>,
+        /// In (0.0, 1.0]; higher is better.
+        best_value: f64,
+        return_count: u32,
+        return_best_relays: Vec<gnosis_vpn_ipc::Address>,
+        return_best_value: f64,
+    },
+}
+
+impl RouteWalk {
+    fn walked_at(&self) -> SystemTime {
+        match self {
+            RouteWalk::NotAnnounced { walked_at }
+            | RouteWalk::NoPath { walked_at, .. }
+            | RouteWalk::Paths { walked_at, .. } => *walked_at,
+        }
+    }
+}
 
 pub(crate) struct RouteHealth {
     key: ExitKey,
@@ -27,17 +64,33 @@ impl RouteHealth {
         }
     }
 
-    pub(crate) fn view(&self) -> RouteHealthView {
+    pub(crate) fn view(&self, percent_of_best: Option<u8>) -> RouteHealthView {
         RouteHealthView {
             state: self.state.clone(),
             last_error: self.last_error().map(str::to_owned),
-            walk: self.walk().cloned(),
+            walked_at: self.last_walk.as_ref().map(RouteWalk::walked_at),
+            percent_of_best,
             quick_probe: self.quick_probe().cloned(),
         }
     }
 
     pub(crate) fn walk(&self) -> Option<&RouteWalk> {
         self.last_walk.as_ref()
+    }
+
+    /// The weaker leg decides, since a session needs both; None unless routable with paths.
+    fn path_value(&self) -> Option<f64> {
+        if !self.is_routable() {
+            return None;
+        }
+        match self.last_walk {
+            Some(RouteWalk::Paths {
+                best_value,
+                return_best_value,
+                ..
+            }) => Some(best_value.min(return_best_value)),
+            _ => None,
+        }
     }
 
     pub(crate) fn quick_probe(&self) -> Option<&QuickProbeState> {
@@ -189,6 +242,22 @@ impl RouteHealth {
         }
         self.last_error = Some(err);
     }
+}
+
+/// Share of the best exit's value: path values multiply over edges, so a shared first link cancels out.
+pub(crate) fn percents_of_best(healths: &HashMap<ExitKey, RouteHealth>) -> HashMap<ExitKey, u8> {
+    let values = healths
+        .iter()
+        .filter_map(|(key, health)| health.path_value().map(|value| (*key, value)))
+        .collect::<Vec<_>>();
+    let best = values.iter().map(|(_, value)| *value).fold(0.0, f64::max);
+    if best <= 0.0 {
+        return HashMap::new();
+    }
+    values
+        .into_iter()
+        .map(|(key, value)| (key, (value / best * 100.0).round() as u8))
+        .collect()
 }
 
 fn derive_initial_state(routing: &HopRouting, allow_insecure: bool, allow_experimental: bool) -> RouteHealthState {
@@ -359,41 +428,6 @@ mod tests {
         assert!(rh.apply_walk(walk_with_paths(SystemTime::now())));
         assert!(!rh.apply_walk(no_path(3, 0)));
         assert_eq!(*rh.state(), RouteHealthState::NotRoutable);
-        assert!(
-            rh.walk()
-                .is_some_and(|walk| walk.to_string().contains("(forward 3, return 0)"))
-        );
-    }
-
-    #[test]
-    fn unresolved_relays_are_not_reported_as_direct() {
-        let unresolved = RouteWalk::Paths {
-            walked_at: SystemTime::now(),
-            count: 1,
-            distinct_first_relays: 1,
-            best_relays: Vec::new(),
-            best_value: 0.5,
-            return_count: 1,
-            return_best_relays: Vec::new(),
-            return_best_value: 0.5,
-        }
-        .to_string();
-        assert!(!unresolved.contains("direct"), "{unresolved}");
-        assert!(unresolved.contains("return 1, unresolved relays"), "{unresolved}");
-
-        let zero_hop = RouteWalk::Paths {
-            walked_at: SystemTime::now(),
-            count: 1,
-            distinct_first_relays: 0,
-            best_relays: Vec::new(),
-            best_value: 1.0,
-            return_count: 1,
-            return_best_relays: Vec::new(),
-            return_best_value: 1.0,
-        }
-        .to_string();
-        assert!(zero_hop.contains("1 path, direct"), "{zero_hop}");
-        assert!(zero_hop.contains("return 1, direct"), "{zero_hop}");
     }
 
     #[test]
@@ -517,5 +551,85 @@ mod tests {
 
         let back: QuickProbeState = serde_json::from_str(&json).expect("deserialize");
         assert!(matches!(back, QuickProbeState::Checked(check) if check.api_version == Some(ApiVersion::new(1))));
+    }
+
+    fn graded(values: &[(u8, f64, f64)]) -> HashMap<ExitKey, RouteHealth> {
+        values
+            .iter()
+            .map(|(id, forward, back)| {
+                let mut rh = RouteHealth::new(&destination(1), false, false);
+                rh.key.address = Address::from([*id; 20]);
+                rh.apply_walk(RouteWalk::Paths {
+                    walked_at: SystemTime::now(),
+                    count: 1,
+                    distinct_first_relays: 1,
+                    best_relays: Vec::new(),
+                    best_value: *forward,
+                    return_count: 1,
+                    return_best_relays: Vec::new(),
+                    return_best_value: *back,
+                });
+                (rh.key, rh)
+            })
+            .collect()
+    }
+
+    fn percent_of(healths: &HashMap<ExitKey, RouteHealth>, id: u8) -> Option<u8> {
+        let key = healths.keys().find(|key| key.address == Address::from([id; 20]))?;
+        percents_of_best(healths).get(key).copied()
+    }
+
+    #[test]
+    fn the_top_exit_is_100_however_weak_the_network() {
+        let healths = graded(&[(1, 0.05, 0.05), (2, 0.04, 0.9)]);
+        assert_eq!(percent_of(&healths, 1), Some(100));
+        assert_eq!(percent_of(&healths, 2), Some(80), "the weaker leg decides");
+    }
+
+    #[test]
+    fn percents_are_shares_of_the_best_value() {
+        let healths = graded(&[(1, 0.8, 0.9), (2, 0.6, 1.0), (3, 0.004, 1.0)]);
+        assert_eq!(percent_of(&healths, 1), Some(100));
+        assert_eq!(percent_of(&healths, 2), Some(75));
+        assert_eq!(percent_of(&healths, 3), Some(1));
+    }
+
+    #[test]
+    fn a_shared_link_moving_changes_no_percent() {
+        let values = [(1, 0.9, 0.8), (2, 0.6, 0.7), (3, 0.35, 0.9), (4, 0.1, 0.5)];
+        let before = graded(&values);
+        let scaled = values.map(|(id, forward, back)| (id, forward * 0.3, back * 0.3));
+        let after = graded(&scaled);
+        for id in 1..=4 {
+            assert_eq!(percent_of(&before, id), percent_of(&after, id), "exit {id}");
+        }
+    }
+
+    #[test]
+    fn exits_without_paths_get_no_percent() {
+        let mut healths = graded(&[(1, 0.8, 0.8)]);
+        let mut no_route = RouteHealth::new(&destination(1), false, false);
+        no_route.key.address = Address::from([2u8; 20]);
+        no_route.apply_walk(no_path(3, 0));
+        healths.insert(no_route.key, no_route);
+        let mut unwalked = RouteHealth::new(&destination(1), false, false);
+        unwalked.key.address = Address::from([3u8; 20]);
+        healths.insert(unwalked.key, unwalked);
+
+        assert_eq!(percent_of(&healths, 1), Some(100));
+        assert_eq!(percent_of(&healths, 2), None);
+        assert_eq!(percent_of(&healths, 3), None);
+    }
+
+    #[test]
+    fn an_unrecoverable_exit_neither_gets_a_percent_nor_sets_the_best() {
+        let mut healths = graded(&[(1, 0.5, 0.5)]);
+        let mut latched = RouteHealth::new(&destination(0), false, false);
+        latched.key.address = Address::from([2u8; 20]);
+        latched.apply_walk(walk_with_paths(SystemTime::now()));
+        healths.insert(latched.key, latched);
+
+        assert_eq!(percent_of(&healths, 1), Some(100));
+        assert_eq!(percent_of(&healths, 2), None);
     }
 }

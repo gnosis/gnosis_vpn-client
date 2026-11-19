@@ -5,7 +5,6 @@ use std::fmt::{self, Display};
 use std::time::{Duration, SystemTime};
 
 use crate::protocol::*;
-use crate::values::Address;
 
 /// `3m 12s`: the two most significant units of the time since `timestamp`.
 pub fn elapsed(timestamp: &SystemTime) -> String {
@@ -492,64 +491,6 @@ impl Display for UnrecoverableReason {
             }
         }
     }
-}
-
-impl Display for RouteWalk {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            RouteWalk::NotAnnounced { walked_at } => {
-                write!(f, "exit not announced on chain - walked {} ago", elapsed(walked_at))
-            }
-            RouteWalk::NoPath {
-                walked_at,
-                forward_count,
-                return_count,
-            } => write!(
-                f,
-                "no path found (forward {forward_count}, return {return_count}) - walked {} ago",
-                elapsed(walked_at)
-            ),
-            RouteWalk::Paths {
-                walked_at,
-                count,
-                distinct_first_relays,
-                best_relays,
-                best_value,
-                return_count,
-                return_best_relays,
-                return_best_value,
-            } => {
-                let plural = if *count == 1 { "" } else { "s" };
-                write!(f, "{count} path{plural}, ")?;
-                // Only a 0-hop walk has no first relay; empty relays alone may just be unresolved.
-                let is_direct = *distinct_first_relays == 0;
-                if is_direct {
-                    write!(f, "direct")?;
-                } else {
-                    write!(
-                        f,
-                        "{distinct_first_relays} distinct first relays, {}",
-                        best_via(best_relays)
-                    )?;
-                }
-                write!(f, " (value {best_value:.3}); return {return_count}, ")?;
-                if is_direct {
-                    write!(f, "direct")?;
-                } else {
-                    write!(f, "{}", best_via(return_best_relays))?;
-                }
-                write!(f, " (value {return_best_value:.3}) - walked {} ago", elapsed(walked_at))
-            }
-        }
-    }
-}
-
-fn best_via(relays: &[Address]) -> String {
-    if relays.is_empty() {
-        return "unresolved relays".to_string();
-    }
-    let chain = relays.iter().map(Address::short).collect::<Vec<_>>().join(" -> ");
-    format!("best via {chain}")
 }
 
 impl Display for QuickProbeCheck {
