@@ -11,8 +11,6 @@ use gnosis_vpn_ipc::{ProbingLevel, ProbingReason};
 use crate::connection::destination::ExitKey;
 use crate::route_health::{RouteHealth, RouteWalk};
 
-/// The app's weak-route banner threshold, so "ready" and "no banner" agree.
-pub(crate) const WEAK_ROUTE_VALUE: f64 = 0.9;
 /// Twice the slowest walk interval: an older walk says nothing about the route now.
 const WALK_FRESHNESS: Duration = Duration::from_secs(120);
 const MAX_FOCUS: usize = 10;
@@ -273,15 +271,12 @@ pub(crate) fn is_ready(health: &RouteHealth, now: SystemTime) -> bool {
 }
 
 fn walk_is_ready(walk: &RouteWalk, now: SystemTime) -> bool {
-    let RouteWalk::Paths {
-        walked_at, best_value, ..
-    } = walk
-    else {
+    let RouteWalk::Paths { walked_at, .. } = walk else {
         return false;
     };
     // A walk stamped in the future (clock step) counts as fresh.
     let age = now.duration_since(*walked_at).unwrap_or(Duration::ZERO);
-    age <= WALK_FRESHNESS && *best_value >= WEAK_ROUTE_VALUE
+    age <= WALK_FRESHNESS
 }
 
 #[derive(Serialize, Deserialize)]
@@ -548,7 +543,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_or_weak_walks_are_not_ready() {
+    fn only_fresh_walks_with_paths_are_ready() {
         let now = SystemTime::now();
         let walk = |age: Duration, best_value: f64| RouteWalk::Paths {
             walked_at: now - age,
@@ -561,7 +556,10 @@ mod tests {
             return_best_value: 1.0,
         };
         assert!(walk_is_ready(&walk(secs(10), 0.95), now));
-        assert!(!walk_is_ready(&walk(secs(10), 0.5), now));
+        assert!(
+            walk_is_ready(&walk(secs(10), 0.05), now),
+            "readiness does not judge the path value"
+        );
         assert!(!walk_is_ready(&walk(WALK_FRESHNESS + secs(1), 0.95), now));
         assert!(!walk_is_ready(&RouteWalk::NotAnnounced { walked_at: now }, now));
     }
