@@ -130,9 +130,9 @@ pub struct Core {
     strategy_handle: Option<AbortHandle>,
     /// Read handle to the strategy reactor's health, paired with `strategy_handle`.
     strategy_state: Option<edgli::StrategyStateHandle>,
-    /// The Curvy float, paired with `strategy_handle`.
-    pix_float: Option<hopr::PixFloat>,
-    /// Outlives a float swap: both shields draw from the same Safe.
+    /// The Curvy PIX pool, paired with `strategy_handle`.
+    pix_pool: Option<hopr::PixPool>,
+    /// Outlives a pool swap: both shields draw from the same Safe.
     pix_funding: Option<tokio::task::JoinHandle<()>>,
     channel_maintenance: channel_maintenance::Supervisor,
     route_healths: HashMap<ExitKey, RouteHealth>,
@@ -296,7 +296,7 @@ impl Core {
             balances: None,
             strategy_handle: None,
             strategy_state: None,
-            pix_float: None,
+            pix_pool: None,
             pix_funding: None,
             channel_maintenance: channel_maintenance::Supervisor::default(),
             ongoing_disconnections: Vec::new(),
@@ -372,7 +372,7 @@ impl Core {
             let shutdown_tracker = TaskTracker::new();
             if let Some(handle) = self.strategy_handle.take() {
                 self.strategy_state = None;
-                self.pix_float = None;
+                self.pix_pool = None;
                 shutdown_tracker.spawn(async move {
                     tracing::debug!("aborting strategy task");
                     handle.abort();
@@ -640,19 +640,21 @@ impl Core {
                         let _ = resp.send(Response::ProbingBoost);
                     }
 
-                    WorkerCommand::FundPixFloat { amount } => self.spawn_fund_pix_float(amount, resp),
+                    WorkerCommand::FundPixPool { amount } => self.spawn_fund_pix_pool(amount, resp),
 
                     WorkerCommand::Balance => {
                         let result = match (&self.hopr, &self.balances) {
                             (Some(hopr), Some(balances)) => {
                                 let funding_status =
                                     match (&self.ideal_balance_recommendation, &self.capacity_allocations) {
-                                        (Some(ideal), Some(allocs)) => Some(balance::to_funding_status(
+                                        (Some(ideal), Some(allocs)) => balance::to_funding_status(
                                             *ideal,
                                             allocs,
                                             balances.node_xdai,
                                             balances.safe_wxhopr,
-                                        )),
+                                        )
+                                        .inspect_err(|err| tracing::error!(%err, "no funding status"))
+                                        .ok(),
                                         _ => None,
                                     };
                                 ipc::BalanceResponse::Available(Box::new(command::balances(
@@ -1782,13 +1784,13 @@ impl Core {
         let cancel = self.cancel_on_shutdown.clone();
         let results_sender = results_sender.clone();
         let cfg = self.config.strategy.clone().into();
-        let pix_float = self.config.pix_strategy.float();
+        let pix_pool = self.config.pix_strategy.pool_top_up();
         if let Some(incentive_operations) = self.incentive_operations.clone() {
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::minimum_balance_recommendation(incentive_operations, cfg, pix_float, results_sender)
+                        runner::minimum_balance_recommendation(incentive_operations, cfg, pix_pool, results_sender)
                             .await;
                     })
                     .await
@@ -1800,12 +1802,13 @@ impl Core {
         if let Some(hopr) = self.hopr.clone() {
             let cancel = self.cancel_on_shutdown.clone();
             let cfg = self.config.strategy.clone().into();
+            let pix_top_up = self.config.pix_strategy.pool_top_up();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::ideal_balance_recommendation(hopr, cfg, results_sender).await;
+                        runner::ideal_balance_recommendation(hopr, cfg, pix_top_up, results_sender).await;
                     })
                     .await
             });
@@ -1814,7 +1817,7 @@ impl Core {
 
     fn spawn_capacity_allocations_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
-            let pix_float = self.pix_float.clone();
+            let pix_pool = self.pix_pool.clone();
             let price_per_byte = self.config.pix_strategy.price_per_byte;
             let cancel = self.cancel_on_shutdown.clone();
             let results_sender = results_sender.clone();
@@ -1822,7 +1825,7 @@ impl Core {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::capacity_allocations(hopr, pix_float, price_per_byte, results_sender).await;
+                        runner::capacity_allocations(hopr, pix_pool, price_per_byte, results_sender).await;
                     })
                     .await
             });
@@ -1831,14 +1834,14 @@ impl Core {
 
     fn spawn_balances_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let Some(hopr) = self.hopr.clone() {
-            let pix_float = self.pix_float.clone();
+            let pix_pool = self.pix_pool.clone();
             let cancel = self.cancel_balances.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::balances(hopr, pix_float, results_sender).await;
+                        runner::balances(hopr, pix_pool, results_sender).await;
                     })
                     .await
             });
@@ -1958,41 +1961,41 @@ impl Core {
     }
 
     /// Shielding waits for a chain transaction, so it answers from its own task.
-    fn spawn_fund_pix_float(&mut self, amount: ipc::Balance<ipc::WxHopr>, resp: oneshot::Sender<Response>) {
-        let Some(float) = self.pix_float.clone() else {
-            let _ = resp.send(Response::FundPixFloat(ipc::FundPixFloatResponse::NotReady));
+    fn spawn_fund_pix_pool(&mut self, amount: ipc::Balance<ipc::WxHopr>, resp: oneshot::Sender<Response>) {
+        let Some(pool) = self.pix_pool.clone() else {
+            let _ = resp.send(Response::FundPixPool(ipc::FundPixPoolResponse::NotReady));
             return;
         };
         // a ctl retry after its 30 s timeout must not shield the amount twice
         let is_funding = self.pix_funding.as_ref().is_some_and(|task| !task.is_finished());
         if is_funding {
-            tracing::info!(%amount, "refused PIX float funding while one is running");
-            let _ = resp.send(Response::FundPixFloat(ipc::FundPixFloatResponse::AlreadyFunding));
+            tracing::info!(%amount, "refused PIX pool funding while one is running");
+            let _ = resp.send(Response::FundPixPool(ipc::FundPixPoolResponse::AlreadyFunding));
             return;
         }
         let cancel = self.cancel_on_shutdown.clone();
         let task = tokio::spawn(async move {
-            let funding = cancel.run_until_cancelled(float.fund(wire::from_wxhopr(amount))).await;
+            let funding = cancel.run_until_cancelled(pool.fund(wire::from_wxhopr(amount))).await;
             let response = match funding {
                 Some(Ok(())) => {
-                    tracing::info!(%amount, "funded the PIX float");
-                    ipc::FundPixFloatResponse::Funded { amount }
+                    tracing::info!(%amount, "funded the PIX pool");
+                    ipc::FundPixPoolResponse::Funded { amount }
                 }
                 // a shield already submitted may still land
                 None => {
-                    tracing::warn!(%amount, "PIX float funding interrupted by shutdown");
-                    ipc::FundPixFloatResponse::Failed {
+                    tracing::warn!(%amount, "PIX pool funding interrupted by shutdown");
+                    ipc::FundPixPoolResponse::Failed {
                         reason: "service shut down while shielding".to_string(),
                     }
                 }
                 Some(Err(err)) => {
-                    tracing::error!(%err, %amount, "failed to fund the PIX float");
-                    ipc::FundPixFloatResponse::Failed {
+                    tracing::error!(%err, %amount, "failed to fund the PIX pool");
+                    ipc::FundPixPoolResponse::Failed {
                         reason: err.to_string(),
                     }
                 }
             };
-            let _ = resp.send(Response::FundPixFloat(response));
+            let _ = resp.send(Response::FundPixPool(response));
         });
         self.pix_funding = Some(task);
     }
@@ -2338,12 +2341,11 @@ impl Core {
                     &self.capacity_allocations,
                     &self.balances,
                 ) {
-                    (Some(ideal), Some(allocs), Some(bals)) => Some(balance::to_funding_status(
-                        *ideal,
-                        allocs,
-                        bals.node_xdai,
-                        bals.safe_wxhopr,
-                    )),
+                    (Some(ideal), Some(allocs), Some(bals)) => {
+                        balance::to_funding_status(*ideal, allocs, bals.node_xdai, bals.safe_wxhopr)
+                            .inspect_err(|err| tracing::error!(%err, "no funding status"))
+                            .ok()
+                    }
                     _ => None,
                 };
                 command::running(
@@ -2390,6 +2392,7 @@ impl Core {
             disconnecting,
             probe: self.probe.as_ref().map(Probe::view),
             pix_chunk_bytes: self.hopr.as_ref().map(|h| h.pix_chunk_bytes()),
+            pix_price_per_byte: wire::wxhopr(self.config.pix_strategy.price_per_byte),
             probing: self.probing_plan.as_ref().map(|plan| self.probing_view(plan)),
             recent: self
                 .network_probing
@@ -2676,7 +2679,7 @@ impl Core {
         {
             Ok(reactor) => {
                 tracing::info!("started edge node telemetry reactor");
-                self.pix_float = hopr::PixFloat::of(&reactor);
+                self.pix_pool = hopr::PixPool::of(&reactor);
                 self.strategy_handle = Some(reactor.abort_handle);
                 self.strategy_state = Some(reactor.strategy_state);
             }

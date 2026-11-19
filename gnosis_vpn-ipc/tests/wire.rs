@@ -46,7 +46,7 @@ fn a_request_travels_in_a_versioned_envelope() {
     };
     round_trips(
         &envelope,
-        json!({"protocol": 2, "request": {"type": "connect", "destination": "berlin"}}),
+        json!({"protocol": 3, "request": {"type": "connect", "destination": "berlin"}}),
     );
 }
 
@@ -198,7 +198,7 @@ fn balances_are_wei_strings() {
             xdai_deficit: None,
             refill_shortfall: None,
         }),
-        pix_float: Some(Balance::from_wei(42)),
+        pix_pool: Some(Balance::from_wei(42)),
     }));
     let json = serde_json::to_value(&balances).expect("serialize");
     assert_eq!(json["type"], "available");
@@ -207,26 +207,7 @@ fn balances_are_wei_strings() {
     assert_eq!(json["channels_out"][0]["balance"], "750000000");
     assert_eq!(json["funding_status"]["traffic"], json!({"type": "low"}));
     assert_eq!(json["funding_status"]["wxhopr_deficit"], "5");
-    assert_eq!(json["pix_float"], "42");
-}
-
-#[test]
-fn balances_without_pix_float_still_parse() {
-    let json = json!({
-        "type": "available",
-        "node": "0",
-        "safe": "0",
-        "channels_out": [],
-        "info": {"node_address": address(3), "node_peer_id": "12D3KooW", "safe_address": address(4)},
-        "capacity_allocations": null,
-        "ideal_balance": null,
-        "funding_status": null,
-    });
-    let parsed: BalanceResponse = serde_json::from_value(json).expect("an older service omits pix_float");
-    let BalanceResponse::Available(balances) = parsed else {
-        panic!("expected available balances");
-    };
-    assert!(balances.pix_float.is_none());
+    assert_eq!(json["pix_pool"], "42");
 }
 
 #[test]
@@ -235,33 +216,37 @@ fn exit_traffic_funds_carry_only_stake_and_bytes() {
         stake: Balance::from_wei(84),
         byte_capacity: 17,
         bytes_from_exits: 78,
+        total_bytes_at_pix_price: 90,
+        price_per_byte: Balance::from_wei(9),
     };
     assert_eq!(
         serde_json::to_value(funds).expect("serialize"),
-        json!({"stake": "84", "byte_capacity": 17, "bytes_from_exits": 78})
+        json!({"stake": "84", "byte_capacity": 17, "bytes_from_exits": 78, "total_bytes_at_pix_price": 90, "price_per_byte": "9"})
     );
 }
 
 #[test]
-fn capacity_allocations_without_exit_traffic_still_parse() {
-    let zero = json!({"stake": "0", "expected_messages": 0, "min_guaranteed_messages": 0, "byte_capacity": 0});
-    let json = json!({"peer_allocations": {}, "node": zero, "safe": zero});
-    let parsed: CapacityAllocations = serde_json::from_value(json).expect("an older service omits exit_traffic");
-    assert_eq!(parsed.exit_traffic, ExitTrafficFunds::default());
+fn status_carries_the_pix_price() {
+    let json = json!({"run_mode": {"type": "not_running"}, "destinations": [], "target": null,
+        "connection": {"type": "disconnected"}, "disconnecting": [], "probe": null, "pix_chunk_bytes": null,
+        "pix_price_per_byte": "9", "probing": null, "recent": []});
+    let parsed: Status = serde_json::from_value(json.clone()).expect("parse");
+    assert_eq!(parsed.pix_price_per_byte, Balance::from_wei(9));
+    assert_eq!(serde_json::to_value(&parsed).expect("serialize"), json);
 }
 
 #[test]
-fn fund_pix_float_request_carries_wei() {
-    let request = Request::FundPixFloat {
+fn fund_pix_pool_request_carries_wei() {
+    let request = Request::FundPixPool {
         amount: "1.5".parse().expect("token amount"),
     };
     let json = serde_json::to_value(&request).expect("serialize");
-    assert_eq!(json, json!({"type": "fund_pix_float", "amount": "1500000000000000000"}));
+    assert_eq!(json, json!({"type": "fund_pix_pool", "amount": "1500000000000000000"}));
 }
 
 #[test]
-fn fund_pix_float_already_funding_is_tagged() {
-    let response = FundPixFloatResponse::AlreadyFunding;
+fn fund_pix_pool_already_funding_is_tagged() {
+    let response = FundPixPoolResponse::AlreadyFunding;
     let json = serde_json::to_value(&response).expect("serialize");
     assert_eq!(json, json!({"type": "already_funding"}));
 }
@@ -462,13 +447,6 @@ fn a_stall_shows_only_while_pings_fail() {
     .to_string();
     assert!(held.contains("held for PIX payment"), "{held}");
     assert!(!held.contains("(2/3)"), "{held}");
-}
-
-#[test]
-fn a_stall_from_an_older_service_has_no_payment_hold() {
-    let stall: TunnelStall =
-        serde_json::from_value(json!({"since": 3_000, "failed_pings": 2, "reconnect_at": 3})).expect("deserialize");
-    assert_eq!(stall.awaiting_payment_since, None);
 }
 
 #[test]

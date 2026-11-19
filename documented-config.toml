@@ -277,9 +277,9 @@ path    = { hops = 1 }
 ##
 ## Tunes the parameters of the global PIX settlement reactor, shared by every session that has
 ## PIX enabled (see connection.pix above for per-session-type enablement). Deposits settle
-## through the Curvy deposit pool: on its first deposit it shields a float from the Safe (the same
-## account the channel-lifecycle strategy stakes channels from) and allocates every deposit out of
-## that float. Proofs always go through the Curvy relayer (relayer_url); further deployment settings
+## through the Curvy deposit pool: on its first deposit it shields wxHOPR from the Safe (the same
+## account the channel-lifecycle strategy stakes channels from) into the PIX pool and allocates every
+## deposit out of that pool. Proofs always go through the Curvy relayer (relayer_url); further deployment settings
 ## come from the HOPRD_CURVY_* environment variables.
 
 # [pix_strategy]
@@ -302,9 +302,9 @@ path    = { hops = 1 }
 # min_safe_hopr_reserve = "0 wxHOPR"
 # Curvy relayer that submits deposit proofs; the client never submits them itself; Curvy staging is https://api.curvy.dev; default: https://api.curvy.box
 # relayer_url = "https://api.curvy.box"
-# Curvy pool only: the float is topped up from the Safe ahead of a deposit flush whenever it can pay less than funding_min_available;
-# fund the first float with `gnosis_vpn-ctl fund-pix-float`, else the first deposit triggers a top-up itself
-# Curvy float below which a top-up is shielded; keep it at most half of funding_top_up; default: 2 wxHOPR
+# Curvy pool only: the PIX pool is topped up from the Safe ahead of a deposit flush whenever it can pay less than funding_min_available;
+# fund it first with `gnosis_vpn-ctl fundpixpool`, else the first deposit triggers a top-up itself
+# PIX pool balance below which a top-up is shielded; keep it at most half of funding_top_up; default: 2 wxHOPR
 # funding_min_available = "2 wxHOPR"
 # wxHOPR one top-up shields from the Safe, gross of the shield fee; default: 35.35 wxHOPR
 # funding_top_up = "35.35 wxHOPR"

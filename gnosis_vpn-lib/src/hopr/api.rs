@@ -373,7 +373,7 @@ impl Hopr {
             node_xdai: node_balances.node_xdai,
             safe_wxhopr: node_balances.safe_wxhopr,
             channels_out,
-            pix_float_wxhopr: None,
+            pix_pool_wxhopr: None,
         })
     }
 

@@ -3707,7 +3707,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "5.3.0"
-source = "git+https://github.com/hoprnet/edge-client.git?branch=ronnyesterluss%2Fgno-1194-pix-deposits-go-through-the-tunnel#b952b54b7f48d9c7fbe8adf8998a7a80e90af2c0"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=ronnyesterluss%2Fgno-1194-pix-deposits-go-through-the-tunnel#12475fea740f6878be7d73bbd63cb7cb555ab54a"
 dependencies = [
  "anyhow",
  "async-signal",
