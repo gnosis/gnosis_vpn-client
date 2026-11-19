@@ -245,10 +245,10 @@ impl RouteHealth {
 }
 
 /// Share of the best exit's value: path values multiply over edges, so a shared first link cancels out.
-pub(crate) fn percents_of_best(healths: &HashMap<ExitKey, RouteHealth>) -> HashMap<ExitKey, u8> {
+pub(crate) fn percents_of_best<'a>(healths: impl IntoIterator<Item = &'a RouteHealth>) -> HashMap<ExitKey, u8> {
     let values = healths
-        .iter()
-        .filter_map(|(key, health)| health.path_value().map(|value| (*key, value)))
+        .into_iter()
+        .filter_map(|health| health.path_value().map(|value| (health.key, value)))
         .collect::<Vec<_>>();
     let best = values.iter().map(|(_, value)| *value).fold(0.0, f64::max);
     if best <= 0.0 {
@@ -576,7 +576,7 @@ mod tests {
 
     fn percent_of(healths: &HashMap<ExitKey, RouteHealth>, id: u8) -> Option<u8> {
         let key = healths.keys().find(|key| key.address == Address::from([id; 20]))?;
-        percents_of_best(healths).get(key).copied()
+        percents_of_best(healths.values()).get(key).copied()
     }
 
     #[test]

@@ -2377,7 +2377,9 @@ impl Core {
             .collect();
         let mut vals = self.config.destinations.values().collect::<Vec<&Destination>>();
         vals.sort_unstable_by(|a, b| a.connect_id.cmp(&b.connect_id));
-        let percents_of_best = route_health::percents_of_best(&self.route_healths);
+        // A connection keeps its tracker past discovery dropping the exit; it must not set the best.
+        let reported = vals.iter().filter_map(|v| self.route_healths.get(&v.key()));
+        let percents_of_best = route_health::percents_of_best(reported);
         let destinations = vals
             .into_iter()
             .map(|v| ipc::DestinationStatus {
