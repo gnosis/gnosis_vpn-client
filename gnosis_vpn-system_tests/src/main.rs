@@ -6,7 +6,6 @@ mod workflow;
 
 use anyhow::Result;
 use clap::Parser;
-use gnosis_vpn_lib::hopr::hopr_lib;
 use tracing::{error, info};
 
 fn main() {
@@ -27,7 +26,9 @@ fn main() {
         env!("CARGO_PKG_NAME")
     );
 
-    let res = match hopr_lib::prepare_tokio_runtime(None, None, None) {
+    // Plain runtime: pulling in gnosis_vpn-lib for hopr's runtime setup bloats this crate's CI build.
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build();
+    let res = match runtime {
         Ok(rt) => rt.block_on(main_inner()),
         Err(error) => {
             error!("error preparing tokio runtime: {error}");
