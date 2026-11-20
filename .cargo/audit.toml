@@ -2,14 +2,11 @@
 #
 # Vulnerabilities are exempted here because they are either:
 # - From transitive dependencies we cannot control
-# - Unmaintained crates with no viable alternatives
 # - Lack a fixed version
 
 [advisories]
 # Advisory IDs to ignore
 ignore = [
-  "RUSTSEC-2024-0388", # derivative: unmaintained - transitive from alloy ecosystem
-  "RUSTSEC-2024-0436", # paste: unmaintained - transitive from alloy-sol-macro
   # hickory-proto advisories: transitive via libp2p 0.56.0 → libp2p-mdns/libp2p-dns → hickory-*;
   # blocked on libp2p upgrading hickory-dns to >=0.26.1
   "RUSTSEC-2026-0118", # hickory-proto: NSEC3 unbounded loop - no fixed version available yet
