@@ -26,8 +26,8 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.6#ce185155e1639403cc40e01260d0830065a49555" =
       "sha256-3Hjb/OdjLwy2N3QAF+e8XlZ2YPp+k53Xt17jtUUP1XQ=";
-    "git+https://github.com/hoprnet/edge-client.git?branch=feature/core-1404-edgli-let-the-embedder-hold-pix-deposit#a4025b50472d7fb6c91da520cb298053646b2ec4" =
-      "sha256-ewAfTOW//9LW7YI1943EqErmAyZi3O/E6FN+zCTziYE=";
+    "git+https://github.com/hoprnet/edge-client.git?branch=feature/core-1404-edgli-let-the-embedder-hold-pix-deposit#c5797272098af42a4bd1dda30b524127c3bb7bfa" =
+      "sha256-5cUDJl0sI/RJ9Ycl9Zd0wMDkSfpXsvquheLwE8nTTEc=";
     "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8" =
       "sha256-pjI64c6Ldv3oXLU4ApmmeWhO7gvqJTMZMUIxQtomb8U=";
   };
