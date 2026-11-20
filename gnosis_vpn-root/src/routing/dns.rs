@@ -158,6 +158,35 @@ fn scutil_remove_script(interface: &str) -> String {
     format!("open\nremove State:/Network/Service/{interface}/DNS\nquit\n")
 }
 
+/// scutil script printing the resolver stored by [`scutil_set_script`].
+#[cfg(any(target_os = "macos", test))]
+fn scutil_show_script(interface: &str) -> String {
+    format!("open\nshow State:/Network/Service/{interface}/DNS\nquit\n")
+}
+
+/// The `ServerAddresses` array entries in scutil's `show` output.
+#[cfg(any(target_os = "macos", test))]
+fn scutil_server_addresses(show_output: &str) -> Vec<&str> {
+    let mut addresses = Vec::new();
+    let mut in_array = false;
+    for line in show_output.lines().map(str::trim) {
+        if line.starts_with("ServerAddresses : <array>") {
+            in_array = true;
+            continue;
+        }
+        if !in_array {
+            continue;
+        }
+        if line == "}" {
+            break;
+        }
+        if let Some((_index, address)) = line.split_once(" : ") {
+            addresses.push(address);
+        }
+    }
+    addresses
+}
+
 /// Run a command to completion, logging (never returning) failures. Reports whether
 /// the command ran and exited successfully.
 #[cfg(target_os = "linux")]
@@ -368,17 +397,27 @@ async fn restore_linux(interface: &str, mechanism: Mechanism) -> bool {
 async fn set_macos(interface: &str, servers: &[&str]) -> Result<Diversion, Error> {
     // Mirror wg-quick: register a supplemental resolver in the dynamic store keyed
     // by the tunnel interface. Removed on restore.
-    if run_scutil(&scutil_set_script(interface, servers)).await {
-        Ok(Diversion::by_command(Mechanism::Scutil))
-    } else {
-        Err(Error::Dns("scutil failed".to_string()))
+    let set_output = run_scutil(&scutil_set_script(interface, servers))
+        .await
+        .unwrap_or_default();
+    // scutil exits 0 even when `set` is denied, so only the stored key proves the resolver took effect.
+    let show_output = run_scutil(&scutil_show_script(interface)).await.unwrap_or_default();
+    let stored = scutil_server_addresses(&show_output);
+    let took_effect = servers.iter().all(|server| stored.contains(server));
+    if !took_effect {
+        run_scutil(&scutil_remove_script(interface)).await;
+        return Err(Error::Dns(format!(
+            "scutil did not store the resolvers: {}",
+            set_output.trim()
+        )));
     }
+    Ok(Diversion::by_command(Mechanism::Scutil))
 }
 
 #[cfg(target_os = "macos")]
 async fn restore_macos(interface: &str, mechanism: Mechanism) -> bool {
     match mechanism {
-        Mechanism::Scutil => run_scutil(&scutil_remove_script(interface)).await,
+        Mechanism::Scutil => run_scutil(&scutil_remove_script(interface)).await.is_some(),
         Mechanism::Resolvectl | Mechanism::Resolvconf | Mechanism::StaticFile => {
             tracing::warn!(
                 ?mechanism,
@@ -389,17 +428,21 @@ async fn restore_macos(interface: &str, mechanism: Mechanism) -> bool {
     }
 }
 
-/// Run a scutil script to completion, logging (never returning) failures. Reports
-/// whether the command ran and exited successfully.
+/// Run a scutil script to completion, logging (never returning) failures. Returns
+/// its stdout when the command ran and exited successfully.
 #[cfg(target_os = "macos")]
-async fn run_scutil(script: &str) -> bool {
+async fn run_scutil(script: &str) -> Option<String> {
     use tokio::io::AsyncWriteExt;
 
-    let mut child = match Command::new("scutil").stdin(std::process::Stdio::piped()).spawn() {
+    let mut child = match Command::new("scutil")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+    {
         Ok(child) => child,
         Err(e) => {
             tracing::warn!(%e, "failed to spawn scutil for DNS (continuing)");
-            return false;
+            return None;
         }
     };
     if let Some(mut stdin) = child.stdin.take()
@@ -407,15 +450,15 @@ async fn run_scutil(script: &str) -> bool {
     {
         tracing::warn!(%e, "failed to write scutil DNS script (continuing)");
     }
-    match child.wait().await {
-        Ok(status) if status.success() => true,
-        Ok(status) => {
-            tracing::warn!(%status, "scutil DNS command exited unsuccessfully (continuing)");
-            false
+    match child.wait_with_output().await {
+        Ok(output) if output.status.success() => Some(String::from_utf8_lossy(&output.stdout).into_owned()),
+        Ok(output) => {
+            tracing::warn!(status = %output.status, "scutil DNS command exited unsuccessfully (continuing)");
+            None
         }
         Err(e) => {
             tracing::warn!(%e, "scutil DNS command failed (continuing)");
-            false
+            None
         }
     }
 }
@@ -501,6 +544,21 @@ mod tests {
             scutil_remove_script("utun8"),
             "open\nremove State:/Network/Service/utun8/DNS\nquit\n"
         );
+        assert_eq!(
+            scutil_show_script("utun8"),
+            "open\nshow State:/Network/Service/utun8/DNS\nquit\n"
+        );
+    }
+
+    #[test]
+    fn scutil_server_addresses_reads_only_the_server_array() {
+        let shown = "<dictionary> {\n  SearchDomains : <array> {\n    0 : fritz.box\n  }\n  ServerAddresses : <array> {\n    0 : 10.128.0.1\n    1 : 10.128.0.2\n  }\n  __FLAGS__ : 2\n}\n";
+        assert_eq!(scutil_server_addresses(shown), ["10.128.0.1", "10.128.0.2"]);
+    }
+
+    #[test]
+    fn scutil_server_addresses_of_a_missing_key_is_empty() {
+        assert!(scutil_server_addresses("  No such key\n").is_empty());
     }
 }
 
