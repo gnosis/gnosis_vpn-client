@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::protocol::*;
-use crate::values::{DestinationId, FundingSecret};
+use crate::values::DestinationId;
 
 #[cfg(target_os = "linux")]
 pub const DEFAULT_PATH: &str = "/run/gnosisvpn/gnosisvpn.sock";
@@ -108,13 +108,6 @@ pub fn disconnect(socket_path: &Path) -> Result<DisconnectResponse, CallError> {
 pub fn balance(socket_path: &Path) -> Result<BalanceResponse, CallError> {
     match call(socket_path, Request::Balance)? {
         Response::Balance(response) => Ok(response),
-        other => Err(unexpected(other)),
-    }
-}
-
-pub fn funding_tool(socket_path: &Path, secret: FundingSecret) -> Result<FundingToolResponse, CallError> {
-    match call(socket_path, Request::FundingTool { secret })? {
-        Response::FundingTool(response) => Ok(response),
         other => Err(unexpected(other)),
     }
 }

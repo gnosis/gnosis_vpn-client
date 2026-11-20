@@ -1,5 +1,5 @@
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use gnosis_vpn_ipc::{self as ipc, FundingSecret, Request};
+use gnosis_vpn_ipc::{self as ipc, Request};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -81,13 +81,6 @@ pub enum Command {
         amount: ipc::Balance<ipc::WxHopr>,
     },
 
-    /// Trigger a funding tool run to claim funds for your account during onboarding
-    #[command()]
-    FundingTool {
-        /// Your secret hash
-        secret: String,
-    },
-
     /// Solicit a ping response ("pong") from the service and it's worker process to check if it is alive
     #[command()]
     Ping {},
@@ -140,9 +133,6 @@ impl From<Command> for Request {
             Command::ProbingBoost {} => Request::ProbingBoost,
             Command::Balance {} => Request::Balance,
             Command::FundPixPool { amount } => Request::FundPixPool { amount },
-            Command::FundingTool { secret } => Request::FundingTool {
-                secret: FundingSecret::new(secret),
-            },
             Command::Ping {} => Request::Ping,
             Command::Telemetry {} => Request::Telemetry,
             Command::NerdStats {} => Request::NerdStats,
