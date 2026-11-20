@@ -1,7 +1,9 @@
-//! Best-effort DNS diversion for the NepTUN data plane: a failure to set or restore DNS never fails the connection.
+//! DNS diversion for the NepTUN data plane: setting DNS is mandatory, restoring it is best-effort so a disconnect never blocks.
 
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
+
+use super::Error;
 
 #[cfg(target_os = "linux")]
 use std::{
@@ -44,13 +46,11 @@ impl Diversion {
     }
 }
 
-/// Push `servers` (a comma-separated list) as the DNS resolvers scoped to the
-/// tunnel interface. An empty/blank list is a no-op. Returns what took effect so
-/// [`restore`] can reverse it, or `None` if nothing was applied.
-pub async fn set(interface: &str, servers: &str) -> Option<Diversion> {
+/// Scope `servers` (comma-separated) to the tunnel interface; errors when nothing took effect, as connecting would leak DNS.
+pub async fn set(interface: &str, servers: &str) -> Result<Diversion, Error> {
     let list = split_servers(servers);
     if list.is_empty() {
-        return None;
+        return Err(Error::Dns(format!("no valid server address in '{servers}'")));
     }
     #[cfg(target_os = "linux")]
     return set_linux(interface, &list).await;
@@ -176,9 +176,10 @@ async fn run(what: &str, mut cmd: Command) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-async fn set_linux(interface: &str, servers: &[&str]) -> Option<Diversion> {
+async fn set_linux(interface: &str, servers: &[&str]) -> Result<Diversion, Error> {
     let resolved_owns = resolved_owns_resolv_conf();
     let resolvconf_owns = resolvconf_owns_resolv_conf();
+    let mut failures = Vec::new();
 
     // systemd-resolved: scope the resolvers to the tunnel interface; `~.` routes every query through it.
     if resolved_owns {
@@ -188,30 +189,36 @@ async fn set_linux(interface: &str, servers: &[&str]) -> Option<Diversion> {
             let mut domain = Command::new("resolvectl");
             domain.args(resolvectl_domain_args(interface));
             run("resolvectl domain", domain).await;
-            return Some(Diversion::by_command(Mechanism::Resolvectl));
+            return Ok(Diversion::by_command(Mechanism::Resolvectl));
         }
+        failures.push("resolvectl dns failed");
     } else {
-        tracing::info!("systemd-resolved does not own /etc/resolv.conf - skipping resolvectl");
+        failures.push("systemd-resolved does not own /etc/resolv.conf");
     }
     // resolvconf for distros without systemd-resolved, mirroring wg-quick.
     if resolvconf_owns {
         if run_resolvconf_add(interface, servers).await {
-            return Some(Diversion::by_command(Mechanism::Resolvconf));
+            return Ok(Diversion::by_command(Mechanism::Resolvconf));
         }
+        failures.push("resolvconf -a failed");
     } else {
-        tracing::info!("resolvconf does not own /etc/resolv.conf - skipping resolvconf");
+        failures.push("resolvconf does not own /etc/resolv.conf");
     }
     // Last resort, as in Mullvad: a manager-owned file is regenerated anyway, so a failed owner must not land here.
     let no_manager_owns_the_file = !resolved_owns && !resolvconf_owns;
-    if no_manager_owns_the_file && let Some(managed) = resolv_conf::apply(servers) {
-        tracing::info!(backup = resolv_conf::BACKUP, "managing /etc/resolv.conf directly");
-        return Some(Diversion {
-            mechanism: Mechanism::StaticFile,
-            resolv_conf: Some(managed),
-        });
+    if !no_manager_owns_the_file {
+        failures.push("not rewriting /etc/resolv.conf owned by a resolver manager");
+        return Err(Error::Dns(failures.join("; ")));
     }
-    tracing::warn!("no DNS mechanism took effect; DNS is not diverted through the tunnel (continuing)");
-    None
+    let Some(managed) = resolv_conf::apply(servers) else {
+        failures.push("rewriting /etc/resolv.conf failed");
+        return Err(Error::Dns(failures.join("; ")));
+    };
+    tracing::info!(backup = resolv_conf::BACKUP, "managing /etc/resolv.conf directly");
+    Ok(Diversion {
+        mechanism: Mechanism::StaticFile,
+        resolv_conf: Some(managed),
+    })
 }
 
 /// resolved can run beside a NetworkManager-written file; then `resolvectl dns` succeeds while glibc never asks it.
@@ -351,13 +358,13 @@ async fn restore_linux(interface: &str, mechanism: Mechanism) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-async fn set_macos(interface: &str, servers: &[&str]) -> Option<Diversion> {
+async fn set_macos(interface: &str, servers: &[&str]) -> Result<Diversion, Error> {
     // Mirror wg-quick: register a supplemental resolver in the dynamic store keyed
     // by the tunnel interface. Removed on restore.
     if run_scutil(&scutil_set_script(interface, servers)).await {
-        Some(Diversion::by_command(Mechanism::Scutil))
+        Ok(Diversion::by_command(Mechanism::Scutil))
     } else {
-        None
+        Err(Error::Dns("scutil failed".to_string()))
     }
 }
 
@@ -432,6 +439,12 @@ mod tests {
         // via embedded whitespace, must both be dropped rather than passed through.
         assert_eq!(split_servers("1.1.1.1,example.com,8.8.8.8"), vec!["1.1.1.1", "8.8.8.8"]);
         assert_eq!(split_servers("1.1.1.1,8.8.8.8 domain evil.example"), vec!["1.1.1.1"]);
+    }
+
+    #[tokio::test]
+    async fn set_fails_when_no_server_address_is_valid() {
+        assert!(matches!(set("wg0_gnosisvpn", "example.com").await, Err(Error::Dns(_))));
+        assert!(matches!(set("wg0_gnosisvpn", " , ").await, Err(Error::Dns(_))));
     }
 
     #[test]
