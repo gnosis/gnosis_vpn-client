@@ -135,7 +135,6 @@ impl Display for RunMode {
                 node_address,
                 node_xdai,
                 node_wxhopr,
-                funding_tool,
                 issue,
                 balance_recommendation,
             } => {
@@ -151,9 +150,6 @@ impl Display for RunMode {
                         ", required: {}{required_sci} & {}",
                         recommendation.wxhopr, recommendation.xdai
                     )?;
-                }
-                if let Some(tool) = funding_tool {
-                    write!(f, ", funding tool: {tool}")?;
                 }
                 if let Some(issue) = issue {
                     write!(f, ", error: {}", issue.message)?;
