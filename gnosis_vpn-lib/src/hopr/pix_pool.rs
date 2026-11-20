@@ -6,6 +6,7 @@ use super::HoprError;
 #[derive(Clone)]
 pub struct PixPool(
     #[cfg(feature = "pix-curvy")] edgli::PixFloatHandle,
+    #[cfg(feature = "pix-curvy")] edgli::PixDepositHold,
     // `pix-test` pays straight from the Safe, so it never has a pool to construct.
     #[cfg(not(feature = "pix-curvy"))] std::convert::Infallible,
 );
@@ -13,11 +14,30 @@ pub struct PixPool(
 impl PixPool {
     pub fn of(reactor: &edgli::ReactorHandle) -> Option<Self> {
         #[cfg(feature = "pix-curvy")]
-        return reactor.pix_float.clone().map(Self);
+        return reactor
+            .pix_float
+            .clone()
+            .zip(reactor.pix_deposits.clone())
+            .map(|(float, hold)| Self(float, hold));
         #[cfg(not(feature = "pix-curvy"))]
         {
             let _ = reactor;
             None
+        }
+    }
+
+    /// Deposits made while held reach the relayer only after the hold is lifted.
+    pub fn hold_deposits(&self, held: bool) {
+        #[cfg(feature = "pix-curvy")]
+        if held {
+            self.1.hold();
+        } else {
+            self.1.release();
+        }
+        #[cfg(not(feature = "pix-curvy"))]
+        {
+            let _ = held;
+            match self.0 {}
         }
     }
 
