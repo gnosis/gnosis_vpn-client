@@ -93,3 +93,7 @@ lto           = "fat"
 opt-level     = 3
 panic         = "abort"
 strip         = true
+
+# CORE-1411 refill retry until hopr-strategy 9.2.1 is published
+[patch.crates-io]
+hopr-strategy = { git = "https://github.com/hoprnet/hopr-strategy", rev = "97bfc19a74235c814b322d355c2429100fac7174" }
