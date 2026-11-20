@@ -188,10 +188,15 @@ async fn set_linux(interface: &str, servers: &[&str]) -> Result<Diversion, Error
         if run("resolvectl dns", dns).await {
             let mut domain = Command::new("resolvectl");
             domain.args(resolvectl_domain_args(interface));
-            run("resolvectl domain", domain).await;
-            return Ok(Diversion::by_command(Mechanism::Resolvectl));
+            if run("resolvectl domain", domain).await {
+                return Ok(Diversion::by_command(Mechanism::Resolvectl));
+            }
+            // Without `~.` unmatched queries still reach WAN resolvers, so drop the half-applied scope.
+            restore_linux(interface, Mechanism::Resolvectl).await;
+            failures.push("resolvectl domain failed");
+        } else {
+            failures.push("resolvectl dns failed");
         }
-        failures.push("resolvectl dns failed");
     } else {
         failures.push("systemd-resolved does not own /etc/resolv.conf");
     }
@@ -200,6 +205,8 @@ async fn set_linux(interface: &str, servers: &[&str]) -> Result<Diversion, Error
         if run_resolvconf_add(interface, servers).await {
             return Ok(Diversion::by_command(Mechanism::Resolvconf));
         }
+        // `-a` stores the entry before its update hooks run, so a failed add can stay registered.
+        restore_linux(interface, Mechanism::Resolvconf).await;
         failures.push("resolvconf -a failed");
     } else {
         failures.push("resolvconf does not own /etc/resolv.conf");
