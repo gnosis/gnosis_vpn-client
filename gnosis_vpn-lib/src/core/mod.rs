@@ -1038,9 +1038,8 @@ impl Core {
                     self.reconnect_in_place(conn, !device_lost, results_sender).await;
                 }
                 phase => {
-                    // During Connecting the runner's own tunnel ping verification
-                    // surfaces the failure; in any other phase the connection is
-                    // already being torn down.
+                    // During Connecting the runner watches its own pump and fails the
+                    // attempt; in any other phase the connection is already being torn down.
                     tracing::debug!(?phase, %reason, "wg pump exited outside an established connection");
                 }
             },

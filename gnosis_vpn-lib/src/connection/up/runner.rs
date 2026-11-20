@@ -159,14 +159,28 @@ impl Runner {
         let allowed_ips = parse_allowed_ips(self.wg_config.allowed_ips.as_deref());
         let interface = request_setup_tunnel(&registration, &self.wg_config, peer_ips.clone(), &results_sender).await?;
         let (engine, tun_reader, tun_writer) = prepare_pump(&wg, &registration, allowed_ips).await?;
-        self.spawn_pump_task(engine, net_tx, net_rx, (tun_writer, tun_reader), &results_sender);
+        let pump_exited = CancellationToken::new();
+        self.spawn_pump_task(
+            engine,
+            net_tx,
+            net_rx,
+            (tun_writer, tun_reader),
+            &results_sender,
+            pump_exited.clone(),
+        );
 
         // 8. let tunnel traffic through the already active killswitch
         request_killswitch_lockdown(peer_ips, Some(interface), &results_sender).await?;
 
         // 9. verify tunnel with ping — give it some leeway with 5 retries
+        // Core ignores WgPumpExited while Connecting, so a session the exit closed must end the retries here.
         let _ = results_sender.send(progress(Progress::Ping)).await;
-        let round_trip_time = request_ping(&self.options.ping_options, 5, &results_sender).await?;
+        let round_trip_time = tokio::select! {
+            res = request_ping(&self.options.ping_options, 5, &results_sender) => res?,
+            _ = pump_exited.cancelled() => {
+                return Err(Error::Runtime("wg pump exited during tunnel verification".to_string()));
+            }
+        };
 
         // 10. adjust to main session
         let _ = results_sender
@@ -386,6 +400,7 @@ impl Runner {
         net_rx: NR,
         tun: (wg_tunnel::TunWriter, wg_tunnel::TunReader),
         results_sender: &mpsc::Sender<Results>,
+        pump_exited: CancellationToken,
     ) where
         NS: wg_tunnel::NetworkSender + 'static,
         NR: wg_tunnel::NetworkReceiver + 'static,
@@ -437,6 +452,7 @@ impl Runner {
                 None => tracing::debug!("wg pump stopped (connection cancelled)"),
                 Some((reason, device_lost)) => {
                     tracing::warn!(%reason, device_lost, "wg pump exited - requesting reconnect");
+                    pump_exited.cancel();
                     let _ = results_sender.send(Results::WgPumpExited { reason, device_lost }).await;
                 }
             }
