@@ -26,10 +26,10 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.6#ce185155e1639403cc40e01260d0830065a49555" =
       "sha256-3Hjb/OdjLwy2N3QAF+e8XlZ2YPp+k53Xt17jtUUP1XQ=";
-    "git+https://github.com/hoprnet/edge-client.git?branch=main#7bafb4723683f826b5fad856cd8622748b823f57" =
-      "sha256-wQPxot0FMrjzjhvWCC9L8J6gajnOhWJ1w2HrtOM56/I=";
-    "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8" =
-      "sha256-pjI64c6Ldv3oXLU4ApmmeWhO7gvqJTMZMUIxQtomb8U=";
+    "git+https://github.com/hoprnet/edge-client.git?branch=kauki/chore/probing/try-8705-and-impls-118#b192f877b12714aafca1cf76af8f0fd79d7d68d3" =
+      "sha256-cbYeDeUwz0JmhyB1IPkmTpk5UILhBAzbZyCOkMNhAqA=";
+    "git+https://github.com/hoprnet/hoprnet?branch=kauki/chore/probing/bridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534" =
+      "sha256-+NwFfucqUHjRrPfJKLSH3hoz/+jv8qVnO5e81jEPDW0=";
   };
 
   builders = nixLib.mkRustBuilders {
