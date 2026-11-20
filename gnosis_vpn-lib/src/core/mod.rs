@@ -2802,18 +2802,10 @@ fn nerd_stats_telemetry() -> Option<String> {
     }
 }
 
-/// The armed killswitch lets the relayer through only via an attached tunnel, so deposits wait for one.
+/// The armed killswitch lets the relayer through only via the tunnel, so deposits wait for Connected.
 fn pix_deposits_held(phase: &Phase, killswitch_armed: bool) -> bool {
-    let tunnel_attached = match phase {
-        Phase::Connected(_) => true,
-        // Step 8 attaches the tunnel to the killswitch right before the verification ping.
-        Phase::Connecting(conn) => matches!(
-            conn.phase.1,
-            connection::up::Phase::VerifyPing | connection::up::Phase::AdjustToMain
-        ),
-        _ => false,
-    };
-    killswitch_armed && !tunnel_attached
+    let connected = matches!(phase, Phase::Connected(_));
+    killswitch_armed && !connected
 }
 
 /// The worker's fd must close before root's: on Linux a stale fd turns the next TUN create into a second queue on the old device.
@@ -3443,7 +3435,7 @@ mod tests {
     }
 
     #[test]
-    fn pix_deposits_wait_while_the_armed_killswitch_has_no_tunnel() {
+    fn pix_deposits_wait_while_the_armed_killswitch_is_not_connected() {
         assert!(pix_deposits_held(
             &Phase::Connecting(attempt("exit", UpPhase::OpeningPing)),
             true
@@ -3452,16 +3444,16 @@ mod tests {
             &Phase::Connecting(attempt("exit", UpPhase::EstablishWgTunnel)),
             true
         ));
+        assert!(pix_deposits_held(
+            &Phase::Connecting(attempt("exit", UpPhase::VerifyPing)),
+            true
+        ));
         // Waiting on route health between reconnect attempts.
         assert!(pix_deposits_held(&Phase::HoprRunning, true));
     }
 
     #[test]
-    fn pix_deposits_flow_once_the_tunnel_is_attached_or_the_killswitch_is_lifted() {
-        assert!(!pix_deposits_held(
-            &Phase::Connecting(attempt("exit", UpPhase::VerifyPing)),
-            true
-        ));
+    fn pix_deposits_flow_once_connected_or_the_killswitch_is_lifted() {
         assert!(!pix_deposits_held(
             &Phase::Connected(attempt("exit", UpPhase::AdjustToMain)),
             true
