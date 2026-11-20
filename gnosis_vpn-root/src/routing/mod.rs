@@ -67,6 +67,8 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("TUN device error: {0}")]
     Tun(String),
+    #[error("DNS not diverted: {0}")]
+    Dns(String),
 
     #[cfg(target_os = "linux")]
     #[error("General error: {0}")]
