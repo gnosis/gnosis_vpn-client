@@ -117,7 +117,6 @@ pub struct Core {
 
     // runtime data
     phase: Phase,
-    funding_tool: balance::FundingTool,
     incentive_operations: Option<Arc<dyn IncentiveOperations>>,
     hopr: Option<Arc<Hopr>>,
     minimum_balance_recommendation: Option<balance::BalanceRecommendation>,
@@ -285,7 +284,6 @@ impl Core {
 
             // runtime data
             phase: Phase::Initial { issue: None },
-            funding_tool: balance::FundingTool::NotStarted,
             hopr: None,
             incentive_operations: None,
             minimum_balance_recommendation: None,
@@ -685,35 +683,6 @@ impl Core {
                         };
                         let _ = resp.send(Response::Telemetry(res));
                     }
-
-                    WorkerCommand::FundingTool { secret } => {
-                        let in_presafe_phase = matches!(self.phase, Phase::CheckingSafe { .. });
-                        let rerun_allowed = self.worker_params.allow_funding_tool_rerun();
-                        // cooldown only gates reruns; without the flag, a completed run stays Done forever
-                        let cooldown_remaining =
-                            rerun_allowed.then(|| self.funding_tool.cooldown_remaining()).flatten();
-
-                        let response = if !(in_presafe_phase || rerun_allowed) {
-                            ipc::FundingToolResponse::WrongPhase
-                        } else if let Some(remaining) = cooldown_remaining {
-                            ipc::FundingToolResponse::Cooldown { remaining }
-                        } else {
-                            match &self.funding_tool {
-                                balance::FundingTool::InProgress => ipc::FundingToolResponse::InProgress,
-                                balance::FundingTool::CompletedSuccess(_) if !rerun_allowed => {
-                                    ipc::FundingToolResponse::Done
-                                }
-                                balance::FundingTool::NotStarted
-                                | balance::FundingTool::CompletedError(_)
-                                | balance::FundingTool::CompletedSuccess(_) => {
-                                    self.funding_tool = balance::FundingTool::InProgress;
-                                    self.spawn_funding_runner(secret.expose().to_string(), results_sender);
-                                    ipc::FundingToolResponse::Started
-                                }
-                            }
-                        };
-                        let _ = resp.send(Response::FundingTool(response));
-                    }
                 }
                 true
             }
@@ -809,7 +778,6 @@ impl Core {
             Results::NodeBalance { res } => self.on_results_node_balance(res, results_sender).await,
             Results::QuerySafe { res } => self.on_results_query_safe(res, results_sender).await,
             Results::DeploySafe { res } => self.on_results_deploy_safe(res, results_sender).await,
-            Results::FundingTool { res } => self.on_results_funding_tool(res),
 
             Results::PersistSafe { res, safe_module } => match res {
                 Ok(()) => {
@@ -1508,14 +1476,6 @@ impl Core {
         }
     }
 
-    fn on_results_funding_tool(&mut self, res: Result<Option<String>, runner::Error>) {
-        self.funding_tool = match res {
-            Ok(None) => balance::FundingTool::CompletedSuccess(SystemTime::now()),
-            Ok(Some(reason)) => balance::FundingTool::CompletedError(reason),
-            Err(err) => balance::FundingTool::CompletedError(err.to_string()),
-        };
-    }
-
     fn trigger_deploy_safe(&mut self, results_sender: &mpsc::Sender<Results>) {
         if let Phase::CheckingSafe {
             node_balance: Querying::Success(presafe),
@@ -1707,17 +1667,6 @@ impl Core {
                     .await
             });
         }
-    }
-
-    fn spawn_funding_runner(&self, secret: String, results_sender: &mpsc::Sender<Results>) {
-        let cancel = self.cancel_on_shutdown.clone();
-        let worker_params = self.worker_params.clone();
-        let results_sender = results_sender.clone();
-        tokio::spawn(async move {
-            cancel
-                .run_until_cancelled(async move { runner::funding_tool(worker_params, secret, results_sender).await })
-                .await;
-        });
     }
 
     fn spawn_safe_deployment_runner(&self, presafe: &balance::PreSafe, results_sender: &mpsc::Sender<Results>) {
@@ -2323,19 +2272,7 @@ impl Core {
                     deploy_safe_issue.as_ref(),
                     self.minimum_balance_recommendation_issue.as_ref(),
                 ]);
-                let funding_tool = match self.funding_tool.clone() {
-                    balance::FundingTool::NotStarted => None,
-                    balance::FundingTool::InProgress => Some("Funding tool running".to_string()),
-                    balance::FundingTool::CompletedSuccess(_) => Some("Funding tool ran successfully".to_string()),
-                    balance::FundingTool::CompletedError(error) => Some(format!("Funding tool error: {error}")),
-                };
-                command::preparing_safe(
-                    self.node_address,
-                    &balance,
-                    funding_tool,
-                    issue,
-                    self.minimum_balance_recommendation,
-                )
+                command::preparing_safe(self.node_address, &balance, issue, self.minimum_balance_recommendation)
             }
             Phase::DeployingSafe { .. } => command::deploying_safe(self.node_address),
             Phase::Starting {

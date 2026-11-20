@@ -8,12 +8,12 @@ use std::time::{Duration, SystemTime};
 
 use crate::traffic;
 use crate::values::{
-    Address, ApiVersion, Balance, CountryCode, DestinationId, FundingSecret, Hops, PeerId, SessionId, WgPublicKey,
-    WxHopr, XDai, duration_ms, unix_ms,
+    Address, ApiVersion, Balance, CountryCode, DestinationId, Hops, PeerId, SessionId, WgPublicKey, WxHopr, XDai,
+    duration_ms, unix_ms,
 };
 
 /// Bumped on every incompatible wire change; the service refuses requests of any other version.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
@@ -31,9 +31,6 @@ pub enum Request {
     },
     Disconnect,
     Balance,
-    FundingTool {
-        secret: FundingSecret,
-    },
     Telemetry,
     Ping,
     Info,
@@ -101,7 +98,6 @@ pub enum Response {
     Connect(ConnectResponse),
     Disconnect(DisconnectResponse),
     Balance(BalanceResponse),
-    FundingTool(FundingToolResponse),
     /// Prometheus text; none while the edge client is not running.
     Telemetry(Option<String>),
     Pong,
@@ -237,7 +233,6 @@ pub enum RunMode {
         node_address: Address,
         node_xdai: Balance<XDai>,
         node_wxhopr: Balance<WxHopr>,
-        funding_tool: Option<String>,
         issue: Option<StartupIssue>,
         balance_recommendation: Option<Box<BalanceRecommendation>>,
     },
@@ -702,20 +697,6 @@ pub enum QuickProbeResponse {
     DestinationNotFound,
     DestinationAmbiguous {
         candidates: Vec<DestinationId>,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum FundingToolResponse {
-    WrongPhase,
-    Started,
-    InProgress,
-    Done,
-    /// A successful run is only restartable after a cooldown.
-    Cooldown {
-        #[serde(with = "duration_ms")]
-        remaining: Duration,
     },
 }
 
