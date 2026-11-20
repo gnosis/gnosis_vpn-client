@@ -26,10 +26,12 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.6#ce185155e1639403cc40e01260d0830065a49555" =
       "sha256-3Hjb/OdjLwy2N3QAF+e8XlZ2YPp+k53Xt17jtUUP1XQ=";
-    "git+https://github.com/hoprnet/edge-client.git?branch=main#7bafb4723683f826b5fad856cd8622748b823f57" =
-      "sha256-wQPxot0FMrjzjhvWCC9L8J6gajnOhWJ1w2HrtOM56/I=";
-    "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8" =
-      "sha256-pjI64c6Ldv3oXLU4ApmmeWhO7gvqJTMZMUIxQtomb8U=";
+    "git+https://github.com/hoprnet/edge-client.git?branch=kauki%2Fchore%2Fprobing%2Ftry-8705-and-impls-118#6db884412fdab451dd2daf876d5ed27904bfc9ae" =
+      "sha256-gxffJOs9zY09TmXql7bwy+ZmWxIw1jdwV5kFLKNgG58=";
+    "git+https://github.com/hoprnet/hopr-impls?branch=bot%2Flazy-dial-driven-probing#597e8c32291df95d8951bd9a999a78512e70a966" =
+      "sha256-1jkbN+zckkYR+qoaKGopo2uaKb5v/zDTdwXc4Qi5ifE=";
+    "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-with-impls-118#e1c9a3849181a0cb46b419cbe8b7489d859cc4e7" =
+      "sha256-4YyaTqyEkGJF+ubzOkc9AzgBmAfUvJ5jHQInRXqQGa0=";
   };
 
   builders = nixLib.mkRustBuilders {
