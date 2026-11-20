@@ -113,7 +113,6 @@ fn respond(request: Request, run_mode: RunMode) -> Response {
         Request::Balance => Response::Balance(BalanceResponse::Unavailable {
             reason: "fake service".to_string(),
         }),
-        Request::FundingTool { .. } => Response::FundingTool(FundingToolResponse::WrongPhase),
         Request::Telemetry => Response::Telemetry(None),
         Request::Ping => Response::Pong,
         Request::Info => Response::Info(InfoResponse {

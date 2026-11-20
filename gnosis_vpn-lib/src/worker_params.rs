@@ -45,7 +45,6 @@ pub struct SpawnParams {
     config_mode: ConfigFileMode,
     allow_insecure: bool,
     allow_experimental: bool,
-    allow_funding_tool_rerun: bool,
     blokli_url: Url,
     /// Set while root's killswitch blocks DNS: the address the previous worker used.
     pinned_blokli_ip: Option<Ipv4Addr>,
@@ -57,7 +56,6 @@ pub struct WorkerParams {
     config_mode: ConfigFileMode,
     allow_insecure: bool,
     allow_experimental: bool,
-    allow_funding_tool_rerun: bool,
     blokli_url: Url,
     /// Fixed for edgli's lifetime; a move is only picked up by a new worker.
     blokli_ip: Ipv4Addr,
@@ -107,7 +105,6 @@ pub enum ConfigFileMode {
 pub struct AllowFlags {
     pub insecure: bool,
     pub experimental: bool,
-    pub funding_tool_rerun: bool,
 }
 
 impl SpawnParams {
@@ -122,7 +119,6 @@ impl SpawnParams {
             config_mode,
             allow_insecure: allow.insecure,
             allow_experimental: allow.experimental,
-            allow_funding_tool_rerun: allow.funding_tool_rerun,
             blokli_url,
             pinned_blokli_ip,
             user_dirs,
@@ -188,7 +184,6 @@ impl WorkerParams {
             config_mode,
             allow_insecure,
             allow_experimental,
-            allow_funding_tool_rerun,
             blokli_url,
             pinned_blokli_ip,
             user_dirs,
@@ -197,7 +192,6 @@ impl WorkerParams {
             config_mode,
             allow_insecure,
             allow_experimental,
-            allow_funding_tool_rerun,
             blokli_url,
             blokli_ip,
             spawned_armed: pinned_blokli_ip.is_some(),
@@ -312,10 +306,6 @@ impl WorkerParams {
 
     pub fn allow_experimental(&self) -> bool {
         self.allow_experimental
-    }
-
-    pub fn allow_funding_tool_rerun(&self) -> bool {
-        self.allow_funding_tool_rerun
     }
 
     pub fn blokli_url(&self) -> Url {
