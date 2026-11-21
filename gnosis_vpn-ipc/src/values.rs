@@ -333,27 +333,6 @@ string_newtype!(
     PeerId
 );
 
-/// The funding tool's one-time secret; never printed.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct FundingSecret(String);
-
-impl FundingSecret {
-    pub fn new(secret: String) -> Self {
-        Self(secret)
-    }
-
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Debug for FundingSecret {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("FundingSecret(***)")
-    }
-}
-
 /// A Curve25519 public key; base64 on the wire, as `wg` prints it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct WgPublicKey([u8; 32]);
@@ -655,11 +634,5 @@ mod tests {
         assert_eq!(v1.path(), "/api/v1");
         assert!("v1.0".parse::<ApiVersion>().is_err());
         assert!("1".parse::<ApiVersion>().is_err());
-    }
-
-    #[test]
-    fn funding_secret_never_prints() {
-        let secret = FundingSecret::new("hunter2".to_string());
-        assert!(!format!("{secret:?}").contains("hunter2"));
     }
 }

@@ -1,11 +1,10 @@
 pub use edgli::hopr_lib::api::types::primitive::prelude::{Address, Balance, WxHOPR, XDai};
 use serde::{Deserialize, Serialize};
 
-use crate::{serde_utils, wire};
+use crate::wire;
 
 use std::collections::HashMap;
 use std::fmt::{self, Display};
-use std::time::{Duration, SystemTime};
 
 pub use gnosis_vpn_ipc::FundingLevel;
 
@@ -32,32 +31,6 @@ const CHANNEL_TOP_UPS_LOW: u64 = 2;
 // 0.0015 / 0.0035 xDAI, in wei
 const XDAI_EMPTY_BELOW_WEI: u64 = 1_500_000_000_000_000;
 const XDAI_LOW_BELOW_WEI: u64 = 3_500_000_000_000_000;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum FundingTool {
-    NotStarted,
-    InProgress,
-    CompletedSuccess(#[serde(with = "serde_utils::system_time")] SystemTime),
-    CompletedError(String),
-}
-
-impl FundingTool {
-    /// Successful runs are only restartable once this much time has passed, so a
-    /// misclick can't immediately re-trigger an on-chain funding transaction.
-    const RERUN_COOLDOWN: Duration = Duration::from_secs(5 * 60);
-
-    /// Time left before a successful run may be restarted, or `None` if it's not
-    /// cooling down (still in progress, never run, errored, or cooldown elapsed).
-    pub fn cooldown_remaining(&self) -> Option<Duration> {
-        let FundingTool::CompletedSuccess(completed_at) = self else {
-            return None;
-        };
-        let elapsed = completed_at.elapsed().unwrap_or_default();
-        Self::RERUN_COOLDOWN
-            .checked_sub(elapsed)
-            .filter(|remaining| !remaining.is_zero())
-    }
-}
 
 /// Data-throughput capacity for a wxHOPR stake at the current ticket price.
 #[derive(Clone, Copy, Debug)]

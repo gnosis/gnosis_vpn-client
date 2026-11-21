@@ -25,7 +25,6 @@ pub enum WorkerCommand {
     Connect { destination: ipc::DestinationId },
     Disconnect,
     Balance,
-    FundingTool { secret: ipc::FundingSecret },
     Telemetry,
     Destinations,
     Probe { destination: ipc::DestinationId },
@@ -35,7 +34,6 @@ pub enum WorkerCommand {
     FundPixPool { amount: ipc::Balance<ipc::WxHopr> },
 }
 
-/// Debug, not JSON: the funding secret must never reach a log line.
 impl Display for WorkerCommand {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
@@ -70,7 +68,6 @@ impl From<ipc::Request> for CommandRoute {
             ipc::Request::Connect { destination } => CommandRoute::Worker(WorkerCommand::Connect { destination }),
             ipc::Request::Disconnect => CommandRoute::Worker(WorkerCommand::Disconnect),
             ipc::Request::Balance => CommandRoute::Worker(WorkerCommand::Balance),
-            ipc::Request::FundingTool { secret } => CommandRoute::Worker(WorkerCommand::FundingTool { secret }),
             ipc::Request::Telemetry => CommandRoute::Worker(WorkerCommand::Telemetry),
             ipc::Request::Destinations => CommandRoute::Worker(WorkerCommand::Destinations),
             ipc::Request::Probe { destination } => CommandRoute::Worker(WorkerCommand::Probe { destination }),
@@ -131,7 +128,6 @@ fn warmup_stage(edgli_init_state: Option<EdgliInitState>, hopr_state: Option<Hop
 pub fn preparing_safe(
     node_address: Address,
     pre_safe: &Option<balance::PreSafe>,
-    funding_tool: Option<String>,
     issue: Option<ipc::StartupIssue>,
     balance_recommendation: Option<balance::BalanceRecommendation>,
 ) -> ipc::RunMode {
@@ -139,7 +135,6 @@ pub fn preparing_safe(
         node_address: wire::address(&node_address),
         node_xdai: wire::xdai(pre_safe.as_ref().map(|s| s.node_xdai).unwrap_or_default()),
         node_wxhopr: wire::wxhopr(pre_safe.as_ref().map(|s| s.node_wxhopr).unwrap_or_default()),
-        funding_tool,
         issue,
         balance_recommendation: balance_recommendation.as_ref().map(|r| Box::new(r.into())),
     }
@@ -388,14 +383,6 @@ mod tests {
         ] {
             assert!(matches!(CommandRoute::from(request), CommandRoute::Root(_)));
         }
-    }
-
-    #[test]
-    fn a_worker_command_never_prints_the_funding_secret() {
-        let cmd = WorkerCommand::FundingTool {
-            secret: ipc::FundingSecret::new("hunter2".to_string()),
-        };
-        assert!(!cmd.to_string().contains("hunter2"), "{cmd}");
     }
 
     #[test]

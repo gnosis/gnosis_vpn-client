@@ -37,6 +37,7 @@ pub(crate) fn kind(failure: FailureKind) -> StartupIssueKind {
 mod tests {
     use super::*;
 
+    use crate::hopr::config as hopr_config;
     use std::time::Duration;
 
     fn issue(since_secs: u64) -> StartupIssue {
@@ -50,7 +51,7 @@ mod tests {
     #[test]
     fn repeated_failure_keeps_the_first_since() {
         let first = issue(100);
-        let err = runner::Error::FundingTool("still failing".to_string());
+        let err = runner::Error::HoprConfig(hopr_config::Error::Output("still failing".to_string()));
 
         let again = failed(Some(&first), &err);
 
@@ -61,7 +62,7 @@ mod tests {
     #[test]
     fn first_failure_starts_a_streak_now() {
         let before = SystemTime::now();
-        let err = runner::Error::FundingTool("down".to_string());
+        let err = runner::Error::HoprConfig(hopr_config::Error::Output("down".to_string()));
 
         let issue = failed(None, &err);
 

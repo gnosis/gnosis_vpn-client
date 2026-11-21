@@ -323,24 +323,6 @@ fn pretty_print(resp: &Response) {
         Response::NerdStats(nerd_stats) => {
             print_nerd_stats(nerd_stats);
         }
-        Response::FundingTool(ipc::FundingToolResponse::WrongPhase) => {
-            eprintln!("Already past potential funding phase - no longer possible to fund");
-        }
-        Response::FundingTool(ipc::FundingToolResponse::Started) => {
-            println!("Started funding");
-        }
-        Response::FundingTool(ipc::FundingToolResponse::InProgress) => {
-            println!("Funding in progress");
-        }
-        Response::FundingTool(ipc::FundingToolResponse::Done) => {
-            println!("Funding complete");
-        }
-        Response::FundingTool(ipc::FundingToolResponse::Cooldown { remaining }) => {
-            println!(
-                "Funding tool already ran successfully, still in cooldown - try again in {}",
-                humantime::format_duration(Duration::from_secs(remaining.as_secs()))
-            );
-        }
         Response::Info(info) => {
             println!(
                 "Gnosis VPN: client service version: {}, package version: {}{}{}",
@@ -516,11 +498,6 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
             ipc::NerdStats::Connecting { .. } => exitcode::OK,
             ipc::NerdStats::Connected { .. } => exitcode::OK,
         },
-        Response::FundingTool(ipc::FundingToolResponse::WrongPhase) => exitcode::UNAVAILABLE,
-        Response::FundingTool(ipc::FundingToolResponse::Started) => exitcode::OK,
-        Response::FundingTool(ipc::FundingToolResponse::InProgress) => exitcode::OK,
-        Response::FundingTool(ipc::FundingToolResponse::Done) => exitcode::OK,
-        Response::FundingTool(ipc::FundingToolResponse::Cooldown { .. }) => exitcode::UNAVAILABLE,
         Response::Info(..) => exitcode::OK,
         Response::StartClient(ipc::StartClientResponse::Started) => exitcode::OK,
         Response::StartClient(ipc::StartClientResponse::AlreadyRunning) => exitcode::PROTOCOL,

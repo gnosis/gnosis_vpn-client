@@ -6,14 +6,10 @@ use edgli::blokli::{IncentiveOperations, make_incentive_operations};
 use edgli::hopr_lib::HopRouting;
 use edgli::hopr_lib::api::node::HoprState;
 use edgli::hopr_lib::api::types::primitive::prelude::{Address, HoprBalance};
-use edgli::hopr_lib::builder::Keypair;
 use edgli::{BlockchainConnectorConfig, EdgliInitState};
-use serde::Deserialize;
-use serde_json::json;
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time;
-use url::Url;
 
 use std::collections::HashMap;
 use std::fmt::{self, Display};
@@ -64,9 +60,6 @@ pub(crate) enum Results {
     PersistSafe {
         res: Result<(), hopr_config::Error>,
         safe_module: SafeModule,
-    },
-    FundingTool {
-        res: Result<Option<String>, Error>,
     },
     Hopr {
         res: Result<Hopr, Error>,
@@ -153,15 +146,9 @@ pub(crate) enum Error {
     #[error("chain error: {0}")]
     Chain(#[from] edgli::errors::EdgliError),
     #[error(transparent)]
-    Reqwest(#[from] reqwest::Error),
-    #[error(transparent)]
     HoprConfig(#[from] hopr_config::Error),
     #[error(transparent)]
     Hopr(#[from] HoprError),
-    #[error(transparent)]
-    Url(#[from] url::ParseError),
-    #[error("Funding tool error: {0}")]
-    FundingTool(String),
     #[error("IncentiveOperations creation error: {0}")]
     IncentiveOperationsCreation(#[source] edgli::errors::EdgliError),
 }
@@ -175,11 +162,6 @@ impl Error {
         };
         startup_issue::kind(failure)
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct UnauthorizedError {
-    error: String,
 }
 
 pub(crate) async fn minimum_balance_recommendation(
@@ -253,11 +235,6 @@ pub(crate) async fn query_safe(
 ) {
     let res = run_query_safe(incentive_operations).await;
     let _ = results_sender.send(Results::QuerySafe { res }).await;
-}
-
-pub(crate) async fn funding_tool(worker_params: WorkerParams, code: String, results_sender: mpsc::Sender<Results>) {
-    let res = run_funding_tool(worker_params, code).await;
-    let _ = results_sender.send(Results::FundingTool { res }).await;
 }
 
 pub(crate) async fn safe_deployment(
@@ -593,65 +570,6 @@ async fn run_safe_deployment(
     .await
 }
 
-// Posts to the HOPR funding tool API to request an airdrop using the provided code.
-// Returns final errors in ok branch to break exponential backoff retries.
-async fn run_funding_tool(worker_params: WorkerParams, code: String) -> Result<Option<String>, Error> {
-    let keys = worker_params.calc_keys().await?;
-    let node_address = keys.chain_key.public().to_address();
-    let url = Url::parse("https://cfp-funding-api-656686060169.europe-west1.run.app/api/cfp-funding-tool/airdrop")?;
-    let client = reqwest::Client::new();
-    let headers = remote_data::json_headers();
-    let body = json!({ "address": node_address.to_string(), "code": code, });
-    tracing::debug!(%url, ?headers, %body, "Posting funding tool");
-    (|| async {
-        let res = client
-            .post(url.clone())
-            .json(&body)
-            .timeout(Duration::from_secs(5 * 60)) // 5 minutes
-            .headers(headers.clone())
-            .send()
-            .await;
-
-        let resp = res
-            .map_err(|err| {
-                tracing::error!(?err, "Funding tool connect request failed");
-                err
-            })
-            .map_err(Error::from)?;
-
-        let status = resp.status();
-
-        let result = if status == reqwest::StatusCode::UNAUTHORIZED {
-            let unauthorized: UnauthorizedError = resp.json().await.map_err(|err| {
-                tracing::error!(?err, "Funding tool read unauthorized response failed");
-                Error::from(err)
-            })?;
-            tracing::debug!(?unauthorized, "Funding tool unauthorized response");
-            Ok(Some(unauthorized.error))
-        } else {
-            let text = resp.text().await.map_err(|err| {
-                tracing::error!(?err, "Funding tool read response failed");
-                Error::from(err)
-            })?;
-
-            tracing::debug!(%status, ?text, "Funding tool response");
-            if status.is_success() {
-                Ok(None)
-            } else {
-                Err(Error::FundingTool(text))
-            }
-        };
-        // allow conversion to retry error
-        let res = result?;
-        Ok(res)
-    })
-    .retry(remote_data::backoff_expo_long_delay())
-    .notify(|err, delay| {
-        tracing::warn!(?err, ?delay, "Funding tool attempt failed, retrying...");
-    })
-    .await
-}
-
 async fn run_hopr(
     worker_params: WorkerParams,
     blokli_config: BlokliConfig,
@@ -755,11 +673,6 @@ impl Display for Results {
             Results::PersistSafe { res, safe_module: _ } => match res {
                 Ok(_) => write!(f, "PersistSafe: Success"),
                 Err(err) => write!(f, "PersistSafe: Error({})", err),
-            },
-            Results::FundingTool { res } => match res {
-                Ok(None) => write!(f, "FundingTool: Success"),
-                Ok(Some(msg)) => write!(f, "FundingTool: Message({})", msg),
-                Err(err) => write!(f, "FundingTool: Error({})", err),
             },
             Results::Hopr { res } => match res {
                 Ok(_) => write!(f, "Hopr: Initialized Successfully"),
