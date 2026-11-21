@@ -30,6 +30,8 @@ let
       "sha256-wQPxot0FMrjzjhvWCC9L8J6gajnOhWJ1w2HrtOM56/I=";
     "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8" =
       "sha256-pjI64c6Ldv3oXLU4ApmmeWhO7gvqJTMZMUIxQtomb8U=";
+    "git+https://github.com/hoprnet/hopr-strategy?rev=97bfc19a74235c814b322d355c2429100fac7174#97bfc19a74235c814b322d355c2429100fac7174" =
+      "sha256-KRIStVZCr60V3FIKr0WGPqqbCD0NIQBLT9alyGFABYQ=";
   };
 
   builders = nixLib.mkRustBuilders {
