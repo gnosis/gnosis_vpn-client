@@ -64,7 +64,7 @@ pub struct PixConfig {
     #[serde(default = "PixConfig::default_relayer_url")]
     pub relayer_url: Url,
 
-    /// Curvy PIX pool balance below which the pool tops itself up from the Safe ahead of a deposit flush.
+    /// Curvy PIX pool balance below which the pool tops itself up from the Safe around each deposit flush.
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default = "PixConfig::default_funding_min_available")]
     pub funding_min_available: HoprBalance,
