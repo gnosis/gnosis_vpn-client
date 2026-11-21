@@ -30,6 +30,8 @@ let
       "sha256-cbYeDeUwz0JmhyB1IPkmTpk5UILhBAzbZyCOkMNhAqA=";
     "git+https://github.com/hoprnet/hoprnet?branch=kauki/chore/probing/bridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534" =
       "sha256-+NwFfucqUHjRrPfJKLSH3hoz/+jv8qVnO5e81jEPDW0=";
+    "git+https://github.com/hoprnet/hopr-strategy?rev=97bfc19a74235c814b322d355c2429100fac7174#97bfc19a74235c814b322d355c2429100fac7174" =
+      "sha256-KRIStVZCr60V3FIKr0WGPqqbCD0NIQBLT9alyGFABYQ=";
   };
 
   builders = nixLib.mkRustBuilders {
