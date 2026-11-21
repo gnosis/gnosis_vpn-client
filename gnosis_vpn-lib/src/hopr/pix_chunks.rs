@@ -189,6 +189,16 @@ impl PixChunks {
             .is_some_and(|s| s.confirmed < s.committed)
     }
 
+    /// Whether any chunk of this session was paid.
+    pub fn has_paid(&self, session_id: &str) -> bool {
+        let ledger = self.ledger.lock().expect("pix chunks lock poisoned");
+        ledger
+            .sessions
+            .iter()
+            .find(|s| s.session_id == session_id)
+            .is_some_and(|s| s.outcomes.values().any(|outcome| *outcome == Deposit::Paid))
+    }
+
     /// Latest unpaid outcome and any unconfirmed refusal, from one ledger snapshot.
     ///
     /// Batches can be prepared ahead of service. Do not interrupt a pending deposit just
@@ -427,6 +437,27 @@ mod tests {
         let scrape = format!("{}{SURBS_CONSUMED}{{session_id=\"s1\"}} 42\n", telemetry(0, 0.0, 0, 1));
         assert_eq!(chunks.surbs_consumed_with("s1", &scrape), Some(42));
         assert_eq!(chunks.payment_outcome("s1").0, Some(Deposit::Failed));
+    }
+
+    #[test]
+    fn a_session_has_paid_once_a_deposit_settles_as_paid() {
+        let chunks = PixChunks::default();
+        assert!(!chunks.has_paid("s1"));
+
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        assert!(!chunks.has_paid("s1"), "a requested chunk is not paid yet");
+
+        stats_with(&chunks, "s1", &telemetry(0, 0.0, 1, 0));
+        assert!(chunks.has_paid("s1"));
+        assert!(!chunks.has_paid("s2"));
+    }
+
+    #[test]
+    fn a_failed_deposit_is_not_paid() {
+        let chunks = PixChunks::default();
+        chunks.record("s1", 1, CHUNK, &telemetry(0, 0.0, 0, 0));
+        stats_with(&chunks, "s1", &telemetry(0, 0.0, 0, 1));
+        assert!(!chunks.has_paid("s1"));
     }
 
     #[test]

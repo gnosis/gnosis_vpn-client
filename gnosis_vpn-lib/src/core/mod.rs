@@ -1,6 +1,8 @@
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder};
 use edgli::EdgliInitState;
 use edgli::blokli::IncentiveOperations;
+use edgli::hopr_lib::api::types::internal::protocol::HoprPseudonym;
+use edgli::hopr_lib::api::types::primitive::prelude::ToHex;
 use edgli::hopr_lib::builder::Keypair;
 use futures_util::future::AbortHandle;
 use thiserror::Error;
@@ -2564,13 +2566,26 @@ impl Core {
         }
 
         match connection::up::Resume::try_from(&conn) {
-            Ok(resume) => {
+            Ok(mut resume) => {
+                resume.paid_pseudonym = self.paid_pseudonym(&conn);
                 tracing::info!(%resume, keep_device, "reconnecting in place");
                 self.resume = Some(resume);
             }
             Err(reason) => tracing::debug!(reason, "reconnecting with a fresh key"),
         }
         self.act_on_target(results_sender);
+    }
+
+    fn paid_pseudonym(&self, conn: &connection::up::Up) -> Option<HoprPseudonym> {
+        let (_, session) = conn.ping_session.as_ref()?;
+        let session_id = session.active_clients.first()?;
+        let has_paid = self.hopr.as_ref()?.pix_chunks().has_paid(session_id);
+        if !has_paid {
+            return None;
+        }
+        HoprPseudonym::from_hex(session_id)
+            .inspect_err(|err| tracing::warn!(%err, %session_id, "paid session id is not a pseudonym"))
+            .ok()
     }
 
     /// A user action rotates the key: the kept registration is removed at the exit and the device torn down.
@@ -3176,6 +3191,13 @@ mod tests {
         let down: connection::down::Down = resume.into();
         assert_eq!(down.wg_public_key, "pub");
         assert_eq!(down.destination.connect_id, destination("exit").connect_id);
+    }
+
+    #[test]
+    fn a_session_id_parses_back_into_its_pseudonym() {
+        use edgli::hopr_lib::api::types::crypto_random::Randomizable;
+        let pseudonym = HoprPseudonym::random();
+        assert_eq!(HoprPseudonym::from_hex(pseudonym.as_ref()).ok(), Some(pseudonym));
     }
 
     #[tokio::test(start_paused = true)]

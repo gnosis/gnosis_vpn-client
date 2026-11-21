@@ -1,3 +1,4 @@
+use edgli::hopr_lib::api::types::internal::protocol::HoprPseudonym;
 use edgli::hopr_lib::exports::transport::{HoprSessionConfigurator, SurbBalancerConfig};
 use thiserror::Error;
 
@@ -577,6 +578,8 @@ impl Up {
 pub struct Resume {
     pub destination: Destination,
     pub wireguard: WireGuard,
+    /// Reused so the exit can go on serving the paid chunk instead of asking for a new one.
+    pub paid_pseudonym: Option<HoprPseudonym>,
 }
 
 impl TryFrom<&Up> for Resume {
@@ -589,13 +592,18 @@ impl TryFrom<&Up> for Resume {
         Ok(Self {
             destination: up.destination.clone(),
             wireguard,
+            paid_pseudonym: None,
         })
     }
 }
 
 impl Display for Resume {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Resume of {} ({})", self.destination, self.wireguard)
+        write!(f, "Resume of {} ({})", self.destination, self.wireguard)?;
+        if let Some(pseudonym) = &self.paid_pseudonym {
+            write!(f, " paid session {pseudonym}")?;
+        }
+        Ok(())
     }
 }
 
