@@ -52,6 +52,8 @@ pub(crate) struct PumpLifecycle {
     /// Tracks the spawned pump task so core can wait for it to finish (and thus
     /// for the TUN fd to close) before asking root to tear down routing.
     pub tasks: TaskTracker,
+    /// Core's connection generation, so a replaced attempt's pump exit is dropped.
+    pub generation: u64,
 }
 
 pub(crate) struct Runner {
@@ -63,6 +65,7 @@ pub(crate) struct Runner {
     prev_conn: PreviousConnection,
     cancel: CancellationToken,
     pump_tasks: TaskTracker,
+    generation: u64,
 }
 
 impl Runner {
@@ -81,6 +84,7 @@ impl Runner {
         let PumpLifecycle {
             cancel,
             tasks: pump_tasks,
+            generation,
         } = pump_lifecycle;
         Self {
             destination,
@@ -91,6 +95,7 @@ impl Runner {
             prev_conn,
             cancel,
             pump_tasks,
+            generation,
         }
     }
 
@@ -168,14 +173,26 @@ impl Runner {
         let allowed_ips = parse_allowed_ips(self.wg_config.allowed_ips.as_deref());
         let interface = request_setup_tunnel(&registration, &self.wg_config, peer_ips.clone(), &results_sender).await?;
         let (engine, tun_reader, tun_writer) = prepare_pump(&wg, &registration, allowed_ips).await?;
-        self.spawn_pump_task(engine, net_tx, net_rx, (tun_writer, tun_reader), &results_sender);
+        let pump_exited = CancellationToken::new();
+        self.spawn_pump_task(
+            engine,
+            net_tx,
+            net_rx,
+            (tun_writer, tun_reader),
+            &results_sender,
+            pump_exited.clone(),
+        );
 
         // 8. let tunnel traffic through the already active killswitch
         request_killswitch_lockdown(peer_ips, Some(interface), &results_sender).await?;
 
         // 9. verify tunnel with ping — give it some leeway with 5 retries
+        // A session the exit closed must end the retries here instead of after ~100 s of ping timeouts.
         let _ = results_sender.send(progress(Progress::Ping)).await;
-        let round_trip_time = request_ping(&self.options.ping_options, 5, &results_sender).await?;
+        let round_trip_time = pump_exited
+            .run_until_cancelled(request_ping(&self.options.ping_options, 5, &results_sender))
+            .await
+            .ok_or_else(|| Error::Runtime("wg pump exited during tunnel verification".to_string()))??;
 
         // 10. adjust to main session
         let _ = results_sender
@@ -415,12 +432,14 @@ impl Runner {
         net_rx: NR,
         tun: (wg_tunnel::TunWriter, wg_tunnel::TunReader),
         results_sender: &mpsc::Sender<Results>,
+        pump_exited: CancellationToken,
     ) where
         NS: wg_tunnel::NetworkSender + 'static,
         NR: wg_tunnel::NetworkReceiver + 'static,
     {
         let (tun_writer, tun_reader) = tun;
         let cancel = self.cancel.clone();
+        let generation = self.generation;
         let results_sender = results_sender.clone();
 
         // Forwards stats samples so `wg_tunnel` stays unaware of core's Results enum.
@@ -466,7 +485,15 @@ impl Runner {
                 None => tracing::debug!("wg pump stopped (connection cancelled)"),
                 Some((reason, device_lost)) => {
                     tracing::warn!(%reason, device_lost, "wg pump exited - requesting reconnect");
-                    let _ = results_sender.send(Results::WgPumpExited { reason, device_lost }).await;
+                    let _ = results_sender
+                        .send(Results::WgPumpExited {
+                            reason,
+                            device_lost,
+                            generation,
+                        })
+                        .await;
+                    // After the send: core must see the exit before the runner's ConnectionResult.
+                    pump_exited.cancel();
                 }
             }
         });

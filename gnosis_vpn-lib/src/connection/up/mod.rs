@@ -184,6 +184,15 @@ pub struct Up {
     pub awaiting_payment_since: Option<SystemTime>,
     /// Carried over from the previous attempt until this one offers it to the exit.
     pub unoffered_paid_pseudonym: Option<HoprPseudonym>,
+    /// Set when the pump exits before the attempt is Connected; it fails the attempt whatever the runner reports.
+    pub pump_exit: Option<PumpExit>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PumpExit {
+    pub reason: String,
+    /// The TUN fd is gone, so the retry must rebuild the device.
+    pub device_lost: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -276,6 +285,7 @@ impl Up {
             payment_hold_since: None,
             awaiting_payment_since: None,
             unoffered_paid_pseudonym: None,
+            pump_exit: None,
         }
     }
 
