@@ -173,14 +173,12 @@ impl Runner {
         request_killswitch_lockdown(peer_ips, Some(interface), &results_sender).await?;
 
         // 9. verify tunnel with ping — give it some leeway with 5 retries
-        // Core ignores WgPumpExited while Connecting, so a session the exit closed must end the retries here.
+        // A session the exit closed must end the retries here instead of after ~100 s of ping timeouts.
         let _ = results_sender.send(progress(Progress::Ping)).await;
-        let round_trip_time = tokio::select! {
-            res = request_ping(&self.options.ping_options, 5, &results_sender) => res?,
-            _ = pump_exited.cancelled() => {
-                return Err(Error::Runtime("wg pump exited during tunnel verification".to_string()));
-            }
-        };
+        let round_trip_time = pump_exited
+            .run_until_cancelled(request_ping(&self.options.ping_options, 5, &results_sender))
+            .await
+            .ok_or_else(|| Error::Runtime("wg pump exited during tunnel verification".to_string()))??;
 
         // 10. adjust to main session
         let _ = results_sender
@@ -452,8 +450,9 @@ impl Runner {
                 None => tracing::debug!("wg pump stopped (connection cancelled)"),
                 Some((reason, device_lost)) => {
                     tracing::warn!(%reason, device_lost, "wg pump exited - requesting reconnect");
-                    pump_exited.cancel();
                     let _ = results_sender.send(Results::WgPumpExited { reason, device_lost }).await;
+                    // After the send: core must see the exit before the runner's ConnectionResult.
+                    pump_exited.cancel();
                 }
             }
         });

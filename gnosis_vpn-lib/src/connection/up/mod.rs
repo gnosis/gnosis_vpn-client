@@ -181,6 +181,15 @@ pub struct Up {
     pub payment_hold_since: Option<SystemTime>,
     /// Set once the exit's PIX gate explains the stall; status only, the hold decides reconnects.
     pub awaiting_payment_since: Option<SystemTime>,
+    /// Set when the pump exits before the attempt is Connected; it fails the attempt whatever the runner reports.
+    pub pump_exit: Option<PumpExit>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PumpExit {
+    pub reason: String,
+    /// The TUN fd is gone, so the retry must rebuild the device.
+    pub device_lost: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -272,6 +281,7 @@ impl Up {
             exit_replies: None,
             payment_hold_since: None,
             awaiting_payment_since: None,
+            pump_exit: None,
         }
     }
 
