@@ -4,6 +4,7 @@
 use backon::{FibonacciBuilder, Retryable};
 use edgli::FlowControlConfig;
 use edgli::hopr_lib::HoprSessionClientConfig;
+use edgli::hopr_lib::api::types::primitive::prelude::HoprBalance;
 use ipnetwork::IpNetwork;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -132,7 +133,7 @@ impl Runner {
         // 5b. give the payment relayer its own unpaid session through this exit. The deposit for the
         //     session opened next must not depend on that session: the exit holds its traffic back once
         //     the free allowance is used up, and the relayer's answers would be held back with it.
-        open_relayer_sidecar(&self.hopr, &self.destination, &self.options).await;
+        let paid_through_sidecar = open_relayer_sidecar(&self.hopr, &self.destination, &self.options).await;
 
         // 6. open the wg session (also carries the in-tunnel verification ping). The
         //    raw session is spliced directly into the pump - no local listener and no
@@ -153,6 +154,19 @@ impl Runner {
         let _ = results_sender
             .send(progress(Progress::SessionConfigurator(configurator.clone())))
             .await;
+
+        // 6b. hold the tunnel back until the exit can see the first payment. Attaching it earlier lets
+        //     the user's traffic run on the exit's small free allowance and then stop until the payment
+        //     arrives, which looks like a broken connection.
+        if paid_through_sidecar
+            && self.options.pix.ping_main.enabled
+            && let Err(reason) = await_first_payment(&self.hopr, &session).await
+        {
+            // An exit that does not allow the relayer as a session target cannot be paid through the
+            // side-car. Go back to the ordinary route and connect as before rather than fail.
+            tracing::warn!(%reason, "first payment not confirmed through the relayer side-car - connecting without the hold");
+            self.hopr.close_relayer_session().await;
+        }
 
         // 7. set up the NepTUN data plane — root provisions the TUN device + routing
         //    and returns the resolved interface name; the worker then receives the
@@ -214,6 +228,49 @@ impl Display for Runner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ConnectionRunner pre WireGuard {{ {} }}", self.destination)
     }
+}
+
+/// How long the first payment may take before the attempt goes on without the hold. Below the exit's own
+/// wait for a deposit (3 minutes on the exit appliance), so a stuck payment does not also cost the session.
+const FIRST_PAYMENT_TIMEOUT: Duration = Duration::from_secs(150);
+/// A session the exit never asks to pay for (an exit that does not enforce payment) is not held.
+const NO_PAYMENT_REQUEST_AFTER: Duration = Duration::from_secs(10);
+/// From "the relayer accepted the deposit" to "the exit sees it": the indexer serves only blocks that are
+/// 3 confirmations (15 s) deep and the pool operator has to commit the note first. Measured: 18.6 to 26.0 s.
+/// A fixed wait stands in for a confirmation the client cannot observe yet. It is not an upper bound: what
+/// covers the rest today is the up to 5 s the payment state lags and the 3 s the tunnel takes to attach.
+const CONFIRMATION_HOLD: Duration = Duration::from_secs(22);
+/// How often the payment state is read while holding. The state itself is refreshed every 5 s.
+const PAYMENT_POLL: Duration = Duration::from_millis(500);
+
+/// Waits until the first chunk of `session` is paid, then for the time the exit needs to see the payment.
+async fn await_first_payment(hopr: &Hopr, session: &SessionClientMetadata) -> Result<(), String> {
+    let Some(session_id) = session.active_clients.first() else {
+        return Err("the session has no id to follow its payment by".into());
+    };
+    let started = time::Instant::now();
+    tracing::info!(%session_id, "holding the tunnel back until the first payment is confirmed");
+    loop {
+        let stats = hopr.pix_chunks().stats(session_id, HoprBalance::zero());
+        if stats.chunks_failed > 0 {
+            return Err("the deposit failed".into());
+        }
+        if stats.chunks_paid > 0 {
+            break;
+        }
+        if stats.chunks_committed == 0 && started.elapsed() > NO_PAYMENT_REQUEST_AFTER {
+            tracing::info!(%session_id, "the exit asked for no payment - not holding");
+            return Ok(());
+        }
+        if started.elapsed() > FIRST_PAYMENT_TIMEOUT {
+            return Err(format!("no deposit made within {FIRST_PAYMENT_TIMEOUT:?}"));
+        }
+        time::sleep(PAYMENT_POLL).await;
+    }
+    tracing::info!(%session_id, paid_after = ?started.elapsed(), hold = ?CONFIRMATION_HOLD, "first deposit made - waiting for the exit to see it");
+    time::sleep(CONFIRMATION_HOLD).await;
+    tracing::info!(%session_id, held = ?started.elapsed(), "first payment confirmed - attaching the tunnel");
+    Ok(())
 }
 
 /// Opens the relayer side-car session. Returns whether the relayer's traffic now goes through it; when it
