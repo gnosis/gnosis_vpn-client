@@ -51,6 +51,8 @@ pub(crate) struct PumpLifecycle {
     /// Tracks the spawned pump task so core can wait for it to finish (and thus
     /// for the TUN fd to close) before asking root to tear down routing.
     pub tasks: TaskTracker,
+    /// Core's connection generation, so a replaced attempt's pump exit is dropped.
+    pub generation: u64,
 }
 
 pub(crate) struct Runner {
@@ -62,6 +64,7 @@ pub(crate) struct Runner {
     prev_conn: PreviousConnection,
     cancel: CancellationToken,
     pump_tasks: TaskTracker,
+    generation: u64,
 }
 
 impl Runner {
@@ -80,6 +83,7 @@ impl Runner {
         let PumpLifecycle {
             cancel,
             tasks: pump_tasks,
+            generation,
         } = pump_lifecycle;
         Self {
             destination,
@@ -90,6 +94,7 @@ impl Runner {
             prev_conn,
             cancel,
             pump_tasks,
+            generation,
         }
     }
 
@@ -405,6 +410,7 @@ impl Runner {
     {
         let (tun_writer, tun_reader) = tun;
         let cancel = self.cancel.clone();
+        let generation = self.generation;
         let results_sender = results_sender.clone();
 
         // Forwards stats samples so `wg_tunnel` stays unaware of core's Results enum.
@@ -450,7 +456,13 @@ impl Runner {
                 None => tracing::debug!("wg pump stopped (connection cancelled)"),
                 Some((reason, device_lost)) => {
                     tracing::warn!(%reason, device_lost, "wg pump exited - requesting reconnect");
-                    let _ = results_sender.send(Results::WgPumpExited { reason, device_lost }).await;
+                    let _ = results_sender
+                        .send(Results::WgPumpExited {
+                            reason,
+                            device_lost,
+                            generation,
+                        })
+                        .await;
                     // After the send: core must see the exit before the runner's ConnectionResult.
                     pump_exited.cancel();
                 }

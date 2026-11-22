@@ -1003,7 +1003,14 @@ impl Core {
                 self.act_on_target(results_sender);
             }
 
-            Results::WgPumpExited { reason, device_lost } => match self.phase.clone() {
+            Results::WgPumpExited {
+                reason,
+                device_lost,
+                generation,
+            } => match self.phase.clone() {
+                _ if generation != self.connection_generation => {
+                    tracing::warn!(generation, current = self.connection_generation, %reason, "dropping pump exit of a replaced attempt");
+                }
                 Phase::Connected(conn) => {
                     tracing::warn!(%conn, %reason, device_lost, "wg pump exited - reconnecting");
                     self.reconnecting_since = Some(SystemTime::now());
@@ -2141,6 +2148,7 @@ impl Core {
             let pump_lifecycle = connection::up::runner::PumpLifecycle {
                 cancel: self.cancel_connection.clone(),
                 tasks: self.wg_pump_tasks.clone(),
+                generation: self.connection_generation,
             };
             let runner = connection::up::runner::Runner::new(spec, hopr.clone(), prev_conn, pump_lifecycle);
             let results_sender = results_sender.clone();
@@ -3197,6 +3205,7 @@ mod tests {
             Results::WgPumpExited {
                 reason: "SessionClosed".to_string(),
                 device_lost: false,
+                generation: core.connection_generation,
             },
             &results,
         )
@@ -3214,6 +3223,37 @@ mod tests {
         assert!(matches!(core.phase, Phase::Connecting(_)), "retrying in place");
         let error = core.route_healths.get(&key).and_then(|rh| rh.last_error());
         assert_eq!(error, Some("wg pump exited: SessionClosed"));
+        core.cancel_on_shutdown.cancel();
+    }
+
+    #[tokio::test]
+    async fn a_pump_exit_of_a_replaced_attempt_is_ignored() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        let conn = attempt("exit", UpPhase::ConnectionEstablished);
+        core.route_healths
+            .insert(conn.destination.key(), tracker(&conn.destination));
+        core.target = Some(conn.destination.connect_id.clone());
+        core.phase = Phase::Connecting(conn);
+        core.connection_generation = 1;
+
+        core.on_results(
+            Results::WgPumpExited {
+                reason: "SessionClosed".to_string(),
+                device_lost: true,
+                generation: 0,
+            },
+            &results,
+        )
+        .await;
+        core.on_results(
+            Results::ConnectionResult {
+                res: Ok(session_metadata()),
+            },
+            &results,
+        )
+        .await;
+
+        assert!(matches!(core.phase, Phase::Connected(_)));
         core.cancel_on_shutdown.cancel();
     }
 
