@@ -26,10 +26,10 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.6#ce185155e1639403cc40e01260d0830065a49555" =
       "sha256-3Hjb/OdjLwy2N3QAF+e8XlZ2YPp+k53Xt17jtUUP1XQ=";
-    "git+https://github.com/hoprnet/edge-client.git?branch=main#b1537f57c9074a1b7203b648c15501d9abca2c06" =
-      "sha256-cbYeDeUwz0JmhyB1IPkmTpk5UILhBAzbZyCOkMNhAqA=";
-    "git+https://github.com/hoprnet/hoprnet?branch=kauki/chore/probing/bridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534" =
-      "sha256-+NwFfucqUHjRrPfJKLSH3hoz/+jv8qVnO5e81jEPDW0=";
+    "git+https://github.com/hoprnet/edge-client.git?branch=feature/core-1397-session-let-a-re-initiation-on-a-held#fbb0b8f75f4fb73b482abff8cea25105bfb4b093" =
+      "sha256-VTON27qAFVMbMw3oT/TdnuaPGFXfqiHzhaTQKAH8tDY=";
+    "git+https://github.com/hoprnet/hoprnet?branch=feature/core-1397-session-let-a-re-initiation-on-a-held#12d52dd9300213081a2d1f8635880e372f630b97" =
+      "sha256-CqnFX2gh3WlFemkrTFRBF8esbOugrllJG8uB33pjqoA=";
     "git+https://github.com/hoprnet/hopr-strategy?rev=97bfc19a74235c814b322d355c2429100fac7174#97bfc19a74235c814b322d355c2429100fac7174" =
       "sha256-KRIStVZCr60V3FIKr0WGPqqbCD0NIQBLT9alyGFABYQ=";
   };
