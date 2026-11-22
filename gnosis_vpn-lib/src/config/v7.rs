@@ -1980,7 +1980,7 @@ min_safe_hopr_reserve = "10 wxHOPR"
 relayer_url = "https://api.curvy.dev"
 funding_min_available = "1 wxHOPR"
 funding_top_up = "10 wxHOPR"
-fund_at_startup = true
+fund_at_startup = false
 max_funding_time = "10m"
 direct_shield_settle_grace = "1m"
 "#####,
@@ -1996,7 +1996,7 @@ direct_shield_settle_grace = "1m"
         assert_eq!(converted.relayer_url.as_str(), "https://api.curvy.dev/");
         assert_eq!(converted.funding_min_available, "1 wxHOPR".parse().unwrap());
         assert_eq!(converted.funding_top_up, "10 wxHOPR".parse().unwrap());
-        assert!(converted.fund_at_startup);
+        assert!(!converted.fund_at_startup);
         assert_eq!(converted.max_funding_time, Some(Duration::from_secs(600)));
         assert_eq!(converted.direct_shield_settle_grace, Some(Duration::from_secs(60)));
     }

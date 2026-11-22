@@ -65,12 +65,6 @@ pub struct Cli {
     /// Allow experimental multi-hop connections with 2+ hops (only for testing purposes)
     #[arg(long)]
     pub allow_experimental: bool,
-
-    /// Allow re-running the funding tool even after a Safe has been deployed and the node is
-    /// running, subject to a cooldown after each successful run (only for support/testing
-    /// purposes)
-    #[arg(long)]
-    pub allow_funding_tool_rerun: bool,
 }
 
 pub fn parse() -> Cli {
@@ -87,7 +81,6 @@ impl Cli {
         let allow = worker_params::AllowFlags {
             insecure: self.allow_insecure,
             experimental: self.allow_experimental,
-            funding_tool_rerun: self.allow_funding_tool_rerun,
         };
 
         SpawnParams::new(

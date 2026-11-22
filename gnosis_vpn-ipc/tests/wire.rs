@@ -46,7 +46,7 @@ fn a_request_travels_in_a_versioned_envelope() {
     };
     round_trips(
         &envelope,
-        json!({"protocol": 4, "request": {"type": "connect", "destination": "berlin"}}),
+        json!({"protocol": 5, "request": {"type": "connect", "destination": "berlin"}}),
     );
 }
 
