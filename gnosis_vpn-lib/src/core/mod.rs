@@ -2122,6 +2122,7 @@ impl Core {
             // Seeded so a disconnect before the runner reports its key still unregisters and tears down.
             if let Some(resume) = &resume {
                 conn.wireguard = Some(resume.wireguard.clone());
+                conn.unoffered_paid_pseudonym = resume.paid_pseudonym;
             }
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
@@ -2567,7 +2568,9 @@ impl Core {
 
         match connection::up::Resume::try_from(&conn) {
             Ok(mut resume) => {
-                resume.paid_pseudonym = self.paid_pseudonym(&conn);
+                if let Some(pseudonym) = self.paid_pseudonym(&conn) {
+                    resume.paid_pseudonym = Some(pseudonym);
+                }
                 tracing::info!(%resume, keep_device, "reconnecting in place");
                 self.resume = Some(resume);
             }
@@ -3191,6 +3194,38 @@ mod tests {
         let down: connection::down::Down = resume.into();
         assert_eq!(down.wg_public_key, "pub");
         assert_eq!(down.destination.connect_id, destination("exit").connect_id);
+    }
+
+    #[tokio::test]
+    async fn a_reconnect_keeps_the_paid_pseudonym_until_it_was_offered() {
+        use edgli::hopr_lib::api::types::crypto_random::Randomizable;
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        let pseudonym = HoprPseudonym::random();
+        let mut never_offered = connected_with_key("exit");
+        never_offered.unoffered_paid_pseudonym = Some(pseudonym);
+        never_offered.connect_progress(connection::up::Progress::RegisterWg);
+
+        core.reconnect_in_place(never_offered, true, &results).await;
+
+        let resume = core.resume.take().expect("key kept");
+        assert_eq!(resume.paid_pseudonym, Some(pseudonym));
+
+        let mut offered = connected_with_key("exit");
+        offered.unoffered_paid_pseudonym = Some(pseudonym);
+        let registration = serde_json::from_value(serde_json::json!({
+            "public_key": "pub",
+            "ip": "10.128.0.5",
+            "newly_registered": false,
+            "server_public_key": "srv",
+            "preshared_key": "psk",
+        }))
+        .expect("valid registration");
+        offered.connect_progress(connection::up::Progress::OpenPing(registration));
+
+        core.reconnect_in_place(offered, true, &results).await;
+
+        let resume = core.resume.take().expect("key kept");
+        assert_eq!(resume.paid_pseudonym, None);
     }
 
     #[test]

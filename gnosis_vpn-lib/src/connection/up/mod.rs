@@ -182,6 +182,8 @@ pub struct Up {
     pub payment_hold_since: Option<SystemTime>,
     /// Set once the exit's PIX gate explains the stall; status only, the hold decides reconnects.
     pub awaiting_payment_since: Option<SystemTime>,
+    /// Carried over from the previous attempt until this one offers it to the exit.
+    pub unoffered_paid_pseudonym: Option<HoprPseudonym>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -273,6 +275,7 @@ impl Up {
             exit_replies: None,
             payment_hold_since: None,
             awaiting_payment_since: None,
+            unoffered_paid_pseudonym: None,
         }
     }
 
@@ -541,6 +544,8 @@ impl Up {
             Progress::OpenPing(reg) => {
                 self.phase = (now, Phase::OpeningPing);
                 self.registration = Some(reg);
+                // The runner offers the pseudonym next; refused or not, it gets only this one try.
+                self.unoffered_paid_pseudonym = None;
             }
             Progress::PeerIps => self.phase = (now, Phase::GatherPeerIps),
             Progress::KillswitchLockdown => self.phase = (now, Phase::KillswitchLockdown),
@@ -592,7 +597,7 @@ impl TryFrom<&Up> for Resume {
         Ok(Self {
             destination: up.destination.clone(),
             wireguard,
-            paid_pseudonym: None,
+            paid_pseudonym: up.unoffered_paid_pseudonym,
         })
     }
 }
