@@ -1,4 +1,5 @@
 use bytesize::ByteSize;
+use edgli::hopr_lib::exports::network::types::types::{IpOrHost, SealedHost};
 use edgli::multiaddr;
 use edgli::{BlockchainConnectorConfig, BlokliEndpoint, EdgeNodeApi, EdgliInitState};
 use edgli::{
@@ -58,6 +59,21 @@ pub struct Hopr {
     open_listeners: Arc<ListenerJoinHandles>,
     pix_chunks: PixChunks,
     pix_chunk_bytes: u64,
+    relayer: std::sync::Mutex<RelayerSidecar>,
+}
+
+/// The separate, unpaid session that carries the payment relayer's traffic to the current exit.
+///
+/// The exit holds the paid session's traffic back until it sees the deposit, and the killswitch blocks
+/// everything but HOPR peers until the tunnel is attached. A deposit sent through the tunnel can therefore
+/// not be made exactly when it is needed; one sent through its own session can.
+#[derive(Default)]
+struct RelayerSidecar {
+    /// Where the payment pool's relayer connections go; set once the payment reactor runs with a relayer.
+    #[cfg(feature = "pix-curvy")]
+    route: Option<edgli::RelayerRoute>,
+    /// The listener of the open side-car session, if any.
+    session: Option<SessionClientMetadata>,
 }
 
 impl Hopr {
@@ -94,7 +110,58 @@ impl Hopr {
             open_listeners: Default::default(),
             pix_chunks,
             pix_chunk_bytes: edgli::strategy::quota_per_ssa(&pix_params),
+            relayer: Default::default(),
         })
+    }
+
+    /// Opens a session to the payment relayer through `destination` and sends the relayer's traffic there.
+    ///
+    /// Returns the local listener, or `None` when this build or configuration has no relayer to route.
+    /// The exit must allow the relayer as a session target; if it does not, payments through this route
+    /// fail and the caller falls back with [`Self::close_relayer_session`].
+    pub async fn open_relayer_session(
+        &self,
+        destination: Address,
+        cfg: HoprSessionClientConfig,
+    ) -> Result<Option<SocketAddr>, HoprError> {
+        self.close_relayer_session().await;
+        #[cfg(feature = "pix-curvy")]
+        {
+            let Some(route) = self.relayer.lock().expect("relayer lock poisoned").route.clone() else {
+                return Ok(None);
+            };
+            let host: IpOrHost = format!("{}:{}", route.host(), route.port())
+                .parse()
+                .map_err(|e| HoprError::Construction(format!("relayer target: {e}")))?;
+            let target = SessionTarget::TcpStream(SealedHost::Plain(host));
+            let meta = self.open_session(destination, target, None, None, cfg).await?;
+            let listener = meta.bound_host;
+            route.set(listener);
+            self.relayer.lock().expect("relayer lock poisoned").session = Some(meta);
+            Ok(Some(listener))
+        }
+        #[cfg(not(feature = "pix-curvy"))]
+        {
+            let _ = (destination, cfg);
+            Ok(None)
+        }
+    }
+
+    /// Sends the relayer's traffic the ordinary way again and closes the side-car session.
+    pub async fn close_relayer_session(&self) {
+        let session = {
+            let mut relayer = self.relayer.lock().expect("relayer lock poisoned");
+            #[cfg(feature = "pix-curvy")]
+            if let Some(route) = &relayer.route {
+                route.clear();
+            }
+            relayer.session.take()
+        };
+        if let Some(meta) = session
+            && let Err(error) = self.close_session(meta.bound_host, meta.protocol).await
+        {
+            tracing::debug!(%error, "relayer side-car session was already closed");
+        }
     }
 
     pub fn pix_chunks(&self) -> &PixChunks {
@@ -415,9 +482,15 @@ impl Hopr {
         // Boxed upstream (edge-client #186): the variant grew with the Curvy pool's config.
         cfg.strategies
             .push(edgli::strategy::EdgeStrategyKind::Pix(Box::new(pix)));
-        self.edgli
+        let reactor = self
+            .edgli
             .run_reactor_from_cfg(cfg)
-            .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))
+            .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))?;
+        #[cfg(feature = "pix-curvy")]
+        {
+            self.relayer.lock().expect("relayer lock poisoned").route = reactor.relayer_route.clone();
+        }
+        Ok(reactor)
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]

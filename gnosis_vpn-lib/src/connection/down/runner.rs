@@ -100,6 +100,8 @@ impl Runner {
                 evt: Event::CloseBridge,
             })
             .await;
+        // The payment relayer's side-car session belongs to this connection: back to the ordinary route.
+        self.hopr.close_relayer_session().await;
         let close_res = match &self.reuse {
             Some(_) => Ok(()),
             None => close_bridge_session(&self.hopr, &bridge_session).await,

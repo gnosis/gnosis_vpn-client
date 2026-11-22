@@ -129,6 +129,11 @@ impl Runner {
             .send(progress(Progress::OpenPing(registration.clone())))
             .await;
 
+        // 5b. give the payment relayer its own unpaid session through this exit. The deposit for the
+        //     session opened next must not depend on that session: the exit holds its traffic back once
+        //     the free allowance is used up, and the relayer's answers would be held back with it.
+        open_relayer_sidecar(&self.hopr, &self.destination, &self.options).await;
+
         // 6. open the wg session (also carries the in-tunnel verification ping). The
         //    raw session is spliced directly into the pump - no local listener and no
         //    loopback hop.
@@ -208,6 +213,40 @@ impl Runner {
 impl Display for Runner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ConnectionRunner pre WireGuard {{ {} }}", self.destination)
+    }
+}
+
+/// Opens the relayer side-car session. Returns whether the relayer's traffic now goes through it; when it
+/// does not, payments use the ordinary route as before.
+async fn open_relayer_sidecar(hopr: &Hopr, destination: &Destination, options: &Options) -> bool {
+    // The relayer answers with tens of kilobytes (its network list alone is 31 KB), far more than the
+    // bridge tier's 16 KB reply buffer can carry in time; the ping tier's 1 MB is ample.
+    let surb = match surb_config_for(&options.surb_balancing.ping) {
+        Ok(surb) => surb,
+        Err(error) => {
+            tracing::warn!(%error, "no SURB configuration for the relayer side-car session");
+            return false;
+        }
+    };
+    let cfg = HoprSessionClientConfig {
+        capabilities: options.sessions.bridge.capabilities,
+        forward_path: destination.routing,
+        return_path: destination.routing,
+        max_surbs_per_data_packet: surb.max_surbs_per_data_packet,
+        surb_management: surb.management,
+        flow_control: Some(FlowControlConfig::robust()),
+        ..Default::default()
+    };
+    match hopr.open_relayer_session(destination.address, cfg).await {
+        Ok(Some(listener)) => {
+            tracing::info!(%destination, %listener, "payment relayer goes through its own session");
+            true
+        }
+        Ok(None) => false,
+        Err(error) => {
+            tracing::warn!(%error, "cannot open the relayer side-car session - payments use the ordinary route");
+            false
+        }
     }
 }
 
