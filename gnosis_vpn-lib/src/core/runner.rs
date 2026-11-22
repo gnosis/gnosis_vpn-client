@@ -107,6 +107,7 @@ pub(crate) enum Results {
         reason: String,
         /// The TUN fd is gone, so the device cannot be reused for the reconnect.
         device_lost: bool,
+        generation: u64,
     },
     TunnelPingResult {
         rtt: Result<Duration, String>,
@@ -724,8 +725,16 @@ impl Display for Results {
                 Ok(_) => write!(f, "DisconnectionResult ({}): Success", wg_public_key),
                 Err(err) => write!(f, "DisconnectionResult ({}): Error({})", wg_public_key, err),
             },
-            Results::WgPumpExited { reason, device_lost } => {
-                write!(f, "WgPumpExited: {} (device_lost={})", reason, device_lost)
+            Results::WgPumpExited {
+                reason,
+                device_lost,
+                generation,
+            } => {
+                write!(
+                    f,
+                    "WgPumpExited: {} (device_lost={}, generation={})",
+                    reason, device_lost, generation
+                )
             }
             Results::TunnelPingResult { rtt } => match rtt {
                 Ok(d) => write!(f, "TunnelPingResult: {:.1}ms", d.as_secs_f64() * 1000.0),

@@ -906,7 +906,7 @@ impl Core {
                 }
             }
 
-            Results::ConnectionResult { res } => match (res, self.phase.clone()) {
+            Results::ConnectionResult { res } => match (fail_on_pump_exit(res, &self.phase), self.phase.clone()) {
                 (Ok(_session), Phase::Connecting(mut conn)) => {
                     tracing::info!(%conn, "connection established successfully");
                     self.reconnecting_since = None;
@@ -942,8 +942,12 @@ impl Core {
                 }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(?err, %conn, "connection failed");
+                    let error = match &conn.pump_exit {
+                        Some(exit) => format!("wg pump exited: {}", exit.reason),
+                        None => err.to_string(),
+                    };
                     if let Some(rh) = self.route_healths.get_mut(&conn.destination.key()) {
-                        rh.with_error(err.to_string());
+                        rh.with_error(error);
                     }
                     // By identity: a dropped target must still restart the worker, not stick in Connecting.
                     let failed_the_target = self.target.as_deref() == Some(conn.destination.connect_id.as_str());
@@ -999,17 +1003,27 @@ impl Core {
                 self.act_on_target(results_sender);
             }
 
-            Results::WgPumpExited { reason, device_lost } => match self.phase.clone() {
+            Results::WgPumpExited {
+                reason,
+                device_lost,
+                generation,
+            } => match self.phase.clone() {
+                _ if generation != self.connection_generation => {
+                    tracing::warn!(generation, current = self.connection_generation, %reason, "dropping pump exit of a replaced attempt");
+                }
                 Phase::Connected(conn) => {
                     tracing::warn!(%conn, %reason, device_lost, "wg pump exited - reconnecting");
                     self.reconnecting_since = Some(SystemTime::now());
                     self.reconnect_in_place(conn, !device_lost, results_sender).await;
                 }
+                Phase::Connecting(mut conn) => {
+                    // The runner reports next; its ConnectionResult fails the attempt on this.
+                    tracing::warn!(%conn, %reason, device_lost, "wg pump exited while connecting");
+                    conn.pump_exit = Some(connection::up::PumpExit { reason, device_lost });
+                    self.phase = Phase::Connecting(conn);
+                }
                 phase => {
-                    // During Connecting the runner's own tunnel ping verification
-                    // surfaces the failure; in any other phase the connection is
-                    // already being torn down.
-                    tracing::debug!(?phase, %reason, "wg pump exited outside an established connection");
+                    tracing::debug!(?phase, %reason, "wg pump exited outside a connection - already torn down");
                 }
             },
 
@@ -1229,7 +1243,8 @@ impl Core {
                 }
                 match self.phase.clone() {
                     Phase::Connecting(conn) if self.target.as_deref() == Some(conn.destination.connect_id.as_str()) => {
-                        self.reconnect_in_place(conn, true, results_sender).await;
+                        let device_lost = conn.pump_exit.as_ref().is_some_and(|exit| exit.device_lost);
+                        self.reconnect_in_place(conn, !device_lost, results_sender).await;
                     }
                     phase => {
                         tracing::debug!(?phase, target = ?self.target, "dropping connect retry - target moved on");
@@ -2133,6 +2148,7 @@ impl Core {
             let pump_lifecycle = connection::up::runner::PumpLifecycle {
                 cancel: self.cancel_connection.clone(),
                 tasks: self.wg_pump_tasks.clone(),
+                generation: self.connection_generation,
             };
             let runner = connection::up::runner::Runner::new(spec, hopr.clone(), prev_conn, pump_lifecycle);
             let results_sender = results_sender.clone();
@@ -2731,6 +2747,20 @@ fn nerd_stats_telemetry() -> Option<String> {
     }
 }
 
+/// The pump can die after the runner's last ping, so the runner's Ok would describe a dead tunnel.
+fn fail_on_pump_exit(
+    res: Result<SessionClientMetadata, connection::up::Error>,
+    phase: &Phase,
+) -> Result<SessionClientMetadata, connection::up::Error> {
+    let pump_exited = matches!(phase, Phase::Connecting(conn) if conn.pump_exit.is_some());
+    match res {
+        Ok(_) if pump_exited => Err(connection::up::Error::Runtime(
+            "wg pump exited before the connection was established".to_string(),
+        )),
+        res => res,
+    }
+}
+
 /// The worker's fd must close before root's: on Linux a stale fd turns the next TUN create into a second queue on the old device.
 async fn wait_for_pump_stop(pump_tasks: TaskTracker) -> bool {
     pump_tasks.close();
@@ -2978,6 +3008,24 @@ mod tests {
         up
     }
 
+    fn session_metadata() -> SessionClientMetadata {
+        SessionClientMetadata {
+            target: "172.30.0.1:8000".to_string(),
+            destination: Address::from([1u8; 20]),
+            forward_path: HopRouting::try_from(1).expect("conversion cannot fail"),
+            return_path: HopRouting::try_from(1).expect("conversion cannot fail"),
+            protocol: edgli::hopr_lib::exports::network::types::types::IpProtocol::UDP,
+            bound_host: "127.0.0.1:4000".parse().expect("valid address"),
+            hopr_mtu: 1000,
+            surb_len: 200,
+            active_clients: vec![],
+            max_client_sessions: 1,
+            max_surb_upstream: None,
+            response_buffer: None,
+            session_pool: None,
+        }
+    }
+
     fn teardown_requested(from_core: &mut mpsc::Receiver<CoreToWorker>) -> bool {
         matches!(
             from_core.try_recv(),
@@ -3141,6 +3189,99 @@ mod tests {
 
         assert!(keep_worker);
         assert!(matches!(core.phase, Phase::HoprRunning));
+        assert!(core.resume.is_some(), "key kept");
+    }
+
+    #[tokio::test]
+    async fn a_pump_exit_before_the_connect_result_fails_the_attempt() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        let conn = attempt("exit", UpPhase::ConnectionEstablished);
+        let key = conn.destination.key();
+        core.route_healths.insert(key, tracker(&conn.destination));
+        core.target = Some(conn.destination.connect_id.clone());
+        core.phase = Phase::Connecting(conn);
+
+        core.on_results(
+            Results::WgPumpExited {
+                reason: "SessionClosed".to_string(),
+                device_lost: false,
+                generation: core.connection_generation,
+            },
+            &results,
+        )
+        .await;
+        let keep_worker = core
+            .on_results(
+                Results::ConnectionResult {
+                    res: Ok(session_metadata()),
+                },
+                &results,
+            )
+            .await;
+
+        assert!(keep_worker);
+        assert!(matches!(core.phase, Phase::Connecting(_)), "retrying in place");
+        let error = core.route_healths.get(&key).and_then(|rh| rh.last_error());
+        assert_eq!(error, Some("wg pump exited: SessionClosed"));
+        core.cancel_on_shutdown.cancel();
+    }
+
+    #[tokio::test]
+    async fn a_pump_exit_of_a_replaced_attempt_is_ignored() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        let conn = attempt("exit", UpPhase::ConnectionEstablished);
+        core.route_healths
+            .insert(conn.destination.key(), tracker(&conn.destination));
+        core.target = Some(conn.destination.connect_id.clone());
+        core.phase = Phase::Connecting(conn);
+        core.connection_generation = 1;
+
+        core.on_results(
+            Results::WgPumpExited {
+                reason: "SessionClosed".to_string(),
+                device_lost: true,
+                generation: 0,
+            },
+            &results,
+        )
+        .await;
+        core.on_results(
+            Results::ConnectionResult {
+                res: Ok(session_metadata()),
+            },
+            &results,
+        )
+        .await;
+
+        assert!(matches!(core.phase, Phase::Connected(_)));
+        core.cancel_on_shutdown.cancel();
+    }
+
+    #[tokio::test]
+    async fn a_lost_device_while_connecting_is_rebuilt_on_retry() {
+        let TestCore {
+            mut core,
+            mut from_core,
+            results,
+            ..
+        } = fresh_core().await;
+        let mut conn = connected_with_key("exit");
+        conn.pump_exit = Some(connection::up::PumpExit {
+            reason: "TunClosed".to_string(),
+            device_lost: true,
+        });
+        core.target = Some(conn.destination.connect_id.clone());
+        core.phase = Phase::Connecting(conn);
+
+        core.on_results(
+            Results::RetryConnect {
+                generation: core.connection_generation,
+            },
+            &results,
+        )
+        .await;
+
+        assert!(teardown_requested(&mut from_core));
         assert!(core.resume.is_some(), "key kept");
     }
 
