@@ -115,16 +115,6 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6 # v2.0.0
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
       - name: Checkout repository
         # Pin to the PR head commit: the default pull_request checkout uses the
         # auto-generated merge ref, which gives `self.rev` a different value than

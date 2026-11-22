@@ -449,14 +449,14 @@ impl Hopr {
 
     /// Sets edgli's probing pace and biases loopbacks towards `exits`; no exits clears the focus.
     pub fn apply_probing(&self, level: gnosis_vpn_ipc::ProbingLevel, exits: &[Address]) {
-        let level = match level {
+        let dial = match level {
             gnosis_vpn_ipc::ProbingLevel::Off => None,
-            gnosis_vpn_ipc::ProbingLevel::Low => Some(edgli::ProbingLevel::Low),
-            gnosis_vpn_ipc::ProbingLevel::Medium => Some(edgli::ProbingLevel::Medium),
-            gnosis_vpn_ipc::ProbingLevel::High => Some(edgli::ProbingLevel::High),
-            gnosis_vpn_ipc::ProbingLevel::Ultra => Some(edgli::ProbingLevel::Ultra),
+            gnosis_vpn_ipc::ProbingLevel::Low => Some(edgli::Dial::LOW),
+            gnosis_vpn_ipc::ProbingLevel::Medium => Some(edgli::Dial::MEDIUM),
+            gnosis_vpn_ipc::ProbingLevel::High => Some(edgli::Dial::HIGH),
+            gnosis_vpn_ipc::ProbingLevel::Ultra => Some(edgli::Dial::ULTRA),
         };
-        self.edgli.set_probing_level(level);
+        self.edgli.set_probing_dial(dial);
         if exits.is_empty() {
             self.edgli.clear_probing_focus();
             return;

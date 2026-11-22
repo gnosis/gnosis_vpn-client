@@ -245,10 +245,22 @@ impl Routing for StaticRouter {
 
         // Phase 4: DNS (the IPv6 blackhole was installed up front for leak
         // protection; DNS waits here because it needs the resolved interface name).
-        self.dns_mechanism = match self.dns.clone() {
-            Some(servers) => dns::set(&interface_name, &servers).await.map(|d| d.mechanism),
-            None => None,
-        };
+        match self.dns.clone() {
+            Some(servers) => match dns::set(&interface_name, &servers).await {
+                Ok(diversion) => self.dns_mechanism = Some(diversion.mechanism),
+                Err(e) => {
+                    tracing::error!(%e, "refusing to connect without DNS diversion");
+                    self.remove_vpn_routes().await;
+                    self.tun = None;
+                    self.rollback_bypass_routes().await;
+                    return Err(e);
+                }
+            },
+            None => {
+                tracing::info!("DNS diversion disabled by config");
+                self.dns_mechanism = None;
+            }
+        }
         // Record what was applied so a SIGKILLed root can be swept at next start.
         self.persist_teardown_state();
 

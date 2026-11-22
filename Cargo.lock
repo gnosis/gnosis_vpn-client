@@ -3707,7 +3707,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "5.3.0"
-source = "git+https://github.com/hoprnet/edge-client.git?branch=main#7bafb4723683f826b5fad856cd8622748b823f57"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=main#b1537f57c9074a1b7203b648c15501d9abca2c06"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -4547,7 +4547,6 @@ dependencies = [
  "clap",
  "exitcode",
  "gnosis_vpn-ipc",
- "gnosis_vpn-lib",
  "reqwest",
  "rustix",
  "serde",
@@ -5008,8 +5007,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-crypto-packet"
-version = "2.2.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8"
+version = "2.3.0"
+source = "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534"
 dependencies = [
  "bimap",
  "bytes",
@@ -5028,9 +5027,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-ct-full-network"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a8b9c0b368425475e7ee9aa005909fb12ada2b161796dadd874b67fca01de6f"
+checksum = "07a2c52b431d77db92e3382a94f2a9b2d6933b0ddd8a1e06efb9f615ee8a4f9f"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -5048,7 +5047,7 @@ dependencies = [
 [[package]]
 name = "hopr-lib"
 version = "5.0.0-rc.6"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8"
+source = "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -5082,9 +5081,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-network-graph"
-version = "0.12.1"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0947dbc8e4e435e0b77c720dc6761ba832d39a2b2ac12003e413f6395a611ca"
+checksum = "0d4f9e796207f6ea3812f22b7c4f16a33d0d5fbadc086e5f5d8765f00b5e017a"
 dependencies = [
  "anyhow",
  "bimap",
@@ -5092,6 +5091,7 @@ dependencies = [
  "futures-time",
  "hopr-api",
  "hopr-utilities",
+ "humantime-serde",
  "indexmap 2.14.2",
  "lazy_static",
  "parking_lot 0.12.5",
@@ -5100,14 +5100,16 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "smart-default",
  "thiserror 2.0.21",
  "tracing",
+ "validator",
 ]
 
 [[package]]
 name = "hopr-protocol-app"
 version = "1.2.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8"
+source = "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534"
 dependencies = [
  "bytes",
  "hopr-crypto-packet",
@@ -5120,7 +5122,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-hopr"
 version = "6.5.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8"
+source = "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5150,7 +5152,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-pix"
 version = "0.3.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8"
+source = "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534"
 dependencies = [
  "ahash",
  "auto_impl",
@@ -5173,7 +5175,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-session"
 version = "1.7.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8"
+source = "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534"
 dependencies = [
  "aquamarine",
  "asynchronous-codec",
@@ -5204,7 +5206,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-start"
 version = "3.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8"
+source = "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534"
 dependencies = [
  "aquamarine",
  "flagset",
@@ -5219,9 +5221,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-strategy"
-version = "9.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "095b98139979667e5e9b6ab53b82ab3fdef907ada3d1f264d085616de5bded61"
+version = "9.2.1"
+source = "git+https://github.com/hoprnet/hopr-strategy?rev=97bfc19a74235c814b322d355c2429100fac7174#97bfc19a74235c814b322d355c2429100fac7174"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5290,7 +5291,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport"
 version = "0.53.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8"
+source = "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534"
 dependencies = [
  "ahash",
  "anyhow",
@@ -5339,7 +5340,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-mixer"
 version = "1.0.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8"
+source = "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534"
 dependencies = [
  "futures",
  "futures-timer",
@@ -5382,7 +5383,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-probe"
 version = "0.9.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8"
+source = "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5401,6 +5402,7 @@ dependencies = [
  "smart-default",
  "strum",
  "thiserror 2.0.21",
+ "tokio",
  "tracing",
  "validator",
 ]
@@ -5408,7 +5410,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-session"
 version = "0.35.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8"
+source = "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5442,7 +5444,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-tag-allocator"
 version = "0.2.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8"
+source = "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534"
 dependencies = [
  "hopr-protocol-app",
  "serde",
@@ -5605,7 +5607,7 @@ dependencies = [
 [[package]]
 name = "hopr-utils-session"
 version = "1.3.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8"
+source = "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5632,7 +5634,7 @@ dependencies = [
 [[package]]
 name = "hopr-utils-tracing"
 version = "0.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8"
+source = "git+https://github.com/hoprnet/hoprnet?branch=kauki%2Fchore%2Fprobing%2Fbridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534"
 dependencies = [
  "crossfire",
  "futures",

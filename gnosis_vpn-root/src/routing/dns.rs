@@ -1,7 +1,9 @@
-//! Best-effort DNS diversion for the NepTUN data plane: a failure to set or restore DNS never fails the connection.
+//! DNS diversion for the NepTUN data plane: setting DNS is mandatory, restoring it is best-effort so a disconnect never blocks.
 
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
+
+use super::Error;
 
 #[cfg(target_os = "linux")]
 use std::{
@@ -44,13 +46,11 @@ impl Diversion {
     }
 }
 
-/// Push `servers` (a comma-separated list) as the DNS resolvers scoped to the
-/// tunnel interface. An empty/blank list is a no-op. Returns what took effect so
-/// [`restore`] can reverse it, or `None` if nothing was applied.
-pub async fn set(interface: &str, servers: &str) -> Option<Diversion> {
+/// Scope `servers` (comma-separated) to the tunnel interface; errors when nothing took effect, as connecting would leak DNS.
+pub async fn set(interface: &str, servers: &str) -> Result<Diversion, Error> {
     let list = split_servers(servers);
     if list.is_empty() {
-        return None;
+        return Err(Error::Dns(format!("no valid server address in '{servers}'")));
     }
     #[cfg(target_os = "linux")]
     return set_linux(interface, &list).await;
@@ -158,6 +158,35 @@ fn scutil_remove_script(interface: &str) -> String {
     format!("open\nremove State:/Network/Service/{interface}/DNS\nquit\n")
 }
 
+/// scutil script printing the resolver stored by [`scutil_set_script`].
+#[cfg(any(target_os = "macos", test))]
+fn scutil_show_script(interface: &str) -> String {
+    format!("open\nshow State:/Network/Service/{interface}/DNS\nquit\n")
+}
+
+/// The `ServerAddresses` array entries in scutil's `show` output.
+#[cfg(any(target_os = "macos", test))]
+fn scutil_server_addresses(show_output: &str) -> Vec<&str> {
+    let mut addresses = Vec::new();
+    let mut in_array = false;
+    for line in show_output.lines().map(str::trim) {
+        if line.starts_with("ServerAddresses : <array>") {
+            in_array = true;
+            continue;
+        }
+        if !in_array {
+            continue;
+        }
+        if line == "}" {
+            break;
+        }
+        if let Some((_index, address)) = line.split_once(" : ") {
+            addresses.push(address);
+        }
+    }
+    addresses
+}
+
 /// Run a command to completion, logging (never returning) failures. Reports whether
 /// the command ran and exited successfully.
 #[cfg(target_os = "linux")]
@@ -176,9 +205,10 @@ async fn run(what: &str, mut cmd: Command) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-async fn set_linux(interface: &str, servers: &[&str]) -> Option<Diversion> {
+async fn set_linux(interface: &str, servers: &[&str]) -> Result<Diversion, Error> {
     let resolved_owns = resolved_owns_resolv_conf();
     let resolvconf_owns = resolvconf_owns_resolv_conf();
+    let mut failures = Vec::new();
 
     // systemd-resolved: scope the resolvers to the tunnel interface; `~.` routes every query through it.
     if resolved_owns {
@@ -187,31 +217,44 @@ async fn set_linux(interface: &str, servers: &[&str]) -> Option<Diversion> {
         if run("resolvectl dns", dns).await {
             let mut domain = Command::new("resolvectl");
             domain.args(resolvectl_domain_args(interface));
-            run("resolvectl domain", domain).await;
-            return Some(Diversion::by_command(Mechanism::Resolvectl));
+            if run("resolvectl domain", domain).await {
+                return Ok(Diversion::by_command(Mechanism::Resolvectl));
+            }
+            // Without `~.` unmatched queries still reach WAN resolvers, so drop the half-applied scope.
+            restore_linux(interface, Mechanism::Resolvectl).await;
+            failures.push("resolvectl domain failed");
+        } else {
+            failures.push("resolvectl dns failed");
         }
     } else {
-        tracing::info!("systemd-resolved does not own /etc/resolv.conf - skipping resolvectl");
+        failures.push("systemd-resolved does not own /etc/resolv.conf");
     }
     // resolvconf for distros without systemd-resolved, mirroring wg-quick.
     if resolvconf_owns {
         if run_resolvconf_add(interface, servers).await {
-            return Some(Diversion::by_command(Mechanism::Resolvconf));
+            return Ok(Diversion::by_command(Mechanism::Resolvconf));
         }
+        // `-a` stores the entry before its update hooks run, so a failed add can stay registered.
+        restore_linux(interface, Mechanism::Resolvconf).await;
+        failures.push("resolvconf -a failed");
     } else {
-        tracing::info!("resolvconf does not own /etc/resolv.conf - skipping resolvconf");
+        failures.push("resolvconf does not own /etc/resolv.conf");
     }
     // Last resort, as in Mullvad: a manager-owned file is regenerated anyway, so a failed owner must not land here.
     let no_manager_owns_the_file = !resolved_owns && !resolvconf_owns;
-    if no_manager_owns_the_file && let Some(managed) = resolv_conf::apply(servers) {
-        tracing::info!(backup = resolv_conf::BACKUP, "managing /etc/resolv.conf directly");
-        return Some(Diversion {
-            mechanism: Mechanism::StaticFile,
-            resolv_conf: Some(managed),
-        });
+    if !no_manager_owns_the_file {
+        failures.push("not rewriting /etc/resolv.conf owned by a resolver manager");
+        return Err(Error::Dns(failures.join("; ")));
     }
-    tracing::warn!("no DNS mechanism took effect; DNS is not diverted through the tunnel (continuing)");
-    None
+    let Some(managed) = resolv_conf::apply(servers) else {
+        failures.push("rewriting /etc/resolv.conf failed");
+        return Err(Error::Dns(failures.join("; ")));
+    };
+    tracing::info!(backup = resolv_conf::BACKUP, "managing /etc/resolv.conf directly");
+    Ok(Diversion {
+        mechanism: Mechanism::StaticFile,
+        resolv_conf: Some(managed),
+    })
 }
 
 /// resolved can run beside a NetworkManager-written file; then `resolvectl dns` succeeds while glibc never asks it.
@@ -351,20 +394,30 @@ async fn restore_linux(interface: &str, mechanism: Mechanism) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-async fn set_macos(interface: &str, servers: &[&str]) -> Option<Diversion> {
+async fn set_macos(interface: &str, servers: &[&str]) -> Result<Diversion, Error> {
     // Mirror wg-quick: register a supplemental resolver in the dynamic store keyed
     // by the tunnel interface. Removed on restore.
-    if run_scutil(&scutil_set_script(interface, servers)).await {
-        Some(Diversion::by_command(Mechanism::Scutil))
-    } else {
-        None
+    let set_output = run_scutil(&scutil_set_script(interface, servers))
+        .await
+        .unwrap_or_default();
+    // scutil exits 0 even when `set` is denied, so only the stored key proves the resolver took effect.
+    let show_output = run_scutil(&scutil_show_script(interface)).await.unwrap_or_default();
+    let stored = scutil_server_addresses(&show_output);
+    let took_effect = servers.iter().all(|server| stored.contains(server));
+    if !took_effect {
+        run_scutil(&scutil_remove_script(interface)).await;
+        return Err(Error::Dns(format!(
+            "scutil did not store the resolvers: {}",
+            set_output.trim()
+        )));
     }
+    Ok(Diversion::by_command(Mechanism::Scutil))
 }
 
 #[cfg(target_os = "macos")]
 async fn restore_macos(interface: &str, mechanism: Mechanism) -> bool {
     match mechanism {
-        Mechanism::Scutil => run_scutil(&scutil_remove_script(interface)).await,
+        Mechanism::Scutil => run_scutil(&scutil_remove_script(interface)).await.is_some(),
         Mechanism::Resolvectl | Mechanism::Resolvconf | Mechanism::StaticFile => {
             tracing::warn!(
                 ?mechanism,
@@ -375,17 +428,21 @@ async fn restore_macos(interface: &str, mechanism: Mechanism) -> bool {
     }
 }
 
-/// Run a scutil script to completion, logging (never returning) failures. Reports
-/// whether the command ran and exited successfully.
+/// Run a scutil script to completion, logging (never returning) failures. Returns
+/// its stdout when the command ran and exited successfully.
 #[cfg(target_os = "macos")]
-async fn run_scutil(script: &str) -> bool {
+async fn run_scutil(script: &str) -> Option<String> {
     use tokio::io::AsyncWriteExt;
 
-    let mut child = match Command::new("scutil").stdin(std::process::Stdio::piped()).spawn() {
+    let mut child = match Command::new("scutil")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+    {
         Ok(child) => child,
         Err(e) => {
             tracing::warn!(%e, "failed to spawn scutil for DNS (continuing)");
-            return false;
+            return None;
         }
     };
     if let Some(mut stdin) = child.stdin.take()
@@ -393,15 +450,15 @@ async fn run_scutil(script: &str) -> bool {
     {
         tracing::warn!(%e, "failed to write scutil DNS script (continuing)");
     }
-    match child.wait().await {
-        Ok(status) if status.success() => true,
-        Ok(status) => {
-            tracing::warn!(%status, "scutil DNS command exited unsuccessfully (continuing)");
-            false
+    match child.wait_with_output().await {
+        Ok(output) if output.status.success() => Some(String::from_utf8_lossy(&output.stdout).into_owned()),
+        Ok(output) => {
+            tracing::warn!(status = %output.status, "scutil DNS command exited unsuccessfully (continuing)");
+            None
         }
         Err(e) => {
             tracing::warn!(%e, "scutil DNS command failed (continuing)");
-            false
+            None
         }
     }
 }
@@ -432,6 +489,12 @@ mod tests {
         // via embedded whitespace, must both be dropped rather than passed through.
         assert_eq!(split_servers("1.1.1.1,example.com,8.8.8.8"), vec!["1.1.1.1", "8.8.8.8"]);
         assert_eq!(split_servers("1.1.1.1,8.8.8.8 domain evil.example"), vec!["1.1.1.1"]);
+    }
+
+    #[tokio::test]
+    async fn set_fails_when_no_server_address_is_valid() {
+        assert!(matches!(set("wg0_gnosisvpn", "example.com").await, Err(Error::Dns(_))));
+        assert!(matches!(set("wg0_gnosisvpn", " , ").await, Err(Error::Dns(_))));
     }
 
     #[test]
@@ -481,6 +544,21 @@ mod tests {
             scutil_remove_script("utun8"),
             "open\nremove State:/Network/Service/utun8/DNS\nquit\n"
         );
+        assert_eq!(
+            scutil_show_script("utun8"),
+            "open\nshow State:/Network/Service/utun8/DNS\nquit\n"
+        );
+    }
+
+    #[test]
+    fn scutil_server_addresses_reads_only_the_server_array() {
+        let shown = "<dictionary> {\n  SearchDomains : <array> {\n    0 : fritz.box\n  }\n  ServerAddresses : <array> {\n    0 : 10.128.0.1\n    1 : 10.128.0.2\n  }\n  __FLAGS__ : 2\n}\n";
+        assert_eq!(scutil_server_addresses(shown), ["10.128.0.1", "10.128.0.2"]);
+    }
+
+    #[test]
+    fn scutil_server_addresses_of_a_missing_key_is_empty() {
+        assert!(scutil_server_addresses("  No such key\n").is_empty());
     }
 }
 

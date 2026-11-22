@@ -298,12 +298,25 @@ impl Routing for StaticRouter {
         // protection; DNS waits here because it needs the resolved interface name).
         // Released before the new apply writes its backup, so a stale guard cannot restore over it.
         self.dns_guard = None;
-        let diversion = match self.dns.clone() {
-            Some(servers) => dns::set(&interface_name, &servers).await,
-            None => None,
-        };
-        self.dns_mechanism = diversion.as_ref().map(|d| d.mechanism);
-        self.dns_guard = diversion.and_then(|d| d.resolv_conf);
+        match self.dns.clone() {
+            Some(servers) => match dns::set(&interface_name, &servers).await {
+                Ok(diversion) => {
+                    self.dns_mechanism = Some(diversion.mechanism);
+                    self.dns_guard = diversion.resolv_conf;
+                }
+                Err(e) => {
+                    tracing::error!(%e, "refusing to connect without DNS diversion");
+                    self.remove_vpn_routes().await;
+                    self.tun = None;
+                    self.rollback_bypass_routes().await;
+                    return Err(e);
+                }
+            },
+            None => {
+                tracing::info!("DNS diversion disabled by config");
+                self.dns_mechanism = None;
+            }
+        }
         // Record what was applied so a SIGKILLed root can be swept at next start.
         self.persist_teardown_state();
 
