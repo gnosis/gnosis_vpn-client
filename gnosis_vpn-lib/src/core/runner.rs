@@ -182,12 +182,17 @@ pub(crate) async fn ideal_balance_recommendation(
     hopr: Arc<Hopr>,
     cfg: edgli::strategy::IncentiveConfiguration,
     pix_top_up: HoprBalance,
+    pix_min_available: HoprBalance,
     results_sender: mpsc::Sender<Results>,
 ) {
     let res = hopr
         .ideal_balance_recommendation(&cfg)
         .await
-        .map(|rec| balance::BalanceRecommendation { pix_top_up, ..rec })
+        .map(|rec| balance::BalanceRecommendation {
+            pix_top_up,
+            pix_min_available,
+            ..rec
+        })
         .map_err(Error::from);
     let _ = results_sender.send(Results::IdealBalanceRecommendation { res }).await;
 }

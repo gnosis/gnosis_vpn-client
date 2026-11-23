@@ -18,7 +18,8 @@ use gnosis_vpn_ipc::{Address, Destination, PixPhase};
 const SERVICE_TIMEOUT: Duration = Duration::from_secs(30);
 const SAFE_TIMEOUT: Duration = Duration::from_mins(1);
 const NODE_RUNNING_TIMEOUT: Duration = Duration::from_mins(30);
-const NODE_FUNDING_TIMEOUT: Duration = Duration::from_secs(30);
+// Balances stay unavailable for up to a minute after Running while the channel list loads.
+const NODE_FUNDING_TIMEOUT: Duration = Duration::from_mins(2);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_mins(5);
 const GEOLOCATION_TIMEOUT: Duration = Duration::from_mins(2);
 const PATH_SETTLE_TIME: Duration = Duration::from_mins(1);
@@ -123,7 +124,7 @@ impl SystemTestWorkflow {
 
         self.client.wait_for_safe_created(SAFE_TIMEOUT).await?;
         self.client.wait_for_node_running(NODE_RUNNING_TIMEOUT).await?;
-        self.client.wait_for_node_funding(NODE_FUNDING_TIMEOUT).await?;
+        self.client.check_funding(NODE_FUNDING_TIMEOUT).await?;
 
         Ok(())
     }
