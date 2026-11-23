@@ -1,6 +1,6 @@
 use gnosis_vpn_ipc::{
-    self as ipc, Address, Balances, CallError, ConnectResponse, Connection, Destination, DestinationId,
-    DestinationSource, DestinationStatus, DisconnectResponse, PixChunkStats, PixPhase, QuickProbeCheck,
+    self as ipc, Address, Balance, Balances, CallError, ConnectResponse, Connection, Destination, DestinationId,
+    DestinationSource, DestinationStatus, DisconnectResponse, FundingLevel, PixChunkStats, PixPhase, QuickProbeCheck,
     QuickProbeResponse, QuickProbeState, Request, Response, RouteHealthState, RunMode, StartClientResponse, Status,
     StopClientResponse,
 };
@@ -171,24 +171,22 @@ impl ControlClient {
         Ok(())
     }
 
-    /// Ensures both on-chain accounts have funds before the test proceeds.
-    pub async fn wait_for_node_funding(&self, timeout: Duration) -> anyhow::Result<()> {
-        lib::wait_for_condition("node funds", timeout, Duration::from_secs(5), || async {
+    /// Waits for the worker's funding figures, then fails at once if they can't pay for a run.
+    pub async fn check_funding(&self, timeout: Duration) -> anyhow::Result<()> {
+        let balances = lib::wait_for_condition("funding figures", timeout, Duration::from_secs(5), || async {
             match self.balance().await {
-                Ok(Balances { node, safe, .. }) => {
-                    if node.is_zero() || safe.is_zero() {
-                        debug!("node or safe have zero funds");
-                        Ok(ConditionCheck::Pending)
-                    } else {
-                        info!("node and safe have funds");
-                        Ok(ConditionCheck::Ready(()))
-                    }
+                Ok(balances) if balances.ideal_balance.is_some() && balances.funding_status.is_some() => {
+                    Ok(ConditionCheck::Ready(balances))
                 }
-                Err(_) => Ok(ConditionCheck::Pending),
+                Ok(_) => Ok(ConditionCheck::Pending),
+                Err(error) => {
+                    debug!(%error, "balances not available yet");
+                    Ok(ConditionCheck::Pending)
+                }
             }
         })
         .await?;
-        Ok(())
+        ensure_run_funded(&balances)
     }
 
     /// Waits until the node reports a running state.
@@ -440,6 +438,42 @@ impl ControlClient {
     }
 }
 
+/// A Safe that can't cover the PIX pool top-up only surfaces as a failed payment minutes into the run.
+fn ensure_run_funded(balances: &Balances) -> anyhow::Result<()> {
+    let (Some(ideal), Some(funding)) = (&balances.ideal_balance, &balances.funding_status) else {
+        return Err(anyhow::anyhow!("worker reports no funding figures"));
+    };
+    let node_address = &balances.info.node_address;
+    let safe_address = &balances.info.safe_address;
+
+    if funding.gas == FundingLevel::Empty {
+        let deficit = funding.xdai_deficit.unwrap_or_default();
+        return Err(anyhow::anyhow!(
+            "node {node_address} holds {}, below the worker's gas floor; fund {deficit} more",
+            balances.node
+        ));
+    }
+
+    // The worker only shields a top-up from the Safe once the pool drops below its floor.
+    let pool = balances.pix_pool.unwrap_or_default();
+    let pool_is_funded = pool >= ideal.pix_min_available;
+    let safe_needed = if pool_is_funded {
+        Balance::zero()
+    } else {
+        ideal.pix_top_up
+    };
+    let safe = balances.safe;
+    if safe.is_zero() || safe < safe_needed {
+        return Err(anyhow::anyhow!(
+            "safe {safe_address} holds {safe}, a run needs {safe_needed} for the PIX pool top-up (pool holds {pool}, refills below {})",
+            ideal.pix_min_available
+        ));
+    }
+
+    info!(%safe, %pool, %safe_needed, node = %balances.node, "funds cover a run");
+    Ok(())
+}
+
 /// The destination discovered at each address; a configured-only entry does not count.
 fn discovered_exits(status: &Status, addresses: &[Address]) -> Vec<Option<Destination>> {
     addresses
@@ -508,5 +542,101 @@ impl DestinationReadiness {
 
     pub fn not_ready(&self) -> &[Destination] {
         &self.not_ready
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gnosis_vpn_ipc::{BalanceRecommendation, FundingStatus, NodeInfo};
+
+    fn piz_palu_dev(safe: &str, pool: &str) -> Balances {
+        Balances {
+            node: "0.01".parse().unwrap(),
+            safe: safe.parse().unwrap(),
+            channels_out: Vec::new(),
+            info: NodeInfo {
+                node_address: Address::new([1; 20]),
+                node_peer_id: "12D3KooW".into(),
+                safe_address: Address::new([2; 20]),
+            },
+            capacity_allocations: None,
+            ideal_balance: Some(BalanceRecommendation {
+                wxhopr: Balance::zero(),
+                xdai: "0.005".parse().unwrap(),
+                channel_stakes: Balance::zero(),
+                pix_pool: Balance::zero(),
+                fee_to_start: Balance::zero(),
+                txs_to_start: 0,
+                xdai_fee_per_tx: Balance::zero(),
+                topup_headroom: Balance::zero(),
+                pix_top_up: "0.0001".parse().unwrap(),
+                pix_min_available: "0.00002".parse().unwrap(),
+            }),
+            funding_status: Some(FundingStatus {
+                traffic: FundingLevel::Good,
+                gas: FundingLevel::Good,
+                wxhopr_deficit: None,
+                xdai_deficit: None,
+                refill_shortfall: None,
+            }),
+            pix_pool: Some(pool.parse().unwrap()),
+        }
+    }
+
+    #[test]
+    fn safe_below_the_top_up_fails_naming_safe_balance_and_need() {
+        let error = ensure_run_funded(&piz_palu_dev("0.000077", "0"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains(&Address::new([2; 20]).to_string()), "{error}");
+        assert!(error.contains("holds 0.000077 wxHOPR"), "{error}");
+        assert!(error.contains("needs 0.0001 wxHOPR"), "{error}");
+    }
+
+    #[test]
+    fn safe_covering_the_top_up_passes() {
+        assert!(ensure_run_funded(&piz_palu_dev("0.02", "0")).is_ok());
+    }
+
+    #[test]
+    fn funded_pool_needs_no_top_up_from_the_safe() {
+        assert!(ensure_run_funded(&piz_palu_dev("0.000077", "0.00005")).is_ok());
+    }
+
+    #[test]
+    fn pool_below_its_floor_needs_the_top_up() {
+        assert!(ensure_run_funded(&piz_palu_dev("0.000077", "0.00001")).is_err());
+    }
+
+    #[test]
+    fn without_a_pool_any_safe_funds_pass() {
+        let mut balances = piz_palu_dev("0.000077", "0");
+        balances.pix_pool = None;
+        if let Some(ideal) = balances.ideal_balance.as_mut() {
+            ideal.pix_top_up = Balance::zero();
+            ideal.pix_min_available = Balance::zero();
+        }
+        assert!(ensure_run_funded(&balances).is_ok());
+    }
+
+    #[test]
+    fn empty_safe_fails() {
+        assert!(ensure_run_funded(&piz_palu_dev("0", "0.00005")).is_err());
+    }
+
+    #[test]
+    fn node_gas_below_the_floor_fails_naming_the_node() {
+        let mut balances = piz_palu_dev("0.02", "0");
+        balances.node = "0.001".parse().unwrap();
+        if let Some(funding) = balances.funding_status.as_mut() {
+            funding.gas = FundingLevel::Empty;
+            funding.xdai_deficit = Some("0.004".parse().unwrap());
+        }
+        let error = ensure_run_funded(&balances).unwrap_err().to_string();
+
+        assert!(error.contains(&Address::new([1; 20]).to_string()), "{error}");
+        assert!(error.contains("0.004"), "{error}");
     }
 }

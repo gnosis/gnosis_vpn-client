@@ -456,6 +456,8 @@ pub struct BalanceRecommendation {
     pub topup_headroom: Balance<WxHOPR>,
     /// wxHOPR one PIX pool refill shields from the Safe; zero without a pool.
     pub pix_top_up: Balance<WxHOPR>,
+    /// PIX pool balance below which a refill is shielded; zero without a pool.
+    pub pix_min_available: Balance<WxHOPR>,
     /// wxHOPR one channel top-up stakes, as edgli resolves it; zero leaves the funding levels uncountable.
     pub channel_top_up: Balance<WxHOPR>,
 }
@@ -472,6 +474,7 @@ impl From<edgli::strategy::BalanceRecommendation> for BalanceRecommendation {
             xdai_fee_per_tx: rec.xdai_fee_per_tx,
             topup_headroom: rec.topup_headroom,
             pix_top_up: Balance::zero(),
+            pix_min_available: Balance::zero(),
             channel_top_up: rec.channel_top_up,
         }
     }
@@ -666,6 +669,8 @@ impl From<&BalanceRecommendation> for gnosis_vpn_ipc::BalanceRecommendation {
             txs_to_start: rec.txs_to_start,
             xdai_fee_per_tx: wire::xdai(rec.xdai_fee_per_tx),
             topup_headroom: wire::wxhopr(rec.topup_headroom),
+            pix_top_up: wire::wxhopr(rec.pix_top_up),
+            pix_min_available: wire::wxhopr(rec.pix_min_available),
         }
     }
 }
@@ -685,6 +690,7 @@ mod tests {
             xdai_fee_per_tx: Balance::<XDai>::from(xdai),
             topup_headroom: Balance::<WxHOPR>::zero(),
             pix_top_up: Balance::<WxHOPR>::zero(),
+            pix_min_available: Balance::<WxHOPR>::zero(),
             // One wei, so any funds count as plenty of channel top-ups.
             channel_top_up: Balance::<WxHOPR>::from(1u64),
         }

@@ -1779,12 +1779,14 @@ impl Core {
             let cancel = self.cancel_on_shutdown.clone();
             let cfg = self.config.strategy.clone().into();
             let pix_top_up = self.config.pix_strategy.pool_top_up();
+            let pix_min_available = self.config.pix_strategy.pool_min_available();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::ideal_balance_recommendation(hopr, cfg, pix_top_up, results_sender).await;
+                        runner::ideal_balance_recommendation(hopr, cfg, pix_top_up, pix_min_available, results_sender)
+                            .await;
                     })
                     .await
             });

@@ -162,6 +162,14 @@ impl PixConfig {
         HoprBalance::zero()
     }
 
+    /// The pool balance below which a top-up is shielded; zero for the `pix-test` pool.
+    pub fn pool_min_available(&self) -> HoprBalance {
+        #[cfg(feature = "pix-curvy")]
+        return self.funding_min_available;
+        #[cfg(not(feature = "pix-curvy"))]
+        HoprBalance::zero()
+    }
+
     /// The edgli form; which pool the knobs reach is edgli's call, deployment stays on `HOPRD_CURVY_*`.
     pub fn to_entry_config(
         &self,
