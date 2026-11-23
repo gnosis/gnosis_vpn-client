@@ -764,7 +764,13 @@ impl Core {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
                     self.balances = Some(balances);
-                    self.spawn_balances_runner(results_sender, Duration::from_secs(60));
+                    // Re-read while the channel list loads, so the first released balances see it.
+                    let next_read = if self.channel_settle.is_settled(Instant::now()) {
+                        Duration::from_secs(60)
+                    } else {
+                        CHANNEL_SETTLE_POLL
+                    };
+                    self.spawn_balances_runner(results_sender, next_read);
                 }
                 Err(err) => {
                     tracing::error!(?err, "failed to fetch balances from hopr - retrying");
@@ -772,9 +778,10 @@ impl Core {
                 }
             },
             Results::PixPoolFunds { res } => {
-                self.pix_pool_read = res
-                    .inspect_err(|err| tracing::debug!(%err, "failed to read the PIX pool between balance polls"))
-                    .ok();
+                match res {
+                    Ok(funds) => self.pix_pool_read = Some(funds),
+                    Err(err) => tracing::debug!(%err, "failed to read the PIX pool between balance polls"),
+                }
                 self.spawn_pix_pool_runner(results_sender, PIX_POOL_POLL);
             }
 
