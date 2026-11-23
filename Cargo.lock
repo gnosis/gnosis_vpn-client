@@ -3707,7 +3707,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "5.3.0"
-source = "git+https://github.com/hoprnet/edge-client.git?branch=feature%2Fcore-1404-edgli-let-the-embedder-hold-pix-deposit#fd1e4fea223242dc9d35107b4b7b1d77ed1e9482"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=main#a07ace6f5f6909376bf41838605d2de04e85e369"
 dependencies = [
  "anyhow",
  "async-signal",
