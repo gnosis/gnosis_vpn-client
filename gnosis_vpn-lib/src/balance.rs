@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::wire;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display};
+use std::time::{Duration, Instant};
 
 pub use gnosis_vpn_ipc::FundingLevel;
 
@@ -54,11 +55,13 @@ impl Default for Capacity {
 
 /// Serde mirror of [`edgli::strategy::CapacityAllocations`], the funds paying for relays — open
 /// outgoing channels, the unallocated Safe balance, and the node EOA (deposited funds not yet swept
-/// into the Safe) — plus the funds paying for exit traffic.
+/// into the Safe) — plus the channels pending closure and the funds paying for exit traffic.
 #[derive(Clone, Debug, Default)]
 pub struct CapacityAllocations {
     /// Open outgoing payment channels, keyed by destination peer.
     pub peer_allocations: HashMap<Address, Capacity>,
+    /// Outgoing channels pending closure; their stake can't pay for relays but returns to the Safe once closed.
+    pub closing: HashMap<Address, Capacity>,
     /// wxHOPR on the node EOA, not yet swept into the Safe.
     pub node: Capacity,
     /// The unallocated wxHOPR balance held in the user's Safe contract.
@@ -96,6 +99,15 @@ impl CapacityAllocations {
     /// All wxHOPR, channel stakes included, valued at the PIX price.
     pub fn total_bytes_at_pix_price(&self) -> u64 {
         edgli::strategy::bytes_at_pix_price(SnapshotTotals::of(self).stake, self.exit_traffic.price_per_byte)
+    }
+
+    /// Every outgoing channel counted, open or closing.
+    pub fn channels(&self) -> HashSet<Address> {
+        self.peer_allocations
+            .keys()
+            .chain(self.closing.keys())
+            .copied()
+            .collect()
     }
 }
 
@@ -143,6 +155,7 @@ impl From<edgli::strategy::CapacityAllocations> for CapacityAllocations {
                 .into_iter()
                 .map(|(addr, c)| (addr, c.into()))
                 .collect(),
+            closing: HashMap::new(),
             node: a.node.into(),
             safe: a.safe.into(),
             exit_traffic: ExitTrafficFunds::default(),
@@ -154,13 +167,52 @@ impl Display for CapacityAllocations {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "CapacityAllocations(node: {}, safe: {}, {} channels totalling {}, exit traffic: {})",
+            "CapacityAllocations(node: {}, safe: {}, {} channels totalling {}, {} closing totalling {}, exit traffic: {})",
             self.node.stake,
             self.safe.stake,
             self.peer_allocations.len(),
             self.peer_allocations.values().map(|c| c.stake).sum::<Balance<WxHOPR>>(),
+            self.closing.len(),
+            self.closing.values().map(|c| c.stake).sum::<Balance<WxHOPR>>(),
             self.exit_traffic.capacity.stake
         )
+    }
+}
+
+/// Equal channel reads in a row after which a node start's channel list counts as loaded.
+const CHANNEL_SETTLE_READS: u8 = 3;
+/// Trust the channel list after this long even if it keeps changing.
+const CHANNEL_SETTLE_MAX_WAIT: Duration = Duration::from_secs(60);
+
+/// A started node fills its channel list from the indexer after it reports ready; balances wait until the list stops changing.
+#[derive(Debug, Default)]
+pub struct ChannelSettle {
+    settled: bool,
+    first_read: Option<Instant>,
+    last: Option<HashSet<Address>>,
+    equal_reads: u8,
+}
+
+impl ChannelSettle {
+    pub fn is_settled(&self) -> bool {
+        self.settled
+    }
+
+    /// Records one read of the channel list; true once it has settled, and from then on.
+    pub fn observe(&mut self, channels: HashSet<Address>, now: Instant) -> bool {
+        if self.settled {
+            return true;
+        }
+        let first_read = *self.first_read.get_or_insert(now);
+        self.equal_reads = if self.last.as_ref() == Some(&channels) {
+            self.equal_reads.saturating_add(1)
+        } else {
+            1
+        };
+        self.last = Some(channels);
+        self.settled =
+            self.equal_reads >= CHANNEL_SETTLE_READS || now.duration_since(first_read) >= CHANNEL_SETTLE_MAX_WAIT;
+        self.settled
     }
 }
 
@@ -182,6 +234,7 @@ struct PendingAllocation {
 struct SnapshotTotals {
     stake: Balance<WxHOPR>,
     channel_stake: Balance<WxHOPR>,
+    closing_stake: Balance<WxHOPR>,
     exit_traffic_stake: Balance<WxHOPR>,
     expected_messages: u64,
     min_guaranteed_messages: u64,
@@ -198,6 +251,7 @@ impl SnapshotTotals {
         SnapshotTotals {
             stake: caps.node.stake + caps.safe.stake + channel_stake,
             channel_stake,
+            closing_stake: Balance::zero(),
             exit_traffic_stake: Balance::zero(),
             expected_messages: sum(|c| c.expected_messages),
             min_guaranteed_messages: sum(|c| c.min_guaranteed_messages),
@@ -205,16 +259,21 @@ impl SnapshotTotals {
         }
     }
 
-    /// Every allocation, the funds paying for exit traffic included.
+    /// Every allocation: closing channels and the funds paying for exit traffic included.
     fn of(caps: &CapacityAllocations) -> Self {
         let relays = Self::relays(caps);
         let exit = &caps.exit_traffic.capacity;
+        let closing_stake = caps.closing.values().map(|c| c.stake).sum::<Balance<WxHOPR>>();
+        let closing = |f: fn(&Capacity) -> u64| caps.closing.values().map(f).sum::<u64>();
         SnapshotTotals {
-            stake: relays.stake + exit.stake,
+            stake: relays.stake + closing_stake + exit.stake,
+            closing_stake,
             exit_traffic_stake: exit.stake,
-            expected_messages: relays.expected_messages + exit.expected_messages,
-            min_guaranteed_messages: relays.min_guaranteed_messages + exit.min_guaranteed_messages,
-            byte_capacity: relays.byte_capacity + exit.byte_capacity,
+            expected_messages: relays.expected_messages + closing(|c| c.expected_messages) + exit.expected_messages,
+            min_guaranteed_messages: relays.min_guaranteed_messages
+                + closing(|c| c.min_guaranteed_messages)
+                + exit.min_guaranteed_messages,
+            byte_capacity: relays.byte_capacity + closing(|c| c.byte_capacity) + exit.byte_capacity,
             ..relays
         }
     }
@@ -241,21 +300,19 @@ impl CapacityReconciler {
     /// raw snapshot, so downstream consumers summing components need no protocol change.
     pub fn reconcile(&mut self, mut raw: CapacityAllocations) -> CapacityAllocations {
         // Valued here so a snapshot with nothing left paying for relays still has the last rate.
-        let exit_stake = raw.exit_traffic.capacity.stake;
-        let (byte_capacity, expected_messages, min_guaranteed_messages) =
-            self.scaled_capacity(exit_stake, &SnapshotTotals::relays(&raw));
-        raw.exit_traffic.capacity = Capacity {
-            stake: exit_stake,
-            expected_messages,
-            min_guaranteed_messages,
-            byte_capacity,
-        };
+        let relays = SnapshotTotals::relays(&raw);
+        raw.exit_traffic.capacity = self.valued(raw.exit_traffic.capacity.stake, &relays);
+        for channel in raw.closing.values_mut() {
+            *channel = self.valued(channel.stake, &relays);
+        }
         let totals = SnapshotTotals::of(&raw);
         let pending_stake = match &self.prev {
             Some(prev) => {
                 let carried = self.pending.map(|p| p.stake).unwrap_or_else(Balance::zero);
-                // Channel drops (drainage, closure) and exit-traffic drops (paid exits) are real usage, not in-flight; `-` saturates at zero.
-                let channel_drop = prev.channel_stake - totals.channel_stake;
+                // Open-channel drops (drainage) and exit-traffic drops (paid exits) are real usage, not in-flight; `-` saturates at zero.
+                // A channel moving to closing is no drop; one leaving closing ahead of its stake reaching the Safe is folded in.
+                let closing_rise = totals.closing_stake - prev.closing_stake;
+                let channel_drop = prev.channel_stake - totals.channel_stake - closing_rise;
                 let exit_traffic_drop = prev.exit_traffic_stake - totals.exit_traffic_stake;
                 prev.stake + carried - channel_drop - exit_traffic_drop - totals.stake
             }
@@ -274,6 +331,24 @@ impl CapacityReconciler {
             published.safe.byte_capacity += p.byte_capacity;
         }
         published
+    }
+
+    /// Publishes a PIX pool figure read between snapshots; the next snapshot books the drop as paid exits.
+    pub fn revalue_exit_traffic(&self, published: &mut CapacityAllocations, funds: Balance<WxHOPR>) {
+        let mut exit_traffic = ExitTrafficFunds::new(funds, published.exit_traffic.price_per_byte);
+        exit_traffic.capacity = self.valued(funds, &SnapshotTotals::relays(published));
+        published.exit_traffic = exit_traffic;
+    }
+
+    /// `stake` at the rate paying for relays.
+    fn valued(&self, stake: Balance<WxHOPR>, relays: &SnapshotTotals) -> Capacity {
+        let (byte_capacity, expected_messages, min_guaranteed_messages) = self.scaled_capacity(stake, relays);
+        Capacity {
+            stake,
+            expected_messages,
+            min_guaranteed_messages,
+            byte_capacity,
+        }
     }
 
     fn next_pending(&self, stake: Balance<WxHOPR>, current: &SnapshotTotals) -> Option<PendingAllocation> {
@@ -543,9 +618,11 @@ impl From<&Capacity> for gnosis_vpn_ipc::Capacity {
 impl From<&CapacityAllocations> for gnosis_vpn_ipc::CapacityAllocations {
     fn from(allocations: &CapacityAllocations) -> Self {
         Self {
+            // Closing channels still hold the user's stake, so clients count them with the open ones.
             peer_allocations: allocations
                 .peer_allocations
                 .iter()
+                .chain(&allocations.closing)
                 .map(|(address, capacity)| (wire::address(address), capacity.into()))
                 .collect(),
             node: (&allocations.node).into(),
@@ -612,6 +689,7 @@ mod tests {
     fn allocs(peer: Option<Capacity>, node: Capacity, safe: Capacity) -> CapacityAllocations {
         CapacityAllocations {
             peer_allocations: peer.map(|c| (Address::from([1u8; 20]), c)).into_iter().collect(),
+            closing: HashMap::new(),
             node,
             safe,
             exit_traffic: ExitTrafficFunds::default(),
@@ -1122,6 +1200,121 @@ mod tests {
         let out = r.reconcile(with_exit(90, 100));
         assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(190u64));
         assert_eq!(total_bytes(&out), 1900);
+    }
+
+    #[test]
+    fn revalued_pix_pool_drop_is_booked_as_paid_by_the_next_snapshot() {
+        let mut r = CapacityReconciler::default();
+        let mut published = r.reconcile(with_exit(100, 100));
+        r.revalue_exit_traffic(&mut published, Balance::from(90u64));
+        assert_eq!(total_stake(&published), Balance::<WxHOPR>::from(190u64));
+        assert_eq!(published.exit_traffic.capacity.byte_capacity, 900);
+        assert_eq!(published.exit_traffic.bytes_from_exits, 90);
+        let out = r.reconcile(with_exit(90, 100));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(190u64));
+        assert_eq!(out.safe.stake, Balance::<WxHOPR>::from(100u64));
+    }
+
+    /// One channel to the fixture peer, open or closing, beside the Safe.
+    fn with_channel(open: Option<u64>, closing: Option<u64>, safe: u64) -> CapacityAllocations {
+        CapacityAllocations {
+            closing: closing
+                .map(|stake| (Address::from([1u8; 20]), capacity(stake, 0)))
+                .into_iter()
+                .collect(),
+            ..allocs(open.map(cap10), Capacity::default(), cap10(safe))
+        }
+    }
+
+    #[test]
+    fn reconcile_keeps_the_total_through_a_channel_closure() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(with_channel(Some(100), None, 100));
+        let closing = r.reconcile(with_channel(None, Some(100), 100));
+        assert_eq!(total_stake(&closing), Balance::<WxHOPR>::from(200u64));
+        assert_eq!(total_bytes(&closing), 2000);
+        assert_eq!(closing.closing.values().next().unwrap().byte_capacity, 1000);
+        // closed, but the stake isn't back in the Safe yet
+        let between = r.reconcile(with_channel(None, None, 100));
+        assert_eq!(total_stake(&between), Balance::<WxHOPR>::from(200u64));
+        let back = r.reconcile(with_channel(None, None, 200));
+        assert_eq!(total_stake(&back), Balance::<WxHOPR>::from(200u64));
+        assert_eq!(back.safe.stake, Balance::<WxHOPR>::from(200u64));
+    }
+
+    #[test]
+    fn reconcile_still_passes_drainage_through_while_another_channel_starts_closing() {
+        let mut r = CapacityReconciler::default();
+        let mut both = with_channel(Some(100), None, 0);
+        both.peer_allocations.insert(Address::from([2u8; 20]), cap10(50));
+        r.reconcile(both);
+        let mut out = with_channel(Some(80), None, 0);
+        out.closing.insert(Address::from([2u8; 20]), capacity(50, 0));
+        let out = r.reconcile(out);
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(130u64));
+    }
+
+    #[test]
+    fn closing_channels_count_toward_the_total_but_not_the_relay_funds() {
+        let open = to_funding_status(
+            ideal(100, 0),
+            &with_channel(Some(30), None, 0),
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
+        )
+        .unwrap();
+        let mut closing = with_channel(Some(30), None, 0);
+        closing.closing.insert(Address::from([2u8; 20]), capacity(500, 5 * GB));
+        let with_closing = to_funding_status(
+            ideal(100, 0),
+            &closing,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
+        )
+        .unwrap();
+        assert_eq!(with_closing.traffic, open.traffic);
+        assert_eq!(with_closing.wxhopr_deficit, open.wxhopr_deficit);
+        assert_eq!(total_stake(&closing), Balance::<WxHOPR>::from(530u64));
+    }
+
+    #[test]
+    fn closing_channels_go_out_with_the_open_ones() {
+        let wire = gnosis_vpn_ipc::CapacityAllocations::from(&with_channel(None, Some(100), 0));
+        assert_eq!(wire.peer_allocations.len(), 1);
+    }
+
+    fn peers(ids: &[u8]) -> HashSet<Address> {
+        ids.iter().map(|id| Address::from([*id; 20])).collect()
+    }
+
+    #[test]
+    fn channel_list_settles_after_three_equal_reads() {
+        let start = Instant::now();
+        let mut settle = ChannelSettle::default();
+        let reads = [
+            peers(&[1, 2, 3]),
+            peers(&[1, 2, 3, 4, 5]),
+            peers(&[1, 2, 3, 4, 5, 6, 7, 8]),
+        ];
+        for (i, read) in reads.into_iter().enumerate() {
+            assert!(!settle.observe(read, start + Duration::from_secs(5 * i as u64)));
+        }
+        let full = peers(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert!(!settle.observe(full.clone(), start + Duration::from_secs(15)));
+        assert!(settle.observe(full, start + Duration::from_secs(20)));
+        assert!(
+            settle.observe(peers(&[1]), start + Duration::from_secs(25)),
+            "stays settled"
+        );
+    }
+
+    #[test]
+    fn channel_list_settles_after_a_minute_even_if_it_keeps_changing() {
+        let start = Instant::now();
+        let mut settle = ChannelSettle::default();
+        assert!(!settle.observe(peers(&[1]), start));
+        assert!(!settle.observe(peers(&[1, 2]), start + Duration::from_secs(59)));
+        assert!(settle.observe(peers(&[1, 2, 3]), start + Duration::from_secs(60)));
     }
 
     // 1 wxHOPR in wei, for the refill-shortfall fixtures below.

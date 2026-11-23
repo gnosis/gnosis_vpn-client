@@ -792,7 +792,7 @@ pub struct Capacity {
 /// The funds paying for relays (open channels, the Safe, the node account) and for exit traffic.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CapacityAllocations {
-    /// Open outgoing channels, keyed by peer.
+    /// Outgoing channels, open or pending closure, keyed by peer.
     pub peer_allocations: BTreeMap<Address, Capacity>,
     /// wxHOPR on the node account, not yet swept into the Safe.
     pub node: Capacity,

@@ -53,6 +53,10 @@ const ROUTABILITY_EAGER_INTERVAL: Duration = Duration::from_secs(10);
 const PROBING_TICK: Duration = Duration::from_secs(5);
 /// What a quick probe reports when discovery moved its exit out from under it.
 const QUICK_PROBE_MOVED: &str = "destination moved while the check was running";
+/// Balance reads while a started node's channel list is still loading.
+const CHANNEL_SETTLE_POLL: Duration = Duration::from_secs(5);
+/// The PIX pool is read from its local ledger, so a payment can show within this.
+const PIX_POOL_POLL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -125,6 +129,8 @@ pub struct Core {
     ideal_balance_recommendation: Option<balance::BalanceRecommendation>,
     capacity_allocations: Option<balance::CapacityAllocations>,
     capacity_reconciler: balance::CapacityReconciler,
+    /// Holds back balances until a started node's channel list has loaded.
+    channel_settle: balance::ChannelSettle,
     balances: Option<balance::Balances>,
     strategy_handle: Option<AbortHandle>,
     /// Read handle to the strategy reactor's health, paired with `strategy_handle`.
@@ -291,6 +297,7 @@ impl Core {
             ideal_balance_recommendation: None,
             capacity_allocations: None,
             capacity_reconciler: balance::CapacityReconciler::default(),
+            channel_settle: balance::ChannelSettle::default(),
             balances: None,
             strategy_handle: None,
             strategy_state: None,
@@ -738,6 +745,10 @@ impl Core {
                     self.spawn_minimum_balance_recommendation_runner(results_sender, Duration::from_secs(10));
                 }
             },
+            // Both recommendation and balances count channels, so they wait for the list to load.
+            Results::IdealBalanceRecommendation { res: Ok(_) } if !self.channel_settle.is_settled() => {
+                self.spawn_ideal_balance_recommendation_runner(results_sender, CHANNEL_SETTLE_POLL);
+            }
             Results::IdealBalanceRecommendation { res } => match res {
                 Ok(rec) => {
                     tracing::info!(?rec, "received ideal balance recommendation");
@@ -751,16 +762,30 @@ impl Core {
             },
             Results::CapacityAllocations { res } => match res {
                 Ok(caps) => {
-                    let caps = self.capacity_reconciler.reconcile(caps);
-                    tracing::info!(%caps, "received capacity allocations");
-                    self.capacity_allocations = Some(caps);
-                    self.spawn_capacity_allocations_runner(results_sender, Duration::from_secs(60));
+                    let channels = caps.channels();
+                    let count = channels.len();
+                    let was_settled = self.channel_settle.is_settled();
+                    if !self.channel_settle.observe(channels, Instant::now()) {
+                        tracing::info!(channels = count, "channel list still loading - holding back balances");
+                        self.spawn_capacity_allocations_runner(results_sender, CHANNEL_SETTLE_POLL);
+                    } else {
+                        if !was_settled {
+                            tracing::info!(channels = count, "channel list loaded - publishing balances");
+                        }
+                        let caps = self.capacity_reconciler.reconcile(caps);
+                        tracing::info!(%caps, "received capacity allocations");
+                        self.capacity_allocations = Some(caps);
+                        self.spawn_capacity_allocations_runner(results_sender, Duration::from_secs(60));
+                    }
                 }
                 Err(err) => {
                     tracing::warn!(?err, "failed to fetch capacity allocations - retrying");
                     self.spawn_capacity_allocations_runner(results_sender, Duration::from_secs(10));
                 }
             },
+            Results::Balances { res: Ok(_) } if !self.channel_settle.is_settled() => {
+                self.spawn_balances_runner(results_sender, CHANNEL_SETTLE_POLL);
+            }
             Results::Balances { res } => match res {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
@@ -772,6 +797,13 @@ impl Core {
                     self.spawn_balances_runner(results_sender, Duration::from_secs(10));
                 }
             },
+            Results::PixPoolFunds { res } => {
+                match res {
+                    Ok(funds) => self.on_pix_pool_funds(funds),
+                    Err(err) => tracing::debug!(%err, "failed to read the PIX pool between balance polls"),
+                }
+                self.spawn_pix_pool_runner(results_sender, PIX_POOL_POLL);
+            }
 
             Results::NodeBalance { res } => self.on_results_node_balance(res, results_sender).await,
             Results::QuerySafe { res } => self.on_results_query_safe(res, results_sender).await,
@@ -1812,6 +1844,36 @@ impl Core {
         }
     }
 
+    fn spawn_pix_pool_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        if let Some(pool) = self.pix_pool.clone() {
+            let cancel = self.cancel_on_shutdown.clone();
+            let results_sender = results_sender.clone();
+            tokio::spawn(async move {
+                cancel
+                    .run_until_cancelled(async move {
+                        time::sleep(delay).await;
+                        runner::pix_pool_funds(pool, results_sender).await;
+                    })
+                    .await
+            });
+        }
+    }
+
+    /// Only drops are published: a top-up raises the pool before the Safe read shows it leaving, so it waits for the next snapshot.
+    fn on_pix_pool_funds(&mut self, funds: balance::Balance<balance::WxHOPR>) {
+        if let Some(caps) = self.capacity_allocations.as_mut()
+            && funds < caps.exit_traffic.capacity.stake
+        {
+            tracing::info!(from = %caps.exit_traffic.capacity.stake, to = %funds, "PIX pool paid out - publishing it before the next balance poll");
+            self.capacity_reconciler.revalue_exit_traffic(caps, funds);
+        }
+        if let Some(balances) = self.balances.as_mut()
+            && balances.pix_pool_wxhopr.is_some_and(|pool| funds < pool)
+        {
+            balances.pix_pool_wxhopr = Some(funds);
+        }
+    }
+
     fn spawn_node_wxhopr_withdraw_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
         if let (Some(ops), Some(hopr)) = (self.incentive_operations.clone(), self.hopr.clone()) {
             let safe_address = hopr.info().safe_address;
@@ -2641,6 +2703,7 @@ impl Core {
                 self.pix_pool = hopr::PixPool::of(&reactor);
                 self.strategy_handle = Some(reactor.abort_handle);
                 self.strategy_state = Some(reactor.strategy_state);
+                self.spawn_pix_pool_runner(results_sender, PIX_POOL_POLL);
             }
             Err(err) => {
                 tracing::error!(?err, "failed to start edge node telemetry reactor - retrying in 10s");
