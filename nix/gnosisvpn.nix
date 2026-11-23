@@ -26,8 +26,8 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.6#ce185155e1639403cc40e01260d0830065a49555" =
       "sha256-3Hjb/OdjLwy2N3QAF+e8XlZ2YPp+k53Xt17jtUUP1XQ=";
-    "git+https://github.com/hoprnet/edge-client.git?branch=main#b1537f57c9074a1b7203b648c15501d9abca2c06" =
-      "sha256-cbYeDeUwz0JmhyB1IPkmTpk5UILhBAzbZyCOkMNhAqA=";
+    "git+https://github.com/hoprnet/edge-client.git?branch=main#a07ace6f5f6909376bf41838605d2de04e85e369" =
+      "sha256-UcO4rruqzee0qtsSI9fr/uD0jnMCeRYWMI1+yzjB9zI=";
     "git+https://github.com/hoprnet/hoprnet?branch=kauki/chore/probing/bridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534" =
       "sha256-+NwFfucqUHjRrPfJKLSH3hoz/+jv8qVnO5e81jEPDW0=";
   };
