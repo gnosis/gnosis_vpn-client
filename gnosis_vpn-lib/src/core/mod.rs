@@ -132,6 +132,8 @@ pub struct Core {
     /// Holds back balances until a started node's channel list has loaded.
     channel_settle: balance::ChannelSettle,
     balances: Option<balance::Balances>,
+    /// PIX pool read between balance polls, so a payment shows within seconds.
+    pix_pool_read: Option<balance::Balance<balance::WxHOPR>>,
     strategy_handle: Option<AbortHandle>,
     /// Read handle to the strategy reactor's health, paired with `strategy_handle`.
     strategy_state: Option<edgli::StrategyStateHandle>,
@@ -297,8 +299,9 @@ impl Core {
             ideal_balance_recommendation: None,
             capacity_allocations: None,
             capacity_reconciler: balance::CapacityReconciler::default(),
-            channel_settle: balance::ChannelSettle::default(),
+            channel_settle: balance::ChannelSettle::new(Instant::now()),
             balances: None,
+            pix_pool_read: None,
             strategy_handle: None,
             strategy_state: None,
             pix_pool: None,
@@ -648,34 +651,7 @@ impl Core {
                     WorkerCommand::FundPixPool { amount } => self.spawn_fund_pix_pool(amount, resp),
 
                     WorkerCommand::Balance => {
-                        let result = match (&self.hopr, &self.balances) {
-                            (Some(hopr), Some(balances)) => {
-                                let funding_status =
-                                    match (&self.ideal_balance_recommendation, &self.capacity_allocations) {
-                                        (Some(ideal), Some(allocs)) => balance::to_funding_status(
-                                            *ideal,
-                                            allocs,
-                                            balances.node_xdai,
-                                            balances.safe_wxhopr,
-                                        )
-                                        .inspect_err(|err| tracing::error!(%err, "no funding status"))
-                                        .ok(),
-                                        _ => None,
-                                    };
-                                ipc::BalanceResponse::Available(Box::new(command::balances(
-                                    &hopr.info(),
-                                    balances,
-                                    &self.config.destinations,
-                                    self.capacity_allocations.as_ref(),
-                                    self.ideal_balance_recommendation,
-                                    funding_status,
-                                )))
-                            }
-                            _ => ipc::BalanceResponse::Unavailable {
-                                reason: "balance data not yet available".to_string(),
-                            },
-                        };
-                        let _ = resp.send(Response::Balance(result));
+                        let _ = resp.send(Response::Balance(self.balance_response()));
                     }
 
                     WorkerCommand::Telemetry => {
@@ -745,10 +721,6 @@ impl Core {
                     self.spawn_minimum_balance_recommendation_runner(results_sender, Duration::from_secs(10));
                 }
             },
-            // Both recommendation and balances count channels, so they wait for the list to load.
-            Results::IdealBalanceRecommendation { res: Ok(_) } if !self.channel_settle.is_settled() => {
-                self.spawn_ideal_balance_recommendation_runner(results_sender, CHANNEL_SETTLE_POLL);
-            }
             Results::IdealBalanceRecommendation { res } => match res {
                 Ok(rec) => {
                     tracing::info!(?rec, "received ideal balance recommendation");
@@ -762,30 +734,30 @@ impl Core {
             },
             Results::CapacityAllocations { res } => match res {
                 Ok(caps) => {
+                    let now = Instant::now();
                     let channels = caps.channels();
                     let count = channels.len();
-                    let was_settled = self.channel_settle.is_settled();
-                    if !self.channel_settle.observe(channels, Instant::now()) {
-                        tracing::info!(channels = count, "channel list still loading - holding back balances");
-                        self.spawn_capacity_allocations_runner(results_sender, CHANNEL_SETTLE_POLL);
-                    } else {
-                        if !was_settled {
-                            tracing::info!(channels = count, "channel list loaded - publishing balances");
-                        }
-                        let caps = self.capacity_reconciler.reconcile(caps);
-                        tracing::info!(%caps, "received capacity allocations");
-                        self.capacity_allocations = Some(caps);
-                        self.spawn_capacity_allocations_runner(results_sender, Duration::from_secs(60));
+                    let was_settled = self.channel_settle.is_settled(now);
+                    self.channel_settle.observe(channels);
+                    let settled = self.channel_settle.is_settled(now);
+                    if settled && !was_settled {
+                        tracing::info!(channels = count, "channel list loaded - publishing balances");
                     }
+                    let caps = self.capacity_reconciler.reconcile(caps);
+                    tracing::info!(%caps, "received capacity allocations");
+                    self.capacity_allocations = Some(caps);
+                    let next_read = if settled {
+                        Duration::from_secs(60)
+                    } else {
+                        CHANNEL_SETTLE_POLL
+                    };
+                    self.spawn_capacity_allocations_runner(results_sender, next_read);
                 }
                 Err(err) => {
                     tracing::warn!(?err, "failed to fetch capacity allocations - retrying");
                     self.spawn_capacity_allocations_runner(results_sender, Duration::from_secs(10));
                 }
             },
-            Results::Balances { res: Ok(_) } if !self.channel_settle.is_settled() => {
-                self.spawn_balances_runner(results_sender, CHANNEL_SETTLE_POLL);
-            }
             Results::Balances { res } => match res {
                 Ok(balances) => {
                     tracing::info!(%balances, "received balances from hopr");
@@ -798,10 +770,9 @@ impl Core {
                 }
             },
             Results::PixPoolFunds { res } => {
-                match res {
-                    Ok(funds) => self.on_pix_pool_funds(funds),
-                    Err(err) => tracing::debug!(%err, "failed to read the PIX pool between balance polls"),
-                }
+                self.pix_pool_read = res
+                    .inspect_err(|err| tracing::debug!(%err, "failed to read the PIX pool between balance polls"))
+                    .ok();
                 self.spawn_pix_pool_runner(results_sender, PIX_POOL_POLL);
             }
 
@@ -1859,19 +1830,43 @@ impl Core {
         }
     }
 
-    /// Only drops are published: a top-up raises the pool before the Safe read shows it leaving, so it waits for the next snapshot.
-    fn on_pix_pool_funds(&mut self, funds: balance::Balance<balance::WxHOPR>) {
-        if let Some(caps) = self.capacity_allocations.as_mut()
-            && funds < caps.exit_traffic.capacity.stake
-        {
-            tracing::info!(from = %caps.exit_traffic.capacity.stake, to = %funds, "PIX pool paid out - publishing it before the next balance poll");
-            self.capacity_reconciler.revalue_exit_traffic(caps, funds);
+    /// The last snapshots with a later PIX pool drop applied; cached snapshots stay untouched, so an older one can't undo it.
+    fn balance_response(&self) -> ipc::BalanceResponse {
+        let (Some(hopr), Some(balances)) = (&self.hopr, &self.balances) else {
+            return ipc::BalanceResponse::Unavailable {
+                reason: "balance data not yet available".to_string(),
+            };
+        };
+        if !self.channel_settle.is_settled(Instant::now()) {
+            return ipc::BalanceResponse::Unavailable {
+                reason: "channel list still loading".to_string(),
+            };
         }
-        if let Some(balances) = self.balances.as_mut()
-            && balances.pix_pool_wxhopr.is_some_and(|pool| funds < pool)
-        {
-            balances.pix_pool_wxhopr = Some(funds);
+        let mut balances = balances.clone();
+        let mut allocs = self.capacity_allocations.clone();
+        if let Some(funds) = self.pix_pool_read {
+            // Only drops: a top-up raises the pool before the Safe read shows it leaving.
+            balances.pix_pool_wxhopr = balances
+                .pix_pool_wxhopr
+                .map(|pool| if funds < pool { funds } else { pool });
+            allocs = allocs.map(|a| self.capacity_reconciler.with_pix_pool(&a, funds));
         }
+        let funding_status = match (&self.ideal_balance_recommendation, &allocs) {
+            (Some(ideal), Some(allocs)) => {
+                balance::to_funding_status(*ideal, allocs, balances.node_xdai, balances.safe_wxhopr)
+                    .inspect_err(|err| tracing::error!(%err, "no funding status"))
+                    .ok()
+            }
+            _ => None,
+        };
+        ipc::BalanceResponse::Available(Box::new(command::balances(
+            &hopr.info(),
+            &balances,
+            &self.config.destinations,
+            allocs.as_ref(),
+            self.ideal_balance_recommendation,
+            funding_status,
+        )))
     }
 
     fn spawn_node_wxhopr_withdraw_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
@@ -2668,6 +2663,7 @@ impl Core {
 
     fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
         self.phase = Phase::HoprRunning;
+        self.channel_settle = balance::ChannelSettle::new(Instant::now());
         self.spawn_exit_node_discovery_runner(results_sender, Duration::ZERO);
         self.spawn_ideal_balance_recommendation_runner(results_sender, Duration::ZERO);
         self.spawn_capacity_allocations_runner(results_sender, Duration::ZERO);
