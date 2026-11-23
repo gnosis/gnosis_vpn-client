@@ -53,9 +53,11 @@ pub async fn set(interface: &str, servers: &str) -> Result<Diversion, Error> {
         return Err(Error::Dns(format!("no valid server address in '{servers}'")));
     }
     #[cfg(target_os = "linux")]
-    return set_linux(interface, &list).await;
+    let diversion = set_linux(interface, &list).await?;
     #[cfg(target_os = "macos")]
-    return set_macos(interface, &list).await;
+    let diversion = set_macos(interface, &list).await?;
+    tracing::info!(%interface, servers = ?list, mechanism = ?diversion.mechanism, "set DNS");
+    Ok(diversion)
 }
 
 /// Restore the resolver configuration that was in effect before [`set`], scoped to

@@ -64,7 +64,7 @@ pub struct PixConfig {
     #[serde(default = "PixConfig::default_relayer_url")]
     pub relayer_url: Url,
 
-    /// Curvy PIX pool balance below which the pool tops itself up from the Safe ahead of a deposit flush.
+    /// Curvy PIX pool balance below which the pool tops itself up from the Safe around each deposit flush.
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default = "PixConfig::default_funding_min_available")]
     pub funding_min_available: HoprBalance,
@@ -74,8 +74,8 @@ pub struct PixConfig {
     #[serde(default = "PixConfig::default_funding_top_up")]
     pub funding_top_up: HoprBalance,
 
-    /// Top up once at startup; off because the PIX pool is first funded manually (`fundpixpool`).
-    #[serde(default)]
+    /// Top up once at startup, so a worker restart refills a pool a failed refill left short.
+    #[serde(default = "PixConfig::default_fund_at_startup")]
     pub fund_at_startup: bool,
 
     /// Lag budget of one Curvy top-up; unset keeps the pool's default.
@@ -102,7 +102,7 @@ impl Default for PixConfig {
             relayer_url: Self::default_relayer_url(),
             funding_min_available: Self::default_funding_min_available(),
             funding_top_up: Self::default_funding_top_up(),
-            fund_at_startup: false,
+            fund_at_startup: Self::default_fund_at_startup(),
             max_funding_time: None,
             direct_shield_settle_grace: None,
         }
@@ -148,6 +148,10 @@ impl PixConfig {
     /// The GNO-1151 onboarding PIX pool funding.
     fn default_funding_top_up() -> HoprBalance {
         "35.35 wxHOPR".parse().expect("default funding top-up is valid")
+    }
+
+    fn default_fund_at_startup() -> bool {
+        true
     }
 
     /// What one top-up shields from the Safe; the `pix-test` pool shields nothing.
@@ -256,7 +260,7 @@ mod tests {
             Some(edgli::strategy::PixFundingPolicy {
                 min_available: PixConfig::default_funding_min_available(),
                 top_up: PixConfig::default_funding_top_up(),
-                fund_at_startup: false,
+                fund_at_startup: true,
             })
         );
         assert_eq!(
@@ -267,7 +271,7 @@ mod tests {
         let set = PixConfig {
             funding_min_available: "1 wxHOPR".parse().expect("valid balance"),
             funding_top_up: "10 wxHOPR".parse().expect("valid balance"),
-            fund_at_startup: true,
+            fund_at_startup: false,
             max_funding_time: Some(Duration::from_secs(600)),
             direct_shield_settle_grace: Some(Duration::from_secs(60)),
             ..PixConfig::default()
@@ -278,7 +282,7 @@ mod tests {
             Some(edgli::strategy::PixFundingPolicy {
                 min_available: "1 wxHOPR".parse().expect("valid balance"),
                 top_up: "10 wxHOPR".parse().expect("valid balance"),
-                fund_at_startup: true,
+                fund_at_startup: false,
             })
         );
         assert_eq!(set.pool.max_funding_time, Duration::from_secs(600));

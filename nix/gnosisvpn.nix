@@ -26,10 +26,10 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.6#ce185155e1639403cc40e01260d0830065a49555" =
       "sha256-3Hjb/OdjLwy2N3QAF+e8XlZ2YPp+k53Xt17jtUUP1XQ=";
-    "git+https://github.com/hoprnet/edge-client.git?branch=feature/core-1404-edgli-let-the-embedder-hold-pix-deposit#c5797272098af42a4bd1dda30b524127c3bb7bfa" =
-      "sha256-5cUDJl0sI/RJ9Ycl9Zd0wMDkSfpXsvquheLwE8nTTEc=";
-    "git+https://github.com/hoprnet/hoprnet?branch=master#2acc3a589cfd4dff16008b72101f3aaef2ce1ff8" =
-      "sha256-pjI64c6Ldv3oXLU4ApmmeWhO7gvqJTMZMUIxQtomb8U=";
+    "git+https://github.com/hoprnet/edge-client.git?branch=feature/core-1404-edgli-let-the-embedder-hold-pix-deposit#fd1e4fea223242dc9d35107b4b7b1d77ed1e9482" =
+      "sha256-UcO4rruqzee0qtsSI9fr/uD0jnMCeRYWMI1+yzjB9zI=";
+    "git+https://github.com/hoprnet/hoprnet?branch=kauki/chore/probing/bridge-8705-merged-with-impls-118#163764d405d1e003b2a4b170ceaf720ca053b534" =
+      "sha256-+NwFfucqUHjRrPfJKLSH3hoz/+jv8qVnO5e81jEPDW0=";
   };
 
   builders = nixLib.mkRustBuilders {
