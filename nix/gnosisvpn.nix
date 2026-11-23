@@ -30,8 +30,6 @@ let
       "sha256-VTON27qAFVMbMw3oT/TdnuaPGFXfqiHzhaTQKAH8tDY=";
     "git+https://github.com/hoprnet/hoprnet?branch=feature/core-1397-session-let-a-re-initiation-on-a-held#12d52dd9300213081a2d1f8635880e372f630b97" =
       "sha256-CqnFX2gh3WlFemkrTFRBF8esbOugrllJG8uB33pjqoA=";
-    "git+https://github.com/hoprnet/hopr-strategy?rev=97bfc19a74235c814b322d355c2429100fac7174#97bfc19a74235c814b322d355c2429100fac7174" =
-      "sha256-KRIStVZCr60V3FIKr0WGPqqbCD0NIQBLT9alyGFABYQ=";
   };
 
   builders = nixLib.mkRustBuilders {
