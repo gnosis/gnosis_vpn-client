@@ -57,6 +57,9 @@ pub(crate) enum Results {
     Balances {
         res: Result<balance::Balances, Error>,
     },
+    PixPoolFunds {
+        res: Result<balance::Balance<balance::WxHOPR>, Error>,
+    },
     PersistSafe {
         res: Result<(), hopr_config::Error>,
         safe_module: SafeModule,
@@ -220,6 +223,12 @@ pub(crate) async fn balances(hopr: Arc<Hopr>, pix_pool: Option<PixPool>, results
             .ok();
     }
     let _ = results_sender.send(Results::Balances { res }).await;
+}
+
+/// The pool's own ledger, no chain read: a payment shows as soon as it is journalled.
+pub(crate) async fn pix_pool_funds(pool: PixPool, results_sender: mpsc::Sender<Results>) {
+    let res = pool.balance().await.map_err(Error::Hopr);
+    let _ = results_sender.send(Results::PixPoolFunds { res }).await;
 }
 
 pub(crate) async fn node_balance(
@@ -666,6 +675,10 @@ impl Display for Results {
             Results::Balances { res } => match res {
                 Ok(balances) => write!(f, "Balances: {}", balances),
                 Err(err) => write!(f, "Balances: Error({})", err),
+            },
+            Results::PixPoolFunds { res } => match res {
+                Ok(funds) => write!(f, "PixPoolFunds: {}", funds),
+                Err(err) => write!(f, "PixPoolFunds: Error({})", err),
             },
             Results::DeploySafe { res } => match res {
                 Ok(deployment) => write!(f, "DeploySafe: {:?}", deployment),
