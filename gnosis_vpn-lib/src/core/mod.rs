@@ -354,6 +354,7 @@ impl Core {
                     }
                     self.sync_root_probe_hold().await;
                     self.sync_network_probing();
+                    self.sync_pix_deposit_hold();
                 }
 
                 // React to internal results from spawned runner tasks
@@ -363,6 +364,7 @@ impl Core {
                     }
                     self.sync_root_probe_hold().await;
                     self.sync_network_probing();
+                    self.sync_pix_deposit_hold();
                 }
 
                 _ = probing_tick.tick() => self.sync_network_probing(),
@@ -2146,6 +2148,12 @@ impl Core {
         let _ = self.outgoing_sender.send(request).await;
     }
 
+    fn sync_pix_deposit_hold(&self) {
+        if let Some(pool) = &self.pix_pool {
+            pool.hold_deposits(pix_deposits_held(&self.phase, self.killswitch_armed));
+        }
+    }
+
     /// Closes a probe that only existed for a target that is now gone; a requested one stays.
     fn stop_implicit_probe(&mut self) {
         let orphaned = self
@@ -2804,6 +2812,12 @@ fn nerd_stats_telemetry() -> Option<String> {
             None
         }
     }
+}
+
+/// The armed killswitch lets the relayer through only via the tunnel, so deposits wait for Connected.
+fn pix_deposits_held(phase: &Phase, killswitch_armed: bool) -> bool {
+    let connected = matches!(phase, Phase::Connected(_));
+    killswitch_armed && !connected
 }
 
 /// The pump can die after the runner's last ping, so the runner's Ok would describe a dead tunnel.
@@ -3555,6 +3569,37 @@ mod tests {
         let keys = latched_on_a_moved_target(&destinations, &route_healths, &before);
 
         assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn pix_deposits_wait_while_the_armed_killswitch_is_not_connected() {
+        assert!(pix_deposits_held(
+            &Phase::Connecting(attempt("exit", UpPhase::OpeningPing)),
+            true
+        ));
+        assert!(pix_deposits_held(
+            &Phase::Connecting(attempt("exit", UpPhase::EstablishWgTunnel)),
+            true
+        ));
+        assert!(pix_deposits_held(
+            &Phase::Connecting(attempt("exit", UpPhase::VerifyPing)),
+            true
+        ));
+        // Waiting on route health between reconnect attempts.
+        assert!(pix_deposits_held(&Phase::HoprRunning, true));
+    }
+
+    #[test]
+    fn pix_deposits_flow_once_connected_or_the_killswitch_is_lifted() {
+        assert!(!pix_deposits_held(
+            &Phase::Connected(attempt("exit", UpPhase::AdjustToMain)),
+            true
+        ));
+        assert!(!pix_deposits_held(
+            &Phase::Connecting(attempt("exit", UpPhase::OpeningPing)),
+            false
+        ));
+        assert!(!pix_deposits_held(&Phase::HoprRunning, false));
     }
 
     fn view(phase: &Phase, reconnecting_since: Option<SystemTime>, target: Option<&str>) -> ipc::Connection {
