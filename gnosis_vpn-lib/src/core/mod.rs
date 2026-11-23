@@ -1,6 +1,8 @@
 use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder};
 use edgli::EdgliInitState;
 use edgli::blokli::IncentiveOperations;
+use edgli::hopr_lib::api::types::internal::protocol::HoprPseudonym;
+use edgli::hopr_lib::api::types::primitive::prelude::ToHex;
 use edgli::hopr_lib::builder::Keypair;
 use futures_util::future::AbortHandle;
 use thiserror::Error;
@@ -2209,6 +2211,7 @@ impl Core {
             // Seeded so a disconnect before the runner reports its key still unregisters and tears down.
             if let Some(resume) = &resume {
                 conn.wireguard = Some(resume.wireguard.clone());
+                conn.unoffered_paid_pseudonym = resume.paid_pseudonym;
             }
             let config_connection = self.config.connection.clone();
             let config_wireguard = self.config.wireguard.clone();
@@ -2654,13 +2657,28 @@ impl Core {
         }
 
         match connection::up::Resume::try_from(&conn) {
-            Ok(resume) => {
+            Ok(mut resume) => {
+                if let Some(pseudonym) = self.paid_pseudonym(&conn) {
+                    resume.paid_pseudonym = Some(pseudonym);
+                }
                 tracing::info!(%resume, keep_device, "reconnecting in place");
                 self.resume = Some(resume);
             }
             Err(reason) => tracing::debug!(reason, "reconnecting with a fresh key"),
         }
         self.act_on_target(results_sender);
+    }
+
+    fn paid_pseudonym(&self, conn: &connection::up::Up) -> Option<HoprPseudonym> {
+        let (_, session) = conn.ping_session.as_ref()?;
+        let session_id = session.active_clients.first()?;
+        let has_paid = self.hopr.as_ref()?.pix_chunks().has_paid(session_id);
+        if !has_paid {
+            return None;
+        }
+        HoprPseudonym::from_hex(session_id)
+            .inspect_err(|err| tracing::warn!(%err, %session_id, "paid session id is not a pseudonym"))
+            .ok()
     }
 
     /// A user action rotates the key: the kept registration is removed at the exit and the device torn down.
@@ -3399,6 +3417,45 @@ mod tests {
         let down: connection::down::Down = resume.into();
         assert_eq!(down.wg_public_key, "pub");
         assert_eq!(down.destination.connect_id, destination("exit").connect_id);
+    }
+
+    #[tokio::test]
+    async fn a_reconnect_keeps_the_paid_pseudonym_until_it_was_offered() {
+        use edgli::hopr_lib::api::types::crypto_random::Randomizable;
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        let pseudonym = HoprPseudonym::random();
+        let mut never_offered = connected_with_key("exit");
+        never_offered.unoffered_paid_pseudonym = Some(pseudonym);
+        never_offered.connect_progress(connection::up::Progress::RegisterWg);
+
+        core.reconnect_in_place(never_offered, true, &results).await;
+
+        let resume = core.resume.take().expect("key kept");
+        assert_eq!(resume.paid_pseudonym, Some(pseudonym));
+
+        let mut offered = connected_with_key("exit");
+        offered.unoffered_paid_pseudonym = Some(pseudonym);
+        let registration = serde_json::from_value(serde_json::json!({
+            "public_key": "pub",
+            "ip": "10.128.0.5",
+            "newly_registered": false,
+            "server_public_key": "srv",
+            "preshared_key": "psk",
+        }))
+        .expect("valid registration");
+        offered.connect_progress(connection::up::Progress::OpenPing(registration));
+
+        core.reconnect_in_place(offered, true, &results).await;
+
+        let resume = core.resume.take().expect("key kept");
+        assert_eq!(resume.paid_pseudonym, None);
+    }
+
+    #[test]
+    fn a_session_id_parses_back_into_its_pseudonym() {
+        use edgli::hopr_lib::api::types::crypto_random::Randomizable;
+        let pseudonym = HoprPseudonym::random();
+        assert_eq!(HoprPseudonym::from_hex(pseudonym.as_ref()).ok(), Some(pseudonym));
     }
 
     #[tokio::test(start_paused = true)]

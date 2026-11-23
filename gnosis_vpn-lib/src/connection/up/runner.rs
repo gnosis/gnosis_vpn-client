@@ -4,6 +4,7 @@
 use backon::{FibonacciBuilder, Retryable};
 use edgli::FlowControlConfig;
 use edgli::hopr_lib::HoprSessionClientConfig;
+use edgli::hopr_lib::api::types::internal::protocol::HoprPseudonym;
 use ipnetwork::IpNetwork;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -143,7 +144,15 @@ impl Runner {
             session: hopr_session,
             configurator,
             metadata: session,
-        } = open_spliced_wg_session(&self.hopr, &self.destination, &self.options, ping_surb, &results_sender).await?;
+        } = open_spliced_wg_session(
+            &self.hopr,
+            &self.destination,
+            &self.options,
+            ping_surb,
+            self.prev_conn.resume.as_ref().and_then(|r| r.paid_pseudonym),
+            &results_sender,
+        )
+        .await?;
         // Split now so the guard owns the write half from the open on: an abort before the pump must not leak the session.
         let (read_half, write_half) = tokio::io::split(hopr_session);
         let net_tx = wg_tunnel::SessionSender::new(wg_tunnel::CloseOnDrop::new(write_half));
@@ -268,6 +277,7 @@ async fn open_spliced_wg_session(
     destination: &Destination,
     options: &Options,
     surb: SurbParams,
+    paid_pseudonym: Option<HoprPseudonym>,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<SplicedWgSession, HoprError> {
     let cfg = HoprSessionClientConfig {
@@ -285,6 +295,25 @@ async fn open_spliced_wg_session(
     } else {
         cfg
     };
+    // One try only: exits that cannot take over the paid session refuse it, and a fresh one must not wait.
+    if let Some(pseudonym) = paid_pseudonym {
+        let reused = HoprSessionClientConfig {
+            pseudonym: Some(pseudonym),
+            ..cfg.clone()
+        };
+        match hopr
+            .open_wg_session(destination.address, destination.wg_target(), reused)
+            .await
+        {
+            Ok(session) => {
+                tracing::info!(%pseudonym, "reused paid session pseudonym");
+                return Ok(session);
+            }
+            Err(err) => {
+                tracing::info!(%pseudonym, error = %err, "exit refused paid session pseudonym - opening a fresh session")
+            }
+        }
+    }
     (|| async {
         tracing::debug!(%destination, "attempting to open spliced wg session");
         hopr.open_wg_session(destination.address, destination.wg_target(), cfg.clone())

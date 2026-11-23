@@ -1,3 +1,4 @@
+use edgli::hopr_lib::api::types::internal::protocol::HoprPseudonym;
 use edgli::hopr_lib::exports::transport::{HoprSessionConfigurator, SurbBalancerConfig};
 use thiserror::Error;
 
@@ -181,6 +182,8 @@ pub struct Up {
     pub payment_hold_since: Option<SystemTime>,
     /// Set once the exit's PIX gate explains the stall; status only, the hold decides reconnects.
     pub awaiting_payment_since: Option<SystemTime>,
+    /// Carried over from the previous attempt until this one offers it to the exit.
+    pub unoffered_paid_pseudonym: Option<HoprPseudonym>,
     /// Set when the pump exits before the attempt is Connected; it fails the attempt whatever the runner reports.
     pub pump_exit: Option<PumpExit>,
 }
@@ -281,6 +284,7 @@ impl Up {
             exit_replies: None,
             payment_hold_since: None,
             awaiting_payment_since: None,
+            unoffered_paid_pseudonym: None,
             pump_exit: None,
         }
     }
@@ -550,6 +554,8 @@ impl Up {
             Progress::OpenPing(reg) => {
                 self.phase = (now, Phase::OpeningPing);
                 self.registration = Some(reg);
+                // The runner offers the pseudonym next; refused or not, it gets only this one try.
+                self.unoffered_paid_pseudonym = None;
             }
             Progress::PeerIps => self.phase = (now, Phase::GatherPeerIps),
             Progress::KillswitchLockdown => self.phase = (now, Phase::KillswitchLockdown),
@@ -587,6 +593,8 @@ impl Up {
 pub struct Resume {
     pub destination: Destination,
     pub wireguard: WireGuard,
+    /// Reused so the exit can go on serving the paid chunk instead of asking for a new one.
+    pub paid_pseudonym: Option<HoprPseudonym>,
 }
 
 impl TryFrom<&Up> for Resume {
@@ -599,13 +607,18 @@ impl TryFrom<&Up> for Resume {
         Ok(Self {
             destination: up.destination.clone(),
             wireguard,
+            paid_pseudonym: up.unoffered_paid_pseudonym,
         })
     }
 }
 
 impl Display for Resume {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Resume of {} ({})", self.destination, self.wireguard)
+        write!(f, "Resume of {} ({})", self.destination, self.wireguard)?;
+        if let Some(pseudonym) = &self.paid_pseudonym {
+            write!(f, " paid session {pseudonym}")?;
+        }
+        Ok(())
     }
 }
 
