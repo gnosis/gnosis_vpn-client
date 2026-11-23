@@ -583,15 +583,30 @@ impl Hopr {
     /// Capacity allocations: open outgoing channels, the unallocated Safe
     /// balance, and wxHOPR sitting on the node EOA (deposited but not yet
     /// swept into the Safe) — edgli's struct mirrored into
-    /// [`balance::CapacityAllocations`] for serialization.
+    /// [`balance::CapacityAllocations`] for serialization — plus the channels
+    /// pending closure, unvalued until [`balance::CapacityReconciler::reconcile`].
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn capacity_allocations(&self) -> Result<balance::CapacityAllocations, HoprError> {
-        let raw = self
+        let mut caps: balance::CapacityAllocations = self
             .edgli
             .describe_current_capacity_allocations()
             .await
-            .map_err(|e| HoprError::Strategy(e.to_string()))?;
-        Ok(raw.into())
+            .map_err(|e| HoprError::Strategy(e.to_string()))?
+            .into();
+        let channels = self.edgli.my_outgoing_channels().await.map_err(HoprError::HoprLib)?;
+        // The later read wins: a channel that started closing since the first one leaves the relay funds.
+        for ch in channels
+            .into_iter()
+            .filter(|ch| matches!(ch.status, ChannelStatus::PendingToClose(_)))
+        {
+            caps.peer_allocations.remove(&ch.destination);
+            let capacity = balance::Capacity {
+                stake: ch.balance,
+                ..balance::Capacity::default()
+            };
+            caps.closing.insert(ch.destination, capacity);
+        }
+        Ok(caps)
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]

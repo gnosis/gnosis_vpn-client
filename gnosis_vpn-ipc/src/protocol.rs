@@ -792,7 +792,7 @@ pub struct Capacity {
 /// The funds paying for relays (open channels, the Safe, the node account) and for exit traffic.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CapacityAllocations {
-    /// Open outgoing channels, keyed by peer.
+    /// Outgoing channels, open or pending closure, keyed by peer.
     pub peer_allocations: BTreeMap<Address, Capacity>,
     /// wxHOPR on the node account, not yet swept into the Safe.
     pub node: Capacity,
@@ -833,6 +833,10 @@ pub struct BalanceRecommendation {
     pub xdai_fee_per_tx: Balance<XDai>,
     /// wxHOPR the next top-up pass will try to spend; not part of `wxhopr`.
     pub topup_headroom: Balance<WxHopr>,
+    /// wxHOPR one PIX pool top-up shields from the Safe; zero without a pool.
+    pub pix_top_up: Balance<WxHopr>,
+    /// PIX pool balance below which a top-up is shielded; zero without a pool.
+    pub pix_min_available: Balance<WxHopr>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
