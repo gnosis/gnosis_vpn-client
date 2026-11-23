@@ -234,7 +234,6 @@ struct PendingAllocation {
 struct SnapshotTotals {
     stake: Balance<WxHOPR>,
     channel_stake: Balance<WxHOPR>,
-    closing_stake: Balance<WxHOPR>,
     exit_traffic_stake: Balance<WxHOPR>,
     expected_messages: u64,
     min_guaranteed_messages: u64,
@@ -251,7 +250,6 @@ impl SnapshotTotals {
         SnapshotTotals {
             stake: caps.node.stake + caps.safe.stake + channel_stake,
             channel_stake,
-            closing_stake: Balance::zero(),
             exit_traffic_stake: Balance::zero(),
             expected_messages: sum(|c| c.expected_messages),
             min_guaranteed_messages: sum(|c| c.min_guaranteed_messages),
@@ -267,7 +265,6 @@ impl SnapshotTotals {
         let closing = |f: fn(&Capacity) -> u64| caps.closing.values().map(f).sum::<u64>();
         SnapshotTotals {
             stake: relays.stake + closing_stake + exit.stake,
-            closing_stake,
             exit_traffic_stake: exit.stake,
             expected_messages: relays.expected_messages + closing(|c| c.expected_messages) + exit.expected_messages,
             min_guaranteed_messages: relays.min_guaranteed_messages
@@ -292,6 +289,8 @@ impl SnapshotTotals {
 #[derive(Debug, Default)]
 pub struct CapacityReconciler {
     prev: Option<SnapshotTotals>,
+    /// Open channels of the previous snapshot, to tell a channel starting to close from one done closing.
+    prev_open: HashSet<Address>,
     pending: Option<PendingAllocation>,
 }
 
@@ -311,8 +310,13 @@ impl CapacityReconciler {
                 let carried = self.pending.map(|p| p.stake).unwrap_or_else(Balance::zero);
                 // Open-channel drops (drainage) and exit-traffic drops (paid exits) are real usage, not in-flight; `-` saturates at zero.
                 // A channel moving to closing is no drop; one leaving closing ahead of its stake reaching the Safe is folded in.
-                let closing_rise = totals.closing_stake - prev.closing_stake;
-                let channel_drop = prev.channel_stake - totals.channel_stake - closing_rise;
+                let moved_to_closing = raw
+                    .closing
+                    .iter()
+                    .filter(|(address, _)| self.prev_open.contains(*address))
+                    .map(|(_, c)| c.stake)
+                    .sum::<Balance<WxHOPR>>();
+                let channel_drop = prev.channel_stake - totals.channel_stake - moved_to_closing;
                 let exit_traffic_drop = prev.exit_traffic_stake - totals.exit_traffic_stake;
                 prev.stake + carried - channel_drop - exit_traffic_drop - totals.stake
             }
@@ -321,6 +325,7 @@ impl CapacityReconciler {
 
         self.pending = self.next_pending(pending_stake, &totals);
         self.prev = Some(totals);
+        self.prev_open = raw.peer_allocations.keys().copied().collect();
 
         let mut published = raw;
         if let Some(p) = &self.pending {
@@ -1239,6 +1244,20 @@ mod tests {
         assert_eq!(total_stake(&between), Balance::<WxHOPR>::from(200u64));
         let back = r.reconcile(with_channel(None, None, 200));
         assert_eq!(total_stake(&back), Balance::<WxHOPR>::from(200u64));
+        assert_eq!(back.safe.stake, Balance::<WxHOPR>::from(200u64));
+    }
+
+    #[test]
+    fn reconcile_holds_a_closed_channel_while_another_starts_closing() {
+        let mut r = CapacityReconciler::default();
+        let mut before = with_channel(Some(100), None, 100);
+        before.closing.insert(Address::from([2u8; 20]), capacity(100, 0));
+        r.reconcile(before);
+        // the closing channel is done but its stake isn't in the Safe yet; the open one starts closing
+        let swapped = r.reconcile(with_channel(None, Some(100), 100));
+        assert_eq!(total_stake(&swapped), Balance::<WxHOPR>::from(300u64));
+        let back = r.reconcile(with_channel(None, Some(100), 200));
+        assert_eq!(total_stake(&back), Balance::<WxHOPR>::from(300u64));
         assert_eq!(back.safe.stake, Balance::<WxHOPR>::from(200u64));
     }
 

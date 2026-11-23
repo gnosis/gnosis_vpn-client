@@ -587,32 +587,26 @@ impl Hopr {
     /// pending closure, unvalued until [`balance::CapacityReconciler::reconcile`].
     #[tracing::instrument(skip(self), level = "debug", ret, err)]
     pub async fn capacity_allocations(&self) -> Result<balance::CapacityAllocations, HoprError> {
-        let raw: balance::CapacityAllocations = self
+        let mut caps: balance::CapacityAllocations = self
             .edgli
             .describe_current_capacity_allocations()
             .await
             .map_err(|e| HoprError::Strategy(e.to_string()))?
             .into();
-        // Read after the open channels: one that started closing in between is still counted once.
-        let closing = self
-            .edgli
-            .my_outgoing_channels()
-            .await
-            .map_err(HoprError::HoprLib)?
+        let channels = self.edgli.my_outgoing_channels().await.map_err(HoprError::HoprLib)?;
+        // The later read wins: a channel that started closing since the first one leaves the relay funds.
+        for ch in channels
             .into_iter()
-            .filter(|ch| {
-                matches!(ch.status, ChannelStatus::PendingToClose(_))
-                    && !raw.peer_allocations.contains_key(&ch.destination)
-            })
-            .map(|ch| {
-                let capacity = balance::Capacity {
-                    stake: ch.balance,
-                    ..balance::Capacity::default()
-                };
-                (ch.destination, capacity)
-            })
-            .collect();
-        Ok(balance::CapacityAllocations { closing, ..raw })
+            .filter(|ch| matches!(ch.status, ChannelStatus::PendingToClose(_)))
+        {
+            caps.peer_allocations.remove(&ch.destination);
+            let capacity = balance::Capacity {
+                stake: ch.balance,
+                ..balance::Capacity::default()
+            };
+            caps.closing.insert(ch.destination, capacity);
+        }
+        Ok(caps)
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]
