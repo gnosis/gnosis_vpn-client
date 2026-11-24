@@ -264,9 +264,13 @@ pub(super) fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
 }
 
 impl Connection {
-    // Bridge capabilities must never include retransmissions — those require additional SURBs.
+    // ACK-only, because probe requests are single-frame and NACKs cannot recover a frame lost whole.
     pub fn default_bridge_capabilities() -> Vec<Capability> {
-        vec![Capability::Segmentation, Capability::NoRateControl]
+        vec![
+            Capability::Segmentation,
+            Capability::RetransmissionAckOnly,
+            Capability::NoRateControl,
+        ]
     }
 
     pub fn default_wg_capabilities() -> Vec<Capability> {
@@ -2119,6 +2123,28 @@ policy = { type = "fixed", level = { type = "high" } }
             .parse::<toml::Table>()
             .expect("valid TOML");
         assert_eq!(wrong_keys(&table), vec!["probing.polcy".to_string()]);
+    }
+
+    #[test]
+    fn bridge_defaults_to_ack_retransmission_and_minimal_surb_balancing() {
+        use edgli::hopr_lib::exports::transport::SessionCapability;
+
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let caps = result.connection.sessions.bridge.capabilities;
+        assert!(caps.contains(SessionCapability::RetransmissionAck));
+        assert!(!caps.contains(SessionCapability::RetransmissionNack));
+        let surb = crate::connection::options::surb_config_for(&result.connection.surb_balancing.bridge)
+            .expect("a valid SURB configuration");
+        assert!(surb.management.is_some());
+        assert_eq!(surb.max_surbs_per_data_packet, 1);
     }
 
     #[test]
