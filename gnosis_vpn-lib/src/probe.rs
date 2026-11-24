@@ -631,6 +631,7 @@ impl ProbeSession {
             return_path: destination.routing,
             max_surbs_per_data_packet: surb.max_surbs_per_data_packet,
             surb_management: surb.management,
+            // A no-op unless the capabilities include retransmission.
             flow_control: Some(FlowControlConfig::robust()),
             ..Default::default()
         };

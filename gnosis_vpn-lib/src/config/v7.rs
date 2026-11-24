@@ -264,7 +264,7 @@ pub(super) fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
 }
 
 impl Connection {
-    // ACK-only, because probe requests are single-frame and NACKs cannot recover a frame lost whole.
+    // ACK-only: NACKs cannot recover a single-frame request lost whole; retransmission also activates flow control.
     pub fn default_bridge_capabilities() -> Vec<Capability> {
         vec![
             Capability::Segmentation,

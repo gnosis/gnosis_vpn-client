@@ -141,6 +141,8 @@ path    = { hops = 1 }
 # determine specific connection parameters for the long-lived probe connection
 # quick probes and a disconnect without a probe session always use [ "segmentation", "no_rate_control" ]
 # options: "segmentation", "retransmission", "retransmission_ack_only", "no_delay", "no_rate_control"
+# retransmission_ack_only: NACK-based "retransmission" cannot recover a single-frame request lost whole
+# either retransmission needs SURBs for its ACKs, so keep [connection.surb_balancing.bridge] enabled with it
 # [connection.bridge]
 # capabilities = [ "segmentation", "retransmission_ack_only", "no_rate_control" ]
 # target = "172.30.0.1:8000"
