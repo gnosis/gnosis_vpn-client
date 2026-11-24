@@ -60,8 +60,8 @@ pub(crate) fn select_api_version(offered: &[ApiVersion]) -> Option<ApiVersion> {
     SUPPORTED.iter().copied().filter(|v| offered.contains(v)).max()
 }
 
-/// No retransmission: without balancing, an ACK would spend the one SURB the reply needs.
-fn quick_probe_capabilities() -> SessionCapabilities {
+/// For short-lived unbalanced sessions; retransmission is off as an ACK would spend the one SURB the reply needs.
+pub(crate) fn one_shot_capabilities() -> SessionCapabilities {
     SessionCapability::Segmentation | SessionCapability::NoRateControl
 }
 
@@ -71,7 +71,7 @@ pub(crate) fn quick_session_matches_bridge(
     bridge: &SessionSurbOptions,
     pix: &SessionPixOptions,
 ) -> bool {
-    bridge_caps == quick_probe_capabilities() && !bridge.enabled && !bridge.always_max_out_surbs && !pix.enabled
+    bridge_caps == one_shot_capabilities() && !bridge.enabled && !bridge.always_max_out_surbs && !pix.enabled
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -455,7 +455,7 @@ async fn run_quick_probe(
         max_surbs_per_data_packet: 1,
     };
     tracing::debug!(%destination, "opening quick probe session");
-    let session = match ProbeSession::open(hopr, destination, options, quick_probe_capabilities(), surb, false).await {
+    let session = match ProbeSession::open(hopr, destination, options, one_shot_capabilities(), surb, false).await {
         Ok(session) => session,
         Err(err) => return (Err(format!("opening session failed: {err}")), None),
     };
@@ -913,7 +913,7 @@ mod tests {
     fn quick_session_matches_only_an_unbalanced_bridge_without_retransmission() {
         use crate::connection::options::{PixOptions, SurbBalancing};
 
-        let caps = quick_probe_capabilities();
+        let caps = one_shot_capabilities();
         let pix = PixOptions::default().bridge;
         let mut unbalanced = SurbBalancing::default().bridge;
         unbalanced.enabled = false;
