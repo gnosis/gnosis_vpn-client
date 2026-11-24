@@ -78,11 +78,6 @@ pub struct PixConfig {
     #[serde(default = "PixConfig::default_fund_at_startup")]
     pub fund_at_startup: bool,
 
-    /// Pool balance below which channels are closed to cover the next top-up; unset is half of `funding_top_up`.
-    #[serde_as(as = "Option<DisplayFromStr>")]
-    #[serde(default)]
-    pub funding_reclaim_below: Option<HoprBalance>,
-
     /// Lag budget of one Curvy top-up; unset keeps the pool's default.
     #[serde(default, with = "humantime_serde::option")]
     pub max_funding_time: Option<Duration>,
@@ -108,7 +103,6 @@ impl Default for PixConfig {
             funding_min_available: Self::default_funding_min_available(),
             funding_top_up: Self::default_funding_top_up(),
             fund_at_startup: Self::default_fund_at_startup(),
-            funding_reclaim_below: None,
             max_funding_time: None,
             direct_shield_settle_grace: None,
         }
@@ -195,7 +189,6 @@ impl PixConfig {
                 min_available: self.funding_min_available,
                 top_up: self.funding_top_up,
                 fund_at_startup: self.fund_at_startup,
-                reclaim_below: self.funding_reclaim_below,
             }),
             max_funding_time: self.max_funding_time.unwrap_or(pool.max_funding_time),
             direct_shield_settle_grace: self
@@ -242,7 +235,6 @@ mod tests {
         assert_eq!(parsed.funding_min_available, def.funding_min_available);
         assert_eq!(parsed.funding_top_up, def.funding_top_up);
         assert_eq!(parsed.fund_at_startup, def.fund_at_startup);
-        assert_eq!(parsed.funding_reclaim_below, None);
     }
 
     #[test]
@@ -277,7 +269,6 @@ mod tests {
                 min_available: PixConfig::default_funding_min_available(),
                 top_up: PixConfig::default_funding_top_up(),
                 fund_at_startup: true,
-                reclaim_below: None,
             })
         );
         assert_eq!(
@@ -289,7 +280,6 @@ mod tests {
             funding_min_available: "1 wxHOPR".parse().expect("valid balance"),
             funding_top_up: "10 wxHOPR".parse().expect("valid balance"),
             fund_at_startup: false,
-            funding_reclaim_below: Some("4 wxHOPR".parse().expect("valid balance")),
             max_funding_time: Some(Duration::from_secs(600)),
             direct_shield_settle_grace: Some(Duration::from_secs(60)),
             ..PixConfig::default()
@@ -301,7 +291,6 @@ mod tests {
                 min_available: "1 wxHOPR".parse().expect("valid balance"),
                 top_up: "10 wxHOPR".parse().expect("valid balance"),
                 fund_at_startup: false,
-                reclaim_below: Some("4 wxHOPR".parse().expect("valid balance")),
             })
         );
         assert_eq!(set.pool.max_funding_time, Duration::from_secs(600));

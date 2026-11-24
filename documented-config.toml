@@ -303,16 +303,13 @@ path    = { hops = 1 }
 # Curvy relayer that submits deposit proofs; the client never submits them itself; Curvy staging is https://api.curvy.dev; default: https://api.curvy.box
 # relayer_url = "https://api.curvy.box"
 # Curvy pool only: the PIX pool is topped up from the Safe before and after each deposit flush, and every minute after a failed top-up, whenever it can pay less than funding_min_available
+# channels leave the Safe share the next top-up needs alone, and below half of funding_top_up in the PIX pool the worst channels are closed to cover it
 # PIX pool balance below which a top-up is shielded; keep it at most half of funding_top_up; default: 2 wxHOPR
 # funding_min_available = "2 wxHOPR"
 # wxHOPR one top-up shields from the Safe, gross of the shield fee; default: 35.35 wxHOPR
 # funding_top_up = "35.35 wxHOPR"
 # also top up once at startup; default: true
 # fund_at_startup = true
-# channels leave the Safe share the next top-up needs alone (none after a top-up, all of it by funding_min_available);
-# below this PIX pool balance the worst channels are also closed to cover it; between funding_min_available and
-# funding_top_up; default: half of funding_top_up
-# funding_reclaim_below = "17.675 wxHOPR"
 # how long one top-up may take before it fails; default: 5m
 # max_funding_time = "5m"
 # how long an unconfirmed shield is waited for before it is resent; default: 3m
