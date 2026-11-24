@@ -259,6 +259,7 @@ fn pretty_print(resp: &Response) {
                 ideal_balance: _,
                 funding_status,
                 pix_pool,
+                pix_reserved,
             } = balances.as_ref();
             let mut str_resp = String::new();
             str_resp.push_str(&format!(
@@ -286,6 +287,12 @@ fn pretty_print(resp: &Response) {
                 str_resp.push_str(&format!(
                     "PIX Pool: {pool}{}{exit_traffic}\n",
                     ipc::scientific_suffix(pool)
+                ));
+            }
+            if let Some(reserved) = pix_reserved.as_ref().filter(|r| !r.is_zero()) {
+                str_resp.push_str(&format!(
+                    "Safe reserved for PIX: {reserved}{}\n",
+                    ipc::scientific_suffix(reserved)
                 ));
             }
             if let Some(nc) = allocations.map(|a| a.node).filter(|c| !c.stake.is_zero()) {

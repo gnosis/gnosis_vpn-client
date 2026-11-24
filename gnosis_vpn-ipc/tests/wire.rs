@@ -199,6 +199,7 @@ fn balances_are_wei_strings() {
             refill_shortfall: None,
         }),
         pix_pool: Some(Balance::from_wei(42)),
+        pix_reserved: Some(Balance::from_wei(7)),
     }));
     let json = serde_json::to_value(&balances).expect("serialize");
     assert_eq!(json["type"], "available");
@@ -208,6 +209,15 @@ fn balances_are_wei_strings() {
     assert_eq!(json["funding_status"]["traffic"], json!({"type": "low"}));
     assert_eq!(json["funding_status"]["wxhopr_deficit"], "5");
     assert_eq!(json["pix_pool"], "42");
+    assert_eq!(json["pix_reserved"], "7");
+
+    let mut older = json;
+    older.as_object_mut().expect("object").remove("pix_reserved");
+    let BalanceResponse::Available(parsed) = serde_json::from_value(older).expect("an older service still parses")
+    else {
+        panic!("available");
+    };
+    assert_eq!(parsed.pix_reserved, None);
 }
 
 #[test]

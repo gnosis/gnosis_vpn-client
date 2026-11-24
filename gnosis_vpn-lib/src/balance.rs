@@ -508,6 +508,8 @@ pub struct Balances {
     pub channels_out: HashMap<Address, Balance<WxHOPR>>,
     /// None without a Curvy PIX pool, or when the pool could not be read.
     pub pix_pool_wxhopr: Option<Balance<WxHOPR>>,
+    /// Safe wxHOPR the next PIX pool top-up keeps from the channels; None without a Curvy PIX pool.
+    pub pix_reserved: Option<Balance<WxHOPR>>,
 }
 
 impl Display for Balances {
@@ -542,13 +544,14 @@ fn refills(available: Balance<WxHOPR>, top_up: Balance<WxHOPR>) -> Option<u64> {
 #[error("unknown channel top-up size")]
 pub struct UnknownChannelTopUp;
 
-/// What the Safe can still refill: funds can't move between the PIX pool and channels, so each needs its own.
+/// What the Safe can still refill: channels only get what the PIX pool's next top-up leaves them.
 /// The level, and the wxHOPR back to Good.
 fn refill_level(
     available: Balance<WxHOPR>,
+    pix_reserved: Balance<WxHOPR>,
     ideal: &BalanceRecommendation,
 ) -> Result<(FundingLevel, Balance<WxHOPR>), UnknownChannelTopUp> {
-    let channel = refills(available, ideal.channel_top_up).ok_or(UnknownChannelTopUp)?;
+    let channel = refills(available - pix_reserved, ideal.channel_top_up).ok_or(UnknownChannelTopUp)?;
     // `pix-test` has no PIX pool to refill.
     let pix = refills(available, ideal.pix_top_up);
     let level = if pix == Some(0) || channel == 0 {
@@ -558,7 +561,8 @@ fn refill_level(
     } else {
         FundingLevel::Good
     };
-    let good = (ideal.pix_top_up * (PIX_REFILLS_LOW + 1)).max(ideal.channel_top_up * (CHANNEL_TOP_UPS_LOW + 1));
+    let good =
+        (ideal.pix_top_up * (PIX_REFILLS_LOW + 1)).max(pix_reserved + ideal.channel_top_up * (CHANNEL_TOP_UPS_LOW + 1));
     Ok((level, good - available))
 }
 
@@ -568,10 +572,11 @@ pub fn to_funding_status(
     capacity_allocations: &CapacityAllocations,
     node_xdai: Balance<XDai>,
     safe_wxhopr: Balance<WxHOPR>,
+    pix_reserved: Balance<WxHOPR>,
 ) -> Result<FundingStatus, UnknownChannelTopUp> {
     // Unswept node wxHOPR lands in the Safe, so it refills too.
     let available = safe_wxhopr + capacity_allocations.node.stake;
-    let (traffic, refill_deficit) = refill_level(available, &ideal)?;
+    let (traffic, refill_deficit) = refill_level(available, pix_reserved, &ideal)?;
     // Funds paying for exit traffic can't pay for relays, so the deficit follows the relay funds alone.
     let relays = SnapshotTotals::relays(capacity_allocations);
 
@@ -735,6 +740,7 @@ mod tests {
             &CapacityAllocations::default(),
             Balance::<XDai>::zero(),
             Balance::<WxHOPR>::zero(),
+            Balance::<WxHOPR>::zero(),
         )
         .unwrap();
         assert_eq!(status.traffic, FundingLevel::Empty);
@@ -758,8 +764,36 @@ mod tests {
             &allocs(None, capacity(node * W, 0), Capacity::default()),
             Balance::<XDai>::zero(),
             Balance::<WxHOPR>::from(safe * W),
+            Balance::<WxHOPR>::zero(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn the_pix_reserve_leaves_channels_only_the_rest_of_the_safe() {
+        let status = |reserved: u64| {
+            to_funding_status(
+                ideal_refills(35, 15),
+                &allocs(None, Capacity::default(), Capacity::default()),
+                Balance::<XDai>::zero(),
+                Balance::<WxHOPR>::from(100 * W),
+                Balance::<WxHOPR>::from(reserved * W),
+            )
+            .unwrap()
+        };
+        assert_eq!(status(0).traffic, FundingLevel::Good);
+        assert_eq!(
+            status(35).traffic,
+            FundingLevel::Good,
+            "65 still covers 4 channel top-ups"
+        );
+        assert_eq!(status(60).traffic, FundingLevel::Low, "40 covers only 2");
+        assert_eq!(status(90).traffic, FundingLevel::Empty, "10 covers none");
+        assert_eq!(
+            status(90).wxhopr_deficit,
+            Some(Balance::<WxHOPR>::from(35 * W)),
+            "back to Good is the reserve plus 3 channel top-ups"
+        );
     }
 
     #[test]
@@ -773,6 +807,7 @@ mod tests {
             &allocs(None, Capacity::default(), Capacity::default()),
             Balance::<XDai>::zero(),
             Balance::<WxHOPR>::from(1_000 * W),
+            Balance::<WxHOPR>::zero(),
         );
         assert!(status.is_err());
     }
@@ -828,6 +863,7 @@ mod tests {
             &allocations,
             Balance::<XDai>::zero(),
             Balance::<WxHOPR>::from(10 * W),
+            Balance::<WxHOPR>::zero(),
         )
         .unwrap();
         assert_eq!(status.traffic, FundingLevel::Empty);
@@ -839,6 +875,7 @@ mod tests {
             ideal(0, 0),
             &CapacityAllocations::default(),
             Balance::<XDai>::from(1_000_000_000_000_000_u64), // 0.001 xDAI < 0.0015 threshold
+            Balance::<WxHOPR>::zero(),
             Balance::<WxHOPR>::zero(),
         )
         .unwrap();
@@ -852,6 +889,7 @@ mod tests {
             &CapacityAllocations::default(),
             Balance::<XDai>::from(2_000_000_000_000_000_u64), // 0.002 xDAI
             Balance::<WxHOPR>::zero(),
+            Balance::<WxHOPR>::zero(),
         )
         .unwrap();
         assert_eq!(status.gas, FundingLevel::Low);
@@ -863,6 +901,7 @@ mod tests {
             ideal(0, 0),
             &CapacityAllocations::default(),
             Balance::<XDai>::from(3_500_000_000_000_000_u64), // 0.0035 xDAI, at the boundary
+            Balance::<WxHOPR>::zero(),
             Balance::<WxHOPR>::zero(),
         )
         .unwrap();
@@ -909,6 +948,7 @@ mod tests {
             &allocations,
             Balance::<XDai>::zero(),
             Balance::<WxHOPR>::zero(),
+            Balance::<WxHOPR>::zero(),
         )
         .unwrap();
         assert_eq!(status.traffic, FundingLevel::Good);
@@ -923,6 +963,7 @@ mod tests {
             &allocations,
             Balance::<XDai>::zero(),
             Balance::<WxHOPR>::zero(),
+            Balance::<WxHOPR>::zero(),
         )
         .unwrap();
         assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(70u64)));
@@ -934,6 +975,7 @@ mod tests {
             ideal(0, 100),
             &CapacityAllocations::default(),
             Balance::<XDai>::from(3_500_000_000_000_000_u64),
+            Balance::<WxHOPR>::zero(),
             Balance::<WxHOPR>::zero(),
         )
         .unwrap();
@@ -947,6 +989,7 @@ mod tests {
             ideal(0, 1_000_000_000_000_000_000_u64), // 1 xDAI ideal
             &CapacityAllocations::default(),
             Balance::<XDai>::from(1_000_000_000_000_000_u64), // 0.001 xDAI on hand
+            Balance::<WxHOPR>::zero(),
             Balance::<WxHOPR>::zero(),
         )
         .unwrap();
@@ -964,6 +1007,7 @@ mod tests {
             ideal(0, 0),
             &CapacityAllocations::default(),
             node_xdai,
+            Balance::<WxHOPR>::zero(),
             Balance::<WxHOPR>::zero(),
         )
         .unwrap();
@@ -987,6 +1031,7 @@ mod tests {
             &allocations,
             Balance::<XDai>::zero(),
             Balance::<WxHOPR>::from(100u64),
+            Balance::<WxHOPR>::zero(),
         )
         .unwrap();
         assert_eq!(status.traffic, FundingLevel::Good);
@@ -1002,6 +1047,7 @@ mod tests {
             &allocations,
             Balance::<XDai>::from(3_500_000_000_000_000_u64), // 0.0035 xDAI — at the Good threshold
             Balance::<WxHOPR>::from(100u64),
+            Balance::<WxHOPR>::zero(),
         )
         .unwrap();
         assert_eq!(status.traffic, FundingLevel::Good);
@@ -1314,6 +1360,7 @@ mod tests {
             &with_channel(Some(30), None, 0),
             Balance::<XDai>::zero(),
             Balance::<WxHOPR>::zero(),
+            Balance::<WxHOPR>::zero(),
         )
         .unwrap();
         let mut closing = with_channel(Some(30), None, 0);
@@ -1322,6 +1369,7 @@ mod tests {
             ideal(100, 0),
             &closing,
             Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
             Balance::<WxHOPR>::zero(),
         )
         .unwrap();
@@ -1397,6 +1445,7 @@ mod tests {
             &allocations,
             Balance::<XDai>::zero(),
             Balance::<WxHOPR>::from(7 * WXHOPR),
+            Balance::<WxHOPR>::zero(),
         )
         .unwrap();
         assert_eq!(status.traffic, FundingLevel::Good);
@@ -1412,6 +1461,7 @@ mod tests {
             &allocations,
             Balance::<XDai>::zero(),
             Balance::<WxHOPR>::from(2 * WXHOPR),
+            Balance::<WxHOPR>::zero(),
         )
         .unwrap();
         assert_eq!(status.traffic, FundingLevel::Good);
@@ -1431,6 +1481,7 @@ mod tests {
             &allocations,
             Balance::<XDai>::zero(),
             Balance::<WxHOPR>::from(7 * WXHOPR),
+            Balance::<WxHOPR>::zero(),
         )
         .unwrap();
         assert_eq!(status.refill_shortfall, Some(Balance::<WxHOPR>::from(4 * WXHOPR)));
@@ -1442,6 +1493,7 @@ mod tests {
             ideal_with_headroom(1),
             &CapacityAllocations::default(),
             Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::zero(),
             Balance::<WxHOPR>::zero(),
         )
         .unwrap();

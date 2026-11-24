@@ -374,6 +374,7 @@ impl Hopr {
             safe_wxhopr: node_balances.safe_wxhopr,
             channels_out,
             pix_pool_wxhopr: None,
+            pix_reserved: None,
         })
     }
 

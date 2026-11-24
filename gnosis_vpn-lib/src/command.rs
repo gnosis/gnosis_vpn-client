@@ -186,6 +186,7 @@ pub fn balances(
         ideal_balance: ideal_balance.as_ref().map(Into::into),
         funding_status: funding_status.as_ref().map(Into::into),
         pix_pool: balances.pix_pool_wxhopr.map(wire::wxhopr),
+        pix_reserved: balances.pix_reserved.map(wire::wxhopr),
     }
 }
 

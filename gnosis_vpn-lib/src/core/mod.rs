@@ -1865,11 +1865,15 @@ impl Core {
             allocs = allocs.map(|a| self.capacity_reconciler.with_pix_pool(&a, funds));
         }
         let funding_status = match (&self.ideal_balance_recommendation, &allocs) {
-            (Some(ideal), Some(allocs)) => {
-                balance::to_funding_status(*ideal, allocs, balances.node_xdai, balances.safe_wxhopr)
-                    .inspect_err(|err| tracing::error!(%err, "no funding status"))
-                    .ok()
-            }
+            (Some(ideal), Some(allocs)) => balance::to_funding_status(
+                *ideal,
+                allocs,
+                balances.node_xdai,
+                balances.safe_wxhopr,
+                balances.pix_reserved.unwrap_or_default(),
+            )
+            .inspect_err(|err| tracing::error!(%err, "no funding status"))
+            .ok(),
             _ => None,
         };
         ipc::BalanceResponse::Available(Box::new(command::balances(
@@ -2371,11 +2375,15 @@ impl Core {
                     &self.capacity_allocations,
                     &self.balances,
                 ) {
-                    (Some(ideal), Some(allocs), Some(bals)) => {
-                        balance::to_funding_status(*ideal, allocs, bals.node_xdai, bals.safe_wxhopr)
-                            .inspect_err(|err| tracing::error!(%err, "no funding status"))
-                            .ok()
-                    }
+                    (Some(ideal), Some(allocs), Some(bals)) => balance::to_funding_status(
+                        *ideal,
+                        allocs,
+                        bals.node_xdai,
+                        bals.safe_wxhopr,
+                        bals.pix_reserved.unwrap_or_default(),
+                    )
+                    .inspect_err(|err| tracing::error!(%err, "no funding status"))
+                    .ok(),
                     _ => None,
                 };
                 command::running(

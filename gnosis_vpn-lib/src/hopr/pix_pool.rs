@@ -4,12 +4,17 @@ use super::HoprError;
 
 /// The Curvy PIX pool that PIX deposits are paid from.
 #[derive(Clone)]
-pub struct PixPool(
-    #[cfg(feature = "pix-curvy")] edgli::PixFloatHandle,
-    #[cfg(feature = "pix-curvy")] edgli::PixDepositHold,
+pub struct PixPool {
+    #[cfg(feature = "pix-curvy")]
+    float: edgli::PixFloatHandle,
+    #[cfg(feature = "pix-curvy")]
+    hold: edgli::PixDepositHold,
+    #[cfg(feature = "pix-curvy")]
+    reserve: edgli::strategy::SafeReserve,
     // `pix-test` pays straight from the Safe, so it never has a pool to construct.
-    #[cfg(not(feature = "pix-curvy"))] std::convert::Infallible,
-);
+    #[cfg(not(feature = "pix-curvy"))]
+    never: std::convert::Infallible,
+}
 
 impl PixPool {
     pub fn of(reactor: &edgli::ReactorHandle) -> Option<Self> {
@@ -18,7 +23,11 @@ impl PixPool {
             .pix_float
             .clone()
             .zip(reactor.pix_deposits.clone())
-            .map(|(float, hold)| Self(float, hold));
+            .map(|(float, hold)| Self {
+                float,
+                hold,
+                reserve: reactor.safe_reserve.clone(),
+            });
         #[cfg(not(feature = "pix-curvy"))]
         {
             let _ = reactor;
@@ -30,35 +39,47 @@ impl PixPool {
     pub fn hold_deposits(&self, held: bool) {
         #[cfg(feature = "pix-curvy")]
         if held {
-            self.1.hold();
+            self.hold.hold();
         } else {
-            self.1.release();
+            self.hold.release();
         }
         #[cfg(not(feature = "pix-curvy"))]
         {
             let _ = held;
-            match self.0 {}
+            match self.never {}
         }
     }
 
     pub async fn balance(&self) -> Result<Balance<WxHOPR>, HoprError> {
         #[cfg(feature = "pix-curvy")]
         return self
-            .0
+            .float
             .available_balance()
             .await
             .map_err(|e| HoprError::PixPool(e.to_string()));
         #[cfg(not(feature = "pix-curvy"))]
-        match self.0 {}
+        match self.never {}
     }
 
     pub async fn fund(&self, amount: Balance<WxHOPR>) -> Result<(), HoprError> {
         #[cfg(feature = "pix-curvy")]
-        return self.0.fund(amount).await.map_err(|e| HoprError::PixPool(e.to_string()));
+        return self
+            .float
+            .fund(amount)
+            .await
+            .map_err(|e| HoprError::PixPool(e.to_string()));
         #[cfg(not(feature = "pix-curvy"))]
         {
             let _ = amount;
-            match self.0 {}
+            match self.never {}
         }
+    }
+
+    /// Safe wxHOPR the next pool top-up keeps from the channels.
+    pub fn reserved(&self) -> Balance<WxHOPR> {
+        #[cfg(feature = "pix-curvy")]
+        return self.reserve.get().reserved;
+        #[cfg(not(feature = "pix-curvy"))]
+        match self.never {}
     }
 }
