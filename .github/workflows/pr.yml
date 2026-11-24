@@ -7,6 +7,7 @@ on:
       - reopened
       - ready_for_review
       - labeled
+  merge_group:
 concurrency:
   group: ${{ github.ref }}-pr
   cancel-in-progress: true
@@ -21,13 +22,12 @@ jobs:
   build-x86_64-linux:
     name: Binary x86_64-linux
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@f15435652c572ad5688af679f0e2b153c98c9773 # build-binaries-v4.0.2
-    if: ${{ github.event.pull_request.head.repo.fork == false }}
     permissions:
       contents: read
       pull-requests: read
       id-token: write
     with:
-      repo_sha: ${{ github.event.pull_request.head.sha }}
+      repo_sha: ${{ github.event.pull_request.head.sha || github.sha }}
       version_type: commit
       architecture: x86_64-linux
       cachix_cache_name: gnosis-vpn-client
@@ -61,13 +61,12 @@ jobs:
             build_debug_command: nix build -L .#binary-gnosis_vpn-aarch64-darwin-dev
             required_label: "binary:aarch64-darwin"
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@f15435652c572ad5688af679f0e2b153c98c9773 # build-binaries-v4.0.2
-    if: ${{ github.event.pull_request.head.repo.fork == false }}
     permissions:
       contents: read
       pull-requests: read
       id-token: write
     with:
-      repo_sha: ${{ github.event.pull_request.head.sha }}
+      repo_sha: ${{ github.event.pull_request.head.sha || github.sha }}
       version_type: commit
       architecture: ${{ matrix.architecture }}
       cachix_cache_name: gnosis-vpn-client
@@ -87,12 +86,11 @@ jobs:
       apple_certificate_password: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_PASSWORD }}
   checks:
     name: Checks
-    if: ${{ github.event.pull_request.head.repo.fork == false }}
     permissions:
       contents: read
     uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@061b4579c870b0fdc008f5ff07a3a500e4fede50 # workflow-checks-v2.3.1
     with:
-      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      source_branch: ${{ github.event.pull_request.head.sha || github.sha }}
       cachix_cache_name: gnosis-vpn-client
       conflict_markers: true
       # No `.#check` app or `.#ci` devshell here; `nix flake check` already covers clippy/docs/test/licenses.
@@ -109,21 +107,19 @@ jobs:
     # sudo (for useradd, chown, etc.). Depot containers restrict these syscalls even for root.
     # Standard GitHub-hosted runners support passwordless sudo for all commands out of the box.
     runs-on: ubuntu-26.04
-    if: ${{ github.event.pull_request.head.repo.fork == false }}
+    # Runs PR code with a funded node identity: only in the merge queue, after review
+    if: github.event_name == 'merge_group'
     needs:
       - build-x86_64-linux
     permissions:
       contents: read
     steps:
       - name: Checkout repository
-        # Pin to the PR head commit: the default pull_request checkout uses the
-        # auto-generated merge ref, which gives `self.rev` a different value than
-        # build-x86_64-linux (which checks out the head branch directly). That
-        # mismatch changes the derivation hash, causing a cachix miss and a full
-        # rebuild here instead of reusing the binary build-x86_64-linux already pushed.
+        # Same commit as build-x86_64-linux, so `self.rev` matches and the cachix-pushed binary is reused
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - name: Setup Nix
         uses: hoprnet/hopr-workflows/actions/setup-nix@ade4bbd75f7204255c61d19c23f67d3da221e7d2 # setup-nix-v2.0.2
         with:
@@ -142,16 +138,16 @@ jobs:
       - name: Run the system test
         env:
           # Both secret names must exist: a missing one yields '' and falls through to the other network
-          SYSTEM_TEST_NETWORK: "${{ startsWith(github.base_ref, 'release/') && 'jura-dev' || 'piz-palu-dev' }}"
-          SYSTEM_TEST_HOPRD_ID: "${{ startsWith(github.base_ref, 'release/') && secrets.SYSTEM_TEST_HOPRD_ID_JURA_DEV || secrets.SYSTEM_TEST_HOPRD_ID_PIZ_PALU_DEV }}"
-          SYSTEM_TEST_HOPRD_ID_PASSWORD: "${{ startsWith(github.base_ref, 'release/') && secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD_JURA_DEV || secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD_PIZ_PALU_DEV }}"
+          SYSTEM_TEST_NETWORK: "${{ startsWith(github.event.merge_group.base_ref, 'refs/heads/release/') && 'jura-dev' || 'piz-palu-dev' }}"
+          SYSTEM_TEST_HOPRD_ID: "${{ startsWith(github.event.merge_group.base_ref, 'refs/heads/release/') && secrets.SYSTEM_TEST_HOPRD_ID_JURA_DEV || secrets.SYSTEM_TEST_HOPRD_ID_PIZ_PALU_DEV }}"
+          SYSTEM_TEST_HOPRD_ID_PASSWORD: "${{ startsWith(github.event.merge_group.base_ref, 'refs/heads/release/') && secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD_JURA_DEV || secrets.SYSTEM_TEST_HOPRD_ID_PASSWORD_PIZ_PALU_DEV }}"
           SYSTEM_TEST_WORKER_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-worker
           SYSTEM_TEST_ROOT_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-root
           SYSTEM_TEST_CTL_BINARY: ${{ github.workspace }}/result-release/bin/gnosis_vpn-ctl
         run: just system-tests ${{ github.workspace }}/result-system-tests/bin/gnosis_vpn-system_tests
   ci-ok:
     name: CI OK
-    # Single required status check: stable across matrix expansion, label gating and fork guards.
+    # Single required status check: stable across matrix expansion, label gating and the queue-only system test.
     if: always() # a skipped job counts as passing, so never let a failed dependency skip this one
     needs: [build-x86_64-linux, build-arm-binaries, checks, system-test]
     runs-on: depot-ubuntu-22.04-4
