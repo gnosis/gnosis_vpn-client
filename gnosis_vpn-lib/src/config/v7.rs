@@ -313,11 +313,13 @@ pub(super) fn apply_session_surb(
         None => def,
         Some(c) => {
             let enabled = c.enabled.unwrap_or(def.enabled);
+            // A tier that never maxes out by default (bridge) stays at 1 SURB per request.
+            let max_out_by_default = enabled && def.always_max_out_surbs;
             options::SessionSurbOptions {
                 enabled,
                 buffer: c.buffer.unwrap_or(def.buffer),
                 max_surb_upstream: c.max_surb_upstream.unwrap_or(def.max_surb_upstream),
-                always_max_out_surbs: c.always_max_out_surbs.unwrap_or(enabled),
+                always_max_out_surbs: c.always_max_out_surbs.unwrap_or(max_out_by_default),
             }
         }
     }
@@ -2145,6 +2147,29 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
             .expect("a valid SURB configuration");
         assert!(surb.management.is_some());
         assert_eq!(surb.max_surbs_per_data_packet, 1);
+    }
+
+    #[test]
+    fn a_bridge_surb_section_without_max_out_keeps_one_surb_per_request() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.surb_balancing.bridge]
+buffer = "32 KB"
+
+[connection.surb_balancing.ping]
+buffer = "2 MB"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let surb = &result.connection.surb_balancing;
+        assert!(surb.bridge.enabled);
+        assert!(!surb.bridge.always_max_out_surbs);
+        assert!(surb.ping.always_max_out_surbs, "ping still maxes out with balancing");
     }
 
     #[test]

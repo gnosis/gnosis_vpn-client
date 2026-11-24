@@ -138,7 +138,9 @@ path    = { hops = 1 }
 # measurements are discarded instead of poisoning the latency estimate (humantime).
 # max_plausible_loopback_rtt = "30s"
 
-# determine specific connection parameters for the bridge (probe) connection
+# determine specific connection parameters for the long-lived probe connection
+# quick probes and a disconnect without a probe session always use [ "segmentation", "no_rate_control" ]
+# options: "segmentation", "retransmission", "retransmission_ack_only", "no_delay", "no_rate_control"
 # [connection.bridge]
 # capabilities = [ "segmentation", "retransmission_ack_only", "no_rate_control" ]
 # target = "172.30.0.1:8000"
@@ -169,15 +171,15 @@ path    = { hops = 1 }
 # tunnel_ping_max_rtt = "3s"
 
 # adjust SURB balancing per session type
-# each section enables balancing for that session; omit to use the defaults below
-# all three default to enabled
-# the probe session is the bridge session, so it follows the bridge settings
+# each section overrides the defaults below for that session; omitted keys keep their default
+# all default to enabled; ping and main are the start and end settings of the one WireGuard session
+# bridge applies to the long-lived probe session only; quick probes and a disconnect without a probe session run unbalanced
 #
 # [connection.surb_balancing.bridge]
 # enabled = true
 # buffer = "16 KB"
 # max_surb_upstream = "128 Kb/s"
-# always_max_out_surbs = false  # bridge default is false - send only 1 SURB per request even if more would fit
+# always_max_out_surbs = false  # send only 1 SURB per request even if more would fit
 #
 # [connection.surb_balancing.ping]
 # enabled = true
