@@ -2,6 +2,7 @@
 use backon::{BackoffBuilder, ExponentialBuilder};
 use edgli::FlowControlConfig;
 use edgli::hopr_lib::HoprSessionClientConfig;
+use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionCapability};
 use rand::prelude::*;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time;
@@ -11,7 +12,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::connection::destination::{Destination, ExitKey};
-use crate::connection::options::{HealthCheckIntervals, Options, SurbParams, surb_config_for};
+use crate::connection::options::{
+    HealthCheckIntervals, Options, SessionPixOptions, SessionSurbOptions, SurbParams, surb_config_for,
+};
 use crate::core::runner::Results;
 use crate::gvpn_client;
 use crate::hopr::types::SessionClientMetadata;
@@ -55,6 +58,20 @@ pub(crate) fn jitter(base: Duration) -> Duration {
 pub(crate) fn select_api_version(offered: &[ApiVersion]) -> Option<ApiVersion> {
     const SUPPORTED: &[ApiVersion] = &[gvpn_client::API];
     SUPPORTED.iter().copied().filter(|v| offered.contains(v)).max()
+}
+
+/// No retransmission: without balancing, an ACK would spend the one SURB the reply needs.
+fn quick_probe_capabilities() -> SessionCapabilities {
+    SessionCapability::Segmentation | SessionCapability::NoRateControl
+}
+
+/// hopr-lib fixes capabilities, SURB balancing and PIX at open, so only an identically opened session can be adopted.
+pub(crate) fn quick_session_matches_bridge(
+    bridge_caps: SessionCapabilities,
+    bridge: &SessionSurbOptions,
+    pix: &SessionPixOptions,
+) -> bool {
+    bridge_caps == quick_probe_capabilities() && !bridge.enabled && !bridge.always_max_out_surbs && !pix.enabled
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -381,6 +398,7 @@ where
             hopr.clone(),
             destination,
             options,
+            options.sessions.bridge.capabilities,
             surb.clone(),
             options.pix.bridge.enabled,
         )
@@ -410,7 +428,7 @@ pub(crate) struct QuickProbeOutcome {
     pub(crate) status_rtt: Duration,
 }
 
-/// Bounded version and health check over a bridge-configured session; the session is handed back only when a probe could adopt it.
+/// Bounded version and health check over an unbalanced session; the session is handed back only when a probe could adopt it.
 pub(crate) async fn quick_probe(
     hopr: Arc<Hopr>,
     destination: Destination,
@@ -431,19 +449,22 @@ async fn run_quick_probe(
     destination: &Destination,
     options: &Options,
 ) -> (Result<QuickProbeOutcome, String>, Option<ProbeSession>) {
-    // Bridge SURB settings so a probe can adopt the session; no PIX, since most quick sessions live for two requests.
-    let surb = match surb_config_for(&options.surb_balancing.bridge) {
-        Ok(surb) => surb,
-        Err(err) => return (Err(format!("invalid bridge surb config: {err}")), None),
+    // No balancing and no PIX: the session lives for two requests unless a probe adopts it.
+    let surb = SurbParams {
+        management: None,
+        max_surbs_per_data_packet: 1,
     };
     tracing::debug!(%destination, "opening quick probe session");
-    let session = match ProbeSession::open(hopr, destination, options, surb, false).await {
+    let session = match ProbeSession::open(hopr, destination, options, quick_probe_capabilities(), surb, false).await {
         Ok(session) => session,
         Err(err) => return (Err(format!("opening session failed: {err}")), None),
     };
     let outcome = quick_checks(session.meta.bound_host).await;
-    // hopr-lib fixes PIX at open, so a PIX bridge cannot take over this session.
-    let adoptable = !options.pix.bridge.enabled;
+    let adoptable = quick_session_matches_bridge(
+        options.sessions.bridge.capabilities,
+        &options.surb_balancing.bridge,
+        &options.pix.bridge,
+    );
     if outcome.is_ok() && adoptable {
         return (outcome, Some(session));
     }
@@ -599,12 +620,13 @@ impl ProbeSession {
     async fn open(
         hopr: Arc<Hopr>,
         destination: &Destination,
-        options: &Options,
+        _options: &Options,
+        capabilities: SessionCapabilities,
         surb: SurbParams,
         pix_enabled: bool,
     ) -> Result<Self, HoprError> {
         let cfg = HoprSessionClientConfig {
-            capabilities: options.sessions.bridge.capabilities,
+            capabilities,
             forward_path: destination.routing,
             return_path: destination.routing,
             max_surbs_per_data_packet: surb.max_surbs_per_data_packet,
@@ -885,6 +907,31 @@ mod tests {
     fn select_api_version_returns_none_when_no_match() {
         assert_eq!(select_api_version(&[]), None);
         assert_eq!(select_api_version(&[ApiVersion::new(2), ApiVersion::new(99)]), None);
+    }
+
+    #[test]
+    fn quick_session_matches_only_an_unbalanced_bridge_without_retransmission() {
+        use crate::connection::options::{PixOptions, SurbBalancing};
+
+        let caps = quick_probe_capabilities();
+        let pix = PixOptions::default().bridge;
+        let mut unbalanced = SurbBalancing::default().bridge;
+        unbalanced.enabled = false;
+        unbalanced.always_max_out_surbs = false;
+        assert!(quick_session_matches_bridge(caps, &unbalanced, &pix));
+
+        let default_bridge = SurbBalancing::default().bridge;
+        assert!(!quick_session_matches_bridge(caps, &default_bridge, &pix));
+
+        let reliable = caps | SessionCapability::RetransmissionAck;
+        assert!(!quick_session_matches_bridge(reliable, &unbalanced, &pix));
+
+        let mut maxed_out = unbalanced.clone();
+        maxed_out.always_max_out_surbs = true;
+        assert!(!quick_session_matches_bridge(caps, &maxed_out, &pix));
+
+        let pix_on = SessionPixOptions { enabled: true };
+        assert!(!quick_session_matches_bridge(caps, &unbalanced, &pix_on));
     }
 
     #[test]
