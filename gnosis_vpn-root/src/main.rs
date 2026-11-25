@@ -77,6 +77,8 @@ struct DaemonState {
     config: Config,
     /// The mode the app asked for; not persisted, so a restarted service runs normal mode.
     mode: ipc::Mode,
+    /// The mode the last worker started in; a target it accepted only exists in that mode.
+    worker_mode: Option<ipc::Mode>,
     config_path: PathBuf,
     reload_handle: Option<LogReloadHandle>,
     shutdown_ongoing: Shutdown,
@@ -560,6 +562,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         reload_handle,
         shutdown_ongoing: Shutdown::None,
         target_dest_id: None,
+        worker_mode: None,
         probing: false,
         worker_child: None,
         worker_exit_channel: mpsc::channel(1),
@@ -728,6 +731,11 @@ fn gate(owner_uid: Option<u32>, request: &Request, peer_uid: u32) -> Option<Serv
 }
 
 /// Bootstrap mode needs the config's node set; leaving it never does.
+/// A target only exists among the exits of the mode its worker ran in.
+fn carried_target(target: Option<String>, worker_mode: Option<ipc::Mode>, next_mode: ipc::Mode) -> Option<String> {
+    target.filter(|_| worker_mode.is_none_or(|mode| mode == next_mode))
+}
+
 fn mode_change(current: ipc::Mode, requested: ipc::Mode, bootstrap_available: bool) -> ipc::SetModeResponse {
     if requested == ipc::Mode::Bootstrap && !bootstrap_available {
         return ipc::SetModeResponse::Unavailable;
@@ -1605,6 +1613,9 @@ impl DaemonState {
         // Armed means DNS is blocked, so the new worker cannot look Blokli up itself.
         let pinned_blokli_ip = self.blokli_ip.filter(|_| self.killswitch_armed);
         let spawn_params = self.cli.spawn_params(pinned_blokli_ip, owner.dirs.clone());
+        // A reply the old worker sent during a mode switch may have set its own mode's target again.
+        self.target_dest_id = carried_target(self.target_dest_id.take(), self.worker_mode, self.mode);
+        self.worker_mode = Some(self.mode);
         let delivered = send_to_worker(
             RootToWorker::StartupParams {
                 config: Box::new(self.effective_config()),
@@ -1915,6 +1926,21 @@ mod tests {
         assert_eq!(Unavailable, mode_change(Normal, Bootstrap, false));
         // Leaving bootstrap mode stays possible after a reload removed the section.
         assert_eq!(Switching, mode_change(Bootstrap, Normal, false));
+    }
+
+    #[test]
+    fn a_respawned_worker_keeps_the_target_only_in_the_same_mode() {
+        use ipc::Mode::{Bootstrap, Normal};
+        let target = || Some("exit-a".to_string());
+
+        // A config reload restarts the worker in the same mode and keeps the connection.
+        assert_eq!(target(), carried_target(target(), Some(Normal), Normal));
+        assert_eq!(target(), carried_target(target(), Some(Bootstrap), Bootstrap));
+        // A target the old worker accepted is unknown to a worker in the other mode.
+        assert_eq!(None, carried_target(target(), Some(Bootstrap), Normal));
+        assert_eq!(None, carried_target(target(), Some(Normal), Bootstrap));
+        // Without a previous worker there is nothing to compare against.
+        assert_eq!(target(), carried_target(target(), None, Normal));
     }
 
     const ALICE: u32 = 1000;
