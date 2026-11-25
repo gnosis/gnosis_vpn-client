@@ -386,8 +386,8 @@ fn format_funding_status(status: &ipc::FundingStatus) -> String {
         .map(|d| format!(" (top up {d} recommended)"))
         .unwrap_or_default();
     format!(
-        "Traffic: {}{wxhopr_note}\nGas: {}{xdai_deficit}\n",
-        status.traffic, status.gas
+        "Traffic: {}{wxhopr_note}\nRefills: {}\nGas: {}{xdai_deficit}\n",
+        status.traffic, status.refills, status.gas
     )
 }
 
@@ -804,6 +804,7 @@ mod tests {
     fn good() -> FundingStatus {
         FundingStatus {
             traffic: FundingLevel::Good,
+            refills: FundingLevel::Good,
             gas: FundingLevel::Good,
             wxhopr_deficit: None,
             xdai_deficit: None,

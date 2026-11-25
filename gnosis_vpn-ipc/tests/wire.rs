@@ -46,7 +46,7 @@ fn a_request_travels_in_a_versioned_envelope() {
     };
     round_trips(
         &envelope,
-        json!({"protocol": 5, "request": {"type": "connect", "destination": "berlin"}}),
+        json!({"protocol": 6, "request": {"type": "connect", "destination": "berlin"}}),
     );
 }
 
@@ -193,6 +193,7 @@ fn balances_are_wei_strings() {
         ideal_balance: None,
         funding_status: Some(FundingStatus {
             traffic: FundingLevel::Low,
+            refills: FundingLevel::Empty,
             gas: FundingLevel::Good,
             wxhopr_deficit: Some(Balance::from_wei(5)),
             xdai_deficit: None,
@@ -206,6 +207,7 @@ fn balances_are_wei_strings() {
     assert_eq!(json["safe"], "0");
     assert_eq!(json["channels_out"][0]["balance"], "750000000");
     assert_eq!(json["funding_status"]["traffic"], json!({"type": "low"}));
+    assert_eq!(json["funding_status"]["refills"], json!({"type": "empty"}));
     assert_eq!(json["funding_status"]["wxhopr_deficit"], "5");
     assert_eq!(json["pix_pool"], "42");
 }

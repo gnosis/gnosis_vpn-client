@@ -575,6 +575,7 @@ mod tests {
             }),
             funding_status: Some(FundingStatus {
                 traffic: FundingLevel::Good,
+                refills: FundingLevel::Good,
                 gas: FundingLevel::Good,
                 wxhopr_deficit: None,
                 xdai_deficit: None,
