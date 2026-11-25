@@ -212,6 +212,7 @@ pub struct SurbBalancing {
     pub ping: SessionSurbOptions,
     pub main: SessionSurbOptions,
     pub bridge: SessionSurbOptions,
+    pub relayer: SessionSurbOptions,
     pub ramp: SurbRampOptions,
 }
 
@@ -352,6 +353,13 @@ impl Default for SurbBalancing {
             bridge: SessionSurbOptions {
                 enabled: true,
                 buffer: ByteSize::kb(16),
+                max_surb_upstream: Bandwidth::from_kbps(128),
+                always_max_out_surbs: false,
+            },
+            // The relayer's largest replies (/networks ~31 KB, /protocol ~8 KB) can arrive together, plus TLS.
+            relayer: SessionSurbOptions {
+                enabled: true,
+                buffer: ByteSize::kb(48),
                 max_surb_upstream: Bandwidth::from_kbps(128),
                 always_max_out_surbs: false,
             },

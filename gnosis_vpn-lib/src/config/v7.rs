@@ -147,6 +147,7 @@ pub(super) struct SurbBalancingConfig {
     pub(super) ping: Option<SessionSurbConfig>,
     pub(super) main: Option<SessionSurbConfig>,
     pub(super) bridge: Option<SessionSurbConfig>,
+    pub(super) relayer: Option<SessionSurbConfig>,
     pub(super) ramp: Option<SurbRampConfig>,
 }
 
@@ -381,6 +382,7 @@ impl From<Option<Connection>> for options::Options {
             ping: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.ping.clone()), def.ping),
             main: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.main.clone()), def.main),
             bridge: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.bridge.clone()), def.bridge),
+            relayer: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.relayer.clone()), def.relayer),
             ramp: options::SurbRampOptions {
                 interval: surb_cfg
                     .as_ref()
@@ -790,7 +792,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "surb_balancing" {
                         if let Some(surb) = v.as_table() {
                             for (k2, v2) in surb.iter() {
-                                if k2 == "ping" || k2 == "main" || k2 == "bridge" {
+                                if k2 == "ping" || k2 == "main" || k2 == "bridge" || k2 == "relayer" {
                                     if let Some(session) = v2.as_table() {
                                         for (k3, _) in session.iter() {
                                             if k3 == "enabled"
@@ -2170,6 +2172,44 @@ buffer = "2 MB"
         assert!(surb.bridge.enabled);
         assert!(!surb.bridge.always_max_out_surbs);
         assert!(surb.ping.always_max_out_surbs, "ping still maxes out with balancing");
+    }
+
+    #[test]
+    fn relayer_tier_defaults_to_a_small_buffer_with_one_surb_per_request() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let surb = crate::connection::options::surb_config_for(&result.connection.surb_balancing.relayer)
+            .expect("a valid SURB configuration");
+        let management = surb.management.expect("balanced");
+        assert_eq!(management.target_surb_buffer_size, 33);
+        assert_eq!(surb.max_surbs_per_data_packet, 1);
+    }
+
+    #[test]
+    fn relayer_tier_is_configurable() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.surb_balancing.relayer]
+buffer = "64 KB"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(
+            result.connection.surb_balancing.relayer.buffer,
+            bytesize::ByteSize::kb(64)
+        );
     }
 
     #[test]
