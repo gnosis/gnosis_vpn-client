@@ -86,6 +86,8 @@ jobs:
       apple_certificate_password: ${{ secrets.APPLE_CERTIFICATE_DEVELOPER_PASSWORD }}
   checks:
     name: Checks
+    # Already ran on the PR; the queue only exists for the secret-using system test
+    if: github.event_name != 'merge_group'
     permissions:
       contents: read
     uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@061b4579c870b0fdc008f5ff07a3a500e4fede50 # workflow-checks-v2.3.1
