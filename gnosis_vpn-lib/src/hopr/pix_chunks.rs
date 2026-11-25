@@ -18,8 +18,8 @@ use crate::wire;
 /// Only the live main session is ever looked up, which keeps it from being pushed out.
 const MAX_SESSIONS: usize = 16;
 
-/// Status is polled every few seconds and a scrape serializes the whole metrics registry.
-const TELEMETRY_MAX_AGE: Duration = Duration::from_secs(5);
+/// Under the app's 1 s status poll while connected, so each poll gets a fresh scrape.
+const TELEMETRY_MAX_AGE: Duration = Duration::from_millis(900);
 
 const SURBS_PRODUCED: &str = "hopr_session_surb_produced_total";
 const BYTES_IN: &str = "hopr_session_transport_bytes_in_total";
