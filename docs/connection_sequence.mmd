@@ -2,15 +2,46 @@
 title: Connection Sequence
 ---
 sequenceDiagram
-    UI->>Root: Initiate Connect
-    Root->>Worker: Initiate Connect
-    Worker->>Root: Ack Initiate Connect
-    Root->>UI: Ack Connect
-    Worker-->>Hoprd: Open TCP session
-    Worker-->>Hoprd: Register WG Pubkey
-    Worker-->>Hoprd: Close TCP session
-    Worker-->>Hoprd: Open WG session (spliced directly into the NepTUN pump)
-    Worker->>Root: SetupTunnel (address, MTU, DNS, peer IPs)
-    Root->>Worker: TunnelReady (interface name, TUN fd via SCM_RIGHTS)
-    Worker-->>Hoprd: (run ping on connection)
-    Worker-->>Hoprd: adjust WG session (via session configurator)
+    participant UI
+    participant Root
+    participant Worker
+    participant PIX as PIX pool (edgli)
+    participant Exit as Exit node
+    participant Server as gvpn server (at exit)
+    participant Relayer as Curvy relayer (via exit)
+
+    UI->>Root: Connect
+    Root->>Worker: Connect
+    Root->>UI: Ack
+
+    rect rgba(128, 128, 128, 0.1)
+    Note over Worker,Server: Probe session (TCP, long-lived, one per probed exit)
+    Worker->>Server: open bridge session
+    Worker->>Server: version, ping, load checks
+    Note over Worker: probe ready: the connect starts
+    end
+
+    par side-car (step 0)
+        Worker->>Relayer: open relayer side-car (TCP, no PIX, fixed local port)
+        Worker->>PIX: release held deposits
+    and steps 1-5
+        Worker->>Root: KillswitchLockdown (tunnel closed)
+        Note over Worker: WG keys (kept from the last attempt)
+        Worker->>Server: register WG pubkey (over the probe session)
+    end
+
+    Worker->>Exit: open WG session (UDP, UsePIX), spliced into the NepTUN pump
+    Exit-->>PIX: deposit request (SURB)
+    PIX->>Relayer: fee, allocate, proof, submit (over the side-car)
+    Worker->>Root: SetupTunnel
+    Root->>Worker: TunnelReady (TUN fd via SCM_RIGHTS)
+    Worker->>Root: KillswitchLockdown (gateway only)
+
+    loop until the exit serves: AwaitingPayment while its keep-alives arrive
+        Worker->>Exit: ping 10.128.0.1 through the tunnel
+    end
+    Note over Exit: deposit seen on chain: the session is served
+
+    Worker->>Root: KillswitchLockdown (tunnel open)
+    Worker->>Root: Connected
+    Note over Exit,Relayer: later chunks: deposit request on the WG session, payment over the side-car
