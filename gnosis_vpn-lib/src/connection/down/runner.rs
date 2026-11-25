@@ -12,10 +12,10 @@ use std::time::Duration;
 
 use crate::connection;
 use crate::connection::options::Options;
-use crate::connection::options::{SurbParams, surb_config_for};
 use crate::core::runner::Results;
 use crate::hopr::types::SessionClientMetadata;
 use crate::hopr::{Hopr, HoprError};
+use crate::probe::one_shot_capabilities;
 use crate::{gvpn_client, remote_data};
 
 use super::{Error, Event};
@@ -69,8 +69,7 @@ impl Runner {
                         evt: Event::OpenBridge,
                     })
                     .await;
-                let bridge_surb = surb_config_for(&self.options.surb_balancing.bridge)?;
-                open_bridge_session(&self.hopr, &self.down, &self.options, bridge_surb).await?
+                open_bridge_session(&self.hopr, &self.down, &self.options).await?
             }
         };
 
@@ -114,14 +113,14 @@ async fn open_bridge_session(
     hopr: &Hopr,
     down: &connection::down::Down,
     options: &Options,
-    surb: SurbParams,
 ) -> Result<SessionClientMetadata, HoprError> {
+    // Unbalanced like the quick probe: it lives for a single unregister.
     let cfg = HoprSessionClientConfig {
-        capabilities: options.sessions.bridge.capabilities,
+        capabilities: one_shot_capabilities(),
         forward_path: down.destination.routing,
         return_path: down.destination.routing,
-        max_surbs_per_data_packet: surb.max_surbs_per_data_packet,
-        surb_management: surb.management,
+        max_surbs_per_data_packet: 1,
+        surb_management: None,
         // Robust tail-tolerance profile for the down-direction data session.
         flow_control: Some(FlowControlConfig::robust()),
         ..Default::default()

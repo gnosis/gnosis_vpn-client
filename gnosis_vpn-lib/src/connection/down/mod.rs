@@ -4,7 +4,6 @@ use std::fmt::{self, Display};
 use std::time::{Duration, SystemTime};
 
 use crate::connection::destination::Destination;
-use crate::connection::options::SurbConfigError;
 use crate::hopr::HoprError;
 use crate::{connection, gvpn_client, ping};
 
@@ -31,8 +30,6 @@ pub(crate) enum Error {
     GvpnClient(#[from] gvpn_client::Error),
     #[error(transparent)]
     Ping(#[from] ping::Error),
-    #[error("Surb config error: {0}")]
-    SurbConfig(#[from] SurbConfigError),
     #[error("unregister exceeded its {0:?} budget")]
     Timeout(Duration),
 }

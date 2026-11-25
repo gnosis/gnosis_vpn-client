@@ -351,15 +351,19 @@ in
   # binary-gnosis_vpn-x86_64-linux and runs system tests against that release
   # artifact directly, instead of recompiling root/worker/ctl a second time
   # here just to have a worker binary to test against.
-  binary-gnosis_vpn-system_tests = withTokioUnstable (
-    builders.local.callPackage nixLib.mkRustPackage (
-      (mkGnosisvpnBuildArgs {
-        src = sources.main;
-        depsSrc = sources.deps;
-      })
-      // {
-        cargoExtraArgs = "--bin gnosis_vpn-system_tests";
-      }
+  # Static musl like the release binaries, so it also runs on hosts without Nix.
+  binary-gnosis_vpn-system_tests = withX86_64LinuxStaticEnv (
+    withTokioUnstable (
+      builders.x86_64-linux.callPackage nixLib.mkRustPackage (
+        (mkGnosisvpnBuildArgs {
+          src = sources.main;
+          depsSrc = sources.deps;
+        })
+        // {
+          cargoExtraArgs = "--bin gnosis_vpn-system_tests";
+          extraBuildInputs = mkLinuxStaticBuildInputs x86_64LinuxStaticPkgs;
+        }
+      )
     )
   );
 
