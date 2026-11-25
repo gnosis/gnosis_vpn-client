@@ -106,7 +106,7 @@ impl Runner {
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
-        // 0. the relayer side-car first, alongside steps 1-6: the PIX deposit for the step 6 session goes through it
+        // 0. the relayer side-car first, alongside steps 1-5: the PIX deposit for the step 6 session goes through it
         let sidecar = AbortOnDropHandle::new(tokio::spawn(open_relayer_sidecar(
             self.hopr.clone(),
             self.destination.clone(),
@@ -144,6 +144,11 @@ impl Runner {
             .send(progress(Progress::OpenPing(registration.clone())))
             .await;
 
+        // A session opened without a side-car would get a deposit that is held, then paid after it was abandoned.
+        sidecar
+            .await
+            .map_err(|e| Error::Runtime(format!("relayer side-car task failed: {e}")))??;
+
         // 6. open the wg session (also carries the in-tunnel verification ping). The
         //    raw session is spliced directly into the pump - no local listener and no
         //    loopback hop.
@@ -171,10 +176,6 @@ impl Runner {
         let _ = results_sender
             .send(progress(Progress::SessionConfigurator(configurator.clone())))
             .await;
-
-        sidecar
-            .await
-            .map_err(|e| Error::Runtime(format!("relayer side-car task failed: {e}")))??;
 
         // 7. set up the NepTUN data plane — root provisions the TUN device + routing
         //    and returns the resolved interface name; the worker then receives the
@@ -357,6 +358,11 @@ async fn open_relayer_sidecar(
         .retry(remote_data::backoff_expo_short_delay())
         .notify(|err: &HoprError, dur: Duration| {
             tracing::warn!(error = ?err, "error opening relayer side-car - will retry after {:?}", dur);
+            let tx = results_sender.clone();
+            let payload = setback(Setback::RelayerSidecar(err.to_string()));
+            tokio::spawn(async move {
+                let _ = tx.send(payload).await;
+            });
         })
         .await?;
     if let Some(sidecar) = opened {

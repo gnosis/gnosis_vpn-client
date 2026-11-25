@@ -130,6 +130,7 @@ pub enum Setback {
     RegisterWg(String),
     OpenPing(String),
     Ping(String),
+    RelayerSidecar(String),
 }
 
 #[derive(Debug, Error)]
@@ -676,6 +677,7 @@ impl Display for Setback {
             Setback::RegisterWg(err) => write!(f, "Failed to register WireGuard key: {err}"),
             Setback::OpenPing(err) => write!(f, "Failed to open main connection: {err}"),
             Setback::Ping(err) => write!(f, "Ping verification failed: {err}"),
+            Setback::RelayerSidecar(err) => write!(f, "Failed to open the payment relayer route: {err}"),
         }
     }
 }
