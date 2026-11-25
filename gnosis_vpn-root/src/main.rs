@@ -730,12 +730,13 @@ fn gate(owner_uid: Option<u32>, request: &Request, peer_uid: u32) -> Option<Serv
     Some(ServiceError::InUseByOtherUser)
 }
 
-/// Bootstrap mode needs the config's node set; leaving it never does.
-/// A target only exists among the exits of the mode its worker ran in.
-fn carried_target(target: Option<String>, worker_mode: Option<ipc::Mode>, next_mode: ipc::Mode) -> Option<String> {
-    target.filter(|_| worker_mode.is_none_or(|mode| mode == next_mode))
+/// A target only exists among the exits of the mode its worker runs; a worker that a mode switch
+/// is stopping still answers with exits of the old mode.
+fn target_from_reply(destination_id: String, worker_mode: Option<ipc::Mode>, mode: ipc::Mode) -> Option<String> {
+    (worker_mode == Some(mode)).then_some(destination_id)
 }
 
+/// Bootstrap mode needs the config's node set; leaving it never does.
 fn mode_change(current: ipc::Mode, requested: ipc::Mode, bootstrap_available: bool) -> ipc::SetModeResponse {
     if requested == ipc::Mode::Bootstrap && !bootstrap_available {
         return ipc::SetModeResponse::Unavailable;
@@ -978,8 +979,10 @@ impl DaemonState {
         match config::read(self.config_path.as_path()).await {
             Ok(new_config) => {
                 self.config = new_config;
-                if self.config.bootstrap.is_none() {
+                // Leaving bootstrap mode this way drops its exit, like a mode switch does.
+                if self.config.bootstrap.is_none() && self.mode == ipc::Mode::Bootstrap {
                     self.mode = ipc::Mode::Normal;
+                    self.target_dest_id = None;
                 }
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
@@ -1225,8 +1228,13 @@ impl DaemonState {
             | ipc::ConnectResponse::AlreadyConnected { destination },
         ) = &resp
         {
-            tracing::debug!(id = %destination.id, "remembering target destination from connect response");
-            self.target_dest_id = Some(destination.id.to_string());
+            match target_from_reply(destination.id.to_string(), self.worker_mode, self.mode) {
+                Some(target) => {
+                    tracing::debug!(id = %target, "remembering target destination from connect response");
+                    self.target_dest_id = Some(target);
+                }
+                None => tracing::debug!(id = %destination.id, "ignoring connect response from the previous mode"),
+            }
         }
         self.track_probe(&resp).await;
         if let Some(resp_sender) = self.pending_responses.remove(&id) {
@@ -1613,8 +1621,6 @@ impl DaemonState {
         // Armed means DNS is blocked, so the new worker cannot look Blokli up itself.
         let pinned_blokli_ip = self.blokli_ip.filter(|_| self.killswitch_armed);
         let spawn_params = self.cli.spawn_params(pinned_blokli_ip, owner.dirs.clone());
-        // A reply the old worker sent during a mode switch may have set its own mode's target again.
-        self.target_dest_id = carried_target(self.target_dest_id.take(), self.worker_mode, self.mode);
         self.worker_mode = Some(self.mode);
         let delivered = send_to_worker(
             RootToWorker::StartupParams {
@@ -1929,18 +1935,15 @@ mod tests {
     }
 
     #[test]
-    fn a_respawned_worker_keeps_the_target_only_in_the_same_mode() {
+    fn only_a_worker_of_the_current_mode_sets_the_target() {
         use ipc::Mode::{Bootstrap, Normal};
-        let target = || Some("exit-a".to_string());
+        let exit = || "exit-a".to_string();
 
-        // A config reload restarts the worker in the same mode and keeps the connection.
-        assert_eq!(target(), carried_target(target(), Some(Normal), Normal));
-        assert_eq!(target(), carried_target(target(), Some(Bootstrap), Bootstrap));
-        // A target the old worker accepted is unknown to a worker in the other mode.
-        assert_eq!(None, carried_target(target(), Some(Bootstrap), Normal));
-        assert_eq!(None, carried_target(target(), Some(Normal), Bootstrap));
-        // Without a previous worker there is nothing to compare against.
-        assert_eq!(target(), carried_target(target(), None, Normal));
+        assert_eq!(Some(exit()), target_from_reply(exit(), Some(Normal), Normal));
+        assert_eq!(Some(exit()), target_from_reply(exit(), Some(Bootstrap), Bootstrap));
+        // A late reply from the worker a mode switch is stopping names an exit of the old mode.
+        assert_eq!(None, target_from_reply(exit(), Some(Normal), Bootstrap));
+        assert_eq!(None, target_from_reply(exit(), Some(Bootstrap), Normal));
     }
 
     const ALICE: u32 = 1000;
