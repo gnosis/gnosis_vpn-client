@@ -73,7 +73,10 @@ struct DaemonState {
     blokli_ip: Option<Ipv4Addr>,
     /// Mirrors the routing actor's policy: a worker can only look Blokli up while this is false.
     killswitch_armed: bool,
+    /// The config file as read; workers run [`DaemonState::effective_config`].
     config: Config,
+    /// The mode the app asked for; not persisted, so a restarted service runs normal mode.
+    mode: ipc::Mode,
     config_path: PathBuf,
     reload_handle: Option<LogReloadHandle>,
     shutdown_ongoing: Shutdown,
@@ -548,6 +551,7 @@ async fn daemon(args: cli::Cli) -> Result<(), exitcode::ExitCode> {
         blokli_ip: None,
         killswitch_armed: false,
         config,
+        mode: ipc::Mode::Normal,
         config_path,
         incoming_worker_channel: mpsc::channel(32),
         pending_response_counter: 0,
@@ -721,6 +725,17 @@ fn gate(owner_uid: Option<u32>, request: &Request, peer_uid: u32) -> Option<Serv
         return None;
     }
     Some(ServiceError::InUseByOtherUser)
+}
+
+/// Bootstrap mode needs the config's node set; leaving it never does.
+fn mode_change(current: ipc::Mode, requested: ipc::Mode, bootstrap_available: bool) -> ipc::SetModeResponse {
+    if requested == ipc::Mode::Bootstrap && !bootstrap_available {
+        return ipc::SetModeResponse::Unavailable;
+    }
+    if requested == current {
+        return ipc::SetModeResponse::Unchanged;
+    }
+    ipc::SetModeResponse::Switching
 }
 
 /// An unopenable log file degrades to stdout; only a configured file yields a reload handle for SIGHUP.
@@ -955,6 +970,9 @@ impl DaemonState {
         match config::read(self.config_path.as_path()).await {
             Ok(new_config) => {
                 self.config = new_config;
+                if self.config.bootstrap.is_none() {
+                    self.mode = ipc::Mode::Normal;
+                }
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child
                 {
@@ -1004,9 +1022,14 @@ impl DaemonState {
         }
     }
 
+    /// The config file in the requested mode: what a worker spawned now runs with.
+    fn effective_config(&self) -> Config {
+        self.config.clone().in_mode(self.mode)
+    }
+
     /// Only what the config file names; the worker's answer also carries whatever discovery found.
     fn configured_destination_ids(&self) -> Vec<ipc::DestinationId> {
-        self.config
+        self.effective_config()
             .destinations
             .connect_ids()
             .into_iter()
@@ -1019,7 +1042,9 @@ impl DaemonState {
             Shutdown::RestartWorker => ipc::RunMode::Restarting,
             _ => ipc::RunMode::NotRunning,
         };
-        let status = self.config.offline_status(run_mode, self.target_dest_id.as_deref());
+        let status = self
+            .effective_config()
+            .offline_status(run_mode, self.target_dest_id.as_deref());
         Response::Status(Box::new(status))
     }
 
@@ -1136,6 +1161,8 @@ impl DaemonState {
                     Err(exitcode::TEMPFAIL)
                 }
             },
+
+            RootCommand::SetMode(mode) => Ok(Response::SetMode(self.set_mode(mode).await)),
 
             RootCommand::TrafficInterfaces => Ok(Response::TrafficInterfaces(self.traffic.interfaces())),
             RootCommand::TrafficStart(request) => {
@@ -1434,6 +1461,28 @@ impl DaemonState {
         }
     }
 
+    /// A change restarts a running worker in the new mode, like a config reload does. The target is
+    /// dropped because the new mode has other exits; the killswitch stays until the next connect or
+    /// a disconnect, so no traffic leaks while the app reconnects.
+    async fn set_mode(&mut self, mode: ipc::Mode) -> ipc::SetModeResponse {
+        let response = mode_change(self.mode, mode, self.config.bootstrap.is_some());
+        if response != ipc::SetModeResponse::Switching {
+            return response;
+        }
+        tracing::info!(?mode, "switching mode");
+        self.mode = mode;
+        self.target_dest_id = None;
+        if matches!(self.shutdown_ongoing, Shutdown::None)
+            && let Some(ref mut child) = self.worker_child
+        {
+            tracing::debug!("sending shutdown signal to worker process due to mode switch");
+            self.shutdown_ongoing = Shutdown::RestartWorker;
+            send_to_worker_lossy(RootToWorker::Shutdown, &mut child.socket_writer).await;
+            self.cleanup_worker_resources().await;
+        }
+        response
+    }
+
     /// The target goes with the owner; the killswitch stays as it is (recovery while armed is an invariant).
     fn forget_owner(&mut self) {
         self.worker_owner = None;
@@ -1558,7 +1607,7 @@ impl DaemonState {
         let spawn_params = self.cli.spawn_params(pinned_blokli_ip, owner.dirs.clone());
         let delivered = send_to_worker(
             RootToWorker::StartupParams {
-                config: Box::new(self.config.clone()),
+                config: Box::new(self.effective_config()),
                 spawn_params: Box::new(spawn_params),
                 target_dest_id: self.target_dest_id.clone(),
             },
@@ -1852,6 +1901,20 @@ mod tests {
         .await;
         assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::EINVAL));
         assert_eq!(attempts.get(), 2);
+    }
+
+    #[test]
+    fn a_mode_request_switches_only_to_an_available_other_mode() {
+        use ipc::Mode::{Bootstrap, Normal};
+        use ipc::SetModeResponse::{Switching, Unavailable, Unchanged};
+
+        assert_eq!(Switching, mode_change(Normal, Bootstrap, true));
+        assert_eq!(Switching, mode_change(Bootstrap, Normal, true));
+        assert_eq!(Unchanged, mode_change(Normal, Normal, true));
+        assert_eq!(Unchanged, mode_change(Bootstrap, Bootstrap, true));
+        assert_eq!(Unavailable, mode_change(Normal, Bootstrap, false));
+        // Leaving bootstrap mode stays possible after a reload removed the section.
+        assert_eq!(Switching, mode_change(Bootstrap, Normal, false));
     }
 
     const ALICE: u32 = 1000;

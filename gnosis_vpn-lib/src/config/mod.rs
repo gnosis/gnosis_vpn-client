@@ -43,6 +43,8 @@ pub struct Config {
     pub curvy_zk_dir: PathBuf,
     /// The fixed node set of bootstrap mode; none means the mode is not available.
     pub bootstrap: Option<Bootstrap>,
+    /// The mode this configuration runs in; only [`Config::in_mode`] leaves normal mode.
+    pub mode: gnosis_vpn_ipc::Mode,
 }
 
 /// The exits bootstrap mode connects to and the relayers it opens channels to, neither discovered.
@@ -59,6 +61,7 @@ impl Config {
         if let (gnosis_vpn_ipc::Mode::Bootstrap, Some(bootstrap)) = (mode, &self.bootstrap) {
             self.destinations = bootstrap.exits.clone();
             self.strategy.channel_allowlist = Some(bootstrap.relayers.clone());
+            self.mode = mode;
         }
         self
     }
@@ -85,6 +88,8 @@ impl Config {
             pix_price_per_byte: crate::wire::wxhopr(self.pix_strategy.price_per_byte),
             probing: None,
             recent: vec![],
+            mode: self.mode,
+            bootstrap_available: self.bootstrap.is_some(),
         }
     }
 }
@@ -405,6 +410,7 @@ wireguard_server = "10.0.0.1:51820"
 
         assert_eq!(bootstrap.exits, effective.destinations);
         assert_eq!(Some(bootstrap.relayers), effective.strategy.channel_allowlist);
+        assert_eq!(gnosis_vpn_ipc::Mode::Bootstrap, effective.mode);
     }
 
     #[test]
@@ -417,6 +423,25 @@ wireguard_server = "10.0.0.1:51820"
             without.clone(),
             without.clone().in_mode(gnosis_vpn_ipc::Mode::Bootstrap)
         );
+    }
+
+    #[test]
+    fn offline_status_reports_the_mode_and_whether_bootstrap_is_available() {
+        let with = read_config(&with_bootstrap(&bootstrap_section()));
+        let without = read_config(&with_bootstrap(""));
+
+        let status = with
+            .in_mode(gnosis_vpn_ipc::Mode::Bootstrap)
+            .offline_status(gnosis_vpn_ipc::RunMode::NotRunning, None);
+        assert_eq!(gnosis_vpn_ipc::Mode::Bootstrap, status.mode);
+        assert!(status.bootstrap_available);
+
+        // Without a node set, bootstrap mode is refused and the config stays in normal mode.
+        let status = without
+            .in_mode(gnosis_vpn_ipc::Mode::Bootstrap)
+            .offline_status(gnosis_vpn_ipc::RunMode::NotRunning, None);
+        assert_eq!(gnosis_vpn_ipc::Mode::Normal, status.mode);
+        assert!(!status.bootstrap_available);
     }
 
     fn with_blokli_section(blokli: &str) -> String {

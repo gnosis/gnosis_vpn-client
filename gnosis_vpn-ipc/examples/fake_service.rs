@@ -103,6 +103,8 @@ fn respond(request: Request, run_mode: RunMode) -> Response {
             pix_price_per_byte: Balance::from_wei(9_000_000_000),
             probing: None,
             recent: vec![],
+            mode: Mode::Normal,
+            bootstrap_available: false,
         })),
         Request::NerdStats => Response::NerdStats(Box::new(NerdStats::NoInfo {
             tickets: TicketStatsStatus::Waiting,
@@ -123,6 +125,7 @@ fn respond(request: Request, run_mode: RunMode) -> Response {
         }),
         Request::StartClient { .. } => Response::StartClient(StartClientResponse::Started),
         Request::StopClient => Response::StopClient(StopClientResponse::Stopped),
+        Request::SetMode { .. } => Response::SetMode(SetModeResponse::Unavailable),
         Request::Destinations => Response::Destinations(vec![]),
         Request::Probe { .. } => Response::Probe(ProbeResponse::DestinationNotFound),
         Request::Unprobe => Response::Unprobe(UnprobeResponse::NotProbing),

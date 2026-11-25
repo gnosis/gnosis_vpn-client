@@ -13,7 +13,7 @@ use crate::values::{
 };
 
 /// Bumped on every incompatible wire change; the service refuses requests of any other version.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
@@ -52,6 +52,10 @@ pub enum Request {
     /// Shield wxHOPR from the Safe into the PIX pool deposits are paid from.
     FundPixPool {
         amount: Balance<WxHopr>,
+    },
+    /// Runs the worker in `mode`; a change restarts it and ends any connection.
+    SetMode {
+        mode: Mode,
     },
     /// List interfaces the service may capture traffic on
     TrafficInterfaces,
@@ -110,6 +114,7 @@ pub enum Response {
     QuickProbe(QuickProbeResponse),
     ProbingBoost,
     FundPixPool(FundPixPoolResponse),
+    SetMode(SetModeResponse),
     TrafficInterfaces(Vec<traffic::Interface>),
     TrafficStart(traffic::StartReply),
     TrafficRead(traffic::ReadResponse),
@@ -136,6 +141,10 @@ pub struct Status {
     pub probing: Option<ProbingView>,
     /// Recently connected exits on this network, newest first.
     pub recent: Vec<DestinationId>,
+    /// The mode the worker runs, or runs next when none runs.
+    pub mode: Mode,
+    /// Whether the configuration has a bootstrap node set; without it, bootstrap mode is refused.
+    pub bootstrap_available: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -713,6 +722,17 @@ pub enum QuickProbeResponse {
     DestinationAmbiguous {
         candidates: Vec<DestinationId>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SetModeResponse {
+    /// The worker restarts in the new mode; a connection it had is gone.
+    Switching,
+    /// Already in that mode; nothing changed.
+    Unchanged,
+    /// The configuration has no bootstrap node set.
+    Unavailable,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

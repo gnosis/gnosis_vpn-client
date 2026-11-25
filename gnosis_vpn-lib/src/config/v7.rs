@@ -1091,6 +1091,7 @@ impl TryFrom<Config> for config::Config {
                 .curvy_zk_dir
                 .unwrap_or_else(|| crate::hopr::pix_config::DEFAULT_CURVY_ZK_DIR.into()),
             bootstrap,
+            mode: gnosis_vpn_ipc::Mode::Normal,
         })
     }
 }
