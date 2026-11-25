@@ -969,7 +969,7 @@ impl Core {
                     let (error, issue) = match &conn.pump_exit {
                         Some(exit) => (
                             format!("wg pump exited: {}", exit.reason),
-                            ipc::ConnectIssueKind::ExitUnreachable,
+                            pump_exit_issue(&conn.phase.1),
                         ),
                         None => (err.to_string(), err.issue()),
                     };
@@ -2810,6 +2810,14 @@ impl Core {
     }
 }
 
+/// Under strict prepay the exit closes an unpaid session once its deposit times out.
+fn pump_exit_issue(phase: &connection::up::Phase) -> ipc::ConnectIssueKind {
+    match phase {
+        connection::up::Phase::AwaitingPayment => ipc::ConnectIssueKind::PaymentFailed,
+        _ => ipc::ConnectIssueKind::ExitUnreachable,
+    }
+}
+
 /// A different kind starts a new count: the earlier issue was got past.
 fn next_connect_issue(current: Option<ipc::ConnectIssue>, kind: ipc::ConnectIssueKind) -> ipc::ConnectIssue {
     match current {
@@ -3781,6 +3789,18 @@ mod tests {
                 step: Some(ipc::ConnectStep::Verifying),
                 issue: None,
             }
+        );
+    }
+
+    #[test]
+    fn a_session_closed_while_awaiting_payment_is_a_failed_payment() {
+        assert_eq!(
+            pump_exit_issue(&UpPhase::AwaitingPayment),
+            ipc::ConnectIssueKind::PaymentFailed
+        );
+        assert_eq!(
+            pump_exit_issue(&UpPhase::EstablishWgTunnel),
+            ipc::ConnectIssueKind::ExitUnreachable
         );
     }
 
