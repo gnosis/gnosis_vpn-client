@@ -348,7 +348,13 @@ impl Default for SurbBalancing {
             ping: SessionSurbOptions::new(true, ByteSize::mb(1), Bandwidth::from_kbps(512)),
             // maximum allowed buffer size is 10 MB
             main: SessionSurbOptions::new(true, ByteSize::mb(10), Bandwidth::from_mbps(16)),
-            bridge: SessionSurbOptions::new(false, ByteSize::kb(16), Bandwidth::from_kbps(128)),
+            // Minimal balancing keeps the long-lived probe session's return path from running dry.
+            bridge: SessionSurbOptions {
+                enabled: true,
+                buffer: ByteSize::kb(16),
+                max_surb_upstream: Bandwidth::from_kbps(128),
+                always_max_out_surbs: false,
+            },
             ramp: SurbRampOptions::default(),
         }
     }

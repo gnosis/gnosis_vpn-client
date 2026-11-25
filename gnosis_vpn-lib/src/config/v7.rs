@@ -264,9 +264,13 @@ pub(super) fn to_flags(caps: Vec<Capability>) -> SessionCapabilities {
 }
 
 impl Connection {
-    // Bridge capabilities must never include retransmissions — those require additional SURBs.
+    // ACK-only: NACKs cannot recover a single-frame request lost whole; retransmission also activates flow control.
     pub fn default_bridge_capabilities() -> Vec<Capability> {
-        vec![Capability::Segmentation, Capability::NoRateControl]
+        vec![
+            Capability::Segmentation,
+            Capability::RetransmissionAckOnly,
+            Capability::NoRateControl,
+        ]
     }
 
     pub fn default_wg_capabilities() -> Vec<Capability> {
@@ -309,11 +313,13 @@ pub(super) fn apply_session_surb(
         None => def,
         Some(c) => {
             let enabled = c.enabled.unwrap_or(def.enabled);
+            // A tier that never maxes out by default (bridge) stays at 1 SURB per request.
+            let max_out_by_default = enabled && def.always_max_out_surbs;
             options::SessionSurbOptions {
                 enabled,
                 buffer: c.buffer.unwrap_or(def.buffer),
                 max_surb_upstream: c.max_surb_upstream.unwrap_or(def.max_surb_upstream),
-                always_max_out_surbs: c.always_max_out_surbs.unwrap_or(enabled),
+                always_max_out_surbs: c.always_max_out_surbs.unwrap_or(max_out_by_default),
             }
         }
     }
@@ -2119,6 +2125,51 @@ policy = { type = "fixed", level = { type = "high" } }
             .parse::<toml::Table>()
             .expect("valid TOML");
         assert_eq!(wrong_keys(&table), vec!["probing.polcy".to_string()]);
+    }
+
+    #[test]
+    fn bridge_defaults_to_ack_retransmission_and_minimal_surb_balancing() {
+        use edgli::hopr_lib::exports::transport::SessionCapability;
+
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let caps = result.connection.sessions.bridge.capabilities;
+        assert!(caps.contains(SessionCapability::RetransmissionAck));
+        assert!(!caps.contains(SessionCapability::RetransmissionNack));
+        let surb = crate::connection::options::surb_config_for(&result.connection.surb_balancing.bridge)
+            .expect("a valid SURB configuration");
+        assert!(surb.management.is_some());
+        assert_eq!(surb.max_surbs_per_data_packet, 1);
+    }
+
+    #[test]
+    fn a_bridge_surb_section_without_max_out_keeps_one_surb_per_request() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.surb_balancing.bridge]
+buffer = "32 KB"
+
+[connection.surb_balancing.ping]
+buffer = "2 MB"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let surb = &result.connection.surb_balancing;
+        assert!(surb.bridge.enabled);
+        assert!(!surb.bridge.always_max_out_surbs);
+        assert!(surb.ping.always_max_out_surbs, "ping still maxes out with balancing");
     }
 
     #[test]
