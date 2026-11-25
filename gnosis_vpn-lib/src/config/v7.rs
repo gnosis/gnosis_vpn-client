@@ -1115,6 +1115,10 @@ fn convert_bootstrap(value: Bootstrap, defaults: DefaultTargets) -> Result<confi
     )?;
     for dest in exits.values_mut() {
         dest.overrides.configured_country = countries.get(&dest.connect_id).copied();
+        dest.geo = dest.overrides.configured_country.map(|country| crate::geoip::Geo {
+            country,
+            source: crate::geoip::GeoSource::Configured,
+        });
     }
     Ok(config::Bootstrap {
         relayers: value.relayers.into_iter().collect(),

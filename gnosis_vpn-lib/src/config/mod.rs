@@ -354,6 +354,11 @@ wireguard_server = "10.0.0.1:51820"
             Some("NL".to_string()),
             amsterdam.overrides.configured_country.as_ref().map(|c| c.to_string())
         );
+        // Shown before the first announced-peers fetch, which refreshes the geo of all exits.
+        assert_eq!(
+            Some(("NL".to_string(), crate::geoip::GeoSource::Configured)),
+            amsterdam.geo.as_ref().map(|g| (g.country.to_string(), g.source))
+        );
         assert_eq!(config.default_targets.wireguard_server, amsterdam.wireguard_server);
         let iowa = bootstrap.exits.by_connect_id("iowa").expect("iowa exit");
         assert_eq!(2, iowa.routing.hop_count());
