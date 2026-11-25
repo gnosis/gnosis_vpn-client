@@ -580,8 +580,8 @@ pub fn to_funding_status(
     // Funds paying for exit traffic can't pay for relays, so the deficit follows the relay funds alone.
     let relays = SnapshotTotals::relays(capacity_allocations);
 
-    // Safe funds missing channels first (wxhopr_deficit counts it there), only the rest can refill; `-` saturates.
-    let safe_after_missing = safe_wxhopr - ideal.wxhopr;
+    // The PIX reserve is not for channels; Safe funds missing channels first (wxhopr_deficit counts it there), only the rest can refill; `-` saturates.
+    let safe_after_missing = safe_wxhopr - pix_reserved - ideal.wxhopr;
     let refill_shortfall = Some(ideal.topup_headroom - safe_after_missing).filter(|d| !d.is_zero());
 
     let xdai_empty_below = Balance::<XDai>::from(XDAI_EMPTY_BELOW_WEI);
@@ -794,6 +794,25 @@ mod tests {
             Some(Balance::<WxHOPR>::from(35 * W)),
             "back to Good is the reserve plus 3 channel top-ups"
         );
+    }
+
+    #[test]
+    fn the_pix_reserve_counts_against_the_refill_headroom() {
+        let status = |reserved: u64| {
+            to_funding_status(
+                BalanceRecommendation {
+                    topup_headroom: Balance::<WxHOPR>::from(80 * W),
+                    ..ideal_refills(35, 15)
+                },
+                &allocs(None, Capacity::default(), Capacity::default()),
+                Balance::<XDai>::zero(),
+                Balance::<WxHOPR>::from(100 * W),
+                Balance::<WxHOPR>::from(reserved * W),
+            )
+            .unwrap()
+        };
+        assert_eq!(status(0).refill_shortfall, None);
+        assert_eq!(status(35).refill_shortfall, Some(Balance::<WxHOPR>::from(15 * W)));
     }
 
     #[test]
