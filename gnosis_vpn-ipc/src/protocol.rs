@@ -253,6 +253,17 @@ pub enum RunMode {
     NotRunning,
 }
 
+/// Which exits and relays the worker runs with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Mode {
+    /// Configured and discovered exits; channels by quality.
+    #[default]
+    Normal,
+    /// Only the configuration's bootstrap exits; channels only to its bootstrap relayers.
+    Bootstrap,
+}
+
 /// A step the worker needs before running keeps failing; `since` is the first failure of the streak.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StartupIssue {
@@ -397,6 +408,9 @@ pub struct Overrides {
     pub configured_meta: BTreeMap<String, String>,
     pub configured_gnosis_vpn_server: Option<SocketAddr>,
     pub configured_wireguard_server: Option<SocketAddr>,
+    /// The exit's country as configuration states it, in place of the announced address's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configured_country: Option<CountryCode>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -417,6 +431,7 @@ pub struct Geo {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GeoSource {
     AnnouncedIp,
+    Configured,
 }
 
 /// The suffix a discovered id carries so no later same-named exit can take it; FNV-1a by hand, as `DefaultHasher` drifts per rustc.

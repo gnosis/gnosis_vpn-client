@@ -294,6 +294,7 @@ impl TryFrom<Config> for super::v7::Config {
             probing: None,
             geoip_db: Some(crate::geoip::DEFAULT_DB_PATH.into()),
             curvy_zk_dir: Some(crate::hopr::pix_config::DEFAULT_CURVY_ZK_DIR.into()),
+            bootstrap: None,
         })
     }
 }

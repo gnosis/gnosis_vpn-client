@@ -74,6 +74,26 @@ address = "0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254"
 path    = { hops = 1 }
 
 ###
+## bootstrap section - the fixed node set of bootstrap mode
+#
+# This section is optional. Without it, bootstrap mode is not available and the app does not
+# show its switch. In bootstrap mode the client connects only to the exits listed here, and it
+# keeps channels only to the relayers listed here: it closes its channels to every other node.
+# Exit discovery and the [destinations] section are not used in bootstrap mode.
+
+# [bootstrap]
+# relayers - chain addresses of the relay nodes to keep channels to; at least one.
+# relayers = ["0x...", "0x..."]
+
+# One entry for each exit, at least one. An entry takes the same keys as a [destinations] entry.
+# country - optional ISO 3166-1 alpha-2 code shown as the exit's country. Without it, the country
+# comes from the address the exit announces on-chain.
+# [bootstrap.exits.<id>]
+# address = "<exit node address>"
+# country = "NL"
+# meta    = { name = "Amsterdam" }
+
+###
 ## connection section - adjust for more fine grained connection control
 
 # [connection]
