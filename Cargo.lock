@@ -3735,7 +3735,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "5.3.0"
-source = "git+https://github.com/hoprnet/edge-client.git?branch=main#ec1022535da0eb6b3569f51d23738e73b3549c8c"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=feature%2Fcore-1447-edgli-let-the-embedder-send-curvy-relayer#356af4e771b613106617dd81055ea7bedbd0bdfe"
 dependencies = [
  "anyhow",
  "async-signal",

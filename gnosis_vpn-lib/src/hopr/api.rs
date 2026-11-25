@@ -17,7 +17,7 @@ use edgli::{
         },
         errors::HoprLibError,
         exports::{
-            network::types::types::IpProtocol,
+            network::types::types::{IpOrHost, IpProtocol, SealedHost},
             transport::{
                 SESSION_MTU, SURB_SIZE, SessionTarget,
                 path::{HoprGraphPathSelector, PathSelector},
@@ -58,6 +58,24 @@ pub struct Hopr {
     open_listeners: Arc<ListenerJoinHandles>,
     pix_chunks: PixChunks,
     pix_chunk_bytes: u64,
+    relayer: RelayerSidecar,
+}
+
+/// Carries the Curvy relayer's traffic through an exit, so a payment never rides the session it pays for.
+struct RelayerSidecar {
+    /// Fixed, so the PIX pool's HTTP client, built once, reaches every side-car.
+    via: SocketAddr,
+    /// `host:port` of the relayer, known once the PIX reactor runs with one.
+    target: std::sync::OnceLock<String>,
+    /// Number of the open side-car, so a late close cannot hit its successor.
+    current: tokio::sync::Mutex<u64>,
+}
+
+/// An open relayer side-car; close it with [`Hopr::close_relayer_sidecar`].
+#[derive(Clone, Debug)]
+pub struct RelayerSidecarHandle {
+    pub number: u64,
+    pub session: SessionClientMetadata,
 }
 
 impl Hopr {
@@ -89,11 +107,19 @@ impl Hopr {
             .pix_ssa_quota()
             .map_err(|e| HoprError::Construction(format!("invalid PIX dimensions: {e}")))?;
         let pix_chunks = PixChunks::listen(edge_node.as_hopr().as_ref());
+        let relayer_via = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .and_then(|listener| listener.local_addr())
+            .map_err(|e| HoprError::Construction(format!("no local port for the relayer side-car: {e}")))?;
         Ok(Self {
             edgli: Arc::new(edge_node),
             open_listeners: Default::default(),
             pix_chunks,
             pix_chunk_bytes: edgli::strategy::quota_per_ssa(&pix_params),
+            relayer: RelayerSidecar {
+                via: relayer_via,
+                target: Default::default(),
+                current: Default::default(),
+            },
         })
     }
 
@@ -128,8 +154,78 @@ impl Hopr {
         max_client_sessions: Option<usize>,
         cfg: HoprSessionClientConfig,
     ) -> Result<SessionClientMetadata, HoprError> {
+        let bind_host: SocketAddr = std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0).into();
+        self.open_session_at(bind_host, destination, target, session_pool, max_client_sessions, cfg)
+            .await
+    }
+
+    /// Opens the relayer side-car through `destination`, replacing any earlier one; `None` when this build pays without a relayer.
+    #[tracing::instrument(skip(self, cfg), level = "debug", err)]
+    pub async fn open_relayer_sidecar(
+        &self,
+        destination: Address,
+        cfg: HoprSessionClientConfig,
+    ) -> Result<Option<RelayerSidecarHandle>, HoprError> {
+        if !cfg!(feature = "pix-curvy") {
+            return Ok(None);
+        }
+        let target = self
+            .relayer
+            .target
+            .get()
+            .ok_or_else(|| HoprError::Construction("the PIX reactor has not named its relayer yet".into()))?;
+        let host: IpOrHost = target
+            .parse()
+            .map_err(|e| HoprError::Construction(format!("relayer target {target}: {e}")))?;
+        let mut current = self.relayer.current.lock().await;
+        // A failed attempt leaves its side-car open; the fixed address must be free again.
+        if let Err(error) = self.close_session(self.relayer.via, IpProtocol::TCP).await {
+            tracing::debug!(%error, "no earlier relayer side-car to close");
+        }
+        // Pre-opening one session makes an exit that refuses the relayer fail the attempt here.
+        let session = self
+            .open_session_at(
+                self.relayer.via,
+                destination,
+                SessionTarget::TcpStream(SealedHost::Plain(host)),
+                Some(1),
+                None,
+                cfg,
+            )
+            .await?;
+        *current += 1;
+        tracing::info!(number = *current, %destination, via = %self.relayer.via, "relayer side-car open");
+        Ok(Some(RelayerSidecarHandle {
+            number: *current,
+            session,
+        }))
+    }
+
+    /// Closes the side-car, unless a newer one has replaced it.
+    pub async fn close_relayer_sidecar(&self, sidecar: &RelayerSidecarHandle) {
+        let current = self.relayer.current.lock().await;
+        if *current != sidecar.number {
+            return;
+        }
+        match self
+            .close_session(sidecar.session.bound_host, sidecar.session.protocol)
+            .await
+        {
+            Ok(()) => tracing::info!(number = sidecar.number, "relayer side-car closed"),
+            Err(error) => tracing::debug!(%error, number = sidecar.number, "relayer side-car was already closed"),
+        }
+    }
+
+    async fn open_session_at(
+        &self,
+        bind_host: SocketAddr,
+        destination: Address,
+        target: SessionTarget,
+        session_pool: Option<usize>,
+        max_client_sessions: Option<usize>,
+        cfg: HoprSessionClientConfig,
+    ) -> Result<SessionClientMetadata, HoprError> {
         tracing::debug!("open hopr session");
-        let bind_host: std::net::SocketAddr = std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 0).into();
 
         let protocol = match target {
             SessionTarget::TcpStream(_) => IpProtocol::TCP,
@@ -412,12 +508,34 @@ impl Hopr {
         // Drop any pre-existing entry first so a future upstream default can't register it twice.
         cfg.strategies
             .retain(|s| !matches!(s, edgli::strategy::EdgeStrategyKind::Pix(_)));
+        #[cfg(feature = "pix-curvy")]
+        let pix = self.route_relayer_through_sidecar(pix)?;
         // Boxed upstream (edge-client #186): the variant grew with the Curvy pool's config.
         cfg.strategies
             .push(edgli::strategy::EdgeStrategyKind::Pix(Box::new(pix)));
         self.edgli
             .run_reactor_from_cfg(cfg)
             .map_err(|e| HoprError::TelemetryReactorStart(e.to_string()))
+    }
+
+    /// Points the pool's relayer calls at the side-car address and remembers the relayer to open side-cars to.
+    #[cfg(feature = "pix-curvy")]
+    fn route_relayer_through_sidecar(
+        &self,
+        mut pix: edgli::strategy::PixEntryConfig,
+    ) -> Result<edgli::strategy::PixEntryConfig, HoprError> {
+        let edgli::strategy::PixCurvySubmission::Relayer(url) = &pix.pool.submission else {
+            return Ok(pix);
+        };
+        let host = url
+            .host_str()
+            .ok_or_else(|| HoprError::TelemetryReactorStart(format!("relayer URL {url} has no host")))?;
+        let port = url
+            .port_or_known_default()
+            .ok_or_else(|| HoprError::TelemetryReactorStart(format!("relayer URL {url} has no port")))?;
+        let _ = self.relayer.target.set(format!("{host}:{port}"));
+        pix.pool.relayer_via = Some(self.relayer.via);
+        Ok(pix)
     }
 
     #[tracing::instrument(skip(self), level = "debug", ret)]

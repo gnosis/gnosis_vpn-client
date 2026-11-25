@@ -5,7 +5,10 @@ pub(crate) mod types;
 pub use edgli::EdgliInitState;
 pub use edgli::hopr_lib;
 pub use edgli::hopr_lib::api::node::HoprState;
-pub use {api::Hopr, errors::HoprError};
+pub use {
+    api::{Hopr, RelayerSidecarHandle},
+    errors::HoprError,
+};
 
 pub(crate) mod blokli_config;
 pub(crate) mod config;
