@@ -954,8 +954,12 @@ impl Core {
                     self.start_probe(&conn.destination, requested, results_sender);
                     self.reconnect_in_place(conn, true, results_sender).await;
                 }
-                (Err(err), Phase::Connecting(conn)) => {
+                (Err(err), Phase::Connecting(mut conn)) => {
                     tracing::error!(?err, %conn, "connection failed");
+                    // Holds deposits through the retry delay: the failed attempt's session no longer needs paying.
+                    self.close_relayer_sidecar(&conn);
+                    conn.relayer_sidecar = None;
+                    self.phase = Phase::Connecting(conn.clone());
                     let error = match &conn.pump_exit {
                         Some(exit) => format!("wg pump exited: {}", exit.reason),
                         None => err.to_string(),
@@ -2167,6 +2171,13 @@ impl Core {
         tokio::spawn(async move { hopr.close_relayer_sidecar(&sidecar).await });
     }
 
+    /// Run at teardown, past the strategy's batching window, so a late deposit of the closed session waits here too.
+    fn drop_held_deposits(&self) {
+        if let Some(pool) = &self.pix_pool {
+            pool.drop_held_deposits();
+        }
+    }
+
     fn sync_pix_deposit_hold(&self) {
         if let Some(pool) = &self.pix_pool {
             pool.hold_deposits(pix_deposits_held(&self.phase, self.killswitch_armed));
@@ -2619,6 +2630,7 @@ impl Core {
 
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
         self.close_relayer_sidecar(conn);
+        self.drop_held_deposits();
         self.cancel_connection.cancel();
         self.connect_retries = None;
         self.connection_generation += 1;
@@ -2646,6 +2658,7 @@ impl Core {
         results_sender: &mpsc::Sender<Results>,
     ) {
         self.close_relayer_sidecar(&conn);
+        self.drop_held_deposits();
         self.cancel_connection.cancel();
         self.connection_generation += 1;
         self.cancel_connection = self.cancel_on_shutdown.child_token();
