@@ -10,7 +10,7 @@ pub struct PixPool {
     #[cfg(feature = "pix-curvy")]
     hold: edgli::PixDepositHold,
     #[cfg(feature = "pix-curvy")]
-    reserve: edgli::strategy::SafeReserve,
+    reserve: edgli::SafeReserve,
     // `pix-test` pays straight from the Safe, so it never has a pool to construct.
     #[cfg(not(feature = "pix-curvy"))]
     never: std::convert::Infallible,
@@ -78,7 +78,7 @@ impl PixPool {
     /// Safe wxHOPR the next pool top-up keeps from the channels.
     pub fn reserved(&self) -> Balance<WxHOPR> {
         #[cfg(feature = "pix-curvy")]
-        return self.reserve.get().reserved;
+        return self.reserve.get();
         #[cfg(not(feature = "pix-curvy"))]
         match self.never {}
     }
