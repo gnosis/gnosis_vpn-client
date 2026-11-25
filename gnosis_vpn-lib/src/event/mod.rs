@@ -10,6 +10,7 @@ use gnosis_vpn_ipc::{Response, ServiceError};
 
 use crate::command::WorkerCommand;
 use crate::config::Config;
+use crate::killswitch::TunnelAccess;
 use crate::ping;
 use crate::worker_params::SpawnParams;
 
@@ -70,8 +71,7 @@ pub enum WorkerToRoot {
 pub(crate) enum RunnerToRoot {
     KillswitchLockdown {
         peer_ips: Vec<Ipv4Addr>,
-        /// None arms the killswitch before the tunnel exists.
-        interface: Option<String>,
+        tunnel: TunnelAccess,
         resp: oneshot::Sender<Result<(), String>>,
     },
     /// Ask root to provision the TUN device and split-tunnel routing for the
@@ -105,7 +105,7 @@ pub enum RequestToRoot {
         peer_ips: Vec<Ipv4Addr>,
         /// Exempt like the peers, or the worker loses chain access once armed.
         blokli_ip: Ipv4Addr,
-        interface: Option<String>,
+        tunnel: TunnelAccess,
     },
     SetupTunnel {
         request_id: u64,

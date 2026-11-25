@@ -1146,11 +1146,7 @@ impl Core {
             },
 
             Results::ConnectionRequestToRoot(respondable_request) => match respondable_request {
-                RunnerToRoot::KillswitchLockdown {
-                    peer_ips,
-                    interface,
-                    resp,
-                } => {
+                RunnerToRoot::KillswitchLockdown { peer_ips, tunnel, resp } => {
                     // Last chance before DNS closes: edgli keeps its spawn-time address, so only a new worker follows a move.
                     let resolve_timeout = self.config.blokli.resolve_timeout;
                     if !self.killswitch_armed && self.worker_params.blokli_moved(resolve_timeout).await {
@@ -1164,7 +1160,7 @@ impl Core {
                         request_id,
                         peer_ips,
                         blokli_ip: self.worker_params.blokli_ip(),
-                        interface,
+                        tunnel,
                     };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }

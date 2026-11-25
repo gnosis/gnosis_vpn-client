@@ -2,7 +2,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use ipnetwork::{IpNetwork, Ipv6Network};
 
-use super::{LAN_MULTICAST_NETS, LAN_NETS};
+use super::{LAN_MULTICAST_NETS, LAN_NETS, TunnelAccess};
 use pfctl::{DropAction, FilterRuleAction};
 use thiserror::Error;
 
@@ -73,17 +73,16 @@ impl Firewall {
     }
 
     /// Apply killswitch policy: block everything except `allowed_ips` and infrastructure.
-    /// `interface` is the resolved WireGuard interface name (e.g. "utun8"), None before the tunnel exists.
     /// When `lan_lockdown` is false, private LAN ranges are also let through.
     pub fn apply_policy(
         &mut self,
-        interface: Option<&str>,
+        tunnel: &TunnelAccess,
         allowed_ips: &[IpAddr],
         lan_lockdown: bool,
     ) -> Result<(), Error> {
         self.enable()?;
         self.add_anchor()?;
-        self.set_rules(interface, allowed_ips, lan_lockdown)?;
+        self.set_rules(tunnel, allowed_ips, lan_lockdown)?;
         self.flush_states();
         Ok(())
     }
@@ -93,13 +92,13 @@ impl Firewall {
     /// flows is only needed on first apply, and network events can fire often.
     pub fn reapply_policy(
         &mut self,
-        interface: Option<&str>,
+        tunnel: &TunnelAccess,
         allowed_ips: &[IpAddr],
         lan_lockdown: bool,
     ) -> Result<(), Error> {
         self.enable()?;
         self.add_anchor()?;
-        self.set_rules(interface, allowed_ips, lan_lockdown)
+        self.set_rules(tunnel, allowed_ips, lan_lockdown)
     }
 
     /// Remove the killswitch anchor, restoring normal networking.
@@ -131,14 +130,16 @@ impl Firewall {
         Ok(())
     }
 
-    fn set_rules(&mut self, interface: Option<&str>, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
+    fn set_rules(&mut self, tunnel: &TunnelAccess, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
         let mut rules = vec![];
 
         rules.append(&mut loopback_rules()?);
         rules.append(&mut dhcp_rules()?);
         rules.append(&mut ndp_rules()?);
-        if let Some(interface) = interface {
-            rules.push(tunnel_rule(interface)?);
+        match tunnel {
+            TunnelAccess::Closed => {}
+            TunnelAccess::GatewayOnly { interface, gateway } => rules.append(&mut gateway_rules(interface, *gateway)?),
+            TunnelAccess::Open { interface } => rules.push(tunnel_rule(interface)?),
         }
         for &ip in allowed_ips {
             rules.append(&mut allowed_ip_rules(ip)?);
@@ -364,6 +365,26 @@ fn tunnel_rule(interface: &str) -> Result<pfctl::FilterRule, Error> {
         .interface(interface)
         .keep_state(pfctl::StatePolicy::Keep)
         .build()?)
+}
+
+fn gateway_rules(interface: &str, gateway: IpAddr) -> Result<Vec<pfctl::FilterRule>, Error> {
+    let out_rule = pfctl::FilterRuleBuilder::default()
+        .action(FilterRuleAction::Pass)
+        .quick(true)
+        .direction(pfctl::Direction::Out)
+        .interface(interface)
+        .to(pfctl::Ip::from(IpNetwork::from(gateway)))
+        .keep_state(pfctl::StatePolicy::Keep)
+        .build()?;
+    let in_rule = pfctl::FilterRuleBuilder::default()
+        .action(FilterRuleAction::Pass)
+        .quick(true)
+        .direction(pfctl::Direction::In)
+        .interface(interface)
+        .from(pfctl::Ip::from(IpNetwork::from(gateway)))
+        .keep_state(pfctl::StatePolicy::Keep)
+        .build()?;
+    Ok(vec![out_rule, in_rule])
 }
 
 fn allowed_ip_rules(ip: IpAddr) -> Result<Vec<pfctl::FilterRule>, Error> {

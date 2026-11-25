@@ -26,6 +26,7 @@ use gnosis_vpn_ipc::{self as ipc, Reply, Request, Response, ServiceError};
 use gnosis_vpn_lib::command::{CommandRoute, RootCommand, WorkerCommand};
 use gnosis_vpn_lib::config::{self, Config};
 use gnosis_vpn_lib::event::{RequestToRoot, ResponseFromRoot, RootToWorker, WorkerToRoot};
+use gnosis_vpn_lib::killswitch::TunnelAccess;
 use gnosis_vpn_lib::worker::{self, WorkerOwner};
 use gnosis_vpn_lib::{dirs, hopr, logging, ping, socket};
 
@@ -1204,13 +1205,13 @@ impl DaemonState {
         Ok(())
     }
 
-    async fn apply_killswitch(&mut self, interface: Option<String>, ips: Vec<IpAddr>) -> Result<(), String> {
+    async fn apply_killswitch(&mut self, tunnel: TunnelAccess, ips: Vec<IpAddr>) -> Result<(), String> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let _ = self
             .routing_actor_sender
             .send(routing_actor::Msg::SetAllowedIps {
                 ips,
-                interface,
+                tunnel,
                 lan_lockdown: self.config.connection.lan_lockdown,
                 reply: reply_tx,
             })
@@ -1241,7 +1242,7 @@ impl DaemonState {
                 request_id,
                 peer_ips,
                 blokli_ip,
-                interface,
+                tunnel,
             } => {
                 // A stop may have lifted the killswitch while this request was in flight; never re-arm after it.
                 if !matches!(self.shutdown_ongoing, Shutdown::None) {
@@ -1251,7 +1252,7 @@ impl DaemonState {
                 self.blokli_ip = Some(blokli_ip);
                 let mut ips: Vec<IpAddr> = peer_ips.into_iter().map(IpAddr::V4).collect();
                 ips.push(IpAddr::V4(blokli_ip));
-                let res = self.apply_killswitch(interface, ips).await;
+                let res = self.apply_killswitch(tunnel, ips).await;
                 self.killswitch_armed |= res.is_ok();
                 if matches!(self.shutdown_ongoing, Shutdown::None)
                     && let Some(ref mut child) = self.worker_child

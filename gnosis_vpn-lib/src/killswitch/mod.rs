@@ -1,6 +1,23 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use ipnetwork::{IpNetwork, Ipv4Network, Ipv6Network};
+use serde::{Deserialize, Serialize};
+
+/// What the armed killswitch lets through the WireGuard tunnel interface.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TunnelAccess {
+    /// No tunnel yet.
+    Closed,
+    /// Only the gateway, so the exit's payment confirmation can be pinged while user traffic waits.
+    GatewayOnly {
+        interface: String,
+        gateway: IpAddr,
+    },
+    Open {
+        interface: String,
+    },
+}
 
 /// RFC-1918 private ranges + link-local + IPv6 ULA/link-local.
 /// Traffic to/from these networks is allowed when lan_lockdown is false.

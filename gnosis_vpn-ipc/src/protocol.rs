@@ -13,7 +13,7 @@ use crate::values::{
 };
 
 /// Bumped on every incompatible wire change; the service refuses requests of any other version.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
@@ -209,6 +209,8 @@ pub enum ConnectPhase {
     RegisterWg,
     OpeningPing,
     EstablishWgTunnel,
+    /// User traffic waits until the exit serves the session, i.e. has seen its PIX deposit.
+    AwaitingPayment,
     VerifyPing,
     AdjustToMain,
     ConnectionEstablished,

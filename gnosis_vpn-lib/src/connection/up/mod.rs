@@ -44,6 +44,8 @@ pub enum Progress {
     /// Handle to adjust the active session's SURB balancer, retained on `Up`
     /// so `core` can reconfigure it from live telemetry, not just once here.
     SessionConfigurator(HoprSessionConfigurator),
+    /// The exit has asked for this session's deposit and not served it yet; user traffic waits.
+    AwaitingPayment,
     Ping,
     AdjustToMain(Duration),
     /// Sets the SURB balancer's desired target; `core` slews toward it at the given ramp pacing.
@@ -150,6 +152,8 @@ pub(crate) enum Error {
     WireGuard(#[from] wireguard::Error),
     #[error("Remote data error: {0}")]
     RemoteData(#[from] remote_data::Error),
+    #[error("PIX deposit for the session {0}, so the exit will not serve it")]
+    Payment(Deposit),
 }
 
 /// Contains stateful data of establishing a VPN connection to a destination.
@@ -572,6 +576,7 @@ impl Up {
             Progress::SessionConfigurator(configurator) => {
                 self.session_configurator = Some(configurator);
             }
+            Progress::AwaitingPayment => self.phase = (now, Phase::AwaitingPayment),
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
             Progress::AdjustToMain(_round_trip_time) => self.phase = (now, Phase::AdjustToMain),
             Progress::SetSurbTarget { applied, target, ramp } => {
@@ -661,6 +666,7 @@ impl Display for Progress {
             Progress::KillswitchLockdown => write!(f, "Activating killswitch"),
             Progress::StaticWgTunnel(_) => write!(f, "Establishing static WireGuard tunnel"),
             Progress::SessionConfigurator(_) => write!(f, "Session configurator retained"),
+            Progress::AwaitingPayment => write!(f, "Waiting for the exit to confirm payment"),
             Progress::Ping => write!(f, "Verifying established connection"),
             Progress::AdjustToMain(round_trip_time) => {
                 write!(f, "Adjusting to main connection with RTT of {:?}", round_trip_time)

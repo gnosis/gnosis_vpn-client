@@ -307,6 +307,7 @@ impl Display for ConnectPhase {
             ConnectPhase::RegisterWg => "Registering WireGuard public key",
             ConnectPhase::OpeningPing => "Opening main connection",
             ConnectPhase::EstablishWgTunnel => "Establishing WireGuard tunnel",
+            ConnectPhase::AwaitingPayment => "Waiting for the exit to confirm payment",
             ConnectPhase::VerifyPing => "Verifying established connection",
             ConnectPhase::AdjustToMain => "Upgrading for general traffic",
             ConnectPhase::ConnectionEstablished => "Connection established",
