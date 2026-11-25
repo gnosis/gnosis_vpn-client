@@ -381,7 +381,8 @@ async fn open_relayer_sidecar(
                 let _ = tx.send(payload).await;
             });
         })
-        .await?;
+        .await
+        .map_err(Error::RelayerSidecar)?;
     if let Some(sidecar) = opened {
         let _ = results_sender.send(progress(Progress::RelayerSidecar(sidecar))).await;
     }

@@ -233,16 +233,26 @@ impl Display for Connection {
                 destination,
                 since,
                 phase,
+                step: _,
+                issue,
                 pix: _,
-            } => write!(
-                f,
-                "Connecting to {destination} (since {}, phase {phase})",
-                elapsed(since)
-            ),
+            } => {
+                write!(
+                    f,
+                    "Connecting to {destination} (since {}, phase {phase})",
+                    elapsed(since)
+                )?;
+                if let Some(issue) = issue {
+                    write!(f, ", {issue}")?;
+                }
+                Ok(())
+            }
             Connection::Reconnecting {
                 destination,
                 since,
                 phase,
+                step: _,
+                issue,
             } => {
                 let progress = match phase {
                     Some(phase) => format!("phase {phase}"),
@@ -252,7 +262,11 @@ impl Display for Connection {
                     f,
                     "Reconnecting to {destination} (since {}, {progress})",
                     elapsed(since)
-                )
+                )?;
+                if let Some(issue) = issue {
+                    write!(f, ", {issue}")?;
+                }
+                Ok(())
             }
             Connection::Connected {
                 destination,
@@ -313,6 +327,21 @@ impl Display for ConnectPhase {
             ConnectPhase::ConnectionEstablished => "Connection established",
         };
         f.write_str(text)
+    }
+}
+
+impl Display for ConnectIssue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let text = match self.kind {
+            ConnectIssueKind::ExitUnreachable => "exit unreachable",
+            ConnectIssueKind::PaymentRouteUnavailable => "payment route unavailable",
+            ConnectIssueKind::RegistrationFailed => "registration failed",
+            ConnectIssueKind::PaymentFailed => "payment failed",
+            ConnectIssueKind::InsufficientFunds => "insufficient funds",
+            ConnectIssueKind::TunnelUnverified => "tunnel unverified",
+            ConnectIssueKind::Other => "failed",
+        };
+        write!(f, "{text} ({}x)", self.attempts)
     }
 }
 

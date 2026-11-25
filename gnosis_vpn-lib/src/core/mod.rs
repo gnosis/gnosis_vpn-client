@@ -165,6 +165,8 @@ pub struct Core {
     pix_hold_failures: PixHoldFailures,
     /// Retry budget of the current connect attempts; reset once connected or on a user disconnect or switch.
     connect_retries: Option<ExponentialBackoff>,
+    /// What holds the connect up; kept across in-place retries so the count spans them.
+    connect_issue: Option<ipc::ConnectIssue>,
     /// Bumped on every connection teardown so an already-queued RetryConnect of an older attempt is dropped.
     connection_generation: u64,
 }
@@ -321,6 +323,7 @@ impl Core {
             reconnecting_since: None,
             pix_hold_failures: PixHoldFailures::default(),
             connect_retries: None,
+            connect_issue: None,
             connection_generation: 0,
         };
         Ok((core, incoming_sender))
@@ -528,6 +531,7 @@ impl Core {
                             Ok(dest) => {
                                 self.reconnecting_since = None;
                                 self.connect_retries = None;
+                                self.connect_issue = None;
                                 self.abandon_resume(results_sender).await;
                                 let is_already_active = match &self.phase {
                                     Phase::Connected(conn) | Phase::Connecting(conn) => {
@@ -583,6 +587,7 @@ impl Core {
                         self.target = None;
                         self.reconnecting_since = None;
                         self.connect_retries = None;
+                        self.connect_issue = None;
                         self.pix_hold_failures = PixHoldFailures::default();
                         self.abandon_resume(results_sender).await;
                         match self.phase.clone() {
@@ -888,10 +893,14 @@ impl Core {
                 match self.phase.clone() {
                     Phase::Connecting(mut conn) => match evt {
                         connection::up::Event::Progress(e) => {
+                            if self.connect_issue.is_some_and(|issue| e.resolves(issue.kind)) {
+                                self.connect_issue = None;
+                            }
                             conn.connect_progress(*e);
                             self.phase = Phase::Connecting(conn);
                         }
                         connection::up::Event::Setback(e) => {
+                            self.note_connect_issue(e.issue());
                             if let Some(rh) = self.route_healths.get_mut(&conn.destination.key()) {
                                 rh.with_error(e.to_string());
                             }
@@ -925,6 +934,7 @@ impl Core {
                     tracing::info!(%conn, "connection established successfully");
                     self.reconnecting_since = None;
                     self.connect_retries = None;
+                    self.connect_issue = None;
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
                     self.remember_connected(conn.destination.key()).await;
@@ -956,10 +966,14 @@ impl Core {
                 }
                 (Err(err), Phase::Connecting(conn)) => {
                     tracing::error!(?err, %conn, "connection failed");
-                    let error = match &conn.pump_exit {
-                        Some(exit) => format!("wg pump exited: {}", exit.reason),
-                        None => err.to_string(),
+                    let (error, issue) = match &conn.pump_exit {
+                        Some(exit) => (
+                            format!("wg pump exited: {}", exit.reason),
+                            ipc::ConnectIssueKind::ExitUnreachable,
+                        ),
+                        None => (err.to_string(), err.issue()),
                     };
+                    self.note_connect_issue(issue);
                     if let Some(rh) = self.route_healths.get_mut(&conn.destination.key()) {
                         rh.with_error(error);
                     }
@@ -2398,6 +2412,7 @@ impl Core {
             self.reconnecting_since,
             self.target.as_deref(),
             reconnect_at,
+            self.connect_issue,
             pix,
         );
         let disconnecting = self
@@ -2517,6 +2532,10 @@ impl Core {
         }
     }
 
+    fn note_connect_issue(&mut self, kind: ipc::ConnectIssueKind) {
+        self.connect_issue = Some(next_connect_issue(self.connect_issue, kind));
+    }
+
     /// The ping session becomes the main one, so it is the session that pays the exit.
     fn main_session_pix(&self) -> Option<ipc::PixChunkStats> {
         let conn = match &self.phase {
@@ -2617,6 +2636,7 @@ impl Core {
         self.close_relayer_sidecar(conn);
         self.cancel_connection.cancel();
         self.connect_retries = None;
+        self.connect_issue = None;
         self.connection_generation += 1;
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
@@ -2790,26 +2810,44 @@ impl Core {
     }
 }
 
+/// A different kind starts a new count: the earlier issue was got past.
+fn next_connect_issue(current: Option<ipc::ConnectIssue>, kind: ipc::ConnectIssueKind) -> ipc::ConnectIssue {
+    match current {
+        Some(issue) if issue.kind == kind => ipc::ConnectIssue {
+            kind,
+            attempts: issue.attempts + 1,
+        },
+        _ => ipc::ConnectIssue { kind, attempts: 1 },
+    }
+}
+
 /// The one connection the phase describes; between attempts a reconnect has no phase.
 fn connection_view(
     phase: &Phase,
     reconnecting_since: Option<SystemTime>,
     target_dest_id: Option<&str>,
     reconnect_at: u32,
+    issue: Option<ipc::ConnectIssue>,
     pix: Option<ipc::PixChunkStats>,
 ) -> ipc::Connection {
     if let Some(since) = reconnecting_since {
         let reconnecting = match phase {
-            Phase::Connecting(conn) => Some((conn.destination.connect_id.as_str(), Some(conn.phase.1.clone()))),
+            Phase::Connecting(conn) => Some((
+                conn.destination.connect_id.as_str(),
+                Some(conn.phase.1.clone()),
+                Some(conn.step(pix.as_ref())),
+            )),
             // Waiting on route health: the target is the only record of where we are headed.
-            Phase::HoprRunning => target_dest_id.map(|id| (id, None)),
+            Phase::HoprRunning => target_dest_id.map(|id| (id, None, None)),
             _ => None,
         };
-        if let Some((destination, phase)) = reconnecting {
+        if let Some((destination, phase, step)) = reconnecting {
             return ipc::Connection::Reconnecting {
                 destination: destination.into(),
                 since,
                 phase,
+                step,
+                issue,
             };
         }
     }
@@ -2818,6 +2856,8 @@ fn connection_view(
             destination: conn.destination.connect_id.as_str().into(),
             since: conn.phase.0,
             phase: conn.phase.1.clone(),
+            step: conn.step(pix.as_ref()),
+            issue,
             pix,
         },
         Phase::Connected(conn) => ipc::Connection::Connected {
@@ -3687,7 +3727,7 @@ mod tests {
     }
 
     fn view(phase: &Phase, reconnecting_since: Option<SystemTime>, target: Option<&str>) -> ipc::Connection {
-        connection_view(phase, reconnecting_since, target, 3, None)
+        connection_view(phase, reconnecting_since, target, 3, None, None)
     }
 
     #[test]
@@ -3699,6 +3739,8 @@ mod tests {
                 destination: "exit".into(),
                 since,
                 phase: None,
+                step: None,
+                issue: None,
             }
         );
     }
@@ -3736,7 +3778,32 @@ mod tests {
                 destination: "exit".into(),
                 since: SystemTime::UNIX_EPOCH,
                 phase: Some(UpPhase::VerifyPing),
+                step: Some(ipc::ConnectStep::Verifying),
+                issue: None,
             }
+        );
+    }
+
+    #[test]
+    fn a_repeated_issue_counts_up_and_another_starts_over() {
+        let route = ipc::ConnectIssueKind::PaymentRouteUnavailable;
+        let first = next_connect_issue(None, route);
+        let again = next_connect_issue(Some(first), route);
+        let other = next_connect_issue(Some(again), ipc::ConnectIssueKind::ExitUnreachable);
+        assert_eq!((first.attempts, again.attempts, other.attempts), (1, 2, 1));
+    }
+
+    #[test]
+    fn an_attempt_reports_its_issue() {
+        let phase = Phase::Connecting(attempt("exit", UpPhase::KillswitchLockdown));
+        let issue = ipc::ConnectIssue {
+            kind: ipc::ConnectIssueKind::PaymentRouteUnavailable,
+            attempts: 2,
+        };
+        let connection = connection_view(&phase, None, None, 3, Some(issue), None);
+        assert!(
+            matches!(connection, ipc::Connection::Connecting { step: ipc::ConnectStep::Securing, issue: Some(i), .. } if i == issue),
+            "{connection:?}"
         );
     }
 

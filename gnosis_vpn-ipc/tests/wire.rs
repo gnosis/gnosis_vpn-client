@@ -114,8 +114,10 @@ fn the_connection_is_one_tagged_state() {
             destination: "berlin".into(),
             since: at(1_000),
             phase: None,
+            step: None,
+            issue: None,
         },
-        json!({"type": "reconnecting", "destination": "berlin", "since": 1_000, "phase": null}),
+        json!({"type": "reconnecting", "destination": "berlin", "since": 1_000, "phase": null, "step": null, "issue": null}),
     );
     round_trips(
         &Connection::Connected {
@@ -363,6 +365,10 @@ fn pix_chunk_stats_ride_on_the_connection() {
             destination: "berlin".into(),
             since: at(1_000),
             phase: ConnectPhase::VerifyPing,
+            step: ConnectStep::Paying {
+                payment: PaymentProgress::Requested,
+            },
+            issue: None,
             pix: Some(PixChunkStats {
                 phase: PixPhase::PaymentPending,
                 chunks_committed: 1,
@@ -382,6 +388,8 @@ fn pix_chunk_stats_ride_on_the_connection() {
             "destination": "berlin",
             "since": 1_000,
             "phase": {"type": "verify_ping"},
+            "step": {"type": "paying", "payment": {"type": "requested"}},
+            "issue": null,
             "pix": {
                 "phase": {"type": "payment_pending"},
                 "chunks_committed": 1,
@@ -448,6 +456,8 @@ fn a_reconnect_without_attempt_names_the_wait() {
         destination: "berlin".into(),
         since: UNIX_EPOCH,
         phase: None,
+        step: None,
+        issue: None,
     }
     .to_string();
     assert!(waiting.contains("waiting for route health"), "{waiting}");
@@ -538,5 +548,29 @@ fn traffic_start_replies_are_tagged_objects() {
             reason: "Interface wg0 is not available".to_string(),
         }),
         json!({"type": "traffic_start", "data": {"type": "failed", "reason": "Interface wg0 is not available"}}),
+    );
+}
+
+#[test]
+fn connect_issue_names_its_kind_without_internals() {
+    round_trips(
+        &Connection::Reconnecting {
+            destination: "berlin".into(),
+            since: at(1_000),
+            phase: Some(ConnectPhase::KillswitchLockdown),
+            step: Some(ConnectStep::Securing),
+            issue: Some(ConnectIssue {
+                kind: ConnectIssueKind::PaymentRouteUnavailable,
+                attempts: 2,
+            }),
+        },
+        json!({
+            "type": "reconnecting",
+            "destination": "berlin",
+            "since": 1_000,
+            "phase": {"type": "killswitch_lockdown"},
+            "step": {"type": "securing"},
+            "issue": {"kind": {"type": "payment_route_unavailable"}, "attempts": 2}
+        }),
     );
 }
