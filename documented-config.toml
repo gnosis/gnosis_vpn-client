@@ -183,6 +183,12 @@ path    = { hops = 1 }
 # max_surb_upstream = "128 Kb/s"
 # always_max_out_surbs = false  # send only 1 SURB per request even if more would fit
 #
+# [connection.surb_balancing.relayer] - the PIX payment relayer's side-car session
+# enabled = true
+# buffer = "48 KB"
+# max_surb_upstream = "128 Kb/s"
+# always_max_out_surbs = false
+#
 # [connection.surb_balancing.ping]
 # enabled = true
 # buffer = "1 MB"

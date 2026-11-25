@@ -368,8 +368,7 @@ async fn open_relayer_sidecar(
     options: Options,
     results_sender: mpsc::Sender<Results>,
 ) -> Result<(), Error> {
-    // The relayer answers with tens of kilobytes; the ping tier's reply buffer carries that, the bridge tier's does not.
-    let surb = surb_config_for(&options.surb_balancing.ping)?;
+    let surb = surb_config_for(&options.surb_balancing.relayer)?;
     let cfg = relayer_sidecar_cfg(options.sessions.bridge.capabilities, destination.routing, surb);
     let opened = (|| async { hopr.open_relayer_sidecar(destination.address, cfg.clone()).await })
         .retry(remote_data::backoff_expo_short_delay())
