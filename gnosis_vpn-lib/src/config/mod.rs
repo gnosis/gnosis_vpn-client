@@ -61,6 +61,8 @@ impl Config {
         if let (gnosis_vpn_ipc::Mode::Bootstrap, Some(bootstrap)) = (mode, &self.bootstrap) {
             self.destinations = bootstrap.exits.clone();
             self.strategy.channel_allowlist = Some(bootstrap.relayers.clone());
+            // Opens fill only up to the target, so without headroom they wait until outside-allowlist closes land.
+            self.strategy.target_open_channels += bootstrap.relayers.len();
             self.mode = mode;
         }
         self
@@ -392,10 +394,15 @@ wireguard_server = "10.0.0.1:51820"
     fn bootstrap_mode_runs_only_the_bootstrap_exits_and_relayers() {
         let config = read_config(&with_bootstrap(&bootstrap_section()));
         let bootstrap = config.bootstrap.clone().expect("bootstrap section present");
+        let configured_target = config.strategy.target_open_channels;
 
         let effective = config.in_mode(gnosis_vpn_ipc::Mode::Bootstrap);
 
         assert_eq!(bootstrap.exits, effective.destinations);
+        assert_eq!(
+            configured_target + bootstrap.relayers.len(),
+            effective.strategy.target_open_channels
+        );
         assert_eq!(Some(bootstrap.relayers), effective.strategy.channel_allowlist);
         assert_eq!(gnosis_vpn_ipc::Mode::Bootstrap, effective.mode);
     }
