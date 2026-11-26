@@ -133,6 +133,13 @@ pub fn info(socket_path: &Path) -> Result<InfoResponse, CallError> {
     }
 }
 
+pub fn set_mode(socket_path: &Path, mode: Mode) -> Result<SetModeResponse, CallError> {
+    match call(socket_path, Request::SetMode { mode })? {
+        Response::SetMode(response) => Ok(response),
+        other => Err(unexpected(other)),
+    }
+}
+
 pub fn start_client(socket_path: &Path, timeout: Duration) -> Result<StartClientResponse, CallError> {
     match call(socket_path, Request::StartClient { timeout })? {
         Response::StartClient(response) => Ok(response),

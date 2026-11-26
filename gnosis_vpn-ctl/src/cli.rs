@@ -3,6 +3,24 @@ use gnosis_vpn_ipc::{self as ipc, Request};
 use std::io::Write;
 use std::path::PathBuf;
 
+/// The modes `mode` switches between.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum ModeArg {
+    /// Configured and discovered exits
+    Normal,
+    /// Only the configuration's bootstrap exits and relayers
+    Bootstrap,
+}
+
+impl From<ModeArg> for ipc::Mode {
+    fn from(val: ModeArg) -> Self {
+        match val {
+            ModeArg::Normal => ipc::Mode::Normal,
+            ModeArg::Bootstrap => ipc::Mode::Bootstrap,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum OutputFormat {
     Plain,
@@ -112,6 +130,13 @@ pub enum Command {
     #[command()]
     StopClient {},
 
+    /// Switch between normal and bootstrap mode; a switch restarts the worker and ends the connection
+    #[command()]
+    Mode {
+        /// The mode to run in
+        mode: ModeArg,
+    },
+
     /// Print shell completion script for the given shell to stdout
     #[command(hide = true)]
     Completions { shell: clap_complete::Shell },
@@ -141,6 +166,7 @@ impl From<Command> for Request {
                 timeout: keep_alive.into(),
             },
             Command::StopClient {} => Request::StopClient,
+            Command::Mode { mode } => Request::SetMode { mode: mode.into() },
             Command::Destinations {} => Request::Destinations,
             Command::Completions { .. } => unreachable!("Completions is handled before socket dispatch"),
         }
@@ -235,6 +261,19 @@ functions[_gnosis_vpn-ctl]=${{functions[_gnosis_vpn-ctl]//:id*:_default/:id:_gno
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_sends_set_mode() {
+        let cli = Cli::try_parse_from(["gnosis_vpn-ctl", "mode", "bootstrap"]).expect("valid command line");
+
+        assert_eq!(
+            Request::SetMode {
+                mode: ipc::Mode::Bootstrap
+            },
+            Request::from(cli.command)
+        );
+        assert!(Cli::try_parse_from(["gnosis_vpn-ctl", "mode", "turbo"]).is_err());
+    }
 
     #[test]
     fn bash_wrapper_targets_clap_function_name() {

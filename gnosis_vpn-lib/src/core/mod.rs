@@ -1553,6 +1553,10 @@ impl Core {
     /// config with no `[destinations]` has none until then. The guard also stops the
     /// `ExitNodesRetry` re-spawn from resurrecting discovery outside that window.
     fn spawn_exit_node_discovery_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
+        // Bootstrap exits are not registered, and discovered ones must not join them.
+        if self.config.mode == ipc::Mode::Bootstrap {
+            return;
+        }
         let Some(hopr) = self.hopr.clone() else { return };
         let cancel = self.cancel_on_shutdown.clone();
         let worker_params = self.worker_params.clone();
@@ -2436,6 +2440,8 @@ impl Core {
                 .iter()
                 .filter_map(|key| self.destination_id(key))
                 .collect(),
+            mode: self.config.mode,
+            bootstrap_available: self.config.bootstrap.is_some(),
         }
     }
 
