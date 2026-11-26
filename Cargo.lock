@@ -5009,7 +5009,7 @@ dependencies = [
 [[package]]
 name = "hopr-crypto-packet"
 version = "2.4.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#c0ad8d7ed1202b79c4c9dc11445dc9a52e6b890d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#832658cf6117f11cfe6f01968fa7034f2cf5a159"
 dependencies = [
  "bimap",
  "bytes",
@@ -5048,7 +5048,7 @@ dependencies = [
 [[package]]
 name = "hopr-lib"
 version = "5.0.0-rc.6"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#c0ad8d7ed1202b79c4c9dc11445dc9a52e6b890d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#832658cf6117f11cfe6f01968fa7034f2cf5a159"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -5110,7 +5110,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-app"
 version = "1.3.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#c0ad8d7ed1202b79c4c9dc11445dc9a52e6b890d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#832658cf6117f11cfe6f01968fa7034f2cf5a159"
 dependencies = [
  "bytes",
  "hopr-crypto-packet",
@@ -5123,7 +5123,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-hopr"
 version = "6.6.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#c0ad8d7ed1202b79c4c9dc11445dc9a52e6b890d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#832658cf6117f11cfe6f01968fa7034f2cf5a159"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5153,7 +5153,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-pix"
 version = "0.3.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#c0ad8d7ed1202b79c4c9dc11445dc9a52e6b890d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#832658cf6117f11cfe6f01968fa7034f2cf5a159"
 dependencies = [
  "ahash",
  "auto_impl",
@@ -5176,7 +5176,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-session"
 version = "2.0.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#c0ad8d7ed1202b79c4c9dc11445dc9a52e6b890d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#832658cf6117f11cfe6f01968fa7034f2cf5a159"
 dependencies = [
  "aquamarine",
  "asynchronous-codec",
@@ -5207,7 +5207,7 @@ dependencies = [
 [[package]]
 name = "hopr-protocol-start"
 version = "4.1.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#c0ad8d7ed1202b79c4c9dc11445dc9a52e6b890d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#832658cf6117f11cfe6f01968fa7034f2cf5a159"
 dependencies = [
  "aquamarine",
  "flagset",
@@ -5292,8 +5292,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-transport"
-version = "0.54.2"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#c0ad8d7ed1202b79c4c9dc11445dc9a52e6b890d"
+version = "0.54.3"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#832658cf6117f11cfe6f01968fa7034f2cf5a159"
 dependencies = [
  "ahash",
  "anyhow",
@@ -5342,7 +5342,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-mixer"
 version = "1.0.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#c0ad8d7ed1202b79c4c9dc11445dc9a52e6b890d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#832658cf6117f11cfe6f01968fa7034f2cf5a159"
 dependencies = [
  "futures",
  "futures-timer",
@@ -5385,7 +5385,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-probe"
 version = "0.9.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#c0ad8d7ed1202b79c4c9dc11445dc9a52e6b890d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#832658cf6117f11cfe6f01968fa7034f2cf5a159"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5412,7 +5412,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-session"
 version = "0.38.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#c0ad8d7ed1202b79c4c9dc11445dc9a52e6b890d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#832658cf6117f11cfe6f01968fa7034f2cf5a159"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5446,7 +5446,7 @@ dependencies = [
 [[package]]
 name = "hopr-transport-tag-allocator"
 version = "0.2.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#c0ad8d7ed1202b79c4c9dc11445dc9a52e6b890d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#832658cf6117f11cfe6f01968fa7034f2cf5a159"
 dependencies = [
  "hopr-protocol-app",
  "serde",
@@ -5638,7 +5638,7 @@ dependencies = [
 [[package]]
 name = "hopr-utils-session"
 version = "1.3.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#c0ad8d7ed1202b79c4c9dc11445dc9a52e6b890d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#832658cf6117f11cfe6f01968fa7034f2cf5a159"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5665,7 +5665,7 @@ dependencies = [
 [[package]]
 name = "hopr-utils-tracing"
 version = "0.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#c0ad8d7ed1202b79c4c9dc11445dc9a52e6b890d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#832658cf6117f11cfe6f01968fa7034f2cf5a159"
 dependencies = [
  "crossfire",
  "futures",
