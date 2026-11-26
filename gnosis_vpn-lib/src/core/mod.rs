@@ -2732,7 +2732,7 @@ impl Core {
             .pix_strategy
             .to_entry_config(self.worker_params.pix_state_dir(), identity_pass.into());
         match edgli
-            .start_telemetry_reactor(self.config.reactor_strategy().into(), pix)
+            .start_telemetry_reactor(self.config.strategy.clone().into(), pix)
             .await
         {
             Ok(reactor) => {

@@ -61,19 +61,11 @@ impl Config {
         if let (gnosis_vpn_ipc::Mode::Bootstrap, Some(bootstrap)) = (mode, &self.bootstrap) {
             self.destinations = bootstrap.exits.clone();
             self.strategy.channel_allowlist = Some(bootstrap.relayers.clone());
+            // Opens fill only up to the target, so without headroom they wait until outside-allowlist closes land.
+            self.strategy.target_open_channels += bootstrap.relayers.len();
             self.mode = mode;
         }
         self
-    }
-
-    /// The channel strategy the reactor runs; funding recommendations keep the configured `strategy`.
-    pub fn reactor_strategy(&self) -> StrategyConfig {
-        let mut strategy = self.strategy.clone();
-        if let (gnosis_vpn_ipc::Mode::Bootstrap, Some(bootstrap)) = (self.mode, &self.bootstrap) {
-            // Opens fill only up to the target, so without headroom they wait until outside-allowlist closes land.
-            strategy.target_open_channels += bootstrap.relayers.len();
-        }
-        strategy
     }
 
     /// Status from the config file alone, while no core runs to answer it.
@@ -407,10 +399,9 @@ wireguard_server = "10.0.0.1:51820"
         let effective = config.in_mode(gnosis_vpn_ipc::Mode::Bootstrap);
 
         assert_eq!(bootstrap.exits, effective.destinations);
-        assert_eq!(configured_target, effective.strategy.target_open_channels);
         assert_eq!(
             configured_target + bootstrap.relayers.len(),
-            effective.reactor_strategy().target_open_channels
+            effective.strategy.target_open_channels
         );
         assert_eq!(Some(bootstrap.relayers), effective.strategy.channel_allowlist);
         assert_eq!(gnosis_vpn_ipc::Mode::Bootstrap, effective.mode);
@@ -422,10 +413,6 @@ wireguard_server = "10.0.0.1:51820"
         let without = read_config(&with_bootstrap(""));
 
         assert_eq!(with.clone(), with.clone().in_mode(gnosis_vpn_ipc::Mode::Normal));
-        assert_eq!(
-            with.strategy,
-            with.clone().in_mode(gnosis_vpn_ipc::Mode::Normal).reactor_strategy()
-        );
         assert_eq!(
             without.clone(),
             without.clone().in_mode(gnosis_vpn_ipc::Mode::Bootstrap)
