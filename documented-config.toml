@@ -86,11 +86,8 @@ path    = { hops = 1 }
 # relayers = ["0x...", "0x..."]
 
 # One entry for each exit, at least one. An entry takes the same keys as a [destinations] entry.
-# country - optional ISO 3166-1 alpha-2 code shown as the exit's country. Without it, the country
-# comes from the address the exit announces on-chain.
 # [bootstrap.exits.<id>]
 # address = "<exit node address>"
-# country = "NL"
 # meta    = { name = "Amsterdam" }
 
 ###

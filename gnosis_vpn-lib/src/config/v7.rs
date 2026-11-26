@@ -673,15 +673,7 @@ pub struct Config {
 pub(super) struct Bootstrap {
     #[serde_as(as = "Vec<DisplayFromStr>")]
     pub(super) relayers: Vec<Address>,
-    pub(super) exits: Option<HashMap<String, BootstrapExit>>,
-}
-
-/// A destination entry plus the country to show, since these exits publish no labels.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub(super) struct BootstrapExit {
-    #[serde(flatten)]
-    pub(super) destination: Destination,
-    pub(super) country: Option<gnosis_vpn_ipc::CountryCode>,
+    pub(super) exits: Option<HashMap<String, Destination>>,
 }
 
 #[serde_as]
@@ -728,7 +720,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                             for (k2, _) in exit.iter() {
                                 if !matches!(
                                     k2.as_str(),
-                                    "address" | "meta" | "path" | "gnosis_vpn_server" | "wireguard_server" | "country"
+                                    "address" | "meta" | "path" | "gnosis_vpn_server" | "wireguard_server"
                                 ) {
                                     wrong.push(format!("bootstrap.exits.{id}.{k2}"));
                                 }
@@ -1096,7 +1088,7 @@ impl TryFrom<Config> for config::Config {
     }
 }
 
-/// Exits are read like `[destinations]`; their country is pinned like any other configured value.
+/// Exits are read like `[destinations]`.
 fn convert_bootstrap(value: Bootstrap, defaults: DefaultTargets) -> Result<config::Bootstrap, config::Error> {
     if value.relayers.is_empty() {
         return Err(config::Error::EmptyBootstrap("relayers"));
@@ -1105,21 +1097,7 @@ fn convert_bootstrap(value: Bootstrap, defaults: DefaultTargets) -> Result<confi
     if entries.is_empty() {
         return Err(config::Error::EmptyBootstrap("exits"));
     }
-    let countries: HashMap<String, gnosis_vpn_ipc::CountryCode> = entries
-        .iter()
-        .filter_map(|(id, exit)| exit.country.map(|c| (id.clone(), c)))
-        .collect();
-    let mut exits = convert_destinations(
-        Some(entries.into_iter().map(|(id, exit)| (id, exit.destination)).collect()),
-        defaults,
-    )?;
-    for dest in exits.values_mut() {
-        dest.overrides.configured_country = countries.get(&dest.connect_id).copied();
-        dest.geo = dest.overrides.configured_country.map(|country| crate::geoip::Geo {
-            country,
-            source: crate::geoip::GeoSource::Configured,
-        });
-    }
+    let exits = convert_destinations(Some(entries), defaults)?;
     Ok(config::Bootstrap {
         relayers: value.relayers.into_iter().collect(),
         exits,
@@ -2307,7 +2285,6 @@ meta = { name = "Amsterdam" }
 path = { hops = 1 }
 gnosis_vpn_server = "172.30.0.1:8000"
 wireguard_server = "172.30.0.1:51820"
-country = "NL"
 location = "NL"
 "#####
             .parse::<toml::Table>()

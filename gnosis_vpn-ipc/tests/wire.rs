@@ -255,22 +255,6 @@ fn set_mode_is_a_tagged_request_with_a_tagged_answer() {
 }
 
 #[test]
-fn a_configured_country_shows_in_geo_and_overrides() {
-    let mut dest = destination();
-    dest.geo = Some(Geo {
-        country: "NL".parse().unwrap(),
-        source: GeoSource::Configured,
-    });
-    dest.overrides.configured_country = Some("NL".parse().unwrap());
-    let json = serde_json::to_value(&dest).expect("serialize");
-
-    assert_eq!(json["geo"], json!({"country": "NL", "source": {"type": "configured"}}));
-    assert_eq!(json["overrides"]["configured_country"], json!("NL"));
-    let back: Destination = serde_json::from_value(json).expect("deserialize");
-    assert_eq!(back, dest);
-}
-
-#[test]
 fn fund_pix_pool_request_carries_wei() {
     let request = Request::FundPixPool {
         amount: "1.5".parse().expect("token amount"),

@@ -417,9 +417,6 @@ pub struct Overrides {
     pub configured_meta: BTreeMap<String, String>,
     pub configured_gnosis_vpn_server: Option<SocketAddr>,
     pub configured_wireguard_server: Option<SocketAddr>,
-    /// The exit's country as configuration states it, in place of the announced address's.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub configured_country: Option<CountryCode>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -440,7 +437,6 @@ pub struct Geo {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GeoSource {
     AnnouncedIp,
-    Configured,
 }
 
 /// The suffix a discovered id carries so no later same-named exit can take it; FNV-1a by hand, as `DefaultHasher` drifts per rustc.

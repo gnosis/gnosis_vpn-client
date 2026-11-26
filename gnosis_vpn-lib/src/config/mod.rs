@@ -322,7 +322,6 @@ relayers = ["{RELAY_A}", "{RELAY_B}"]
 
 [bootstrap.exits.amsterdam]
 address = "{AMSTERDAM}"
-country = "NL"
 meta = {{ name = "Amsterdam" }}
 
 [bootstrap.exits.iowa]
@@ -350,19 +349,9 @@ wireguard_server = "10.0.0.1:51820"
         let amsterdam = bootstrap.exits.by_connect_id("amsterdam").expect("amsterdam exit");
         assert_eq!(addr(AMSTERDAM), amsterdam.address);
         assert_eq!(Some("Amsterdam"), amsterdam.meta.name.as_deref());
-        assert_eq!(
-            Some("NL".to_string()),
-            amsterdam.overrides.configured_country.as_ref().map(|c| c.to_string())
-        );
-        // Shown before the first announced-peers fetch, which refreshes the geo of all exits.
-        assert_eq!(
-            Some(("NL".to_string(), crate::geoip::GeoSource::Configured)),
-            amsterdam.geo.as_ref().map(|g| (g.country.to_string(), g.source))
-        );
         assert_eq!(config.default_targets.wireguard_server, amsterdam.wireguard_server);
         let iowa = bootstrap.exits.by_connect_id("iowa").expect("iowa exit");
         assert_eq!(2, iowa.routing.hop_count());
-        assert_eq!(None, iowa.overrides.configured_country);
         assert_eq!(
             "10.0.0.1:51820".parse::<std::net::SocketAddr>().unwrap(),
             iowa.wireguard_server
@@ -374,13 +363,6 @@ wireguard_server = "10.0.0.1:51820"
     #[test]
     fn a_config_without_a_bootstrap_section_has_no_bootstrap() {
         assert_eq!(None, read_config(&with_bootstrap("")).bootstrap);
-    }
-
-    #[test]
-    fn a_bootstrap_exit_with_an_invalid_country_is_rejected() {
-        let section = bootstrap_section().replace(r#"country = "NL""#, r#"country = "NLD""#);
-
-        assert!(parse(&with_bootstrap(&section)).is_err());
     }
 
     #[test]

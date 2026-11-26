@@ -103,7 +103,6 @@ pub fn configured_overrides(
         configured_meta: meta.into_iter().collect(),
         configured_gnosis_vpn_server: gnosis_vpn_server,
         configured_wireguard_server: wireguard_server,
-        configured_country: None,
     }
 }
 
@@ -331,19 +330,12 @@ impl Destinations {
         }
     }
 
-    /// Every destination's country: configuration's if it states one, else from its exit's announced
-    /// addresses, so an unpinned exit missing from the snapshot loses it.
+    /// Every destination's country from its exit's announced addresses; an exit missing from the snapshot loses it.
     pub fn refresh_geo(&mut self, announced_ipv4: &HashMap<Address, Vec<Ipv4Addr>>, geoip: &GeoIp) {
         for dest in self.by_exit.values_mut() {
-            dest.geo = match &dest.overrides.configured_country {
-                Some(country) => Some(Geo {
-                    country: *country,
-                    source: crate::geoip::GeoSource::Configured,
-                }),
-                None => announced_ipv4
-                    .get(&dest.address)
-                    .and_then(|addrs| geoip.country_of(addrs)),
-            };
+            dest.geo = announced_ipv4
+                .get(&dest.address)
+                .and_then(|addrs| geoip.country_of(addrs));
         }
     }
 
@@ -1418,33 +1410,6 @@ mod tests {
         assert_eq!(None, country_of(&destinations, disagreeing));
         assert_eq!(None, country_of(&destinations, unknown));
         assert_eq!(None, country_of(&destinations, gone));
-    }
-
-    #[test]
-    fn a_configured_country_wins_over_the_announced_one() {
-        let geoip = geoip_fixture();
-        let (announced_elsewhere, unannounced) = (address(1), address(2));
-        let mut destinations = Destinations::default();
-        for (id, addr) in [("a", announced_elsewhere), ("b", unannounced)] {
-            let mut dest = configured(id, addr);
-            dest.overrides.configured_country = Some("SG".parse().unwrap());
-            destinations.insert(dest);
-        }
-        let mut announced = HashMap::new();
-        // Resolves to AU in the fixture.
-        announced.insert(announced_elsewhere, vec!["185.9.1.9".parse().unwrap()]);
-
-        destinations.refresh_geo(&announced, &geoip);
-
-        for addr in [announced_elsewhere, unannounced] {
-            let geo = destinations
-                .values()
-                .find(|d| d.address == addr)
-                .and_then(|d| d.geo.clone())
-                .expect("a configured country always resolves");
-            assert_eq!("SG", geo.country.to_string());
-            assert_eq!(crate::geoip::GeoSource::Configured, geo.source);
-        }
     }
 
     #[test]
