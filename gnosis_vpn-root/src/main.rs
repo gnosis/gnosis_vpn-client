@@ -1488,6 +1488,8 @@ impl DaemonState {
         tracing::info!(?mode, "switching mode");
         self.mode = mode;
         self.target_dest_id = None;
+        // A switch back before the old worker exits would otherwise let its replies match again.
+        self.worker_mode = None;
         if matches!(self.shutdown_ongoing, Shutdown::None)
             && let Some(ref mut child) = self.worker_child
         {
@@ -1944,6 +1946,9 @@ mod tests {
         // A late reply from the worker a mode switch is stopping names an exit of the old mode.
         assert_eq!(None, target_from_reply(exit(), Some(Normal), Bootstrap));
         assert_eq!(None, target_from_reply(exit(), Some(Bootstrap), Normal));
+        // A worker a switch is retiring has no mode, even if the mode switched back.
+        assert_eq!(None, target_from_reply(exit(), None, Normal));
+        assert_eq!(None, target_from_reply(exit(), None, Bootstrap));
     }
 
     const ALICE: u32 = 1000;
