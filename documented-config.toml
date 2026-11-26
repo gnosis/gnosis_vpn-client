@@ -83,7 +83,8 @@ path    = { hops = 1 }
 
 # [bootstrap]
 # relayers - chain addresses of the relay nodes to keep channels to; at least one.
-# Bootstrap mode raises target_open_channels by the number of relayers.
+# Bootstrap mode raises target_open_channels by the number of relayers for channel opening only;
+# funding recommendations keep the configured target.
 # relayers = ["0x...", "0x..."]
 
 # One entry for each exit, at least one. An entry takes the same keys as a [destinations] entry.
