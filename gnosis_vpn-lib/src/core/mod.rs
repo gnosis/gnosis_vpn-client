@@ -4,7 +4,7 @@ use edgli::blokli::IncentiveOperations;
 use edgli::hopr_lib::api::types::internal::protocol::HoprPseudonym;
 use edgli::hopr_lib::api::types::primitive::prelude::ToHex;
 use edgli::hopr_lib::builder::Keypair;
-use futures_util::future::AbortHandle;
+use futures_util::future::{AbortHandle, BoxFuture};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time;
@@ -483,21 +483,31 @@ impl Core {
                 match cmd {
                     WorkerCommand::NerdStats => {
                         tracing::debug!("incoming nerd stats request");
-                        let Some(ops) = self.incentive_operations.clone() else {
-                            let _ = resp.send(Response::NerdStats(Box::new(ipc::NerdStats::NoInfo {
-                                tickets: ipc::TicketStatsStatus::Waiting,
-                                strategies: None,
-                            })));
-                            return true;
-                        };
+                        // The pre-node connector is gone once the node runs.
+                        let ticket_stats: BoxFuture<'static, Result<edgli::blokli::TicketStats, String>> =
+                            match (self.hopr.clone(), self.incentive_operations.clone()) {
+                                (Some(hopr), _) => {
+                                    Box::pin(async move { hopr.ticket_stats().await.map_err(|e| e.to_string()) })
+                                }
+                                (None, Some(ops)) => {
+                                    Box::pin(async move { ops.ticket_stats().await.map_err(|e| e.to_string()) })
+                                }
+                                (None, None) => {
+                                    let _ = resp.send(Response::NerdStats(Box::new(ipc::NerdStats::NoInfo {
+                                        tickets: ipc::TicketStatsStatus::Waiting,
+                                        strategies: None,
+                                    })));
+                                    return true;
+                                }
+                            };
                         let sender = results_sender.clone();
                         tokio::spawn(async move {
-                            let ticket_stats_status = match ops.ticket_stats().await {
+                            let ticket_stats_status = match ticket_stats.await {
                                 Ok(ts) => ipc::TicketStatsStatus::Available(ipc::TicketStats {
                                     ticket_price: wire::wxhopr(ts.ticket_price),
                                     winning_probability: ts.winning_probability.into(),
                                 }),
-                                Err(e) => ipc::TicketStatsStatus::Error { message: e.to_string() },
+                                Err(message) => ipc::TicketStatsStatus::Error { message },
                             };
                             let _ = sender
                                 .send(Results::NerdStatsTicketStats {
@@ -1666,6 +1676,11 @@ impl Core {
             query_safe: Querying::Init,
             deploy_safe_issue: None,
         };
+        // Released once the node ran; its creation result comes back here via the persisted-safe check.
+        if self.incentive_operations.is_none() {
+            self.spawn_initial_runner(results_sender, Duration::ZERO);
+            return;
+        }
         self.spawn_query_safe_runner(results_sender, Duration::ZERO);
         self.spawn_node_balance_runner(results_sender, Duration::ZERO);
     }
@@ -1887,15 +1902,16 @@ impl Core {
     }
 
     fn spawn_node_wxhopr_withdraw_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
-        if let (Some(ops), Some(hopr)) = (self.incentive_operations.clone(), self.hopr.clone()) {
-            let safe_address = hopr.info().safe_address;
+        if let Some(hopr) = self.hopr.clone() {
+            let worker_params = self.worker_params.clone();
+            let blokli_config = self.config.blokli.clone();
             let cancel = self.cancel_node_wxhopr.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
                     .run_until_cancelled(async move {
                         time::sleep(delay).await;
-                        runner::node_wxhopr_withdraw(ops, safe_address, results_sender).await;
+                        runner::node_wxhopr_withdraw(worker_params, blokli_config, hopr, results_sender).await;
                     })
                     .await
             });
@@ -2704,6 +2720,8 @@ impl Core {
 
     fn on_hopr_running(&mut self, results_sender: &mpsc::Sender<Results>) {
         self.phase = Phase::HoprRunning;
+        // Its chain graph duplicates the node's; in-flight runners hold their own clone.
+        self.incentive_operations = None;
         self.channel_settle = balance::ChannelSettle::new(Instant::now());
         self.spawn_exit_node_discovery_runner(results_sender, Duration::ZERO);
         self.spawn_ideal_balance_recommendation_runner(results_sender, Duration::ZERO);
@@ -3182,6 +3200,62 @@ mod tests {
         assert!(matches!(core.phase, Phase::CheckingSafe { .. }));
         assert!(!hopr_config::safe_file(&cache_dir).exists());
         assert!(cache_dir.join("hopr.safe.stale").exists());
+    }
+
+    /// Stands in for the pre-node connector; tests only check whether `Core` holds it.
+    struct UnusedIncentiveOperations;
+
+    fn unused() -> edgli::errors::EdgliError {
+        edgli::errors::EdgliError::OsError("not used in this test".to_string())
+    }
+
+    #[async_trait::async_trait]
+    impl IncentiveOperations for UnusedIncentiveOperations {
+        async fn retrieve_safe(&self) -> edgli::errors::Result<Option<edgli::blokli::SafeModuleDeploymentResult>> {
+            Err(unused())
+        }
+        async fn deploy_safe(
+            &self,
+            _token_amount: edgli::hopr_lib::api::types::primitive::prelude::HoprBalance,
+        ) -> edgli::errors::Result<edgli::blokli::SafeModuleDeploymentResult> {
+            Err(unused())
+        }
+        async fn ticket_stats(&self) -> edgli::errors::Result<edgli::blokli::TicketStats> {
+            Err(unused())
+        }
+        async fn max_fee_per_gas(&self) -> edgli::errors::Result<u128> {
+            Err(unused())
+        }
+        async fn compute_costs_to_start(&self) -> edgli::errors::Result<edgli::strategy::StartupCosts> {
+            Err(unused())
+        }
+        async fn balances(
+            &self,
+        ) -> edgli::errors::Result<(
+            edgli::hopr_lib::api::types::primitive::prelude::HoprBalance,
+            edgli::hopr_lib::api::types::primitive::prelude::XDaiBalance,
+        )> {
+            Err(unused())
+        }
+        async fn withdraw_wxhopr(
+            &self,
+            _safe_address: edgli::hopr_lib::api::types::primitive::prelude::Address,
+            _amount: edgli::hopr_lib::api::types::primitive::prelude::HoprBalance,
+        ) -> edgli::errors::Result<()> {
+            Err(unused())
+        }
+    }
+
+    #[tokio::test]
+    async fn reaching_running_releases_the_pre_node_connector() {
+        let TestCore { mut core, results, .. } = fresh_core().await;
+        core.incentive_operations = Some(Arc::new(UnusedIncentiveOperations));
+
+        core.on_hopr_running(&results);
+        core.cancel_on_shutdown.cancel();
+
+        assert!(matches!(core.phase, Phase::HoprRunning));
+        assert!(core.incentive_operations.is_none());
     }
 
     #[tokio::test]

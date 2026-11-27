@@ -6,13 +6,13 @@ use edgli::{
     hopr_lib::{
         HopRouting, HoprSessionClientConfig,
         api::{
-            chain::{AccountSelector, ChainKeyOperations, ChainPathResolver, ChainReadAccountOperations},
+            chain::{AccountSelector, ChainKeyOperations, ChainPathResolver, ChainReadAccountOperations, ChainValues},
             graph::NetworkGraphView,
             node::HasChainApi,
             types::{
                 crypto::prelude::OffchainPublicKey,
                 internal::{NodeId, channels::ChannelStatus, path::ValidatedPath},
-                primitive::prelude::Address,
+                primitive::prelude::{Address, HoprBalance},
             },
         },
         errors::HoprLibError,
@@ -375,6 +375,31 @@ impl Hopr {
             channels_out,
             pix_pool_wxhopr: None,
         })
+    }
+
+    /// Read off the node's own connector, so the pre-node one need not outlive startup.
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
+    pub async fn ticket_stats(&self) -> Result<edgli::blokli::TicketStats, HoprError> {
+        let chain_api = self.edgli.chain_api();
+        let ticket_price = chain_api
+            .minimum_ticket_price()
+            .await
+            .map_err(|e| HoprError::HoprLib(HoprLibError::GeneralError(e.to_string())))?;
+        let winning_probability = chain_api
+            .minimum_incoming_ticket_win_prob()
+            .await
+            .map_err(|e| HoprError::HoprLib(HoprLibError::GeneralError(e.to_string())))?;
+        Ok(edgli::blokli::TicketStats {
+            ticket_price,
+            winning_probability,
+        })
+    }
+
+    /// wxHOPR on the node wallet, which belongs in the Safe.
+    #[tracing::instrument(skip(self), level = "debug", ret, err)]
+    pub async fn node_wxhopr(&self) -> Result<HoprBalance, HoprError> {
+        let node_balances = self.edgli.balances().await.map_err(HoprError::HoprLib)?;
+        Ok(node_balances.node_wxhopr)
     }
 
     #[tracing::instrument(skip(self), level = "debug")]
