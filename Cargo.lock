@@ -3708,8 +3708,8 @@ dependencies = [
 
 [[package]]
 name = "edgli"
-version = "5.3.0"
-source = "git+https://github.com/hoprnet/edge-client.git?branch=feature%2Fcore-1447-edgli-let-the-embedder-send-curvy-relayer#2eef8595a6874b7b38bcb35dfcdf168e12e91c79"
+version = "5.3.1"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=main#a5c2e1a55d9fa83226baab7ba8ea6af9d7cb826e"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -4976,9 +4976,9 @@ dependencies = [
 
 [[package]]
 name = "hopr-chain-connector"
-version = "0.36.1"
+version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcc23cbbd381916ccf6f0cb5eaab22ff1c2673ff002a5dddb12e81e24c256bec"
+checksum = "292fb334cf42162a75b8529c63c4a1868c66c00e3ed5045b900b88ab012edb17"
 dependencies = [
  "ahash",
  "anyhow",
@@ -4987,7 +4987,6 @@ dependencies = [
  "atomic_enum",
  "blokli-client",
  "const-hex",
- "dashmap",
  "futures",
  "futures-concurrency",
  "futures-time",
