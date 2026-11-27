@@ -183,13 +183,14 @@ impl<'a> PolicyBatch<'a> {
 
     fn finalize(mut self, tunnel: &TunnelAccess, allowed_ips: &[IpAddr], lan_lockdown: bool) -> FinalizedBatch {
         self.add_loopback_rules();
-        self.add_dhcp_client_rules();
-        self.add_ndp_rules();
+        // The DHCP and NDP exceptions match any interface, so the tunnel verdict must come first.
         match tunnel {
             TunnelAccess::Closed => {}
             TunnelAccess::GatewayOnly { interface, gateway } => self.add_gateway_rules(interface, *gateway),
             TunnelAccess::Open { interface } => self.add_tunnel_rules(interface),
         }
+        self.add_dhcp_client_rules();
+        self.add_ndp_rules();
         self.add_allowed_ip_rules(allowed_ips);
         if !lan_lockdown {
             self.add_lan_rules();

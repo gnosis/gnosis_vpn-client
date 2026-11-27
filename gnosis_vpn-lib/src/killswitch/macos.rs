@@ -142,13 +142,14 @@ impl Firewall {
         let mut rules = vec![];
 
         rules.append(&mut loopback_rules()?);
-        rules.append(&mut dhcp_rules()?);
-        rules.append(&mut ndp_rules()?);
+        // The DHCP and NDP exceptions match any interface, so the tunnel verdict must come first.
         match tunnel {
             TunnelAccess::Closed => {}
             TunnelAccess::GatewayOnly { interface, gateway } => rules.append(&mut gateway_rules(interface, *gateway)?),
             TunnelAccess::Open { interface } => rules.push(tunnel_rule(interface)?),
         }
+        rules.append(&mut dhcp_rules()?);
+        rules.append(&mut ndp_rules()?);
         for &ip in allowed_ips {
             rules.append(&mut allowed_ip_rules(ip)?);
         }
