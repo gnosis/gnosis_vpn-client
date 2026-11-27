@@ -159,6 +159,9 @@ fn pretty_print(resp: &Response) {
         Response::ProbingBoost => {
             println!("Network probing stepped up");
         }
+        Response::RefreshBalance => {
+            println!("Re-reading balances");
+        }
         Response::FundPixPool(ipc::FundPixPoolResponse::Funded { amount }) => {
             println!("Shielded {amount} into the PIX pool");
         }
@@ -486,6 +489,7 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::Unprobe(ipc::UnprobeResponse::InUse { .. }) => exitcode::PROTOCOL,
         Response::Unprobe(ipc::UnprobeResponse::NotProbing) => exitcode::PROTOCOL,
         Response::ProbingBoost => exitcode::OK,
+        Response::RefreshBalance => exitcode::OK,
         Response::FundPixPool(ipc::FundPixPoolResponse::Funded { .. }) => exitcode::OK,
         Response::FundPixPool(ipc::FundPixPoolResponse::NotReady) => exitcode::UNAVAILABLE,
         Response::FundPixPool(ipc::FundPixPoolResponse::AlreadyFunding) => exitcode::UNAVAILABLE,

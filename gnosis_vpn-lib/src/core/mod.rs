@@ -103,6 +103,7 @@ pub struct Core {
     cancel_on_shutdown: CancellationToken,
     cancel_presafe_queries: CancellationToken,
     cancel_balances: CancellationToken,
+    cancel_capacity_allocations: CancellationToken,
     // Tracks the connection's NepTUN pump task so teardown can wait for it to
     // stop (dropping its TUN fd) before asking root to tear down routing;
     // replaced together with cancel_connection.
@@ -282,6 +283,7 @@ impl Core {
             cancel_on_shutdown: cancel_on_shutdown.clone(),
             cancel_presafe_queries: cancel_on_shutdown.child_token(),
             cancel_balances: cancel_on_shutdown.child_token(),
+            cancel_capacity_allocations: cancel_on_shutdown.child_token(),
             wg_pump_tasks: TaskTracker::new(),
             cancel_routability: cancel_on_shutdown.child_token(),
             announced_peers_loop_running: false,
@@ -656,6 +658,11 @@ impl Core {
 
                     WorkerCommand::Balance => {
                         let _ = resp.send(Response::Balance(self.balance_response()));
+                    }
+
+                    WorkerCommand::RefreshBalance => {
+                        self.refresh_balance(results_sender);
+                        let _ = resp.send(Response::RefreshBalance);
                     }
 
                     WorkerCommand::Telemetry => {
@@ -1803,7 +1810,7 @@ impl Core {
         if let Some(hopr) = self.hopr.clone() {
             let pix_pool = self.pix_pool.clone();
             let price_per_byte = self.config.pix_strategy.price_per_byte;
-            let cancel = self.cancel_on_shutdown.clone();
+            let cancel = self.cancel_capacity_allocations.clone();
             let results_sender = results_sender.clone();
             tokio::spawn(async move {
                 cancel
@@ -1814,6 +1821,17 @@ impl Core {
                     .await
             });
         }
+    }
+
+    /// Re-reads the chain now instead of at the next poll; replaces the waiting runners so no second chain starts.
+    fn refresh_balance(&mut self, results_sender: &mpsc::Sender<Results>) {
+        self.cancel_balances.cancel();
+        self.cancel_capacity_allocations.cancel();
+        self.cancel_balances = self.cancel_on_shutdown.child_token();
+        self.cancel_capacity_allocations = self.cancel_on_shutdown.child_token();
+        self.capacity_reconciler.accept_next();
+        self.spawn_capacity_allocations_runner(results_sender, Duration::ZERO);
+        self.spawn_balances_runner(results_sender, Duration::ZERO);
     }
 
     fn spawn_balances_runner(&self, results_sender: &mpsc::Sender<Results>, delay: Duration) {
@@ -1870,7 +1888,8 @@ impl Core {
         }
         let funding_status = match (&self.ideal_balance_recommendation, &allocs) {
             (Some(ideal), Some(allocs)) => {
-                balance::to_funding_status(*ideal, allocs, balances.node_xdai, balances.safe_wxhopr)
+                // The published Safe stake, so the levels move with the total clients show.
+                balance::to_funding_status(*ideal, allocs, balances.node_xdai, allocs.safe.stake)
                     .inspect_err(|err| tracing::error!(%err, "no funding status"))
                     .ok()
             }
@@ -2376,7 +2395,7 @@ impl Core {
                     &self.balances,
                 ) {
                     (Some(ideal), Some(allocs), Some(bals)) => {
-                        balance::to_funding_status(*ideal, allocs, bals.node_xdai, bals.safe_wxhopr)
+                        balance::to_funding_status(*ideal, allocs, bals.node_xdai, allocs.safe.stake)
                             .inspect_err(|err| tracing::error!(%err, "no funding status"))
                             .ok()
                     }

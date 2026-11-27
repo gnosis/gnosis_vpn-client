@@ -189,6 +189,13 @@ pub fn probing_boost(socket_path: &Path) -> Result<(), CallError> {
     }
 }
 
+pub fn refresh_balance(socket_path: &Path) -> Result<(), CallError> {
+    match call(socket_path, Request::RefreshBalance)? {
+        Response::RefreshBalance => Ok(()),
+        other => Err(unexpected(other)),
+    }
+}
+
 /// Service side: one request line, checked against this build's protocol version first.
 pub fn decode_request(line: &str) -> Result<Request, ServiceError> {
     let invalid = |reason: String| ServiceError::InvalidRequest { reason };

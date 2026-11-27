@@ -13,7 +13,7 @@ use crate::values::{
 };
 
 /// Bumped on every incompatible wire change; the service refuses requests of any other version.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
@@ -49,6 +49,8 @@ pub enum Request {
     },
     /// Steps network probing up one level; route readiness steps it back down.
     ProbingBoost,
+    /// Re-reads balances from the chain now; `Balance` answers from the cache, which follows within seconds.
+    RefreshBalance,
     /// Shield wxHOPR from the Safe into the PIX pool deposits are paid from.
     FundPixPool {
         amount: Balance<WxHopr>,
@@ -113,6 +115,7 @@ pub enum Response {
     Unprobe(UnprobeResponse),
     QuickProbe(QuickProbeResponse),
     ProbingBoost,
+    RefreshBalance,
     FundPixPool(FundPixPoolResponse),
     SetMode(SetModeResponse),
     TrafficInterfaces(Vec<traffic::Interface>),
@@ -1075,6 +1078,14 @@ impl Default for TunnelStatsSample {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_balance_request_is_a_tagged_object() {
+        let request = Request::RefreshBalance;
+        let json = serde_json::to_value(&request).expect("serialize");
+        assert_eq!(json, serde_json::json!({ "type": "refresh_balance" }));
+        assert_eq!(serde_json::from_value::<Request>(json).expect("deserialize"), request);
+    }
 
     #[test]
     fn probing_boost_request_is_a_tagged_object() {

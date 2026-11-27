@@ -31,6 +31,7 @@ pub enum WorkerCommand {
     Unprobe,
     QuickProbe { destination: ipc::DestinationId },
     ProbingBoost,
+    RefreshBalance,
     FundPixPool { amount: ipc::Balance<ipc::WxHopr> },
 }
 
@@ -75,6 +76,7 @@ impl From<ipc::Request> for CommandRoute {
             ipc::Request::Unprobe => CommandRoute::Worker(WorkerCommand::Unprobe),
             ipc::Request::QuickProbe { destination } => CommandRoute::Worker(WorkerCommand::QuickProbe { destination }),
             ipc::Request::ProbingBoost => CommandRoute::Worker(WorkerCommand::ProbingBoost),
+            ipc::Request::RefreshBalance => CommandRoute::Worker(WorkerCommand::RefreshBalance),
             ipc::Request::FundPixPool { amount } => CommandRoute::Worker(WorkerCommand::FundPixPool { amount }),
             ipc::Request::Ping => CommandRoute::Root(RootCommand::Ping),
             ipc::Request::Info => CommandRoute::Root(RootCommand::Info),

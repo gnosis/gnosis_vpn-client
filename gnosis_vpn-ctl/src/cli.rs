@@ -92,6 +92,10 @@ pub enum Command {
     #[command()]
     Balance {},
 
+    /// Re-read balances from the chain now instead of at the next poll
+    #[command(name = "refresh-balance")]
+    RefreshBalance {},
+
     /// Shield wxHOPR from the Safe into the PIX pool, e.g. `fundpixpool 10`
     #[command(name = "fundpixpool")]
     FundPixPool {
@@ -157,6 +161,7 @@ impl From<Command> for Request {
             Command::QuickProbe { id } => Request::QuickProbe { destination: id.into() },
             Command::ProbingBoost {} => Request::ProbingBoost,
             Command::Balance {} => Request::Balance,
+            Command::RefreshBalance {} => Request::RefreshBalance,
             Command::FundPixPool { amount } => Request::FundPixPool { amount },
             Command::Ping {} => Request::Ping,
             Command::Telemetry {} => Request::Telemetry,

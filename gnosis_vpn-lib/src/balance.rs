@@ -222,7 +222,7 @@ impl ChannelSettle {
 }
 
 /// Bounds how long an unexplained Safe/EOA drop is masked, so a real spend still surfaces.
-const PENDING_ALLOCATION_MAX_POLLS: u8 = 5;
+const PENDING_ALLOCATION_MAX_POLLS: u8 = 2;
 
 /// Stake presumed in flight (Safe/EOA → channel), folded into published capacity until indexed or expired.
 #[derive(Clone, Copy, Debug)]
@@ -294,9 +294,15 @@ pub struct CapacityReconciler {
     /// Channel stakes of the previous snapshot, open or closing, to tell drainage from a channel done closing.
     prev_channels: HashMap<Address, Balance<WxHOPR>>,
     pending: Option<PendingAllocation>,
+    accept_next: bool,
 }
 
 impl CapacityReconciler {
+    /// A refresh wants the chain as read: the next snapshot is published without the fold-in.
+    pub fn accept_next(&mut self) {
+        self.accept_next = true;
+    }
+
     /// Snapshot to publish: in-flight stake folded into `safe`. Same shape as the
     /// raw snapshot, so downstream consumers summing components need no protocol change.
     pub fn reconcile(&mut self, mut raw: CapacityAllocations) -> CapacityAllocations {
@@ -307,15 +313,16 @@ impl CapacityReconciler {
             *channel = self.valued(channel.stake, &relays);
         }
         let totals = SnapshotTotals::of(&raw);
+        let accept = std::mem::take(&mut self.accept_next);
         let pending_stake = match &self.prev {
-            Some(prev) => {
+            Some(prev) if !accept => {
                 let carried = self.pending.map(|p| p.stake).unwrap_or_else(Balance::zero);
                 // Channel drainage and exit-traffic drops (paid exits) are real usage, not in-flight; `-` saturates at zero.
                 let channel_drop = self.channel_drainage(&raw);
                 let exit_traffic_drop = prev.exit_traffic_stake - totals.exit_traffic_stake;
                 prev.stake + carried - channel_drop - exit_traffic_drop - totals.stake
             }
-            None => Balance::zero(),
+            _ => Balance::zero(),
         };
 
         self.pending = self.next_pending(pending_stake, &totals);
@@ -1101,6 +1108,21 @@ mod tests {
         }
         // ...then accepted as a real spend
         let out = r.reconcile(dropped);
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(100u64));
+    }
+
+    #[test]
+    fn reconcile_accept_next_publishes_one_snapshot_as_read() {
+        let mut r = CapacityReconciler::default();
+        r.reconcile(allocs(None, Capacity::default(), cap10(200)));
+        let out = r.reconcile(allocs(None, Capacity::default(), cap10(150)));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(200u64));
+
+        r.accept_next();
+        let out = r.reconcile(allocs(None, Capacity::default(), cap10(100)));
+        assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(100u64));
+        // only that one: the next drop is presumed in flight again
+        let out = r.reconcile(allocs(None, Capacity::default(), cap10(60)));
         assert_eq!(total_stake(&out), Balance::<WxHOPR>::from(100u64));
     }
 

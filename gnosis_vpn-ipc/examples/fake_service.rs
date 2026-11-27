@@ -131,6 +131,7 @@ fn respond(request: Request, run_mode: RunMode) -> Response {
         Request::Unprobe => Response::Unprobe(UnprobeResponse::NotProbing),
         Request::QuickProbe { .. } => Response::QuickProbe(QuickProbeResponse::DestinationNotFound),
         Request::ProbingBoost => Response::ProbingBoost,
+        Request::RefreshBalance => Response::RefreshBalance,
         Request::FundPixPool { .. } => Response::FundPixPool(FundPixPoolResponse::NotReady),
         Request::TrafficInterfaces => Response::TrafficInterfaces(vec![]),
         Request::TrafficStart(request) => Response::TrafficStart(traffic::StartReply::Failed {
