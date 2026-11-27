@@ -1,0 +1,16 @@
+#!/bin/sh
+# Control wrapper. The worker refuses to run as root, so control calls are
+# executed as the gnosisvpn account. Binaries live in tmpfs.
+RUNDIR="${GNOSISVPN_RUNDIR:-/tmp/gnosisvpn}"
+SOCKET="${GNOSISVPN_SOCKET_PATH:-/run/gnosisvpn/gnosisvpn.sock}"
+CTL="$RUNDIR/bin/gnosis_vpn-ctl"
+
+if [ ! -x "$CTL" ]; then
+	CTL=/usr/bin/gnosis_vpn-ctl
+fi
+[ -x "$CTL" ] || { echo "gnosis_vpn-ctl not found (service not started?)" >&2; exit 1; }
+
+if [ "$(id -u)" = "0" ]; then
+	exec su -s /bin/sh gnosisvpn -c "$CTL --socket-path '$SOCKET' $*"
+fi
+exec "$CTL" --socket-path "$SOCKET" "$@"

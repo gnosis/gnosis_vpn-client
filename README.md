@@ -129,6 +129,16 @@ Use the latest
 
 Verify integrity before installing - see [SECURITY.md](./SECURITY.md).
 
+### OpenWrt
+
+Routers are supported through the packaging in
+[`packaging/openwrt`](./packaging/openwrt): the static musl binaries are repacked
+for `apk`, and the client runs inside a network namespace so the router keeps its
+own uplink while `br-lan` exits through a Gnosis exit node. Prebuilt packages for
+`aarch64_cortex-a53` (25.12.x) are published from
+[gnosis-openwrt](https://github.com/ivcained/gnosis-openwrt), and the scripts
+show what a router deployment needs. Tested on a Cudy TR3000 v1 with 1.2.0.
+
 ## Idle shutdown
 
 `gnosis_vpn-ctl start-client <duration>` shuts the worker down after it has been

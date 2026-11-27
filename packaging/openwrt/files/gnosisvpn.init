@@ -1,0 +1,105 @@
+#!/bin/sh /etc/rc.common
+# Gnosis VPN service.
+#
+# The payload is shipped xz-compressed because 43 MB of binaries plus a 6 MB
+# geoip database do not fit a stock overlay. Everything is expanded into tmpfs
+# (/tmp is RAM on OpenWrt) at start, so nothing is written to flash per boot.
+#
+# The client insists on owning the default route and installs a default-drop
+# killswitch, so root runs inside its own network namespace (/usr/bin/
+# gnosis-ns.sh sets it up). Only LAN traffic is steered in; the router's own
+# path, tailscale included, is untouched.
+#
+# The root daemon owns routing and spawns the worker as the unprivileged
+# gnosisvpn user (uid 65533): the worker refuses to run as root.
+START=90
+STOP=05
+USE_PROCD=1
+
+PAYLOAD=/usr/share/gnosisvpn/payload
+RUNDIR=/tmp/gnosisvpn
+CONF_SRC=/etc/gnosisvpn/config.toml
+CONF_RUN=$RUNDIR/config.toml
+SOCKET=/run/gnosisvpn/gnosisvpn.sock
+NSRUN=/usr/bin/gnosis-ns-run.sh
+NSCLI=/usr/bin/gnosis-ns-client.sh
+
+expand() {
+	local name="$1"
+	[ -s "$RUNDIR/bin/$name" ] && return 0
+	[ -f "$PAYLOAD/$name.xz" ] || { logger -t gnosisvpn "payload missing: $name"; return 1; }
+	xz -dc "$PAYLOAD/$name.xz" > "$RUNDIR/bin/$name.tmp" &&
+		chmod 0755 "$RUNDIR/bin/$name.tmp" &&
+		mv "$RUNDIR/bin/$name.tmp" "$RUNDIR/bin/$name"
+}
+
+prepare() {
+	mkdir -p "$RUNDIR/bin" "$RUNDIR/curvy-zk" /run/gnosisvpn /var/lib/gnosisvpn /var/log/gnosisvpn
+	chown 65533:65533 /run/gnosisvpn /var/lib/gnosisvpn /var/log/gnosisvpn 2>/dev/null
+
+	expand gnosis_vpn-root || return 1
+	expand gnosis_vpn-worker || return 1
+	expand gnosis_vpn-ctl || return 1
+
+	[ -s "$RUNDIR/geoip.mmdb" ] || {
+		xz -dc "$PAYLOAD/geoip.mmdb.xz" > "$RUNDIR/geoip.mmdb.tmp" &&
+			mv "$RUNDIR/geoip.mmdb.tmp" "$RUNDIR/geoip.mmdb"
+	} || return 1
+
+	sed -e "s#^geoip_db = .*#geoip_db = \"$RUNDIR/geoip.mmdb\"#" \
+	    -e "s#^curvy_zk_dir = .*#curvy_zk_dir = \"$RUNDIR/curvy-zk\"#" \
+	    "$CONF_SRC" > "$CONF_RUN"
+	return 0
+}
+
+start_service() {
+	local blokli loglevel enabled keepalive
+	config_load gnosisvpn
+	config_get_bool enabled service enabled 0
+	config_get blokli service blokli_url 'https://blokli.piz-palu.gnosisvpn.io'
+	config_get loglevel service loglevel 'info'
+	config_get keepalive service keepalive '5256000'
+
+	[ "$enabled" = "1" ] || { logger -t gnosisvpn "disabled, not starting"; return 0; }
+	[ -f "$CONF_SRC" ] || { logger -t gnosisvpn "missing $CONF_SRC"; return 1; }
+	prepare || { logger -t gnosisvpn "payload expansion failed"; return 1; }
+
+	# A daemon started outside procd (hand-run during testing) holds the socket
+	# lock, which makes this instance exit immediately.
+	if [ -n "$(ps w | awk '/[g]nosis_vpn-root/ {print $1; exit}')" ] && ! running; then
+		for p in $(ps w | awk '/[g]nosis_vpn-root/ {print $1}'); do kill "$p" 2>/dev/null; done
+		sleep 2
+	fi
+
+	/usr/bin/gnosis-ns.sh ensure >/dev/null 2>&1 || logger -t gnosisvpn "namespace setup failed"
+
+	procd_open_instance root
+	procd_set_param command "$NSRUN"
+	procd_set_param env GNOSIS_BLOKLI_URL="$blokli" RUST_LOG="$loglevel"
+	procd_set_param respawn 3600 5 0
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+
+	# Keeps the connection loop alive. The actual worker process is spawned by
+	# root inside the namespace; this only holds the keepalive session.
+	procd_open_instance client
+	procd_set_param command /usr/bin/gnosis-ns-client.sh "${keepalive}m"
+	procd_set_param respawn 3600 30 0
+	procd_set_param stdout 0
+	procd_set_param stderr 0
+	procd_close_instance
+}
+
+stop_service() {
+	/usr/bin/gnosis-ctl stop-client >/dev/null 2>&1
+}
+
+service_triggers() {
+	procd_add_reload_trigger gnosisvpn
+}
+
+reload_service() {
+	stop
+	start
+}
