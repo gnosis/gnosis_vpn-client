@@ -197,8 +197,13 @@ fn pretty_print(resp: &Response) {
                 pix_price_per_byte,
                 probing,
                 recent,
+                mode,
+                bootstrap_available: _,
             } = status.as_ref();
             let mut str_resp = format!("{run_mode}\n");
+            if *mode == ipc::Mode::Bootstrap {
+                str_resp.push_str("Mode: bootstrap\n");
+            }
             if let Some(bytes) = pix_chunk_bytes {
                 str_resp.push_str(&format!("PIX chunk per exit: {}\n", ByteSize(*bytes)));
             }
@@ -358,6 +363,15 @@ fn pretty_print(resp: &Response) {
                 println!("{id}");
             }
         }
+        Response::SetMode(ipc::SetModeResponse::Switching) => {
+            println!("Switching mode - the worker restarts and any connection ends");
+        }
+        Response::SetMode(ipc::SetModeResponse::Unchanged) => {
+            println!("Already in that mode");
+        }
+        Response::SetMode(ipc::SetModeResponse::Unavailable) => {
+            eprintln!("Bootstrap mode is not available: the configuration has no [bootstrap] section");
+        }
         // Traffic capture is driven by the desktop app; the ctl never requests it.
         Response::TrafficInterfaces(_)
         | Response::TrafficStart(_)
@@ -505,6 +519,8 @@ fn determine_exitcode(resp: &Response) -> ExitCode {
         Response::StopClient(ipc::StopClientResponse::Stopped) => exitcode::OK,
         Response::StopClient(ipc::StopClientResponse::NotRunning) => exitcode::PROTOCOL,
         Response::Destinations(..) => exitcode::OK,
+        Response::SetMode(ipc::SetModeResponse::Switching | ipc::SetModeResponse::Unchanged) => exitcode::OK,
+        Response::SetMode(ipc::SetModeResponse::Unavailable) => exitcode::UNAVAILABLE,
         // See pretty_print: these never answer a ctl command.
         Response::TrafficInterfaces(..)
         | Response::TrafficStart(..)

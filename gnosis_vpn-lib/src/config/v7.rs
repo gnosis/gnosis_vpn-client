@@ -666,6 +666,16 @@ pub struct Config {
     pub(super) probing: Option<Probing>,
     pub(super) geoip_db: Option<PathBuf>,
     pub(super) curvy_zk_dir: Option<PathBuf>,
+    pub(super) bootstrap: Option<Bootstrap>,
+}
+
+/// Bootstrap mode's fixed node set; none of it comes from discovery.
+#[serde_as]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct Bootstrap {
+    #[serde_as(as = "Vec<DisplayFromStr>")]
+    pub(super) relayers: Vec<Address>,
+    pub(super) exits: Option<HashMap<String, Destination>>,
 }
 
 #[serde_as]
@@ -693,6 +703,36 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
     let mut wrong = Vec::new();
     for (key, value) in table.iter() {
         if key == "version" || key == "geoip_db" || key == "curvy_zk_dir" {
+            continue;
+        }
+        if key == "bootstrap" {
+            if let Some(bootstrap) = value.as_table() {
+                for (k, v) in bootstrap.iter() {
+                    if k == "relayers" {
+                        continue;
+                    }
+                    if k == "exits"
+                        && let Some(exits) = v.as_table()
+                    {
+                        for (id, exit) in exits.iter() {
+                            let Some(exit) = exit.as_table() else {
+                                wrong.push(format!("bootstrap.exits.{id}"));
+                                continue;
+                            };
+                            for (k2, _) in exit.iter() {
+                                if !matches!(
+                                    k2.as_str(),
+                                    "address" | "meta" | "path" | "gnosis_vpn_server" | "wireguard_server"
+                                ) {
+                                    wrong.push(format!("bootstrap.exits.{id}.{k2}"));
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    wrong.push(format!("bootstrap.{k}"));
+                }
+            }
             continue;
         }
         if key == "wireguard" {
@@ -1023,6 +1063,10 @@ impl TryFrom<Config> for config::Config {
             wireguard_server: default_wireguard_server,
         };
         let destinations = convert_destinations(value.destinations, default_targets)?;
+        let bootstrap = value
+            .bootstrap
+            .map(|b| convert_bootstrap(b, default_targets))
+            .transpose()?;
         let wireguard = value.wireguard.into();
         let blokli = value.blokli.into();
         let strategy = value.strategy.into();
@@ -1040,8 +1084,26 @@ impl TryFrom<Config> for config::Config {
             curvy_zk_dir: value
                 .curvy_zk_dir
                 .unwrap_or_else(|| crate::hopr::pix_config::DEFAULT_CURVY_ZK_DIR.into()),
+            bootstrap,
+            mode: gnosis_vpn_ipc::Mode::Normal,
         })
     }
+}
+
+/// Exits are read like `[destinations]`.
+fn convert_bootstrap(value: Bootstrap, defaults: DefaultTargets) -> Result<config::Bootstrap, config::Error> {
+    if value.relayers.is_empty() {
+        return Err(config::Error::EmptyBootstrap("relayers"));
+    }
+    let entries = value.exits.unwrap_or_default();
+    if entries.is_empty() {
+        return Err(config::Error::EmptyBootstrap("exits"));
+    }
+    let exits = convert_destinations(Some(entries), defaults)?;
+    Ok(config::Bootstrap {
+        relayers: value.relayers.into_iter().collect(),
+        exits,
+    })
 }
 
 /// The per-destination `Option`s survive as the pins; discovery fills in what they leave open.
@@ -2246,6 +2308,37 @@ enabled = false
         let result: crate::config::Config = cfg.try_into().expect("should succeed");
         assert!(result.connection.pix.bridge.enabled);
         assert!(!result.connection.pix.ping_main.enabled);
+    }
+
+    #[test]
+    fn bootstrap_keys_are_known_and_typos_in_them_are_not() {
+        let table = r#####"
+version = 7
+
+[bootstrap]
+relayers = ["0x2598c0773e3fa07437de329737d3e1a18f272e8f"]
+relayer = []
+
+[bootstrap.exits.amsterdam]
+address = "0xc9a0ab0f96608b4da489321003070fda0d45f4ac"
+meta = { name = "Amsterdam" }
+path = { hops = 1 }
+gnosis_vpn_server = "172.30.0.1:8000"
+wireguard_server = "172.30.0.1:51820"
+location = "NL"
+"#####
+            .parse::<toml::Table>()
+            .expect("valid TOML");
+
+        let mut wrong = wrong_keys(&table);
+        wrong.sort();
+        assert_eq!(
+            wrong,
+            vec![
+                "bootstrap.exits.amsterdam.location".to_string(),
+                "bootstrap.relayer".to_string()
+            ]
+        );
     }
 
     #[test]

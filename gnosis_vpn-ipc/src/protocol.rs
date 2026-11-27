@@ -53,6 +53,10 @@ pub enum Request {
     FundPixPool {
         amount: Balance<WxHopr>,
     },
+    /// Runs the worker in `mode`; a change restarts it and ends any connection.
+    SetMode {
+        mode: Mode,
+    },
     /// List interfaces the service may capture traffic on
     TrafficInterfaces,
     /// Begin capturing on one interface, replacing any current capture
@@ -110,6 +114,7 @@ pub enum Response {
     QuickProbe(QuickProbeResponse),
     ProbingBoost,
     FundPixPool(FundPixPoolResponse),
+    SetMode(SetModeResponse),
     TrafficInterfaces(Vec<traffic::Interface>),
     TrafficStart(traffic::StartReply),
     TrafficRead(traffic::ReadResponse),
@@ -136,6 +141,10 @@ pub struct Status {
     pub probing: Option<ProbingView>,
     /// Recently connected exits on this network, newest first.
     pub recent: Vec<DestinationId>,
+    /// The mode the worker runs, or runs next when none runs.
+    pub mode: Mode,
+    /// Whether the configuration has a bootstrap node set; without it, bootstrap mode is refused.
+    pub bootstrap_available: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -303,6 +312,17 @@ pub enum RunMode {
     Shutdown,
     Restarting,
     NotRunning,
+}
+
+/// Which exits and relays the worker runs with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Mode {
+    /// Configured and discovered exits; channels by quality.
+    #[default]
+    Normal,
+    /// Only the configuration's bootstrap exits; channels only to its bootstrap relayers.
+    Bootstrap,
 }
 
 /// A step the worker needs before running keeps failing; `since` is the first failure of the streak.
@@ -750,6 +770,17 @@ pub enum QuickProbeResponse {
     DestinationAmbiguous {
         candidates: Vec<DestinationId>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SetModeResponse {
+    /// The worker restarts in the new mode; a connection it had is gone.
+    Switching,
+    /// Already in that mode; nothing changed.
+    Unchanged,
+    /// The configuration has no bootstrap node set.
+    Unavailable,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

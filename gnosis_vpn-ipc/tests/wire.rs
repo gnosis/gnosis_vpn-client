@@ -231,10 +231,29 @@ fn exit_traffic_funds_carry_only_stake_and_bytes() {
 fn status_carries_the_pix_price() {
     let json = json!({"run_mode": {"type": "not_running"}, "destinations": [], "target": null,
         "connection": {"type": "disconnected"}, "disconnecting": [], "probe": null, "pix_chunk_bytes": null,
-        "pix_price_per_byte": "9", "probing": null, "recent": []});
+        "pix_price_per_byte": "9", "probing": null, "recent": [], "mode": {"type": "normal"},
+        "bootstrap_available": false});
     let parsed: Status = serde_json::from_value(json.clone()).expect("parse");
     assert_eq!(parsed.pix_price_per_byte, Balance::from_wei(9));
     assert_eq!(serde_json::to_value(&parsed).expect("serialize"), json);
+}
+
+#[test]
+fn set_mode_is_a_tagged_request_with_a_tagged_answer() {
+    round_trips(
+        &Request::SetMode { mode: Mode::Bootstrap },
+        json!({"type": "set_mode", "mode": {"type": "bootstrap"}}),
+    );
+    for (response, tag) in [
+        (SetModeResponse::Switching, "switching"),
+        (SetModeResponse::Unchanged, "unchanged"),
+        (SetModeResponse::Unavailable, "unavailable"),
+    ] {
+        round_trips(
+            &Response::SetMode(response),
+            json!({"type": "set_mode", "data": {"type": tag}}),
+        );
+    }
 }
 
 #[test]
