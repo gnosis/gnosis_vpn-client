@@ -3709,7 +3709,7 @@ dependencies = [
 [[package]]
 name = "edgli"
 version = "5.3.1"
-source = "git+https://github.com/hoprnet/edge-client.git?branch=main#6328c23466e8fbb29f22b3ef44064c0173eadd2b"
+source = "git+https://github.com/hoprnet/edge-client.git?branch=main#a5c2e1a55d9fa83226baab7ba8ea6af9d7cb826e"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -8427,7 +8427,7 @@ dependencies = [
  "quinn-udp 0.5.16",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -8467,7 +8467,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -8480,7 +8480,7 @@ checksum = "47091c86514c2e11452cb228dee77037334b99d92a23e4c69aa5982261f39247"
 dependencies = [
  "cfg_aliases",
  "libc",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "windows-sys 0.61.2",
 ]
 
