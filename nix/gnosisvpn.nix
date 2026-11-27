@@ -26,8 +26,8 @@ let
   outputHashes = {
     "git+https://github.com/NordSecurity/neptun.git?tag=v3.0.6#ce185155e1639403cc40e01260d0830065a49555" =
       "sha256-3Hjb/OdjLwy2N3QAF+e8XlZ2YPp+k53Xt17jtUUP1XQ=";
-    "git+https://github.com/hoprnet/edge-client.git?branch=feature/core-1447-edgli-let-the-embedder-send-curvy-relayer#2eef8595a6874b7b38bcb35dfcdf168e12e91c79" =
-      "sha256-w63DeS/lQ1OjimTom2j5dZmc5FkrLke0hfhPn6Be/Pw=";
+    "git+https://github.com/hoprnet/edge-client.git?branch=main#a5c2e1a55d9fa83226baab7ba8ea6af9d7cb826e" =
+      "sha256-cTL5IsLmw9CjwuKYuiJZd/Ldq64nqx2/e3MwlcxiFvg=";
     "git+https://github.com/hoprnet/hoprnet?branch=master#470809c2e8a232feb9a3006f970e92e4cdcd8148" =
       "sha256-pWKpc7WFTM8QjxBhLuXe2eWXm40ZbONYPoLP+hntWKY=";
   };

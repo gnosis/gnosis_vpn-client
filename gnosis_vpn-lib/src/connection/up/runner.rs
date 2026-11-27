@@ -140,15 +140,15 @@ impl Runner {
         let _ = results_sender.send(progress(Progress::RegisterWg)).await;
         let registration = register(&self.options, &self.bridge_session, public_key, &results_sender).await?;
 
+        // No session without a side-car (its deposit would be paid after it was abandoned); before OpenPing, which spends the carried-over pseudonym.
+        sidecar
+            .await
+            .map_err(|e| Error::Runtime(format!("relayer side-car task failed: {e}")))??;
+
         // 5. signal ping phase (carries registration)
         let _ = results_sender
             .send(progress(Progress::OpenPing(registration.clone())))
             .await;
-
-        // A session opened without a side-car would get a deposit that is held, then paid after it was abandoned.
-        sidecar
-            .await
-            .map_err(|e| Error::Runtime(format!("relayer side-car task failed: {e}")))??;
 
         // 6. open the wg session (also carries the in-tunnel verification ping). The
         //    raw session is spliced directly into the pump - no local listener and no
