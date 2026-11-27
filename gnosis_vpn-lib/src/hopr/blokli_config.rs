@@ -9,6 +9,9 @@ use std::time::Duration;
 /// the TLS handshake alone can take several round trips before the request goes out.
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The connector's 30 s default regularly cuts off a prod graph sync, which then restarts from scratch.
+const DEFAULT_CONNECTION_SYNC_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// Only looked up while DNS is still open, so a slow answer is a broken resolver.
 const DEFAULT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -39,9 +42,8 @@ impl From<BlokliConfig> for BlockchainConnectorConfig {
 
 impl Default for BlokliConfig {
     fn default() -> Self {
-        let def = BlockchainConnectorConfig::default();
         Self {
-            connection_sync_timeout: def.connection_sync_timeout,
+            connection_sync_timeout: DEFAULT_CONNECTION_SYNC_TIMEOUT,
             // Edge client uses lower tolerance than full nodes (default 90%) because
             // its blokli index typically covers only a fraction of all on-chain accounts.
             sync_tolerance: 50,
@@ -58,6 +60,20 @@ mod tests {
     #[test]
     fn default_request_timeout_is_ten_seconds() {
         assert_eq!(BlokliConfig::default().request_timeout, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn default_connection_sync_timeout_is_two_minutes() {
+        assert_eq!(
+            BlokliConfig::default().connection_sync_timeout,
+            Duration::from_secs(120)
+        );
+    }
+
+    #[test]
+    fn default_connection_sync_timeout_is_wider_than_the_connector_default() {
+        let connector_default = BlockchainConnectorConfig::default().connection_sync_timeout;
+        assert!(BlokliConfig::default().connection_sync_timeout > connector_default);
     }
 
     /// The connector's own default is deliberately tighter than ours; if upstream ever

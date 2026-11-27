@@ -1,7 +1,9 @@
 use edgli::hopr_lib::api::types::primitive::errors::GeneralError;
+use edgli::hopr_lib::api::types::primitive::prelude::Address;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -39,9 +41,33 @@ pub struct Config {
     pub geoip_db: PathBuf,
     /// The Curvy proving files, at the installer's location unless a v7 file points elsewhere.
     pub curvy_zk_dir: PathBuf,
+    /// The fixed node set of bootstrap mode; none means the mode is not available.
+    pub bootstrap: Option<Bootstrap>,
+    /// The mode this configuration runs in; only [`Config::in_mode`] leaves normal mode.
+    pub mode: gnosis_vpn_ipc::Mode,
+}
+
+/// The exits bootstrap mode connects to and the relayers it opens channels to, neither discovered.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Bootstrap {
+    pub relayers: HashSet<Address>,
+    pub exits: Destinations,
 }
 
 impl Config {
+    /// The configuration a worker runs with in `mode`: bootstrap mode swaps in the bootstrap exits
+    /// and keeps channels to the bootstrap relayers; without a `[bootstrap]` section it changes nothing.
+    pub fn in_mode(mut self, mode: gnosis_vpn_ipc::Mode) -> Config {
+        if let (gnosis_vpn_ipc::Mode::Bootstrap, Some(bootstrap)) = (mode, &self.bootstrap) {
+            self.destinations = bootstrap.exits.clone();
+            self.strategy.channel_allowlist = Some(bootstrap.relayers.clone());
+            // Opens fill only up to the target, so without headroom they wait until outside-allowlist closes land.
+            self.strategy.target_open_channels += bootstrap.relayers.len();
+            self.mode = mode;
+        }
+        self
+    }
+
     /// Status from the config file alone, while no core runs to answer it.
     pub fn offline_status(&self, run_mode: gnosis_vpn_ipc::RunMode, target: Option<&str>) -> gnosis_vpn_ipc::Status {
         let mut vals: Vec<_> = self.destinations.values().collect();
@@ -64,6 +90,8 @@ impl Config {
             pix_price_per_byte: crate::wire::wxhopr(self.pix_strategy.price_per_byte),
             probing: None,
             recent: vec![],
+            mode: self.mode,
+            bootstrap_available: self.bootstrap.is_some(),
         }
     }
 }
@@ -99,6 +127,8 @@ pub enum Error {
         address: String,
         hops: usize,
     },
+    #[error("[bootstrap] needs at least one entry in {0}")]
+    EmptyBootstrap(&'static str),
 }
 
 pub async fn read(path: &Path) -> Result<Config, Error> {
@@ -266,6 +296,146 @@ mod tests {
         .await;
 
         assert!(matches!(result, Err(Error::CurvyZkDirNotFound(_))), "{result:?}");
+    }
+
+    const AMSTERDAM: &str = "0xc9a0ab0f96608b4da489321003070fda0d45f4ac";
+    const IOWA: &str = "0xd61cb773673dcfe622872f1c7d9965639d6f8f45";
+    const RELAY_A: &str = "0x2598c0773e3fa07437de329737d3e1a18f272e8f";
+    const RELAY_B: &str = "0x6cc978516dfe8f007bfaf1736b33fb9e6c7f7e2f";
+    const GERMANY: &str = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739";
+
+    /// A configured destination beside a bootstrap set of two exits and two relays.
+    fn with_bootstrap(bootstrap: &str) -> String {
+        format!(
+            r#"version = 7
+
+[destinations.germany]
+address = "{GERMANY}"
+
+{bootstrap}
+"#
+        )
+    }
+
+    fn bootstrap_section() -> String {
+        format!(
+            r#"[bootstrap]
+relayers = ["{RELAY_A}", "{RELAY_B}"]
+
+[bootstrap.exits.amsterdam]
+address = "{AMSTERDAM}"
+meta = {{ name = "Amsterdam" }}
+
+[bootstrap.exits.iowa]
+address = "{IOWA}"
+path = {{ hops = 2 }}
+wireguard_server = "10.0.0.1:51820"
+"#
+        )
+    }
+
+    fn addr(s: &str) -> Address {
+        s.parse().expect("valid address")
+    }
+
+    #[test]
+    fn a_bootstrap_section_carries_its_relayers_and_exits() {
+        let config = read_config(&with_bootstrap(&bootstrap_section()));
+        let bootstrap = config.bootstrap.expect("bootstrap section present");
+
+        assert_eq!(
+            std::collections::HashSet::from([addr(RELAY_A), addr(RELAY_B)]),
+            bootstrap.relayers
+        );
+        assert_eq!(2, bootstrap.exits.len());
+        let amsterdam = bootstrap.exits.by_connect_id("amsterdam").expect("amsterdam exit");
+        assert_eq!(addr(AMSTERDAM), amsterdam.address);
+        assert_eq!(Some("Amsterdam"), amsterdam.meta.name.as_deref());
+        assert_eq!(config.default_targets.wireguard_server, amsterdam.wireguard_server);
+        let iowa = bootstrap.exits.by_connect_id("iowa").expect("iowa exit");
+        assert_eq!(2, iowa.routing.hop_count());
+        assert_eq!(
+            "10.0.0.1:51820".parse::<std::net::SocketAddr>().unwrap(),
+            iowa.wireguard_server
+        );
+        // The bootstrap exits stay out of the normal destinations.
+        assert_eq!(1, config.destinations.len());
+    }
+
+    #[test]
+    fn a_config_without_a_bootstrap_section_has_no_bootstrap() {
+        assert_eq!(None, read_config(&with_bootstrap("")).bootstrap);
+    }
+
+    #[test]
+    fn a_bootstrap_relayer_that_is_not_an_address_is_rejected() {
+        let section = bootstrap_section().replace(RELAY_B, "0x1234");
+
+        assert!(parse(&with_bootstrap(&section)).is_err());
+    }
+
+    #[test]
+    fn a_bootstrap_section_without_relayers_or_exits_is_rejected() {
+        let no_relayers =
+            format!("[bootstrap]\nrelayers = []\n\n[bootstrap.exits.amsterdam]\naddress = \"{AMSTERDAM}\"\n");
+        let no_exits = format!("[bootstrap]\nrelayers = [\"{RELAY_A}\"]\n");
+
+        assert!(matches!(
+            parse(&with_bootstrap(&no_relayers)),
+            Err(Error::EmptyBootstrap("relayers"))
+        ));
+        assert!(matches!(
+            parse(&with_bootstrap(&no_exits)),
+            Err(Error::EmptyBootstrap("exits"))
+        ));
+    }
+
+    #[test]
+    fn bootstrap_mode_runs_only_the_bootstrap_exits_and_relayers() {
+        let config = read_config(&with_bootstrap(&bootstrap_section()));
+        let bootstrap = config.bootstrap.clone().expect("bootstrap section present");
+        let configured_target = config.strategy.target_open_channels;
+
+        let effective = config.in_mode(gnosis_vpn_ipc::Mode::Bootstrap);
+
+        assert_eq!(bootstrap.exits, effective.destinations);
+        assert_eq!(
+            configured_target + bootstrap.relayers.len(),
+            effective.strategy.target_open_channels
+        );
+        assert_eq!(Some(bootstrap.relayers), effective.strategy.channel_allowlist);
+        assert_eq!(gnosis_vpn_ipc::Mode::Bootstrap, effective.mode);
+    }
+
+    #[test]
+    fn normal_mode_and_a_config_without_bootstrap_run_as_configured() {
+        let with = read_config(&with_bootstrap(&bootstrap_section()));
+        let without = read_config(&with_bootstrap(""));
+
+        assert_eq!(with.clone(), with.clone().in_mode(gnosis_vpn_ipc::Mode::Normal));
+        assert_eq!(
+            without.clone(),
+            without.clone().in_mode(gnosis_vpn_ipc::Mode::Bootstrap)
+        );
+    }
+
+    #[test]
+    fn offline_status_reports_the_mode_and_whether_bootstrap_is_available() {
+        let with = read_config(&with_bootstrap(&bootstrap_section()));
+        let without = read_config(&with_bootstrap(""));
+
+        let status = with
+            .in_mode(gnosis_vpn_ipc::Mode::Bootstrap)
+            .offline_status(gnosis_vpn_ipc::RunMode::NotRunning, None);
+        assert_eq!(gnosis_vpn_ipc::Mode::Bootstrap, status.mode);
+        assert!(status.bootstrap_available);
+
+        // Without a node set, bootstrap mode is refused and the config stays in normal mode.
+        let status = without
+            .in_mode(gnosis_vpn_ipc::Mode::Bootstrap)
+            .offline_status(gnosis_vpn_ipc::RunMode::NotRunning, None);
+        assert_eq!(gnosis_vpn_ipc::Mode::Normal, status.mode);
+        assert!(!status.bootstrap_available);
     }
 
     fn with_blokli_section(blokli: &str) -> String {
