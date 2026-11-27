@@ -780,7 +780,6 @@ pub struct Balances {
     /// wxHOPR shielded for PIX deposits, as the pool accounts it; none without a Curvy PIX pool.
     pub pix_pool: Option<Balance<WxHopr>>,
     /// Safe wxHOPR the next PIX pool top-up keeps from the channels; none without a Curvy PIX pool.
-    #[serde(default)]
     pub pix_reserved: Option<Balance<WxHopr>>,
 }
 
