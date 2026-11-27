@@ -876,7 +876,7 @@ pub struct BalanceRecommendation {
 pub struct FundingStatus {
     pub traffic: FundingLevel,
     pub gas: FundingLevel,
-    /// wxHOPR still needed to reach the ideal recommendation, or to bring the Safe's refills back to Good.
+    /// wxHOPR still needed for 30 GiB of data at the PIX price, at least back to Good; `None` while `traffic` is Good.
     pub wxhopr_deficit: Option<Balance<WxHopr>>,
     /// xDai still needed to reach the ideal recommendation.
     pub xdai_deficit: Option<Balance<XDai>>,
