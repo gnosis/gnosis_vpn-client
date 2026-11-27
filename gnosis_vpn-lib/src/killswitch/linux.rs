@@ -15,7 +15,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use ipnetwork::{IpNetwork, Ipv6Network};
 
-use super::{LAN_MULTICAST_NETS, LAN_NETS};
+use super::{LAN_MULTICAST_NETS, LAN_NETS, TunnelAccess};
 use nftnl::{
     Batch, Chain, FinalizedBatch, Hook, MsgType, Policy, ProtoFamily, Rule, Table,
     expr::{self, Payload, Verdict},
@@ -89,15 +89,14 @@ impl Firewall {
     }
 
     /// Apply killswitch policy: block everything except `allowed_ips` and infrastructure.
-    /// `interface` is the resolved WireGuard interface name (e.g. "wg0_gnosisvpn"), None before the tunnel exists.
     /// When `lan_lockdown` is false, private LAN ranges are also let through.
     pub fn apply_policy(
         &mut self,
-        interface: Option<&str>,
+        tunnel: &TunnelAccess,
         allowed_ips: &[IpAddr],
         lan_lockdown: bool,
     ) -> Result<(), Error> {
-        let Err(error) = send_policy(interface, allowed_ips, lan_lockdown) else {
+        let Err(error) = send_policy(tunnel, allowed_ips, lan_lockdown) else {
             return Ok(());
         };
         // A lost ACK can hide a committed table; don't leave a lockdown root thinks failed.
@@ -111,11 +110,11 @@ impl Firewall {
     /// Applying is an atomic table replace; on failure the armed lockdown is kept.
     pub fn reapply_policy(
         &mut self,
-        interface: Option<&str>,
+        tunnel: &TunnelAccess,
         allowed_ips: &[IpAddr],
         lan_lockdown: bool,
     ) -> Result<(), Error> {
-        send_policy(interface, allowed_ips, lan_lockdown)
+        send_policy(tunnel, allowed_ips, lan_lockdown)
     }
 
     /// Remove the killswitch table, restoring normal networking.
@@ -135,9 +134,9 @@ impl Firewall {
     }
 }
 
-fn send_policy(interface: Option<&str>, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
+fn send_policy(tunnel: &TunnelAccess, allowed_ips: &[IpAddr], lan_lockdown: bool) -> Result<(), Error> {
     let table = Table::new(TABLE_NAME, ProtoFamily::Inet);
-    let batch = PolicyBatch::new(&table).finalize(interface, allowed_ips, lan_lockdown);
+    let batch = PolicyBatch::new(&table).finalize(tunnel, allowed_ips, lan_lockdown);
     send_batch(&batch)
 }
 
@@ -182,13 +181,16 @@ impl<'a> PolicyBatch<'a> {
         }
     }
 
-    fn finalize(mut self, interface: Option<&str>, allowed_ips: &[IpAddr], lan_lockdown: bool) -> FinalizedBatch {
+    fn finalize(mut self, tunnel: &TunnelAccess, allowed_ips: &[IpAddr], lan_lockdown: bool) -> FinalizedBatch {
         self.add_loopback_rules();
+        // The DHCP and NDP exceptions match any interface, so the tunnel verdict must come first.
+        match tunnel {
+            TunnelAccess::Closed => {}
+            TunnelAccess::GatewayOnly { interface, gateway } => self.add_gateway_rules(interface, *gateway),
+            TunnelAccess::Open { interface } => self.add_tunnel_rules(interface),
+        }
         self.add_dhcp_client_rules();
         self.add_ndp_rules();
-        if let Some(interface) = interface {
-            self.add_tunnel_rules(interface);
-        }
         self.add_allowed_ip_rules(allowed_ips);
         if !lan_lockdown {
             self.add_lan_rules();
@@ -343,6 +345,34 @@ impl<'a> PolicyBatch<'a> {
         fwd_in_rule.add_expr(&nft_expr!(cmp != 0u32));
         fwd_in_rule.add_expr(&Verdict::Accept);
         self.batch.add(&fwd_in_rule, MsgType::Add);
+    }
+
+    fn add_gateway_rules(&mut self, interface: &str, gateway: IpAddr) {
+        let mut out_rule = Rule::new(&self.out_chain);
+        check_iface_by_name(&mut out_rule, Direction::Out, interface);
+        check_ip(&mut out_rule, End::Dst, gateway);
+        out_rule.add_expr(&Verdict::Accept);
+        self.batch.add(&out_rule, MsgType::Add);
+
+        let mut in_rule = Rule::new(&self.in_chain);
+        check_iface_by_name(&mut in_rule, Direction::In, interface);
+        check_ip(&mut in_rule, End::Src, gateway);
+        in_rule.add_expr(&Verdict::Accept);
+        self.batch.add(&in_rule, MsgType::Add);
+
+        // The LAN exceptions match any interface, so the tunnel must be shut before they run.
+        let drops = [
+            (&self.out_chain, Direction::Out),
+            (&self.in_chain, Direction::In),
+            (&self.forward_chain, Direction::Out),
+            (&self.forward_chain, Direction::In),
+        ];
+        for (chain, direction) in drops {
+            let mut drop_rule = Rule::new(chain);
+            check_iface_by_name(&mut drop_rule, direction, interface);
+            drop_rule.add_expr(&Verdict::Drop);
+            self.batch.add(&drop_rule, MsgType::Add);
+        }
     }
 
     fn add_lan_rules(&mut self) {
@@ -559,11 +589,35 @@ mod tests {
             .collect()
     }
 
+    fn open_tunnel() -> TunnelAccess {
+        TunnelAccess::Open {
+            interface: "wg0_gnosisvpn".into(),
+        }
+    }
+
+    #[test]
+    fn gateway_only_accepts_the_gateway_and_drops_the_rest_of_the_tunnel() {
+        let table = Table::new(TABLE_NAME, ProtoFamily::Inet);
+        let gateway_only = TunnelAccess::GatewayOnly {
+            interface: "wg0_gnosisvpn".into(),
+            gateway: IpAddr::V4(Ipv4Addr::new(10, 128, 0, 1)),
+        };
+        let count = |batch: &FinalizedBatch| batch.sequence_numbers().len();
+        for lan_lockdown in [true, false] {
+            let closed = PolicyBatch::new(&table).finalize(&TunnelAccess::Closed, &[], lan_lockdown);
+            let gateway = PolicyBatch::new(&table).finalize(&gateway_only, &[], lan_lockdown);
+            let open = PolicyBatch::new(&table).finalize(&open_tunnel(), &[], lan_lockdown);
+
+            assert_eq!(count(&gateway) - count(&closed), 6);
+            assert_eq!(count(&open) - count(&closed), 4);
+        }
+    }
+
     #[test]
     fn policy_batch_size_does_not_grow_with_allowed_ips() {
         let table = Table::new(TABLE_NAME, ProtoFamily::Inet);
-        let without_ips = PolicyBatch::new(&table).finalize(Some("wg0_gnosisvpn"), &[], false);
-        let with_ips = PolicyBatch::new(&table).finalize(Some("wg0_gnosisvpn"), &mixed_ips(500), false);
+        let without_ips = PolicyBatch::new(&table).finalize(&open_tunnel(), &[], false);
+        let with_ips = PolicyBatch::new(&table).finalize(&open_tunnel(), &mixed_ips(500), false);
 
         let grown = with_ips.sequence_numbers().len() - without_ips.sequence_numbers().len();
         assert!(grown <= 4, "batch grew by {grown} messages for 500 allowed IPs");
@@ -574,11 +628,15 @@ mod tests {
     #[ignore]
     fn arms_with_500_allowed_ips() {
         let mut firewall = Firewall::new().expect("firewall");
+        let gateway_only = TunnelAccess::GatewayOnly {
+            interface: "wg0_gnosisvpn".into(),
+            gateway: IpAddr::V4(Ipv4Addr::new(10, 128, 0, 1)),
+        };
         firewall
-            .apply_policy(Some("wg0_gnosisvpn"), &mixed_ips(500), true)
+            .apply_policy(&gateway_only, &mixed_ips(500), true)
             .expect("apply policy");
         firewall
-            .reapply_policy(Some("wg0_gnosisvpn"), &mixed_ips(500), true)
+            .reapply_policy(&open_tunnel(), &mixed_ips(500), true)
             .expect("reapply policy");
         firewall.reset_policy().expect("reset policy");
     }

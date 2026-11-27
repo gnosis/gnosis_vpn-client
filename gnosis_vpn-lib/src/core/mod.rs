@@ -120,6 +120,8 @@ pub struct Core {
     // user provided data
     /// The connect id, resolved live - a cached clone goes stale on a discovery tick and cannot outlive a restart.
     target: Option<String>,
+    /// Start of a connect still checking the exit, before its runner reports a phase of its own.
+    target_since: Option<SystemTime>,
 
     // runtime data
     phase: Phase,
@@ -165,6 +167,8 @@ pub struct Core {
     pix_hold_failures: PixHoldFailures,
     /// Retry budget of the current connect attempts; reset once connected or on a user disconnect or switch.
     connect_retries: Option<ExponentialBackoff>,
+    /// What holds the connect up; kept across in-place retries so the count spans them.
+    connect_issue: Option<ipc::ConnectIssue>,
     /// Bumped on every connection teardown so an already-queued RetryConnect of an older attempt is dropped.
     connection_generation: u64,
 }
@@ -290,6 +294,7 @@ impl Core {
             probing_plan: None,
 
             // user provided data
+            target_since: target.as_ref().map(|_| SystemTime::now()),
             target,
 
             // runtime data
@@ -321,6 +326,7 @@ impl Core {
             reconnecting_since: None,
             pix_hold_failures: PixHoldFailures::default(),
             connect_retries: None,
+            connect_issue: None,
             connection_generation: 0,
         };
         Ok((core, incoming_sender))
@@ -528,6 +534,7 @@ impl Core {
                             Ok(dest) => {
                                 self.reconnecting_since = None;
                                 self.connect_retries = None;
+                                self.connect_issue = None;
                                 self.abandon_resume(results_sender).await;
                                 let is_already_active = match &self.phase {
                                     Phase::Connected(conn) | Phase::Connecting(conn) => {
@@ -551,6 +558,7 @@ impl Core {
                                             destination: command::destination(&dest),
                                         }));
                                         self.target = Some(dest.connect_id.clone());
+                                        self.target_since = Some(SystemTime::now());
                                         self.act_on_target(results_sender);
                                     } else {
                                         let _ = resp.send(Response::Connect(ipc::ConnectResponse::WaitingToConnect {
@@ -558,6 +566,7 @@ impl Core {
                                             route_health: rh.state().clone(),
                                         }));
                                         self.target = Some(dest.connect_id.clone());
+                                        self.target_since = Some(SystemTime::now());
                                     }
                                 } else {
                                     tracing::warn!(key = %dest.key(), "no route health found for destination - this should not happen");
@@ -581,8 +590,10 @@ impl Core {
                         // Root lifts the killswitch on every disconnect.
                         self.killswitch_armed = false;
                         self.target = None;
+                        self.target_since = None;
                         self.reconnecting_since = None;
                         self.connect_retries = None;
+                        self.connect_issue = None;
                         self.pix_hold_failures = PixHoldFailures::default();
                         self.abandon_resume(results_sender).await;
                         match self.phase.clone() {
@@ -888,10 +899,14 @@ impl Core {
                 match self.phase.clone() {
                     Phase::Connecting(mut conn) => match evt {
                         connection::up::Event::Progress(e) => {
+                            if self.connect_issue.is_some_and(|issue| e.resolves(issue.kind)) {
+                                self.connect_issue = None;
+                            }
                             conn.connect_progress(*e);
                             self.phase = Phase::Connecting(conn);
                         }
                         connection::up::Event::Setback(e) => {
+                            self.note_connect_issue(e.issue());
                             if let Some(rh) = self.route_healths.get_mut(&conn.destination.key()) {
                                 rh.with_error(e.to_string());
                             }
@@ -925,6 +940,7 @@ impl Core {
                     tracing::info!(%conn, "connection established successfully");
                     self.reconnecting_since = None;
                     self.connect_retries = None;
+                    self.connect_issue = None;
                     conn.connected();
                     self.phase = Phase::Connected(conn.clone());
                     self.remember_connected(conn.destination.key()).await;
@@ -960,10 +976,14 @@ impl Core {
                     self.close_relayer_sidecar(&conn);
                     conn.relayer_sidecar = None;
                     self.phase = Phase::Connecting(conn.clone());
-                    let error = match &conn.pump_exit {
-                        Some(exit) => format!("wg pump exited: {}", exit.reason),
-                        None => err.to_string(),
+                    let (error, issue) = match &conn.pump_exit {
+                        Some(exit) => (
+                            format!("wg pump exited: {}", exit.reason),
+                            pump_exit_issue(&conn.phase.1),
+                        ),
+                        None => (err.to_string(), err.issue()),
                     };
+                    self.note_connect_issue(issue);
                     if let Some(rh) = self.route_healths.get_mut(&conn.destination.key()) {
                         rh.with_error(error);
                     }
@@ -1150,11 +1170,7 @@ impl Core {
             },
 
             Results::ConnectionRequestToRoot(respondable_request) => match respondable_request {
-                RunnerToRoot::KillswitchLockdown {
-                    peer_ips,
-                    interface,
-                    resp,
-                } => {
+                RunnerToRoot::KillswitchLockdown { peer_ips, tunnel, resp } => {
                     // Last chance before DNS closes: edgli keeps its spawn-time address, so only a new worker follows a move.
                     let resolve_timeout = self.config.blokli.resolve_timeout;
                     if !self.killswitch_armed && self.worker_params.blokli_moved(resolve_timeout).await {
@@ -1168,7 +1184,7 @@ impl Core {
                         request_id,
                         peer_ips,
                         blokli_ip: self.worker_params.blokli_ip(),
-                        interface,
+                        tunnel,
                     };
                     let _ = self.outgoing_sender.send(CoreToWorker::RequestToRoot(request)).await;
                 }
@@ -1229,6 +1245,7 @@ impl Core {
                 let key = probe.key();
                 let was_ready = probe.ready_session().is_some();
                 let reopening = matches!(event, probe::Event::Reopening { .. });
+                let failed = matches!(event, probe::Event::OpenFailed { .. } | probe::Event::Failed { .. });
                 if let probe::Event::Version { versions, .. } = &event
                     && let Some(rh) = self.route_healths.get_mut(&key)
                 {
@@ -1236,7 +1253,14 @@ impl Core {
                 }
                 probe.apply(event);
                 let is_ready = probe.ready_session().is_some();
+                let target_waits = self.target_key() == Some(key) && self.checking_exit();
+                if failed && target_waits {
+                    self.note_connect_issue(ipc::ConnectIssueKind::ExitUnreachable);
+                }
                 if !was_ready && is_ready {
+                    if target_waits {
+                        self.connect_issue = None;
+                    }
                     self.act_on_target(results_sender);
                 }
                 // A connection still registering holds a bound_host that just died; restart in place so its key and device survive.
@@ -2110,6 +2134,23 @@ impl Core {
         self.config.destinations.by_connect_id(target).map(Destination::key)
     }
 
+    /// A target without a runner yet is still checking its exit: waiting on its route or its probe.
+    fn checking_exit(&self) -> bool {
+        if !matches!(self.phase, Phase::HoprRunning) {
+            return false;
+        }
+        let Some(dest) = self
+            .target
+            .as_deref()
+            .and_then(|id| self.config.destinations.by_connect_id(id))
+        else {
+            return false;
+        };
+        self.route_healths
+            .get(&dest.key())
+            .is_some_and(|rh| connect_step(rh, self.probe.as_ref(), dest) != ConnectStep::Refuse)
+    }
+
     /// Whether someone is mid-exchange over the probe's session right now.
     fn probe_session_busy(&self, probed: &Destination) -> bool {
         probe_session_busy(&self.phase, &self.ongoing_disconnections, probed)
@@ -2412,11 +2453,14 @@ impl Core {
 
         let reconnect_at = self.config.connection.health_check_intervals.tunnel_ping_max_failures;
         let pix = self.main_session_pix();
+        let checking_exit_since = self.target_since.filter(|_| self.checking_exit());
         let connection = connection_view(
             &self.phase,
             self.reconnecting_since,
             self.target.as_deref(),
+            checking_exit_since,
             reconnect_at,
+            self.connect_issue,
             pix,
         );
         let disconnecting = self
@@ -2538,6 +2582,10 @@ impl Core {
         }
     }
 
+    fn note_connect_issue(&mut self, kind: ipc::ConnectIssueKind) {
+        self.connect_issue = Some(next_connect_issue(self.connect_issue, kind));
+    }
+
     /// The ping session becomes the main one, so it is the session that pays the exit.
     fn main_session_pix(&self) -> Option<ipc::PixChunkStats> {
         let conn = match &self.phase {
@@ -2639,6 +2687,7 @@ impl Core {
         self.drop_held_deposits();
         self.cancel_connection.cancel();
         self.connect_retries = None;
+        self.connect_issue = None;
         self.connection_generation += 1;
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
@@ -2815,34 +2864,77 @@ impl Core {
     }
 }
 
+/// Under strict prepay the exit closes an unpaid session once its deposit times out.
+fn pump_exit_issue(phase: &connection::up::Phase) -> ipc::ConnectIssueKind {
+    match phase {
+        connection::up::Phase::AwaitingPayment => ipc::ConnectIssueKind::PaymentFailed,
+        _ => ipc::ConnectIssueKind::ExitUnreachable,
+    }
+}
+
+/// A different kind starts a new count: the earlier issue was got past.
+fn next_connect_issue(current: Option<ipc::ConnectIssue>, kind: ipc::ConnectIssueKind) -> ipc::ConnectIssue {
+    match current {
+        Some(issue) if issue.kind == kind => ipc::ConnectIssue {
+            kind,
+            attempts: issue.attempts + 1,
+        },
+        _ => ipc::ConnectIssue { kind, attempts: 1 },
+    }
+}
+
 /// The one connection the phase describes; between attempts a reconnect has no phase.
 fn connection_view(
     phase: &Phase,
     reconnecting_since: Option<SystemTime>,
     target_dest_id: Option<&str>,
+    checking_exit_since: Option<SystemTime>,
     reconnect_at: u32,
+    issue: Option<ipc::ConnectIssue>,
     pix: Option<ipc::PixChunkStats>,
 ) -> ipc::Connection {
     if let Some(since) = reconnecting_since {
         let reconnecting = match phase {
-            Phase::Connecting(conn) => Some((conn.destination.connect_id.as_str(), Some(conn.phase.1.clone()))),
-            // Waiting on route health: the target is the only record of where we are headed.
-            Phase::HoprRunning => target_dest_id.map(|id| (id, None)),
+            Phase::Connecting(conn) => Some((
+                conn.destination.connect_id.as_str(),
+                Some(conn.phase.1.clone()),
+                Some(conn.step(pix.as_ref())),
+            )),
+            // Waiting on route health or the probe: the target is the only record of where we are headed.
+            Phase::HoprRunning => {
+                let step = checking_exit_since.map(|_| ipc::ConnectStep::CheckingExit);
+                target_dest_id.map(|id| (id, None, step))
+            }
             _ => None,
         };
-        if let Some((destination, phase)) = reconnecting {
+        if let Some((destination, phase, step)) = reconnecting {
             return ipc::Connection::Reconnecting {
                 destination: destination.into(),
                 since,
                 phase,
+                step,
+                issue,
             };
         }
+    }
+    // No runner yet, so no phase of its own: Init is where the runner starts, also at checking the exit.
+    if let (Phase::HoprRunning, Some(destination), Some(since)) = (phase, target_dest_id, checking_exit_since) {
+        return ipc::Connection::Connecting {
+            destination: destination.into(),
+            since,
+            phase: ipc::ConnectPhase::Init,
+            step: ipc::ConnectStep::CheckingExit,
+            issue,
+            pix: None,
+        };
     }
     match phase {
         Phase::Connecting(conn) => ipc::Connection::Connecting {
             destination: conn.destination.connect_id.as_str().into(),
             since: conn.phase.0,
             phase: conn.phase.1.clone(),
+            step: conn.step(pix.as_ref()),
+            issue,
             pix,
         },
         Phase::Connected(conn) => ipc::Connection::Connected {
@@ -3712,7 +3804,7 @@ mod tests {
     }
 
     fn view(phase: &Phase, reconnecting_since: Option<SystemTime>, target: Option<&str>) -> ipc::Connection {
-        connection_view(phase, reconnecting_since, target, 3, None)
+        connection_view(phase, reconnecting_since, target, None, 3, None, None)
     }
 
     #[test]
@@ -3724,6 +3816,8 @@ mod tests {
                 destination: "exit".into(),
                 since,
                 phase: None,
+                step: None,
+                issue: None,
             }
         );
     }
@@ -3733,6 +3827,60 @@ mod tests {
         assert_eq!(
             view(&Phase::HoprRunning, None, Some("exit")),
             ipc::Connection::Disconnected
+        );
+    }
+
+    #[test]
+    fn a_connect_waiting_on_the_probe_is_checking_the_exit() {
+        let since = SystemTime::UNIX_EPOCH;
+        let issue = ipc::ConnectIssue {
+            kind: ipc::ConnectIssueKind::ExitUnreachable,
+            attempts: 3,
+        };
+        let connection = connection_view(
+            &Phase::HoprRunning,
+            None,
+            Some("exit"),
+            Some(since),
+            3,
+            Some(issue),
+            None,
+        );
+        assert_eq!(
+            connection,
+            ipc::Connection::Connecting {
+                destination: "exit".into(),
+                since,
+                phase: UpPhase::Init,
+                step: ipc::ConnectStep::CheckingExit,
+                issue: Some(issue),
+                pix: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_reconnect_waiting_on_the_probe_is_checking_the_exit() {
+        let since = SystemTime::UNIX_EPOCH;
+        let connection = connection_view(
+            &Phase::HoprRunning,
+            Some(since),
+            Some("exit"),
+            Some(since),
+            3,
+            None,
+            None,
+        );
+        assert!(
+            matches!(
+                connection,
+                ipc::Connection::Reconnecting {
+                    phase: None,
+                    step: Some(ipc::ConnectStep::CheckingExit),
+                    ..
+                }
+            ),
+            "{connection:?}"
         );
     }
 
@@ -3761,7 +3909,44 @@ mod tests {
                 destination: "exit".into(),
                 since: SystemTime::UNIX_EPOCH,
                 phase: Some(UpPhase::VerifyPing),
+                step: Some(ipc::ConnectStep::Verifying),
+                issue: None,
             }
+        );
+    }
+
+    #[test]
+    fn a_session_closed_while_awaiting_payment_is_a_failed_payment() {
+        assert_eq!(
+            pump_exit_issue(&UpPhase::AwaitingPayment),
+            ipc::ConnectIssueKind::PaymentFailed
+        );
+        assert_eq!(
+            pump_exit_issue(&UpPhase::EstablishWgTunnel),
+            ipc::ConnectIssueKind::ExitUnreachable
+        );
+    }
+
+    #[test]
+    fn a_repeated_issue_counts_up_and_another_starts_over() {
+        let route = ipc::ConnectIssueKind::PaymentRouteUnavailable;
+        let first = next_connect_issue(None, route);
+        let again = next_connect_issue(Some(first), route);
+        let other = next_connect_issue(Some(again), ipc::ConnectIssueKind::ExitUnreachable);
+        assert_eq!((first.attempts, again.attempts, other.attempts), (1, 2, 1));
+    }
+
+    #[test]
+    fn an_attempt_reports_its_issue() {
+        let phase = Phase::Connecting(attempt("exit", UpPhase::KillswitchLockdown));
+        let issue = ipc::ConnectIssue {
+            kind: ipc::ConnectIssueKind::PaymentRouteUnavailable,
+            attempts: 2,
+        };
+        let connection = connection_view(&phase, None, None, None, 3, Some(issue), None);
+        assert!(
+            matches!(connection, ipc::Connection::Connecting { step: ipc::ConnectStep::Securing, issue: Some(i), .. } if i == issue),
+            "{connection:?}"
         );
     }
 

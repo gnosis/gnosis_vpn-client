@@ -14,7 +14,7 @@ use tokio_util::task::{AbortOnDropHandle, TaskTracker};
 use std::fmt::{self, Display};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time;
 
 use crate::connection::destination::Destination;
@@ -24,10 +24,11 @@ use crate::event::RunnerToRoot;
 use crate::gvpn_client::{self, Registration};
 use crate::hopr::types::{SessionClientMetadata, SplicedWgSession};
 use crate::hopr::{Hopr, HoprError};
+use crate::killswitch::TunnelAccess;
 use crate::wireguard::{self, WireGuard};
 use crate::{ping, remote_data, wg_tunnel};
 
-use super::{Error, Event, Progress, Resume, Setback};
+use super::{COUNTER_STALL_RECONNECT, Error, Event, Progress, Resume, Setback};
 
 /// State carried over from a previous connection attempt.
 pub(crate) struct PreviousConnection {
@@ -118,9 +119,9 @@ impl Runner {
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
         let peer_ips = gather_peer_ips(&self.hopr).await?;
 
-        // 2. arm the killswitch first so leaks stop as the attempt starts; the tunnel is attached at step 8
+        // 2. arm the killswitch first so leaks stop as the attempt starts; the tunnel opens in steps 8 and 10
         let _ = results_sender.send(progress(Progress::KillswitchLockdown)).await;
-        request_killswitch_lockdown(peer_ips.clone(), None, &results_sender).await?;
+        request_killswitch_lockdown(peer_ips.clone(), TunnelAccess::Closed, &results_sender).await?;
 
         // 3. generate wg keys - or keep the previous ones so the exit returns the same address
         let _ = results_sender.send(progress(Progress::GenerateWg)).await;
@@ -197,18 +198,34 @@ impl Runner {
             pump_exited.clone(),
         );
 
-        // 8. let tunnel traffic through the already active killswitch
-        request_killswitch_lockdown(peer_ips, Some(interface), &results_sender).await?;
+        // 8. let only the gateway through: user traffic must not run on a session the exit does not serve yet
+        let gateway_only = TunnelAccess::GatewayOnly {
+            interface: interface.clone(),
+            gateway: self.options.ping_options.address,
+        };
+        request_killswitch_lockdown(peer_ips.clone(), gateway_only, &results_sender).await?;
 
-        // 9. verify tunnel with ping — give it some leeway with 5 retries
-        // A session the exit closed must end the retries here instead of after ~100 s of ping timeouts.
+        // 9. ping until the exit serves: under strict prepay the first answer confirms the payment; a closed session ends it
         let _ = results_sender.send(progress(Progress::Ping)).await;
+        let main_session_id = session
+            .active_clients
+            .first()
+            .cloned()
+            .ok_or_else(|| Error::Runtime("spliced wg session has no id".to_string()))?;
         let round_trip_time = pump_exited
-            .run_until_cancelled(request_ping(&self.options.ping_options, 5, &results_sender))
+            .run_until_cancelled(await_exit_serving(
+                &self.hopr,
+                &main_session_id,
+                &self.options.ping_options,
+                &results_sender,
+            ))
             .await
             .ok_or_else(|| Error::Runtime("wg pump exited during tunnel verification".to_string()))??;
 
-        // 10. adjust to main session
+        // 10. let user traffic through the tunnel
+        request_killswitch_lockdown(peer_ips, TunnelAccess::Open { interface }, &results_sender).await?;
+
+        // 11. adjust to main session
         let _ = results_sender
             .send(progress(Progress::AdjustToMain(round_trip_time)))
             .await;
@@ -364,7 +381,8 @@ async fn open_relayer_sidecar(
                 let _ = tx.send(payload).await;
             });
         })
-        .await?;
+        .await
+        .map_err(Error::RelayerSidecar)?;
     if let Some(sidecar) = opened {
         let _ = results_sender.send(progress(Progress::RelayerSidecar(sidecar))).await;
     }
@@ -390,14 +408,14 @@ fn relayer_sidecar_cfg(
 
 async fn request_killswitch_lockdown(
     peer_ips: Vec<Ipv4Addr>,
-    interface: Option<String>,
+    tunnel: TunnelAccess,
     results_sender: &mpsc::Sender<Results>,
 ) -> Result<(), Error> {
     let (tx, rx) = oneshot::channel();
     let _ = results_sender
         .send(Results::ConnectionRequestToRoot(RunnerToRoot::KillswitchLockdown {
             peer_ips,
-            interface,
+            tunnel,
             resp: tx,
         }))
         .await;
@@ -644,6 +662,89 @@ async fn request_ping(
     .await
 }
 
+/// Failed pings a dead path gets, as before the payment wait existed.
+const PING_FAILURES_BEFORE_GIVING_UP: u32 = 5;
+
+/// Paces the pings of a payment wait whose failures return before the ping timeout.
+const PAYMENT_WAIT_PING_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Pings until the exit serves the session; failures only count while the exit is not just awaiting its deposit.
+async fn await_exit_serving(
+    hopr: &Hopr,
+    session_id: &str,
+    options: &ping::Options,
+    results_sender: &mpsc::Sender<Results>,
+) -> Result<Duration, Error> {
+    let chunks = hopr.pix_chunks();
+    let mut keep_alives = ExitKeepAlives::default();
+    let mut failures = 0;
+    let mut reported_wait = false;
+    let mut held = false;
+    loop {
+        let error = match request_ping(options, 0, results_sender).await {
+            Ok(rtt) => {
+                // Mirrors core's HoldResumed: an answer after a payment wait confirms the payment.
+                if held {
+                    chunks.confirm(session_id);
+                }
+                return Ok(rtt);
+            }
+            Err(error) if error.is_ping_error() => error,
+            Err(error) => return Err(error),
+        };
+        if let (Some(unpaid), _) = chunks.payment_outcome(session_id) {
+            return Err(Error::Payment(unpaid));
+        }
+        let awaiting_payment = chunks.awaiting_payment(session_id);
+        let exit_talking = keep_alives.talking(chunks.surbs_consumed(session_id), Instant::now());
+        if awaiting_payment && exit_talking {
+            held = true;
+            if !reported_wait {
+                tracing::info!(%session_id, "holding user traffic until the exit confirms the payment");
+                let _ = results_sender.send(progress(Progress::AwaitingPayment)).await;
+                reported_wait = true;
+            }
+            time::sleep(PAYMENT_WAIT_PING_INTERVAL).await;
+            continue;
+        }
+        // The setback below re-raises the issue, so a resumed wait must report itself again.
+        reported_wait = false;
+        failures += 1;
+        if failures >= PING_FAILURES_BEFORE_GIVING_UP {
+            return Err(error);
+        }
+        tracing::warn!(%error, failures, "ping through the tunnel failed - will retry");
+        let _ = results_sender.send(setback(Setback::Ping(error.to_string()))).await;
+        time::sleep(Duration::from_secs(u64::from(failures))).await;
+    }
+}
+
+/// The PIX gate parks data but not the exit's keep-alives, so their SURB use tells a payment wait from a dead path.
+#[derive(Default)]
+struct ExitKeepAlives {
+    consumed: Option<u64>,
+    grew_at: Option<Instant>,
+}
+
+impl ExitKeepAlives {
+    fn talking(&mut self, consumed: Option<u64>, now: Instant) -> bool {
+        let grew = match (self.consumed, consumed) {
+            (Some(before), Some(after)) => after > before,
+            // The first reading has nothing to compare with; it starts the silence clock.
+            (None, Some(_)) => true,
+            (_, None) => false,
+        };
+        if consumed.is_some() {
+            self.consumed = consumed;
+        }
+        if grew {
+            self.grew_at = Some(now);
+        }
+        self.grew_at
+            .is_some_and(|at| now.duration_since(at) < COUNTER_STALL_RECONNECT)
+    }
+}
+
 fn setback(setback: Setback) -> Results {
     Results::ConnectionEvent(Event::Setback(Box::new(setback)))
 }
@@ -655,6 +756,23 @@ fn progress(progress: Progress) -> Results {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exit_keep_alives_count_as_talking_until_they_stop_for_the_stall_threshold() {
+        let start = Instant::now();
+        let mut keep_alives = ExitKeepAlives::default();
+        assert!(keep_alives.talking(Some(10), start));
+        assert!(keep_alives.talking(Some(10), start + Duration::from_secs(5)));
+        assert!(keep_alives.talking(Some(12), start + Duration::from_secs(15)));
+        assert!(keep_alives.talking(Some(12), start + Duration::from_secs(34)));
+        assert!(!keep_alives.talking(Some(12), start + COUNTER_STALL_RECONNECT + Duration::from_secs(15)));
+    }
+
+    #[test]
+    fn an_exit_without_telemetry_is_not_talking() {
+        let mut keep_alives = ExitKeepAlives::default();
+        assert!(!keep_alives.talking(None, Instant::now()));
+    }
 
     #[test]
     fn relayer_sidecar_never_pays() -> anyhow::Result<()> {

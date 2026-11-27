@@ -1,5 +1,6 @@
 use edgli::hopr_lib::api::types::internal::protocol::HoprPseudonym;
 use edgli::hopr_lib::exports::transport::{HoprSessionConfigurator, SurbBalancerConfig};
+use gnosis_vpn_ipc::{ConnectIssueKind, ConnectStep, PaymentProgress, PixChunkStats, PixPhase};
 use thiserror::Error;
 
 use std::collections::VecDeque;
@@ -44,6 +45,8 @@ pub enum Progress {
     /// Handle to adjust the active session's SURB balancer, retained on `Up`
     /// so `core` can reconfigure it from live telemetry, not just once here.
     SessionConfigurator(HoprSessionConfigurator),
+    /// The exit has asked for this session's deposit and not served it yet; user traffic waits.
+    AwaitingPayment,
     Ping,
     AdjustToMain(Duration),
     /// Sets the SURB balancer's desired target; `core` slews toward it at the given ramp pacing.
@@ -137,6 +140,8 @@ pub enum Setback {
 pub(crate) enum Error {
     #[error("Hopr error: {0}")]
     Hopr(#[from] HoprError),
+    #[error("Relayer side-car error: {0}")]
+    RelayerSidecar(HoprError),
     #[error("Gvpn client error: {0}")]
     GvpnClient(#[from] gvpn_client::Error),
     #[error("Ping error: {0}")]
@@ -151,6 +156,8 @@ pub(crate) enum Error {
     WireGuard(#[from] wireguard::Error),
     #[error("Remote data error: {0}")]
     RemoteData(#[from] remote_data::Error),
+    #[error("PIX deposit for the session {0}, so the exit will not serve it")]
+    Payment(Deposit),
 }
 
 /// Contains stateful data of establishing a VPN connection to a destination.
@@ -269,6 +276,47 @@ pub use gnosis_vpn_ipc::ConnectPhase as Phase;
 impl Error {
     pub fn is_ping_error(&self) -> bool {
         matches!(self, Error::Ping(_))
+    }
+
+    pub fn issue(&self) -> ConnectIssueKind {
+        match self {
+            Error::Hopr(_) => ConnectIssueKind::ExitUnreachable,
+            Error::RelayerSidecar(_) => ConnectIssueKind::PaymentRouteUnavailable,
+            Error::GvpnClient(_) => ConnectIssueKind::RegistrationFailed,
+            Error::Ping(_) => ConnectIssueKind::TunnelUnverified,
+            Error::Payment(Deposit::Refused) => ConnectIssueKind::InsufficientFunds,
+            Error::Payment(_) => ConnectIssueKind::PaymentFailed,
+            Error::Runtime(_)
+            | Error::SurbConfig(_)
+            | Error::Routing(_)
+            | Error::WireGuard(_)
+            | Error::RemoteData(_) => ConnectIssueKind::Other,
+        }
+    }
+}
+
+impl Setback {
+    pub fn issue(&self) -> ConnectIssueKind {
+        match self {
+            Setback::RegisterWg(_) => ConnectIssueKind::RegistrationFailed,
+            Setback::OpenPing(_) => ConnectIssueKind::ExitUnreachable,
+            Setback::Ping(_) => ConnectIssueKind::TunnelUnverified,
+            Setback::RelayerSidecar(_) => ConnectIssueKind::PaymentRouteUnavailable,
+        }
+    }
+}
+
+impl Progress {
+    /// Reaching this step means the issue no longer holds the attempt up.
+    pub fn resolves(&self, issue: ConnectIssueKind) -> bool {
+        match self {
+            Progress::RelayerSidecar(_) => issue == ConnectIssueKind::PaymentRouteUnavailable,
+            Progress::OpenPing(_) => issue == ConnectIssueKind::RegistrationFailed,
+            Progress::StaticWgTunnel(_) => issue == ConnectIssueKind::ExitUnreachable,
+            // The exit answers on the session, so failing pings are the payment wait.
+            Progress::AwaitingPayment => issue == ConnectIssueKind::TunnelUnverified,
+            _ => false,
+        }
     }
 }
 
@@ -573,6 +621,7 @@ impl Up {
             Progress::SessionConfigurator(configurator) => {
                 self.session_configurator = Some(configurator);
             }
+            Progress::AwaitingPayment => self.phase = (now, Phase::AwaitingPayment),
             Progress::Ping => self.phase = (now, Phase::VerifyPing),
             Progress::AdjustToMain(_round_trip_time) => self.phase = (now, Phase::AdjustToMain),
             Progress::SetSurbTarget { applied, target, ramp } => {
@@ -584,6 +633,27 @@ impl Up {
                 self.surb_applied = Some(applied);
                 self.surb_target = Some(target);
             }
+        }
+    }
+
+    /// The deposit the exit asked for turns the tunnel steps into paying.
+    pub fn step(&self, pix: Option<&PixChunkStats>) -> ConnectStep {
+        let payment = match pix.map(|stats| stats.phase) {
+            Some(PixPhase::PaymentPending | PixPhase::PaymentFailed) => Some(PaymentProgress::Requested),
+            Some(PixPhase::Funded) => Some(PaymentProgress::Sent),
+            Some(PixPhase::Free) | None => None,
+        };
+        match (&self.phase.1, payment) {
+            (Phase::Init | Phase::GatherPeerIps, _) => ConnectStep::CheckingExit,
+            (Phase::KillswitchLockdown | Phase::GeneratingWg | Phase::RegisterWg, _) => ConnectStep::Securing,
+            (Phase::AwaitingPayment, payment) => ConnectStep::Paying {
+                payment: payment.unwrap_or(PaymentProgress::Requested),
+            },
+            (Phase::OpeningPing | Phase::EstablishWgTunnel | Phase::VerifyPing, Some(payment)) => {
+                ConnectStep::Paying { payment }
+            }
+            (Phase::OpeningPing | Phase::EstablishWgTunnel, None) => ConnectStep::OpeningTunnel,
+            (Phase::VerifyPing | Phase::AdjustToMain | Phase::ConnectionEstablished, _) => ConnectStep::Verifying,
         }
     }
 
@@ -662,6 +732,7 @@ impl Display for Progress {
             Progress::KillswitchLockdown => write!(f, "Activating killswitch"),
             Progress::StaticWgTunnel(_) => write!(f, "Establishing static WireGuard tunnel"),
             Progress::SessionConfigurator(_) => write!(f, "Session configurator retained"),
+            Progress::AwaitingPayment => write!(f, "Waiting for the exit to confirm payment"),
             Progress::Ping => write!(f, "Verifying established connection"),
             Progress::AdjustToMain(round_trip_time) => {
                 write!(f, "Adjusting to main connection with RTT of {:?}", round_trip_time)
@@ -1428,5 +1499,81 @@ mod tunnel_ping_tests {
         let mut up = up();
         drive(&mut up, &[TIMEOUT, Ok(Duration::from_secs(8))], true);
         assert!(up.tunnel_ping.failing_since.is_none());
+    }
+}
+
+#[cfg(test)]
+mod connect_step_tests {
+    use super::*;
+    use crate::connection::destination::{Address, DestinationSource, HopRouting, Meta};
+    use gnosis_vpn_ipc::Balance;
+
+    fn up_in(phase: Phase) -> Up {
+        let mut up = Up::new(Destination::new(
+            "exit".to_string(),
+            Address::from([7u8; 20]),
+            HopRouting::try_from(1).expect("conversion cannot fail"),
+            Meta::default(),
+            "172.30.0.1:8000".parse().expect("valid socket address"),
+            "172.30.0.1:51820".parse().expect("valid socket address"),
+            DestinationSource::Configured,
+        ));
+        up.phase.1 = phase;
+        up
+    }
+
+    fn pix(phase: PixPhase) -> PixChunkStats {
+        PixChunkStats {
+            phase,
+            chunks_committed: 1,
+            chunks_paid: 0,
+            chunks_failed: 0,
+            chunk_bytes: 900,
+            bytes_bought: 900,
+            cost: Balance::from_wei(900),
+            bytes_spent: None,
+            bytes_left: None,
+            bytes_received: None,
+            empty_in: None,
+        }
+    }
+
+    #[test]
+    fn a_requested_deposit_turns_opening_the_tunnel_into_paying() {
+        let up = up_in(Phase::EstablishWgTunnel);
+        assert_eq!(up.step(None), ConnectStep::OpeningTunnel);
+        assert_eq!(
+            up.step(Some(&pix(PixPhase::PaymentPending))),
+            ConnectStep::Paying {
+                payment: PaymentProgress::Requested
+            }
+        );
+        assert_eq!(
+            up.step(Some(&pix(PixPhase::Funded))),
+            ConnectStep::Paying {
+                payment: PaymentProgress::Sent
+            }
+        );
+    }
+
+    #[test]
+    fn a_free_session_verifies_without_paying() {
+        let up = up_in(Phase::VerifyPing);
+        assert_eq!(up.step(Some(&pix(PixPhase::Free))), ConnectStep::Verifying);
+    }
+
+    #[test]
+    fn a_refused_deposit_reads_as_insufficient_funds() {
+        assert_eq!(
+            Error::Payment(Deposit::Refused).issue(),
+            ConnectIssueKind::InsufficientFunds
+        );
+        assert_eq!(Error::Payment(Deposit::Failed).issue(), ConnectIssueKind::PaymentFailed);
+    }
+
+    #[test]
+    fn the_exit_answering_on_the_session_resolves_failing_pings() {
+        assert!(Progress::AwaitingPayment.resolves(ConnectIssueKind::TunnelUnverified));
+        assert!(!Progress::AwaitingPayment.resolves(ConnectIssueKind::PaymentRouteUnavailable));
     }
 }
