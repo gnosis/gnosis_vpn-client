@@ -74,6 +74,24 @@ address = "0x8a6E6200C9dE8d8F8D9b4c08F86500a2E3Fbf254"
 path    = { hops = 1 }
 
 ###
+## bootstrap section - the fixed node set of bootstrap mode
+#
+# This section is optional. Without it, bootstrap mode is not available and the app does not
+# show its switch. In bootstrap mode the client connects only to the exits listed here, and it
+# keeps channels only to the relayers listed here: it closes its channels to every other node.
+# Exit discovery and the [destinations] section are not used in bootstrap mode.
+
+# [bootstrap]
+# relayers - chain addresses of the relay nodes to keep channels to; at least one.
+# Bootstrap mode raises target_open_channels by the number of relayers.
+# relayers = ["0x...", "0x..."]
+
+# One entry for each exit, at least one. An entry takes the same keys as a [destinations] entry.
+# [bootstrap.exits.<id>]
+# address = "<exit node address>"
+# meta    = { name = "Amsterdam" }
+
+###
 ## connection section - adjust for more fine grained connection control
 
 # [connection]
@@ -241,7 +259,7 @@ path    = { hops = 1 }
 
 # see https://github.com/hoprnet/hoprnet/blob/6525d753fde70b5026d19d7a647b8143352b26df/chain/connector/src/connector/mod.rs#L46 for documentation
 # [blokli]
-# connection_sync_timeout = "30s"
+# connection_sync_timeout = "2m"
 # sync_tolerance = 50
 # bound on a single request to blokli, covering DNS, TCP, TLS, request and response;
 # raise it on high-latency links where requests time out during startup

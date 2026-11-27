@@ -47,6 +47,7 @@ pub enum RootCommand {
     Info,
     StartClient(Duration),
     StopClient,
+    SetMode(ipc::Mode),
     TrafficInterfaces,
     TrafficStart(ipc::traffic::StartRequest),
     TrafficRead(ipc::traffic::ReadRequest),
@@ -79,6 +80,7 @@ impl From<ipc::Request> for CommandRoute {
             ipc::Request::Info => CommandRoute::Root(RootCommand::Info),
             ipc::Request::StartClient { timeout } => CommandRoute::Root(RootCommand::StartClient(timeout)),
             ipc::Request::StopClient => CommandRoute::Root(RootCommand::StopClient),
+            ipc::Request::SetMode { mode } => CommandRoute::Root(RootCommand::SetMode(mode)),
             ipc::Request::TrafficInterfaces => CommandRoute::Root(RootCommand::TrafficInterfaces),
             ipc::Request::TrafficStart(request) => CommandRoute::Root(RootCommand::TrafficStart(request)),
             ipc::Request::TrafficRead(request) => CommandRoute::Root(RootCommand::TrafficRead(request)),
@@ -379,6 +381,9 @@ mod tests {
                 timeout: Duration::from_secs(1),
             },
             ipc::Request::StopClient,
+            ipc::Request::SetMode {
+                mode: ipc::Mode::Bootstrap,
+            },
             ipc::Request::TrafficInterfaces,
             ipc::Request::TrafficStop(ipc::traffic::StopRequest { session_id: 1 }),
         ] {

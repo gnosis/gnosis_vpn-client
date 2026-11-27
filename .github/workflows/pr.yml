@@ -88,9 +88,9 @@ jobs:
     name: Checks
     permissions:
       contents: read
-    uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@061b4579c870b0fdc008f5ff07a3a500e4fede50 # workflow-checks-v2.3.1
+    uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@43c833e72dffe4f2f3be60193733e5657f8aa0d7 # workflow-checks-v3.0.0
     with:
-      source_branch: ${{ github.event.pull_request.head.sha || github.sha }}
+      repo_sha: ${{ github.event.pull_request.head.sha || github.sha }}
       cachix_cache_name: gnosis-vpn-client
       conflict_markers: true
       # No `.#check` app or `.#ci` devshell here; `nix flake check` already covers clippy/docs/test/licenses.

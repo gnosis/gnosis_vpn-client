@@ -294,6 +294,7 @@ impl TryFrom<Config> for super::v7::Config {
             probing: None,
             geoip_db: Some(crate::geoip::DEFAULT_DB_PATH.into()),
             curvy_zk_dir: Some(crate::hopr::pix_config::DEFAULT_CURVY_ZK_DIR.into()),
+            bootstrap: None,
         })
     }
 }
@@ -540,5 +541,24 @@ address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
             std::path::PathBuf::from(crate::geoip::DEFAULT_DB_PATH),
             runtime_config(parse(toml)).geoip_db
         );
+    }
+
+    #[test]
+    fn bootstrap_is_not_a_supported_key_in_v6() {
+        let toml = r#####"
+version = 6
+
+[bootstrap]
+relayers = ["0x2598c0773e3fa07437de329737d3e1a18f272e8f"]
+
+[bootstrap.exits.amsterdam]
+address = "0xc9a0ab0f96608b4da489321003070fda0d45f4ac"
+"#####;
+        assert_eq!(
+            wrong_keys(&toml.parse::<toml::Table>().expect("valid TOML")),
+            vec!["bootstrap".to_string()]
+        );
+
+        assert_eq!(None, runtime_config(parse(toml)).bootstrap);
     }
 }
