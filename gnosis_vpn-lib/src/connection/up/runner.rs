@@ -3,12 +3,13 @@
 //! This allows keeping the source of truth for data in `core` and avoiding structs duplication.
 use backon::{FibonacciBuilder, Retryable};
 use edgli::FlowControlConfig;
-use edgli::hopr_lib::HoprSessionClientConfig;
 use edgli::hopr_lib::api::types::internal::protocol::HoprPseudonym;
+use edgli::hopr_lib::exports::transport::{SessionCapabilities, SessionCapability};
+use edgli::hopr_lib::{HopRouting, HoprSessionClientConfig};
 use ipnetwork::IpNetwork;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
+use tokio_util::task::{AbortOnDropHandle, TaskTracker};
 
 use std::fmt::{self, Display};
 use std::net::Ipv4Addr;
@@ -105,6 +106,14 @@ impl Runner {
     }
 
     async fn run(&self, results_sender: mpsc::Sender<Results>) -> Result<SessionClientMetadata, Error> {
+        // 0. the relayer side-car first, alongside steps 1-5: the PIX deposit for the step 6 session goes through it
+        let sidecar = AbortOnDropHandle::new(tokio::spawn(open_relayer_sidecar(
+            self.hopr.clone(),
+            self.destination.clone(),
+            self.options.clone(),
+            results_sender.clone(),
+        )));
+
         // 1. gather ips of all announced peers
         let _ = results_sender.send(progress(Progress::PeerIps)).await;
         let peer_ips = gather_peer_ips(&self.hopr).await?;
@@ -129,6 +138,11 @@ impl Runner {
         // 4. register wg public key over the probe's bridge session
         let _ = results_sender.send(progress(Progress::RegisterWg)).await;
         let registration = register(&self.options, &self.bridge_session, public_key, &results_sender).await?;
+
+        // No session without a side-car (its deposit would be paid after it was abandoned); before OpenPing, which spends the carried-over pseudonym.
+        sidecar
+            .await
+            .map_err(|e| Error::Runtime(format!("relayer side-car task failed: {e}")))??;
 
         // 5. signal ping phase (carries registration)
         let _ = results_sender
@@ -329,6 +343,49 @@ async fn open_spliced_wg_session(
         });
     })
     .await
+}
+
+/// Opens the session the PIX relayer calls take, so a deposit never waits behind the tunnel it pays for.
+async fn open_relayer_sidecar(
+    hopr: Arc<Hopr>,
+    destination: Destination,
+    options: Options,
+    results_sender: mpsc::Sender<Results>,
+) -> Result<(), Error> {
+    let surb = surb_config_for(&options.surb_balancing.relayer)?;
+    let cfg = relayer_sidecar_cfg(options.sessions.bridge.capabilities, destination.routing, surb);
+    let opened = (|| async { hopr.open_relayer_sidecar(destination.address, cfg.clone()).await })
+        .retry(remote_data::backoff_expo_short_delay())
+        .notify(|err: &HoprError, dur: Duration| {
+            tracing::warn!(error = ?err, "error opening relayer side-car - will retry after {:?}", dur);
+            let tx = results_sender.clone();
+            let payload = setback(Setback::RelayerSidecar(err.to_string()));
+            tokio::spawn(async move {
+                let _ = tx.send(payload).await;
+            });
+        })
+        .await?;
+    if let Some(sidecar) = opened {
+        let _ = results_sender.send(progress(Progress::RelayerSidecar(sidecar))).await;
+    }
+    Ok(())
+}
+
+fn relayer_sidecar_cfg(
+    capabilities: SessionCapabilities,
+    routing: HopRouting,
+    surb: SurbParams,
+) -> HoprSessionClientConfig {
+    HoprSessionClientConfig {
+        // A charged side-car would be gated like the session whose payment it carries.
+        capabilities: capabilities - SessionCapability::UsePIX,
+        forward_path: routing,
+        return_path: routing,
+        max_surbs_per_data_packet: surb.max_surbs_per_data_packet,
+        surb_management: surb.management,
+        flow_control: Some(FlowControlConfig::robust()),
+        ..Default::default()
+    }
 }
 
 async fn request_killswitch_lockdown(
@@ -598,6 +655,19 @@ fn progress(progress: Progress) -> Results {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relayer_sidecar_never_pays() -> anyhow::Result<()> {
+        let capabilities = SessionCapability::Segmentation | SessionCapability::UsePIX;
+        let surb = SurbParams {
+            management: None,
+            max_surbs_per_data_packet: 1,
+        };
+        let cfg = relayer_sidecar_cfg(capabilities, HopRouting::try_from(1)?, surb);
+        assert!(!cfg.capabilities.contains(SessionCapability::UsePIX));
+        assert!(cfg.capabilities.contains(SessionCapability::Segmentation));
+        Ok(())
+    }
 
     #[test]
     fn pump_exit_reason_none_for_cancellation() {

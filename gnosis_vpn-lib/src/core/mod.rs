@@ -954,8 +954,12 @@ impl Core {
                     self.start_probe(&conn.destination, requested, results_sender);
                     self.reconnect_in_place(conn, true, results_sender).await;
                 }
-                (Err(err), Phase::Connecting(conn)) => {
+                (Err(err), Phase::Connecting(mut conn)) => {
                     tracing::error!(?err, %conn, "connection failed");
+                    // Holds deposits through the retry delay: the failed attempt's session no longer needs paying.
+                    self.close_relayer_sidecar(&conn);
+                    conn.relayer_sidecar = None;
+                    self.phase = Phase::Connecting(conn.clone());
                     let error = match &conn.pump_exit {
                         Some(exit) => format!("wg pump exited: {}", exit.reason),
                         None => err.to_string(),
@@ -2163,6 +2167,21 @@ impl Core {
         let _ = self.outgoing_sender.send(request).await;
     }
 
+    /// Hopr skips the close once the next attempt has replaced this side-car.
+    fn close_relayer_sidecar(&self, conn: &connection::up::Up) {
+        let (Some(hopr), Some(sidecar)) = (self.hopr.clone(), conn.relayer_sidecar.clone()) else {
+            return;
+        };
+        tokio::spawn(async move { hopr.close_relayer_sidecar(&sidecar).await });
+    }
+
+    /// Run at teardown, past the strategy's batching window, so a late deposit of the closed session waits here too.
+    fn drop_held_deposits(&self) {
+        if let Some(pool) = &self.pix_pool {
+            pool.drop_held_deposits();
+        }
+    }
+
     fn sync_pix_deposit_hold(&self) {
         if let Some(pool) = &self.pix_pool {
             pool.hold_deposits(pix_deposits_held(&self.phase, self.killswitch_armed));
@@ -2616,6 +2635,8 @@ impl Core {
     }
 
     fn disconnect_from_connection(&mut self, conn: &connection::up::Up, results_sender: &mpsc::Sender<Results>) {
+        self.close_relayer_sidecar(conn);
+        self.drop_held_deposits();
         self.cancel_connection.cancel();
         self.connect_retries = None;
         self.connection_generation += 1;
@@ -2642,12 +2663,16 @@ impl Core {
         keep_device: bool,
         results_sender: &mpsc::Sender<Results>,
     ) {
+        // Hold before the side-car closes: the pump-stop wait below runs before the event loop syncs the hold.
+        self.phase = Phase::HoprRunning;
+        self.sync_pix_deposit_hold();
+        self.close_relayer_sidecar(&conn);
+        self.drop_held_deposits();
         self.cancel_connection.cancel();
         self.connection_generation += 1;
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
         self.responders.clear();
-        self.phase = Phase::HoprRunning;
         // Discovery may have dropped this exit mid-connection; its tracker was kept only for the tunnel pings.
         let configured = &self.config.destinations;
         self.route_healths.retain(|key, _| configured.contains_key(key));
@@ -2847,10 +2872,13 @@ fn nerd_stats_telemetry() -> Option<String> {
     }
 }
 
-/// The armed killswitch lets the relayer through only via the tunnel, so deposits wait for Connected.
+/// The armed killswitch blocks every relayer route but the attempt's side-car, so deposits wait for it.
 fn pix_deposits_held(phase: &Phase, killswitch_armed: bool) -> bool {
-    let connected = matches!(phase, Phase::Connected(_));
-    killswitch_armed && !connected
+    let sidecar_open = match phase {
+        Phase::Connecting(conn) | Phase::Connected(conn) => conn.relayer_sidecar.is_some(),
+        _ => false,
+    };
+    killswitch_armed && !sidecar_open
 }
 
 /// The pump can die after the runner's last ping, so the runner's Ok would describe a dead tunnel.
@@ -3643,18 +3671,23 @@ mod tests {
         assert!(keys.is_empty());
     }
 
+    fn with_sidecar(mut conn: connection::up::Up) -> connection::up::Up {
+        conn.relayer_sidecar = Some(hopr::RelayerSidecarHandle {
+            number: 1,
+            session: session_metadata(),
+        });
+        conn
+    }
+
     #[test]
-    fn pix_deposits_wait_while_the_armed_killswitch_is_not_connected() {
+    fn pix_deposits_wait_while_the_armed_killswitch_has_no_sidecar() {
         assert!(pix_deposits_held(
-            &Phase::Connecting(attempt("exit", UpPhase::OpeningPing)),
+            &Phase::Connecting(attempt("exit", UpPhase::KillswitchLockdown)),
             true
         ));
+        // Without its side-car a connected session's relayer calls would ride the tunnel they pay for.
         assert!(pix_deposits_held(
-            &Phase::Connecting(attempt("exit", UpPhase::EstablishWgTunnel)),
-            true
-        ));
-        assert!(pix_deposits_held(
-            &Phase::Connecting(attempt("exit", UpPhase::VerifyPing)),
+            &Phase::Connected(attempt("exit", UpPhase::AdjustToMain)),
             true
         ));
         // Waiting on route health between reconnect attempts.
@@ -3662,9 +3695,13 @@ mod tests {
     }
 
     #[test]
-    fn pix_deposits_flow_once_connected_or_the_killswitch_is_lifted() {
+    fn pix_deposits_flow_once_the_sidecar_is_open_or_the_killswitch_is_lifted() {
         assert!(!pix_deposits_held(
-            &Phase::Connected(attempt("exit", UpPhase::AdjustToMain)),
+            &Phase::Connecting(with_sidecar(attempt("exit", UpPhase::KillswitchLockdown))),
+            true
+        ));
+        assert!(!pix_deposits_held(
+            &Phase::Connected(with_sidecar(attempt("exit", UpPhase::AdjustToMain))),
             true
         ));
         assert!(!pix_deposits_held(

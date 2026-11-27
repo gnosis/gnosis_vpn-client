@@ -9,9 +9,9 @@ use std::time::{Duration, SystemTime};
 use crate::connection::destination::Destination;
 use crate::connection::options::{SurbConfigError, SurbRampOptions};
 use crate::gvpn_client::Registration;
-use crate::hopr::HoprError;
 use crate::hopr::pix_chunks::Deposit;
 use crate::hopr::types::SessionClientMetadata;
+use crate::hopr::{HoprError, RelayerSidecarHandle};
 use crate::wg_tunnel::{self, TunnelStatsSample};
 use crate::wireguard::WireGuard;
 use crate::{gvpn_client, remote_data, wireguard};
@@ -33,6 +33,8 @@ pub enum SessionKind {
 #[derive(Clone, Debug)]
 pub enum Progress {
     PeerIps,
+    /// Relayer calls now reach the Curvy relayer through this exit, outside the tunnel.
+    RelayerSidecar(RelayerSidecarHandle),
     KillswitchLockdown,
     GenerateWg,
     WgGenerated(WireGuard),
@@ -128,6 +130,7 @@ pub enum Setback {
     RegisterWg(String),
     OpenPing(String),
     Ping(String),
+    RelayerSidecar(String),
 }
 
 #[derive(Debug, Error)]
@@ -186,6 +189,8 @@ pub struct Up {
     pub unoffered_paid_pseudonym: Option<HoprPseudonym>,
     /// Set when the pump exits before the attempt is Connected; it fails the attempt whatever the runner reports.
     pub pump_exit: Option<PumpExit>,
+    /// Carries the PIX relayer calls; closed with the attempt.
+    pub relayer_sidecar: Option<RelayerSidecarHandle>,
 }
 
 #[derive(Clone, Debug)]
@@ -286,6 +291,7 @@ impl Up {
             awaiting_payment_since: None,
             unoffered_paid_pseudonym: None,
             pump_exit: None,
+            relayer_sidecar: None,
         }
     }
 
@@ -558,6 +564,7 @@ impl Up {
                 self.unoffered_paid_pseudonym = None;
             }
             Progress::PeerIps => self.phase = (now, Phase::GatherPeerIps),
+            Progress::RelayerSidecar(sidecar) => self.relayer_sidecar = Some(sidecar),
             Progress::KillswitchLockdown => self.phase = (now, Phase::KillswitchLockdown),
             Progress::StaticWgTunnel(session) => {
                 self.phase = (now, Phase::EstablishWgTunnel);
@@ -651,6 +658,7 @@ impl Display for Progress {
             Progress::RegisterWg => write!(f, "Registering WireGuard public key"),
             Progress::OpenPing(_) => write!(f, "Opening main connection"),
             Progress::PeerIps => write!(f, "Retrieving peer IPs"),
+            Progress::RelayerSidecar(sidecar) => write!(f, "Relayer side-car {} open", sidecar.number),
             Progress::KillswitchLockdown => write!(f, "Activating killswitch"),
             Progress::StaticWgTunnel(_) => write!(f, "Establishing static WireGuard tunnel"),
             Progress::SessionConfigurator(_) => write!(f, "Session configurator retained"),
@@ -669,6 +677,7 @@ impl Display for Setback {
             Setback::RegisterWg(err) => write!(f, "Failed to register WireGuard key: {err}"),
             Setback::OpenPing(err) => write!(f, "Failed to open main connection: {err}"),
             Setback::Ping(err) => write!(f, "Ping verification failed: {err}"),
+            Setback::RelayerSidecar(err) => write!(f, "Failed to open the payment relayer route: {err}"),
         }
     }
 }

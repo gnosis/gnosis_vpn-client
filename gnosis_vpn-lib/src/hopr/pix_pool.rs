@@ -41,6 +41,14 @@ impl PixPool {
         }
     }
 
+    /// Fails the held deposits without paying them: the only session that pays, the main one, has closed.
+    pub fn drop_held_deposits(&self) {
+        #[cfg(feature = "pix-curvy")]
+        self.1.drop_held_deposits();
+        #[cfg(not(feature = "pix-curvy"))]
+        match self.0 {}
+    }
+
     pub async fn balance(&self) -> Result<Balance<WxHOPR>, HoprError> {
         #[cfg(feature = "pix-curvy")]
         return self

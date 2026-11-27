@@ -77,6 +77,7 @@ fn to_surb_balancing_config(buf: Option<BufferOptions>, surbs: Option<MaxSurbUps
         ping: Some(session(buf.ping, surbs.ping)),
         main: Some(session(buf.main, surbs.main)),
         bridge: Some(session(buf.bridge, surbs.bridge)),
+        relayer: None,
         ramp: None,
     }
 }
