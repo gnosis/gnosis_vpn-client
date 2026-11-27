@@ -2663,6 +2663,9 @@ impl Core {
         keep_device: bool,
         results_sender: &mpsc::Sender<Results>,
     ) {
+        // Hold before the side-car closes: the pump-stop wait below runs before the event loop syncs the hold.
+        self.phase = Phase::HoprRunning;
+        self.sync_pix_deposit_hold();
         self.close_relayer_sidecar(&conn);
         self.drop_held_deposits();
         self.cancel_connection.cancel();
@@ -2670,7 +2673,6 @@ impl Core {
         self.cancel_connection = self.cancel_on_shutdown.child_token();
         let pump_tasks = std::mem::replace(&mut self.wg_pump_tasks, TaskTracker::new());
         self.responders.clear();
-        self.phase = Phase::HoprRunning;
         // Discovery may have dropped this exit mid-connection; its tracker was kept only for the tunnel pings.
         let configured = &self.config.destinations;
         self.route_healths.retain(|key, _| configured.contains_key(key));
