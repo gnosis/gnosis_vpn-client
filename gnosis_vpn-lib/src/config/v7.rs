@@ -82,6 +82,7 @@ pub(super) struct ConnectionProtocol {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct PingOptions {
+    #[serde(default, deserialize_with = "validate_ping_address")]
     pub(super) address: Option<IpAddr>,
     #[serde(default, with = "humantime_serde::option")]
     pub(super) timeout: Option<Duration>,
@@ -219,6 +220,28 @@ where
             .map(Some)
             .map_err(|_| serde::de::Error::custom("tunnel_ping_max_failures is out of range")),
     }
+}
+
+// The ping gates user traffic, so only a reply that crossed the tunnel may answer it.
+fn validate_ping_address<'de, D>(deserializer: D) -> Result<Option<IpAddr>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<IpAddr>::deserialize(deserializer)?;
+    let Some(address) = value else {
+        return Ok(None);
+    };
+    let is_link_local = match address {
+        IpAddr::V4(v4) => v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_unicast_link_local(),
+    };
+    let is_host_local = address.is_loopback() || address.is_unspecified() || is_link_local;
+    if is_host_local {
+        return Err(serde::de::Error::custom(format!(
+            "connection.ping.address {address} is host-local and can't verify the tunnel"
+        )));
+    }
+    Ok(Some(address))
 }
 
 // Zero intervals feed `time::sleep(0)` and hammer the exit; a zero RTT ceiling calls every reply slow.
@@ -2513,6 +2536,28 @@ version = 7
             );
             assert!(toml::from_str::<Config>(&toml).is_err(), "expected rejection for {bad}");
         }
+    }
+
+    #[test]
+    fn ping_address_rejects_host_local_targets() {
+        for bad in ["127.0.0.1", "::1", "0.0.0.0", "169.254.1.1", "fe80::1"] {
+            let toml = format!(
+                r#####"
+version = 7
+
+[connection.ping]
+address = "{bad}"
+"#####
+            );
+            assert!(toml::from_str::<Config>(&toml).is_err(), "expected rejection for {bad}");
+        }
+        let ok = r#####"
+version = 7
+
+[connection.ping]
+address = "10.128.0.1"
+"#####;
+        assert!(toml::from_str::<Config>(ok).is_ok());
     }
 
     #[test]

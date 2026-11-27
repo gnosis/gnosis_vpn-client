@@ -679,9 +679,16 @@ async fn await_exit_serving(
     let mut keep_alives = ExitKeepAlives::default();
     let mut failures = 0;
     let mut reported_wait = false;
+    let mut held = false;
     loop {
         let error = match request_ping(options, 0, results_sender).await {
-            Ok(rtt) => return Ok(rtt),
+            Ok(rtt) => {
+                // Mirrors core's HoldResumed: an answer after a payment wait confirms the payment.
+                if held {
+                    chunks.confirm(session_id);
+                }
+                return Ok(rtt);
+            }
             Err(error) if error.is_ping_error() => error,
             Err(error) => return Err(error),
         };
@@ -691,6 +698,7 @@ async fn await_exit_serving(
         let awaiting_payment = chunks.awaiting_payment(session_id);
         let exit_talking = keep_alives.talking(chunks.surbs_consumed(session_id), Instant::now());
         if awaiting_payment && exit_talking {
+            held = true;
             if !reported_wait {
                 tracing::info!(%session_id, "holding user traffic until the exit confirms the payment");
                 let _ = results_sender.send(progress(Progress::AwaitingPayment)).await;
@@ -699,6 +707,8 @@ async fn await_exit_serving(
             time::sleep(PAYMENT_WAIT_PING_INTERVAL).await;
             continue;
         }
+        // The setback below re-raises the issue, so a resumed wait must report itself again.
+        reported_wait = false;
         failures += 1;
         if failures >= PING_FAILURES_BEFORE_GIVING_UP {
             return Err(error);

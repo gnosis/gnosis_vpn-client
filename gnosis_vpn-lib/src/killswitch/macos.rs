@@ -37,6 +37,7 @@ pub struct Firewall {
     pf: pfctl::PfCtl,
     // Saved so reset_policy can restore PF to its original state.
     pf_was_enabled: Option<bool>,
+    tunnel_open: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +61,7 @@ impl Firewall {
         Ok(Firewall {
             pf: pfctl::PfCtl::new()?,
             pf_was_enabled: None,
+            tunnel_open: false,
         })
     }
 
@@ -83,13 +85,12 @@ impl Firewall {
         self.enable()?;
         self.add_anchor()?;
         self.set_rules(tunnel, allowed_ips, lan_lockdown)?;
-        self.flush_states();
+        self.flush_states(&[]);
+        self.tunnel_open = matches!(tunnel, TunnelAccess::Open { .. });
         Ok(())
     }
 
-    /// Re-assert an already applied policy (e.g. after a network change).
-    /// Unlike `apply_policy` this does not flush PF states: killing established
-    /// flows is only needed on first apply, and network events can fire often.
+    /// Re-assert a policy; flushes PF states only when the tunnel closes, since network events fire often.
     pub fn reapply_policy(
         &mut self,
         tunnel: &TunnelAccess,
@@ -98,7 +99,14 @@ impl Firewall {
     ) -> Result<(), Error> {
         self.enable()?;
         self.add_anchor()?;
-        self.set_rules(tunnel, allowed_ips, lan_lockdown)
+        self.set_rules(tunnel, allowed_ips, lan_lockdown)?;
+        let opens = matches!(tunnel, TunnelAccess::Open { .. });
+        // PF states bypass the rules, so flows the open tunnel admitted would outlive the hold.
+        if self.tunnel_open && !opens {
+            self.flush_states(allowed_ips);
+        }
+        self.tunnel_open = opens;
+        Ok(())
     }
 
     /// Remove the killswitch anchor, restoring normal networking.
@@ -175,8 +183,8 @@ impl Firewall {
         }
     }
 
-    /// Kill all non-loopback PF states so the new rules take effect on existing connections.
-    fn flush_states(&mut self) {
+    /// Kill non-loopback PF states so new rules bind existing connections; `keep` remotes (HOPR peers) survive.
+    fn flush_states(&mut self, keep: &[IpAddr]) {
         let states = match self.pf.get_states() {
             Ok(s) => s,
             Err(e) => {
@@ -186,7 +194,11 @@ impl Firewall {
         };
         for state in states {
             let is_loopback = state.local_address().map(|a| a.ip().is_loopback()).unwrap_or(true); // keep state if we can't parse it
-            if !is_loopback && let Err(e) = self.pf.kill_state(&state) {
+            let is_kept_peer = state.remote_address().is_ok_and(|a| keep.contains(&a.ip()));
+            if !is_loopback
+                && !is_kept_peer
+                && let Err(e) = self.pf.kill_state(&state)
+            {
                 tracing::warn!(?e, "failed to kill PF state");
             }
         }
@@ -384,7 +396,13 @@ fn gateway_rules(interface: &str, gateway: IpAddr) -> Result<Vec<pfctl::FilterRu
         .from(pfctl::Ip::from(IpNetwork::from(gateway)))
         .keep_state(pfctl::StatePolicy::Keep)
         .build()?;
-    Ok(vec![out_rule, in_rule])
+    // The LAN exceptions match any interface, so the tunnel must be shut before they run.
+    let rest_of_tunnel = pfctl::FilterRuleBuilder::default()
+        .action(FilterRuleAction::Drop(DropAction::Drop))
+        .quick(true)
+        .interface(interface)
+        .build()?;
+    Ok(vec![out_rule, in_rule, rest_of_tunnel])
 }
 
 fn allowed_ip_rules(ip: IpAddr) -> Result<Vec<pfctl::FilterRule>, Error> {

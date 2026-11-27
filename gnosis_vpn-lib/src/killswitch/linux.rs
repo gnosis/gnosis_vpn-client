@@ -358,6 +358,20 @@ impl<'a> PolicyBatch<'a> {
         check_ip(&mut in_rule, End::Src, gateway);
         in_rule.add_expr(&Verdict::Accept);
         self.batch.add(&in_rule, MsgType::Add);
+
+        // The LAN exceptions match any interface, so the tunnel must be shut before they run.
+        let drops = [
+            (&self.out_chain, Direction::Out),
+            (&self.in_chain, Direction::In),
+            (&self.forward_chain, Direction::Out),
+            (&self.forward_chain, Direction::In),
+        ];
+        for (chain, direction) in drops {
+            let mut drop_rule = Rule::new(chain);
+            check_iface_by_name(&mut drop_rule, direction, interface);
+            drop_rule.add_expr(&Verdict::Drop);
+            self.batch.add(&drop_rule, MsgType::Add);
+        }
     }
 
     fn add_lan_rules(&mut self) {
@@ -581,19 +595,21 @@ mod tests {
     }
 
     #[test]
-    fn gateway_only_adds_one_rule_per_direction_and_no_forwarding() {
+    fn gateway_only_accepts_the_gateway_and_drops_the_rest_of_the_tunnel() {
         let table = Table::new(TABLE_NAME, ProtoFamily::Inet);
-        let closed = PolicyBatch::new(&table).finalize(&TunnelAccess::Closed, &[], true);
         let gateway_only = TunnelAccess::GatewayOnly {
             interface: "wg0_gnosisvpn".into(),
             gateway: IpAddr::V4(Ipv4Addr::new(10, 128, 0, 1)),
         };
-        let gateway = PolicyBatch::new(&table).finalize(&gateway_only, &[], true);
-        let open = PolicyBatch::new(&table).finalize(&open_tunnel(), &[], true);
-
         let count = |batch: &FinalizedBatch| batch.sequence_numbers().len();
-        assert_eq!(count(&gateway) - count(&closed), 2);
-        assert_eq!(count(&open) - count(&closed), 4);
+        for lan_lockdown in [true, false] {
+            let closed = PolicyBatch::new(&table).finalize(&TunnelAccess::Closed, &[], lan_lockdown);
+            let gateway = PolicyBatch::new(&table).finalize(&gateway_only, &[], lan_lockdown);
+            let open = PolicyBatch::new(&table).finalize(&open_tunnel(), &[], lan_lockdown);
+
+            assert_eq!(count(&gateway) - count(&closed), 6);
+            assert_eq!(count(&open) - count(&closed), 4);
+        }
     }
 
     #[test]
