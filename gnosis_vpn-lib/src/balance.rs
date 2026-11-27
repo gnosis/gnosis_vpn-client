@@ -9,10 +9,13 @@ use std::time::{Duration, Instant};
 
 pub use gnosis_vpn_ipc::FundingLevel;
 
-/// Traffic/gas health plus wxHOPR/xDAI still needed to reach the ideal recommendation.
+/// Traffic/refill/gas health plus wxHOPR/xDAI still needed to reach the ideal recommendation.
 #[derive(Clone, Debug)]
 pub struct FundingStatus {
+    /// Data left to send, from the relay and exit-traffic funds; the one level users are warned on.
     pub traffic: FundingLevel,
+    /// Whether the Safe can keep refilling the PIX pool and channels; informational.
+    pub refills: FundingLevel,
     pub gas: FundingLevel,
     /// wxHOPR still needed to reach the ideal recommendation, or to bring the Safe's refills back to Good,
     /// whichever is more; can be `None` even while `traffic` isn't `Good`.
@@ -562,7 +565,7 @@ fn refill_level(
     Ok((level, good - available))
 }
 
-/// Traffic follows the refills the Safe can still fund; there is no level without a channel top-up size.
+/// Traffic follows the data left to send, refills what the Safe can still fund; there is no level without a channel top-up size.
 pub fn to_funding_status(
     ideal: BalanceRecommendation,
     capacity_allocations: &CapacityAllocations,
@@ -571,9 +574,22 @@ pub fn to_funding_status(
 ) -> Result<FundingStatus, UnknownChannelTopUp> {
     // Unswept node wxHOPR lands in the Safe, so it refills too.
     let available = safe_wxhopr + capacity_allocations.node.stake;
-    let (traffic, refill_deficit) = refill_level(available, &ideal)?;
+    let (refills, refill_deficit) = refill_level(available, &ideal)?;
     // Funds paying for exit traffic can't pay for relays, so the deficit follows the relay funds alone.
     let relays = SnapshotTotals::relays(capacity_allocations);
+
+    // Relay and exit funds can't swap, so the first to run out stops traffic; the Safe refills either, so counts in both.
+    let relay_level = traffic_level(relays.byte_capacity);
+    let exit_funds = &capacity_allocations.exit_traffic;
+    let has_pix_pool = !exit_funds.price_per_byte.is_zero();
+    let exit_level = if has_pix_pool {
+        let exit_bytes =
+            edgli::strategy::bytes_at_pix_price(exit_funds.capacity.stake + available, exit_funds.price_per_byte);
+        traffic_level(exit_bytes)
+    } else {
+        FundingLevel::Good
+    };
+    let traffic = relay_level.max(exit_level);
 
     // Safe funds missing channels first (wxhopr_deficit counts it there), only the rest can refill; `-` saturates.
     let safe_after_missing = safe_wxhopr - ideal.wxhopr;
@@ -590,9 +606,8 @@ pub fn to_funding_status(
     };
 
     // `-` on Balance saturates at zero; wxhopr_deficit is relative to `ideal` only, which ignores drained stake on already-open channels.
-    let relay_deficit =
-        (traffic_level(relays.byte_capacity) != FundingLevel::Good).then(|| ideal.wxhopr - relays.stake);
-    let refill_deficit = (traffic != FundingLevel::Good).then_some(refill_deficit);
+    let relay_deficit = (relay_level != FundingLevel::Good).then(|| ideal.wxhopr - relays.stake);
+    let refill_deficit = (refills != FundingLevel::Good).then_some(refill_deficit);
     let wxhopr_deficit = relay_deficit
         .into_iter()
         .chain(refill_deficit)
@@ -605,6 +620,7 @@ pub fn to_funding_status(
 
     Ok(FundingStatus {
         traffic,
+        refills,
         gas,
         wxhopr_deficit,
         xdai_deficit,
@@ -616,6 +632,7 @@ impl From<&FundingStatus> for gnosis_vpn_ipc::FundingStatus {
     fn from(status: &FundingStatus) -> Self {
         Self {
             traffic: status.traffic,
+            refills: status.refills,
             gas: status.gas,
             wxhopr_deficit: status.wxhopr_deficit.map(wire::wxhopr),
             xdai_deficit: status.xdai_deficit.map(wire::xdai),
@@ -780,57 +797,99 @@ mod tests {
     #[test]
     fn empty_once_the_safe_cannot_refill_the_pix_pool() {
         let status = refill_status(ideal_refills(35, 15), 34, 0);
-        assert_eq!(status.traffic, FundingLevel::Empty);
+        assert_eq!(status.refills, FundingLevel::Empty);
         assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(36 * W)));
     }
 
     #[test]
     fn empty_once_the_safe_cannot_top_up_a_channel() {
-        assert_eq!(refill_status(ideal_refills(0, 15), 14, 0).traffic, FundingLevel::Empty);
+        assert_eq!(refill_status(ideal_refills(0, 15), 14, 0).refills, FundingLevel::Empty);
     }
 
     #[test]
     fn low_with_one_pix_refill_left() {
-        assert_eq!(refill_status(ideal_refills(35, 15), 69, 0).traffic, FundingLevel::Low);
+        assert_eq!(refill_status(ideal_refills(35, 15), 69, 0).refills, FundingLevel::Low);
     }
 
     #[test]
     fn low_with_two_channel_top_ups_left() {
         let status = refill_status(ideal_refills(10, 15), 44, 0);
-        assert_eq!(status.traffic, FundingLevel::Low);
+        assert_eq!(status.refills, FundingLevel::Low);
         assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(W)));
     }
 
     #[test]
     fn good_with_two_pix_refills_and_three_channel_top_ups() {
         let status = refill_status(ideal_refills(35, 15), 70, 0);
-        assert_eq!(status.traffic, FundingLevel::Good);
+        assert_eq!(status.refills, FundingLevel::Good);
         assert_eq!(status.wxhopr_deficit, None);
     }
 
     #[test]
     fn unswept_node_wxhopr_counts_toward_refills() {
-        assert_eq!(refill_status(ideal_refills(35, 15), 35, 35).traffic, FundingLevel::Good);
+        assert_eq!(refill_status(ideal_refills(35, 15), 35, 35).refills, FundingLevel::Good);
     }
 
-    #[test]
-    fn refills_ignore_what_the_pix_pool_and_channels_hold() {
+    /// Exit-traffic funds at a PIX price of one wxHOPR (`W`) per MB.
+    fn pix_pool(stake: u64) -> ExitTrafficFunds {
+        ExitTrafficFunds {
+            price_per_byte: Balance::<WxHOPR>::from(W / MB),
+            ..valued_exit_funds(stake, 0)
+        }
+    }
+
+    fn pool_status(pool: u64, channel_bytes: u64, safe: u64) -> FundingStatus {
         let allocations = CapacityAllocations {
-            exit_traffic: valued_exit_funds(500 * W, 100 * GB),
+            exit_traffic: pix_pool(pool * W),
             ..allocs(
-                Some(capacity(500 * W, 100 * GB)),
+                Some(capacity(500 * W, channel_bytes)),
                 Capacity::default(),
                 Capacity::default(),
             )
         };
+        to_funding_status(
+            ideal_refills(35, 15),
+            &allocations,
+            Balance::<XDai>::zero(),
+            Balance::<WxHOPR>::from(safe * W),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn allocated_funds_keep_traffic_good_while_the_safe_cannot_refill() {
+        let status = pool_status(5_000, 100 * GB, 10);
+        assert_eq!(status.traffic, FundingLevel::Good);
+        assert_eq!(status.refills, FundingLevel::Empty);
+    }
+
+    #[test]
+    fn traffic_empty_once_the_pix_pool_runs_dry() {
+        assert_eq!(pool_status(500, 100 * GB, 10).traffic, FundingLevel::Empty);
+    }
+
+    #[test]
+    fn the_safe_keeps_traffic_good_while_the_pix_pool_is_empty() {
+        assert_eq!(pool_status(0, 100 * GB, 5_000).traffic, FundingLevel::Good);
+    }
+
+    #[test]
+    fn traffic_follows_the_relays_alone_without_a_pix_pool() {
+        let status = refill_status(ideal_refills(35, 15), 0, 0);
+        assert_eq!(status.traffic, FundingLevel::Empty);
+        let allocations = allocs(
+            Some(capacity(500 * W, 100 * GB)),
+            Capacity::default(),
+            Capacity::default(),
+        );
         let status = to_funding_status(
             ideal_refills(35, 15),
             &allocations,
             Balance::<XDai>::zero(),
-            Balance::<WxHOPR>::from(10 * W),
+            Balance::<WxHOPR>::zero(),
         )
         .unwrap();
-        assert_eq!(status.traffic, FundingLevel::Empty);
+        assert_eq!(status.traffic, FundingLevel::Good);
     }
 
     #[test]
@@ -977,7 +1036,7 @@ mod tests {
 
     #[test]
     fn exit_traffic_funds_never_hide_the_relay_deficit() {
-        // Good on refills, yet the relays still lack 900.
+        // Good on refills, yet the relays hold 320 MB and lack 900.
         let allocations = CapacityAllocations {
             exit_traffic: valued_exit_funds(500, 2 * GB),
             ..allocs(None, Capacity::default(), capacity(100, 320 * MB))
@@ -989,7 +1048,8 @@ mod tests {
             Balance::<WxHOPR>::from(100u64),
         )
         .unwrap();
-        assert_eq!(status.traffic, FundingLevel::Good);
+        assert_eq!(status.refills, FundingLevel::Good);
+        assert_eq!(status.traffic, FundingLevel::Empty);
         assert_eq!(status.wxhopr_deficit, Some(Balance::<WxHOPR>::from(900u64)));
     }
 

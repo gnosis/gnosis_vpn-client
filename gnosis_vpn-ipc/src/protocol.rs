@@ -872,7 +872,10 @@ pub struct BalanceRecommendation {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FundingStatus {
+    /// Data left to send; the one level users are warned on.
     pub traffic: FundingLevel,
+    /// Whether the Safe can keep refilling the PIX pool and channels; informational.
+    pub refills: FundingLevel,
     pub gas: FundingLevel,
     /// wxHOPR still needed to reach the ideal recommendation, or to bring the Safe's refills back to Good.
     pub wxhopr_deficit: Option<Balance<WxHopr>>,
