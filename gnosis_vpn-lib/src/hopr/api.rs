@@ -6,9 +6,9 @@ use edgli::{
     hopr_lib::{
         HopRouting, HoprSessionClientConfig,
         api::{
-            chain::{AccountSelector, ChainKeyOperations, ChainPathResolver, ChainReadAccountOperations},
+            chain::{AccountSelector, ChainKeyOperations, ChainPathResolver, ChainReadAccountOperations, ChainValues},
             graph::NetworkGraphView,
-            node::HasChainApi,
+            node::{HasChainApi, PacketTransport},
             types::{
                 crypto::prelude::OffchainPublicKey,
                 internal::{NodeId, channels::ChannelStatus, path::ValidatedPath},
@@ -19,7 +19,7 @@ use edgli::{
         exports::{
             network::types::types::{IpOrHost, IpProtocol, SealedHost},
             transport::{
-                SESSION_MTU, SURB_SIZE, SessionTarget,
+                PACKET_PAYLOAD_SIZE, SESSION_MTU, SURB_SIZE, SessionTarget,
                 path::{HoprGraphPathSelector, PathSelector},
             },
         },
@@ -52,6 +52,15 @@ use crate::{
     info::Info,
     wire,
 };
+
+/// The packet payload size hopr-strategy converts a data capacity with.
+struct PacketPayload;
+
+impl PacketTransport for PacketPayload {
+    fn packet_payload_size() -> usize {
+        PACKET_PAYLOAD_SIZE
+    }
+}
 
 pub struct Hopr {
     edgli: Arc<edgli::Edgli>,
@@ -696,7 +705,22 @@ impl Hopr {
             .ideal_balance_recommendation(cfg)
             .await
             .map_err(|e| HoprError::Strategy(e.to_string()))?;
-        Ok(rec.into())
+        let chain = self.edgli.chain_api();
+        let ticket_price = chain
+            .minimum_ticket_price()
+            .await
+            .map_err(|e| HoprError::Strategy(e.to_string()))?;
+        let win_prob = chain
+            .minimum_incoming_ticket_win_prob()
+            .await
+            .map_err(|e| HoprError::Strategy(e.to_string()))?;
+        let funding = edgli::strategy::compute_funding_config(cfg)
+            .map_err(|e| HoprError::Strategy(e.to_string()))?
+            .resolve::<PacketPayload>(ticket_price, win_prob.as_f64());
+        Ok(balance::BalanceRecommendation {
+            channel_max_balance: balance::channel_max_balance(&funding),
+            ..rec.into()
+        })
     }
 
     /// Capacity allocations: open outgoing channels, the unallocated Safe
