@@ -297,11 +297,12 @@ pub(crate) async fn hopr(
 }
 
 pub(crate) async fn node_wxhopr_withdraw(
-    incentive_operations: Arc<dyn IncentiveOperations>,
-    safe_address: Address,
+    worker_params: WorkerParams,
+    blokli_config: BlokliConfig,
+    hopr: Arc<Hopr>,
     results_sender: mpsc::Sender<Results>,
 ) {
-    let res = run_node_wxhopr_withdraw(incentive_operations, safe_address).await;
+    let res = run_node_wxhopr_withdraw(&worker_params, blokli_config, hopr).await;
     let _ = results_sender.send(Results::NodeWxhoprWithdraw { res }).await;
 }
 
@@ -468,21 +469,27 @@ pub(crate) async fn watch_exit_nodes(
     }
 }
 
+/// The node's connector withdraws from the Safe, so a temporary safeless one moves node-wallet funds.
 async fn run_node_wxhopr_withdraw(
-    incentive_operations: Arc<dyn IncentiveOperations>,
-    safe_address: Address,
+    worker_params: &WorkerParams,
+    blokli_config: BlokliConfig,
+    hopr: Arc<Hopr>,
 ) -> Result<(), Error> {
+    let safe_address = hopr.info().safe_address;
     (|| {
-        let incentive_operations = incentive_operations.clone();
+        let hopr = hopr.clone();
+        let blokli_config = blokli_config.clone();
         async move {
-            let (wxhopr, _xdai) = incentive_operations.balances().await.map_err(Error::Chain)?;
-            if !wxhopr.is_zero() {
-                tracing::info!(%wxhopr, %safe_address, "withdrawing node wxHOPR to safe");
-                incentive_operations
-                    .withdraw_wxhopr(safe_address, wxhopr)
-                    .await
-                    .map_err(Error::Chain)?;
+            let wxhopr = hopr.node_wxhopr().await?;
+            if wxhopr.is_zero() {
+                return Ok(());
             }
+            tracing::info!(%wxhopr, %safe_address, "withdrawing node wxHOPR to safe");
+            let incentive_operations = worker_params.create_incentive_operations(blokli_config).await?;
+            incentive_operations
+                .withdraw_wxhopr(safe_address, wxhopr)
+                .await
+                .map_err(Error::Chain)?;
             Ok(())
         }
     })
