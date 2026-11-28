@@ -11,7 +11,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=gnosisvpn
 PKG_VERSION:=1.2.0
-PKG_RELEASE:=3
+PKG_RELEASE:=6
 PKG_LICENSE:=LGPL-3.0-only
 PKG_LICENSE_FILES:=LICENSE
 PKG_MAINTAINER:=LegitClub <hello@legitclub.com>
@@ -34,7 +34,10 @@ define Package/gnosisvpn
   SUBMENU:=VPN
   TITLE:=Gnosis VPN (HOPR mixnet) client
   URL:=https://vpn.gnosis.io
-  DEPENDS:=+kmod-tun +nftables +ip-full +ca-bundle +shadow-su +xz
+  # zram-swap is a hard requirement on 512 MB boards: the worker peaks around
+  # 190 MB anon RSS and is OOM-killed within seconds without swap. The payload
+  # already takes 48 MB of tmpfs, so there is no headroom to borrow.
+  DEPENDS:=+kmod-tun +nftables +ip-full +ca-bundle +shadow-su +xz +zram-swap
 endef
 
 define Package/gnosisvpn/description
@@ -82,6 +85,11 @@ define Package/gnosisvpn/install
 	$(INSTALL_BIN) ./files/gnosis-ns-client.sh $(1)/usr/bin/
 	$(INSTALL_BIN) ./files/gnosis-ns-watch.sh $(1)/usr/bin/
 
+	# Survives a firewall reload: fw4 rebuilds inet fw4 from scratch, so an
+	# imperative insert into its forward chain lasts until the next ifup.
+	$(INSTALL_DIR) $(1)/usr/share/nftables.d/chain-pre/forward
+	$(INSTALL_DATA) ./files/nftables-forward.nft $(1)/usr/share/nftables.d/chain-pre/forward/10-gnosisvpn.nft
+
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/gnosisvpn.init $(1)/etc/init.d/gnosisvpn
 	$(INSTALL_DIR) $(1)/etc/config
@@ -95,12 +103,35 @@ endef
 define Package/gnosisvpn/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
+# 65533 has to be free: writing a second account with that uid would hand the
+# worker someone else's files.
+owner=$$(awk -F: '$$3 == 65533 { print $$1; exit }' /etc/passwd)
+if [ -n "$$owner" ] && [ "$$owner" != gnosisvpn ]; then
+	logger -t gnosisvpn "uid 65533 is already used by $$owner, not creating an account"
+	logger -t gnosisvpn "the service will fail until that uid is free"
+else
 grep -q '^gnosisvpn:' /etc/group || echo 'gnosisvpn:x:65533:' >> /etc/group
 grep -q '^gnosisvpn:' /etc/passwd || echo 'gnosisvpn:x:65533:65533:gnosisvpn:/var/lib/gnosisvpn:/bin/sh' >> /etc/passwd
 grep -q '^gnosisvpn:' /etc/shadow || echo 'gnosisvpn:!:19000:0:99999:7:::' >> /etc/shadow
-mkdir -p /var/lib/gnosisvpn /run/gnosisvpn /var/log/gnosisvpn
+fi
+mkdir -p /var/lib/gnosisvpn /run/gnosisvpn /var/log/gnosisvpn /run/gnosis-ns
+chmod 700 /run/gnosis-ns
 chown -R 65533:65533 /var/lib/gnosisvpn /run/gnosisvpn /var/log/gnosisvpn
-/etc/init.d/gnosisvpn enable
+# Enable once, on first install: an upgrade must not re-enable a service the
+# admin turned off on purpose.
+if [ ! -f /etc/gnosisvpn/.installed ]; then
+	/etc/init.d/gnosisvpn enable
+	: > /etc/gnosisvpn/.installed
+fi
+# Without swap the worker does not survive its own start on a 496 MB router
+# (OOM kill at ~190 MB anon RSS). Enable compressed swap when there is none.
+if [ ! -s /proc/swaps ] || [ "$$(wc -l < /proc/swaps)" -le 1 ]; then
+	if [ "$$(awk '/MemTotal/{print int($$2/1024)}' /proc/meminfo)" -lt 640 ]; then
+		/etc/init.d/zram enable >/dev/null 2>&1
+		/etc/init.d/zram start >/dev/null 2>&1
+		logger -t gnosisvpn "enabled zram swap: the worker needs it on a small board"
+	fi
+fi
 exit 0
 endef
 

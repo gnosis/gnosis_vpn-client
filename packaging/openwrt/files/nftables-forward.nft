@@ -1,0 +1,2 @@
+iifname "veth-gvh" accept
+oifname "veth-gvh" accept

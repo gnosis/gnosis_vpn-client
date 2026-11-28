@@ -1,4 +1,6 @@
 #!/bin/sh
+TMPDIR=/tmp/gnosisvpn/tmp; TMP=$TMPDIR; TEMP=$TMPDIR; export TMPDIR TMP TEMP
+mkdir -p "$TMPDIR" && chmod 1777 "$TMPDIR"
 # Keeps the worker's keepalive session open under procd. The root daemon spawns
 # the actual worker; this only needs to hold the session. If a session is
 # already open it waits quietly instead of exiting, so procd does not respawn

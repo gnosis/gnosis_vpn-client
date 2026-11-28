@@ -10,7 +10,13 @@ if [ ! -x "$CTL" ]; then
 fi
 [ -x "$CTL" ] || { echo "gnosis_vpn-ctl not found (service not started?)" >&2; exit 1; }
 
+# su -c hands the string to sh, which splits it again, so every argument has
+# to be quoted before it goes in or "connect a b" arrives as two arguments.
+shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
 if [ "$(id -u)" = "0" ]; then
-	exec su -s /bin/sh gnosisvpn -c "$CTL --socket-path '$SOCKET' $*"
+	cmd="$CTL --socket-path $(shq "$SOCKET")"
+	for a in "$@"; do cmd="$cmd $(shq "$a")"; done
+	exec su -s /bin/sh gnosisvpn -c "$cmd"
 fi
 exec "$CTL" --socket-path "$SOCKET" "$@"

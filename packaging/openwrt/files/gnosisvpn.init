@@ -36,6 +36,14 @@ expand() {
 prepare() {
 	mkdir -p "$RUNDIR/bin" "$RUNDIR/curvy-zk" /run/gnosisvpn /var/lib/gnosisvpn /var/log/gnosisvpn
 	chown 65533:65533 /run/gnosisvpn /var/lib/gnosisvpn /var/log/gnosisvpn 2>/dev/null
+	# Scratch files the client leaves behind when it is killed: each run drops
+	# 1.5-3 MB into TMPDIR, and a full tmpfs makes the client fail with
+	# "I/O error: No space left on device" while it is still warming up.
+	mkdir -p /run/gnosis-ns && chmod 700 /run/gnosis-ns
+	rm -rf "$RUNDIR/tmp"
+	# Only this account's leftovers: /tmp is shared with the rest of the system.
+	find /tmp -maxdepth 1 -name '.tmp*' -user gnosisvpn -exec rm -f {} + 2>/dev/null
+	mkdir -p "$RUNDIR/tmp" && chmod 1777 "$RUNDIR/tmp"
 
 	expand gnosis_vpn-root || return 1
 	expand gnosis_vpn-worker || return 1
@@ -59,10 +67,20 @@ start_service() {
 	config_get blokli service blokli_url 'https://blokli.piz-palu.gnosisvpn.io'
 	config_get loglevel service loglevel 'info'
 	config_get keepalive service keepalive '5256000'
+	config_get exit_id service exit 'auto'
 
 	[ "$enabled" = "1" ] || { logger -t gnosisvpn "disabled, not starting"; return 0; }
 	[ -f "$CONF_SRC" ] || { logger -t gnosisvpn "missing $CONF_SRC"; return 1; }
 	prepare || { logger -t gnosisvpn "payload expansion failed"; return 1; }
+
+	# The scripts read a file rather than UCI so they work without ubus. Keep
+	# the two in step here; "auto" means let the client pick.
+	mkdir -p /etc/vpn
+	if [ "$exit_id" = "auto" ] || [ -z "$exit_id" ]; then
+		rm -f /etc/vpn/gnosis-exit
+	else
+		echo "$exit_id" > /etc/vpn/gnosis-exit
+	fi
 
 	# A daemon started outside procd (hand-run during testing) holds the socket
 	# lock, which makes this instance exit immediately.
@@ -92,6 +110,15 @@ start_service() {
 }
 
 stop_service() {
+	# An internal bounce from the watchdog or restart_daemon clears itself and
+	# must not tear down the steering it is about to rebuild.
+	if [ -f /run/gnosis-ns/internal-restart ]; then
+		rm -f /run/gnosis-ns/internal-restart
+	else
+		# Without this the watchdog sees a dead tunnel, restores the LAN, then
+		# restarts the service: an admin stop would undo itself 30 s later.
+		/usr/bin/gnosis-ns.sh down >/dev/null 2>&1
+	fi
 	/usr/bin/gnosis-ctl stop-client >/dev/null 2>&1
 }
 

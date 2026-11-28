@@ -26,8 +26,16 @@ CONF=/tmp/gnosisvpn/config.toml
 SOCK=/run/gnosisvpn/gnosisvpn.sock
 EXITF=/etc/vpn/gnosis-exit
 CTL=/usr/bin/gnosis-ctl
-LOG=/tmp/gnosis-ns.log
 TUN=wg0_gnosisvpn
+# State lives in a root-only directory: /tmp is world-writable, so a process
+# running as the unprivileged worker could pre-create these paths (or symlink
+# them) and redirect root's writes into a file it still owns.
+NSDIR=/run/gnosis-ns
+LOG=$NSDIR/ns.log
+DIRECTF=$NSDIR/direct-ip
+PIDF=$NSDIR/watch.pid
+STATED=$NSDIR
+mkdir -p "$NSDIR" 2>/dev/null && chmod 700 "$NSDIR"
 
 log() { logger -t gnosis-ns "$*"; echo "$(date +%H:%M:%S) $*" >> "$LOG"; }
 
@@ -66,6 +74,12 @@ ensure_ns() {
 	# two legs we own instead of naming the one we do not.
 	nft add rule inet gvnat post ip saddr 10.200.0.0/24 oifname != { "$VH", "$LANDEV" } masquerade
 	}
+	# fw4 owns inet fw4 and rebuilds it from scratch on every reload, so the
+	# accepts are shipped as a drop-in (nftables.d/chain-pre/forward) and this
+	# insert only covers the window before the next reload. A WAN reconnect,
+	# PPPoE redial or DHCP renew reloads fw4, and without the drop-in the LAN
+	# would be black-holed by the forward policy while the watchdog still
+	# probes fine from inside the namespace.
 	nft list ruleset | grep -q "iifname \"$VH\" accept" ||
 		nft insert rule inet fw4 forward iifname "$VH" accept
 	nft list ruleset | grep -q "oifname \"$VH\" accept" ||
@@ -93,6 +107,10 @@ restart_daemon() {
 	# A restart keeps the same worker state, and root does not respawn a worker
 	# it saw exit, so a plain restart can come back Ready-less forever. Fall
 	# through to a full stop/start, which forces a fresh worker process.
+	# Tell stop_service this is an internal bounce, not an admin stopping the
+	# service: otherwise stop tears down the steering and kills the watchdog
+	# that is asking for the restart.
+	: > "$STATED/internal-restart"
 	/etc/init.d/gnosisvpn restart >/dev/null 2>&1
 	i=0
 	while [ $i -lt 25 ]; do
@@ -131,22 +149,26 @@ probe() {
 	# Answer only when the reply really came from an exit node. With the TUN
 	# down the namespace has no route of its own and falls through to the host,
 	# so curl still succeeds and returns the router's own WAN address: counting
-	# that as a proof would steer the LAN into a plaintext leak.
+	# that as a proof would steer the LAN into a plaintext leak. Two ways that
+	# check fails open, both closed here: an error page or proxy notice is not
+	# an address, and an unknown router address must not be compared at all.
 	c=$(ip netns exec "$NS" curl -4 -s -m 35 https://api.ipify.org 2>/dev/null)
-	[ -n "$c" ] || return 0
-	[ "$c" = "$(direct_ip)" ] && return 0
+	echo "$c" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || return 0
+	d=$(direct_ip)
+	[ -n "$d" ] || return 0
+	[ "$c" = "$d" ] && return 0
 	echo "$c"
 }
 
 direct_ip() {
 	# Cached briefly: a PPPoE re-dial changes the address, and a stale value
 	# would make a genuine exit look like a leak (or hide one).
-	if [ -s /tmp/gnosis-direct-ip ] && [ -z "$(find /tmp/gnosis-direct-ip -mmin +10 2>/dev/null)" ]; then
-		cat /tmp/gnosis-direct-ip; return 0
+	if [ -s "$DIRECTF" ] && [ -z "$(find "$DIRECTF" -mmin +10 2>/dev/null)" ]; then
+		cat "$DIRECTF"; return 0
 	fi
 	d=$(curl -4 -s -m 10 https://api.ipify.org 2>/dev/null)
-	case "$d" in ''|*[!0-9.]*) d="";; esac
-	[ -n "$d" ] && echo "$d" > /tmp/gnosis-direct-ip
+	echo "$d" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || d=""
+	[ -n "$d" ] && echo "$d" > "$DIRECTF"
 	echo "$d"
 }
 
@@ -254,16 +276,16 @@ up() {
 # One watchdog, owned by the steering it guards.
 start_watch() {
 	[ -x /usr/bin/gnosis-ns-watch.sh ] || return 0
-	pidof_check=$(cat /tmp/gnosis-watch.pid 2>/dev/null)
+	pidof_check=$(cat "$PIDF" 2>/dev/null)
 	[ -n "$pidof_check" ] && kill -0 "$pidof_check" 2>/dev/null && return 0
 	setsid /usr/bin/gnosis-ns-watch.sh </dev/null >/dev/null 2>&1 &
 	log "watchdog started"
 }
 
 stop_watch() {
-	wp=$(cat /tmp/gnosis-watch.pid 2>/dev/null)
+	wp=$(cat "$PIDF" 2>/dev/null)
 	[ -n "$wp" ] && kill "$wp" 2>/dev/null
-	rm -f /tmp/gnosis-watch.pid
+	rm -f "$PIDF"
 }
 
 down() {

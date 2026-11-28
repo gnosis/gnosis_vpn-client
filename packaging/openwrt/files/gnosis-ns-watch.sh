@@ -20,7 +20,9 @@ TUN=wg0_gnosisvpn
 TABLE=100
 NNS=10.200.0.2
 VH=veth-gvh
-LOG=/tmp/gnosis-watch.log
+NSDIR=/run/gnosis-ns
+mkdir -p "$NSDIR" 2>/dev/null && chmod 700 "$NSDIR"
+LOG=$NSDIR/watch.log
 
 log() { logger -t gnosis-watch "$*"; echo "$(date +%H:%M:%S) $*" >> "$LOG"; }
 
@@ -58,7 +60,7 @@ recover() {
 }
 
 # One watcher only: two would fight over the tunnel and the kill switch.
-PIDF=/tmp/gnosis-watch.pid
+PIDF=$NSDIR/watch.pid
 if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null; then
 	exit 0
 fi
