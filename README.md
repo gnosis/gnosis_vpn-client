@@ -1,244 +1,203 @@
-# Gnosis VPN Client
+# Gnosis VPN for OpenWrt
 
-Gnosis VPN is a VPN solution build on top the HOPR mixnet. This repo contains
-the system service and a control application. It is part of a larger project
-consisting of:
+Installable package for the [Gnosis VPN](https://vpn.gnosis.io) client on
+OpenWrt. It routes a network's traffic through the HOPR mixnet while the router
+itself keeps its own uplink, so Tailscale, SSH and the LuCI page stay reachable
+while the LAN exits through a Gnosis exit node.
 
-- [Gnosis VPN App](https://github.com/gnosis/gnosis_vpn-app) handling user
-  interface
-- [Gnosis VPN Server](https://github.com/gnosis/gnosis_vpn-server) handling VPN
-  server side
+Upstream builds its Linux binaries with nix against static musl
+(`pkgsCross.*.pkgsStatic`), and the `arm64` `.deb` on the release page contains
+exactly those binaries, statically linked. OpenWrt has no glibc and no use for a
+distro package manager, so this package takes the official signed `.deb`,
+verifies it by hash, and repacks the three binaries for `apk`.
 
-## Reporting Issues
+## Status
 
-We use **[Gnosis VPN](https://github.com/gnosis/gnosis_vpn)** repository as the
-central hub for all user feedback.
+Verified on a Cudy TR3000 v1 (MediaTek MT7981, OpenWrt 25.12.6, aarch64) with
+client **1.2.0**:
 
-### How to report an issue
+| check | result |
+| --- | --- |
+| `gnosis-ctl status` | `Ready (Node is running) - traffic: Good, gas: Good` |
+| namespace egress | `80.241.197.94` (`gvpn-ger-1-j9os`) |
+| router egress | `122.170.192.224` (ISP), unchanged |
+| `tailscale status` | `100.81.224.10` up the whole time |
+| overlay used | ~35 MB of 44 MB, payload expanded into tmpfs |
 
-1. Visit
-   [Gnosis VPN Discussions](https://github.com/gnosis/gnosis_vpn/discussions)
-   board.
-1. Search existing Discussions and
-   [Issues](https://github.com/gnosis/gnosis_vpn/issues) to see if your topic is
-   already covered.
-1. If not, start a new Discussion in the
-   [Issues & Bug Reports](https://github.com/gnosis/gnosis_vpn/discussions/new?category=issues-bug-reports)
-   category.
-1. Provide as much detail as possible using the provided template.
+Throughput is mixnet throughput: expect roughly 1-3 Mbit/s, not line rate.
 
-The team will review all discussions and promote confirmed bugs or planned
-features to actionable issues. This repository is reserved for tracking
-actionable work on this component.
+## Install
 
-## General concept
+aarch64 routers running OpenWrt 25.x or later (apk-based). The overlay needs
+about 20 MB free.
 
-The client offers three binaries, `gnosis_vpn-root`, `gnosis_vpn-worker` and
-`gnosis_vpn-ctl`. The client system service (`gnosis_vpn-root`) runs with root
-privileges and takes care of routing setup. It spawn the worker process
-(`gnosis_vpn-worker`) which is responsible for the application logic. The
-control application (`gnosis_vpn-ctl`) is used to manage the client and its
-connections.
-
-## Multi-user model
-
-`gnosis_vpn-root` is the only privileged component; there is no service
-account. Whoever runs `gnosis_vpn-ctl start-client` gets a worker running as
-themselves, with state in their own per-user directories. The kernel reports the
-caller's uid on the control socket, so nothing is configured for this.
-
-- **One worker per machine.** While user A's worker runs (or is still shutting
-  down), every other user's `start-client`, `status`, `destinations`, `connect`,
-  … is answered with `InUseByOtherUser` (`gnosis_vpn-ctl` exits `NOPERM`).
-  `ping` and `info` stay open to everyone; `info` reports the worker log
-  directory only to the owner and root. The tunnel is machine-wide, so all local
-  traffic uses A's connection while it is up.
-- **Root may use anyone's worker, never own one.** `sudo gnosis_vpn-ctl status` and
-  `stop-client` work on anyone's worker; `sudo gnosis_vpn-ctl start-client` is
-  refused with `RootCannotOwnWorker`.
-- **A failed spawn is a response, not an outage.** `start-client` answers
-  `SpawnFailed { reason }` (exit `UNAVAILABLE`) and the service stays up.
-
-### Per-user directories
-
-The worker asks Blokli for `chainInfo.network` before it touches any state;
-the name is never configured. Per user and network:
-
-| Content                                          | Linux                                          | macOS                                                         |
-| ------------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------- |
-| identity `hopr.id`/`hopr.pass`, PIX state `pix/` | `~/.local/share/gnosisvpn/networks/<network>/` | `~/Library/Application Support/GnosisVPN/networks/<network>/` |
-| safe cache `hopr.safe`                           | `~/.cache/gnosisvpn/networks/<network>/`       | `~/Library/Caches/GnosisVPN/networks/<network>/`              |
-| worker logs `worker.log.YYYY-MM-DD`              | `~/.local/state/gnosisvpn/`                    | `~/Library/Logs/GnosisVPN/`                                   |
-
-An empty `networks/<network>/` means a fresh identity is generated; `hopr.pass` is `0600`, the directories are
-`0700`. The worker keeps seven daily log files; the root log
-(`--log-file`) is root-owned and rotated by logrotate/newsyslog via SIGHUP as
-before. A log file that cannot be opened never stops either process: it logs
-to stdout instead and says so on stderr, and a failed reopen after SIGHUP keeps
-the current file. Root's own runtime files (control socket, lock,
-crash-recovery state) live in `/run/gnosisvpn/` on Linux and under `/var/run/`
-on macOS.
-
-## Development setup
-
-1. _**Only for: Ubuntu 26.04 LTS**_ (TODO: remove once userspace wireguard is
-   merged)
-
-```
-sudo tee /etc/apparmor.d/local/wg-quick >/dev/null <<'EOF'
-# Local build: allow wg-quick to read the dev user's managed config.
-/home/<VPN_USER>/wg0_gnosisvpn.conf r, # VPN_USER: e.g. gnosisvpn, gnosisvpnrotsee, gnosisvpnjura
-EOF
-
-sudo apparmor_parser -r /etc/apparmor.d/wg-quick`
+```sh
+wget -O /etc/apk/keys/gnosis-openwrt.pem \
+  https://ivcained.github.io/gnosis-openwrt/gnosis-openwrt.pem
+echo "https://ivcained.github.io/gnosis-openwrt/25.12/aarch64_cortex-a53/packages.adb" \
+  >> /etc/apk/repositories.d/customfeeds.list
+apk update && apk add gnosisvpn
 ```
 
-2. Build binaries via: `cargo build` or `nix build .#gnosis_vpn-dev`.
+Or install the single file without trusting a feed:
 
-3. Run the root binary with sudo and point it at the worker binary; the worker
-   binary must be executable by whoever runs `start-client`:
-
-```bash
-> sudo RUST_LOG="debug" ./target/debug/gnosis_vpn-root -c <config.toml> \
-    --hopr-blokli-url <hopr blokli url> --worker-binary ./target/debug/gnosis_vpn-worker
-# or from nix build:
-> sudo RUST_LOG="debug" ./result/bin/gnosis_vpn-root -c <config.toml> \
-    --hopr-blokli-url <hopr blokli url> --worker-binary ./result/bin/gnosis_vpn-worker
+```sh
+wget -O /tmp/gnosisvpn.apk \
+  https://ivcained.github.io/gnosis-openwrt/25.12/aarch64_cortex-a53/gnosisvpn-1.2.0-r5.apk
+apk add --allow-untrusted /tmp/gnosisvpn.apk
 ```
 
-4. From your own shell: `gnosis_vpn-ctl start-client 10m`. The worker runs as you,
-   with state under your home (see [Per-user directories](#per-user-directories)).
+Either way the package pulls in `kmod-tun`, `nftables`, `ip-full`, `xz`,
+`ca-bundle`, `shadow-su` and `zram-swap`, creates the unprivileged `gnosisvpn`
+account (uid 65533: the worker refuses to run as root) and enables the service.
 
-### Worker configuration
+**On a 512 MB board swap is not optional.** The worker peaks near 190 MB of
+anon RSS while the 48 MB payload is already occupying tmpfs, and without swap
+the kernel OOM-kills it seconds after start (`Out of memory: Killed process …
+(gnosis_vpn-work)`, then a permanent `Worker offline`). The package enables
+zram on boards under 640 MB when no swap exists; on anything larger that is
+unnecessary. With zram in place this box sits at ~54 MB swapped and stays
+`Ready`.
 
-- `GNOSISVPN_WORKER_BINARY` / `--worker-binary`: the worker binary to spawn.
-  Defaults to `./gnosis_vpn-worker`.
+**Upgrading needs the old copy gone first.** The payload is 15 MB compressed, and
+`apk` writes the new one before dropping the old, so a 44 MB overlay fails
+mid-extract with `No space left on device` (this is how the 1.2.0-r2 upgrade
+failed on a stock TR3000 at 6.9 MB free). Remove, then add:
 
-## Testing
-
-### Unit tests
-
-```bash
-cargo test
+```sh
+gnosis-ns.sh down
+apk del gnosisvpn
+rm -rf /usr/share/gnosisvpn /tmp/gnosisvpn /var/lib/gnosisvpn/.local/share/gnosisvpn/curvy-zk
+apk add gnosisvpn
 ```
 
-## Installation
+Keep `/var/lib/gnosisvpn` unless you want a new identity; the identity files
+(`hopr.id`, `hopr.pass`) are what hold your funded node.
 
-Use the latest
-[installer](https://github.com/gnosis/gnosis_vpn/releases/latest).
+## Use
 
-Verify integrity before installing - see [SECURITY.md](./SECURITY.md).
-
-## Idle shutdown
-
-`gnosis_vpn-ctl start-client <duration>` shuts the worker down after it has been
-idle for the given duration.
-
-The idle countdown behaves as follows:
-
-- **Idle**: countdown runs; worker shuts down when it reaches zero.
-- **Connected**: countdown is suspended for the lifetime of the VPN tunnel.
-- **Probing**: `probe <id>` suspends the countdown like a connection; `unprobe` resumes it unless a connection target is still set. A probe started during a quick check of the same exit takes over that session instead of opening a second one. The probe `connect` opens on its way in is implicit - it never suspends the countdown and closes again once the target is cleared.
-- **Quick probing**: `quickprobe <id>` only resets the countdown like any other command - it is bounded and holds no session. It returns as soon as the check starts; its result is kept under the destination in `status`.
-- **Disconnected**: countdown resumes from the full duration.
-- Any other command to the worker (e.g. status) resets the countdown.
-
-Example — shut down the worker after 10 minutes of idle time:
-
-```bash
-gnosis_vpn-ctl start-client 10m
+```sh
+gnosis-ctl status       # Ready / Worker offline / Initializing
+gnosis-ns.sh up         # connect, prove the circuit, steer the LAN
+gnosis-ns.sh status     # daemon, tun, steering and exit IP in one screen
+gnosis-ns.sh down       # LAN back on the direct path
 ```
 
-## General usage
+`up` only steers after two successful requests 20 s apart, so a flapping circuit
+never takes the LAN with it. It starts `gnosis-ns-watch.sh`, which keeps
+watching for as long as the LAN is steered: on a hard failure it removes the
+steering first (the LAN is never left dark behind a kill switch), then recovers
+the tunnel and re-steers, and gives up with the LAN on the direct path if
+recovery fails. `up --no-lan` connects without touching the LAN.
 
-Check available params and env vars via:
+Exit selection is a UCI option, written to `/etc/vpn/gnosis-exit` on service
+start, because the scripts read a file so they work without ubus:
 
-`gnosis_vpn-root --help` `gnosis_vpn-ctl --help`
-
-Diagnostic/ops scripts (connectivity smoke test, capacity/latency drain tour, WireGuard traffic sampling) live in [`scripts/`](scripts/README.md).
-
-## Docker
-
-`just docker-build` then `just docker-run`. The worker runs as the image's
-`gnosisvpn` user (home `/var/lib/gnosisvpn`):
-
-```bash
-docker exec -u gnosisvpn gnosis_vpn-client gnosis_vpn-ctl start-client 10m
+```sh
+uci set gnosisvpn.service.exit='gvpn-ger-1-j9os'   # or 'auto' to let the client pick
+uci commit gnosisvpn && /etc/init.d/gnosisvpn restart
 ```
 
-To use an existing identity, mount a writable directory holding `hopr.id` and
-`hopr.pass` at `/var/lib/gnosisvpn/.local/share/gnosisvpn/networks/<network>/`
-(`just docker-run` does this for `IDENTITY_DIR` and `NETWORK`). `<network>` is
-what root logs at startup as `blokli network`.
+`uci show gnosisvpn` also holds the Blokli URL, log level and worker keepalive.
+Client and driver logs go to `/run/gnosis-ns/` (root-only, tmpfs).
 
-### Migrating a pre-GNO-958 volume
+### Funding
 
-The image does not migrate; native installs are migrated by the installer
-through the toolkit's `gnosis_vpn-migrate`. With the container stopped, inside
-the volume (formerly `/var/lib/gnosisvpn`):
+The client creates its identity on first run under
+`/var/lib/gnosisvpn/.local/share/gnosisvpn/`. Fund the printed node address with
+wxHOPR on Gnosis Chain plus a little xDAI for gas. `gnosis-ctl --output json
+status` prints the exact deficit. To reuse an identity you already funded, copy
+`hopr.id` and `hopr.pass` into that directory, own them by 65533, mode 600, and
+stop any other client holding the same peer id first: two clients on one
+identity is the failure mode.
 
-```bash
-net=.local/share/gnosisvpn/networks/<network>
-mkdir -p "$net/pix"
-mv .config/gnosisvpn-hopr.id "$net/hopr.id"
-mv .config/gnosisvpn-hopr.pass "$net/hopr.pass"
-mv curvy-pix.redb "$net/pix/curvy-pix.redb" # pending PIX deposits of that identity
-rm -f .config/gnosisvpn-hopr.safe           # cache, rebuilt on start
-chmod 0600 "$net/hopr.pass"
-chmod -R go-rwx .local
+## Why a namespace
+
+With `FORCE_STATIC_ROUTING=true` the root daemon installs `0.0.0.0/1` and
+`128.0.0.0/1` on `wg0_gnosisvpn` and a `gnosis_vpn_ks` nft table that drops
+anything not going through its TUN. Left on the router's main table it takes the
+router down with it: tailscaled's DERP and control-plane sockets are public
+addresses inside the mixnet, so the remote session dies while the LAN looks
+fine.
+
+`gnosis-ns.sh` therefore gives the client its own netns (`gvns`) on a veth pair
+(`veth-gvh` ↔ `veth-gv`, `10.200.0.0/24`) with NAT on the host, and steers only
+LAN traffic (`iif br-lan` → table 100 → `10.200.0.2`). The client's routes,
+killswitch and `/etc/resolv.conf` rewrites stay inside that namespace. The LAN
+prefix and the resolver are read from `br-lan` at runtime, and the namespace NAT
+excludes both veth legs instead of naming a WAN device, so the script is not
+tied to one board.
+
+The daemon is owned by procd, not by a shell: a daemon started from an SSH
+session dies with that session, and the log then reads `routing teardown
+complete` plus `worker process exited unexpectedly`.
+
+## Layout
+
+| path | role |
+| --- | --- |
+| `/usr/share/gnosisvpn/payload/` | xz-compressed root, worker, ctl and geoip |
+| `/tmp/gnosisvpn/bin/` | expanded binaries (tmpfs, wiped on boot) |
+| `/etc/config/gnosisvpn` | UCI: enabled, blokli_url, loglevel, keepalive |
+| `/etc/gnosisvpn/config.toml` | client config (v7) |
+| `/etc/vpn/gnosis-exit` | destination id to connect to (optional) |
+| `/usr/bin/gnosis-ctl` | control CLI, runs as the unprivileged account |
+| `/usr/bin/gnosis-ns.sh` | namespace + steering driver |
+| `/usr/bin/gnosis-ns-watch.sh` | watchdog: restore LAN first, then recover |
+| `/usr/share/nftables.d/chain-pre/forward/10-gnosisvpn.nft` | fw4 drop-in: the veth accepts survive a firewall reload |
+| `/run/gnosis-ns/` | root-only state: logs, watchdog pid, cached WAN address |
+
+## Building
+
+```sh
+# in an OpenWrt SDK matching your target (25.12.x, mediatek/filogic):
+make defconfig
+cp -r gnosisvpn package/
+make package/gnosisvpn/compile V=s
 ```
 
-## Branches
+The Makefile unpacks the upstream release `.deb` with `ar`, so the build host
+needs binutils; no Rust toolchain and no nix are involved.
 
-`main` is the only release line (hoprd v5); `release/hoprdv4` (hoprd v4) is
-frozen. See [docs/branch-strategy.md](docs/branch-strategy.md).
+## Uninstall
 
-## Dependency Updates
-
-Renovate runs on Renovate's `schedule:earlyMondays` preset with a 14-day minimum
-release age, so most PRs appear early Monday morning and only for packages that
-have been released for at least two weeks.
-
-Updates are grouped by ecosystem:
-
-| Group               | What it covers                                        | Notes                                                                                                 |
-| ------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `nix flake updates` | `flake.lock` inputs (nixpkgs, crane, rust-overlay, …) | digest/pinDigest updates; `pinDigests` disabled for the `nix` manager since nix pins via `flake.lock` |
-| `github-actions`    | `.github/workflows` action refs                       | digest-pinned                                                                                         |
-| _(individual PRs)_  | Cargo crates                                          | one PR per crate                                                                                      |
-
-`prCreation: immediate` is intentional — CI only triggers on pull request
-events, so waiting for branch checks would deadlock.
-
-## Deployment
-
-Show potential deployment targets:
-
-`nix flake show`
-
-Build for a target, e.g. `x86_64-linux` or `aarch64-linux`:
-
-```bash
-# For x86_64 (AMD64)
-nix build -L .#binary-gnosis_vpn-x86_64-linux
-
-# For ARM64
-nix build -L .#binary-gnosis_vpn-aarch64-linux
+```sh
+gnosis-ns.sh down
+apk del gnosisvpn
+rm -rf /var/lib/gnosisvpn /usr/share/gnosisvpn
 ```
 
-These settle PIX through the Curvy pool (`pix-curvy`, the default). For testing against Exits built
-with hoprd's `strategy-pix-test`, which settle to plain secp256k1 transfers, build the `pix-test`
-variant instead: `nix build -L .#binary-gnosis_vpn-pix-test-x86_64-linux` or
-`just docker-build-pix-test` (image `gnosis_vpn-client:pix-test`). The pool is fixed at build time
-and never negotiated, so an Exit refuses every PIX session from a client built for the other one.
+## Notes
 
-The resulting binaries are in `result/bin/`:
+- `fw4` rebuilds `inet fw4` from scratch on every reload (WAN reconnect, DHCP
+  renew, `ifup`), so the veth accepts are shipped as an `nftables.d` drop-in.
+  An imperative `nft insert` lasts only until the next reload; without the
+  drop-in the forward policy drops the LAN mid-session.
+- LAN traffic is steered over IPv4 only. On an uplink that hands out a global
+  IPv6 prefix, LAN clients would still reach the internet over IPv6 outside the
+  mixnet; disable IPv6 on the LAN or accept that gap.
+- DNS is not steered: LAN clients resolve through dnsmasq on the router, which
+  forwards over the router's own uplink, so queries are visible to the ISP even
+  while the traffic goes through the mixnet.
+- `/etc/init.d/gnosisvpn stop` tears the steering down and stops the watchdog.
+  An internal bounce (watchdog recovery) skips that teardown.
+- The service is enabled on first install only, so an upgrade will not undo a
+  deliberate disable. After removing and reinstalling, enable it again.
+- The 39 MB `curvy-zk` proving key is not shipped; the v7 validator only needs
+  the directory to exist, and the key is fetched on demand at first PIX.
+- `xz -9` runs out of memory on a 496 MB router; the payload is `-6`.
+- The client leaves 1.5-3 MB scratch files in `TMPDIR` when it is killed. They
+  accumulate across restarts (82 files, 130 MB in one day of testing) until
+  tmpfs is full and the client fails its own writes with `I/O error: No space
+  left on device` while warming up. The package pins `TMPDIR` to
+  `/tmp/gnosisvpn/tmp` and wipes it on every service start.
+- Identity is per node. Do not run the desktop client and the router at the same
+  time on one identity.
+- `openwrt/packages` builds everything from source, so a repack of an upstream
+  binary cannot go there. This feed is the install path; the packaging itself is
+  proposed upstream in `gnosis/gnosis_vpn-client`.
 
-```
-$ ls -l result*/bin/
-result/bin/:
-total 4752
--r-xr-xr-x 1 root root  4863367 Jan  1  1970 gnosis_vpn-root
--r-xr-xr-x 1 root root 14863367 Jan  1  1970 gnosis_vpn-worker
--r-xr-xr-x 1 root root  1740059 Jan  1  1970 gnosis_vpn-ctl
-```
+## Licence
+
+LGPL-3.0-only, the same as upstream. The packaged binaries are the unmodified
+release binaries published by `gnosis/gnosis_vpn`.

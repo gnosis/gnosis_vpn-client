@@ -1,0 +1,12 @@
+gnosisvpn for OpenWrt is distributed under the GNU Lesser General Public
+License v3.0 only (LGPL-3.0-only), the same licence as the upstream client:
+https://github.com/gnosis/gnosis_vpn-client/blob/main/LICENSE
+
+The packaged binaries are the unmodified release artefacts published by
+gnosis/gnosis_vpn for v1.2.0 (gnosisvpn_1.2.0_arm64.deb, sha256
+b02c24bdcdbaf6e199e5153a8402f0a6a5ee171ec9f0198c372295adb826d9b8), repacked for
+apk without recompilation. The matching source tree for LGPL compliance is the
+upstream v1.2.0 tag of https://github.com/gnosis/gnosis_vpn-client.
+
+The init scripts, the netns driver and the packaging files in this repository
+are also LGPL-3.0-only.
