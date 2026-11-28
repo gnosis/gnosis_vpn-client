@@ -160,7 +160,9 @@ fn warmup_reports_one_merged_stage() {
 fn a_startup_issue_carries_a_tagged_kind_and_its_streak_start() {
     let init = RunMode::Init {
         issue: Some(StartupIssue {
-            kind: StartupIssueKind::Unreachable,
+            kind: StartupIssueKind::Unreachable {
+                internet: Internet::Down,
+            },
             message: "connection refused".to_string(),
             since: at(1_700_000_000_000),
         }),
@@ -169,10 +171,21 @@ fn a_startup_issue_carries_a_tagged_kind_and_its_streak_start() {
     assert_eq!(
         json,
         json!({"type": "init", "issue": {
-            "kind": {"type": "unreachable"},
+            "kind": {"type": "unreachable", "internet": "down"},
             "message": "connection refused",
             "since": 1_700_000_000_000u64,
         }})
+    );
+}
+
+#[test]
+fn an_unreachable_kind_from_an_older_client_reads_as_unknown_internet() {
+    let kind: StartupIssueKind = serde_json::from_value(json!({"type": "unreachable"})).expect("deserialize");
+    assert_eq!(
+        kind,
+        StartupIssueKind::Unreachable {
+            internet: Internet::Unknown
+        }
     );
 }
 
