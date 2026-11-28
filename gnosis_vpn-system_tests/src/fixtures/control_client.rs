@@ -581,6 +581,7 @@ mod tests {
                 refill_shortfall: None,
             }),
             pix_pool: Some(pool.parse().unwrap()),
+            pix_reserved: None,
         }
     }
 

@@ -220,6 +220,7 @@ pub(crate) async fn balances(hopr: Arc<Hopr>, pix_pool: Option<PixPool>, results
     tracing::debug!("starting balances runner");
     let mut res = hopr.balances().await.map_err(Error::from);
     if let (Ok(balances), Some(pool)) = (res.as_mut(), pix_pool) {
+        balances.pix_reserved = Some(pool.reserved());
         // A missing pool figure must not hide the Safe and channel balances.
         balances.pix_pool_wxhopr = pool
             .balance()
