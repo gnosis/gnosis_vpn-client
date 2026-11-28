@@ -82,6 +82,7 @@ pub(super) struct ConnectionProtocol {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(super) struct PingOptions {
+    #[serde(default, deserialize_with = "validate_ping_address")]
     pub(super) address: Option<IpAddr>,
     #[serde(default, with = "humantime_serde::option")]
     pub(super) timeout: Option<Duration>,
@@ -147,6 +148,7 @@ pub(super) struct SurbBalancingConfig {
     pub(super) ping: Option<SessionSurbConfig>,
     pub(super) main: Option<SessionSurbConfig>,
     pub(super) bridge: Option<SessionSurbConfig>,
+    pub(super) relayer: Option<SessionSurbConfig>,
     pub(super) ramp: Option<SurbRampConfig>,
 }
 
@@ -218,6 +220,28 @@ where
             .map(Some)
             .map_err(|_| serde::de::Error::custom("tunnel_ping_max_failures is out of range")),
     }
+}
+
+// The ping gates user traffic, so only a reply that crossed the tunnel may answer it.
+fn validate_ping_address<'de, D>(deserializer: D) -> Result<Option<IpAddr>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<IpAddr>::deserialize(deserializer)?;
+    let Some(address) = value else {
+        return Ok(None);
+    };
+    let is_link_local = match address {
+        IpAddr::V4(v4) => v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_unicast_link_local(),
+    };
+    let is_host_local = address.is_loopback() || address.is_unspecified() || is_link_local;
+    if is_host_local {
+        return Err(serde::de::Error::custom(format!(
+            "connection.ping.address {address} is host-local and can't verify the tunnel"
+        )));
+    }
+    Ok(Some(address))
 }
 
 // Zero intervals feed `time::sleep(0)` and hammer the exit; a zero RTT ceiling calls every reply slow.
@@ -381,6 +405,7 @@ impl From<Option<Connection>> for options::Options {
             ping: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.ping.clone()), def.ping),
             main: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.main.clone()), def.main),
             bridge: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.bridge.clone()), def.bridge),
+            relayer: apply_session_surb(surb_cfg.as_ref().and_then(|s| s.relayer.clone()), def.relayer),
             ramp: options::SurbRampOptions {
                 interval: surb_cfg
                     .as_ref()
@@ -830,7 +855,7 @@ pub fn wrong_keys(table: &toml::Table) -> Vec<String> {
                     if k == "surb_balancing" {
                         if let Some(surb) = v.as_table() {
                             for (k2, v2) in surb.iter() {
-                                if k2 == "ping" || k2 == "main" || k2 == "bridge" {
+                                if k2 == "ping" || k2 == "main" || k2 == "bridge" || k2 == "relayer" {
                                     if let Some(session) = v2.as_table() {
                                         for (k3, _) in session.iter() {
                                             if k3 == "enabled"
@@ -2235,6 +2260,44 @@ buffer = "2 MB"
     }
 
     #[test]
+    fn relayer_tier_defaults_to_a_small_buffer_with_one_surb_per_request() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        let surb = crate::connection::options::surb_config_for(&result.connection.surb_balancing.relayer)
+            .expect("a valid SURB configuration");
+        let management = surb.management.expect("balanced");
+        assert_eq!(management.target_surb_buffer_size, 33);
+        assert_eq!(surb.max_surbs_per_data_packet, 1);
+    }
+
+    #[test]
+    fn relayer_tier_is_configurable() {
+        let cfg = parse(
+            r#####"
+version = 7
+
+[destinations.Germany]
+address = "0xD9c11f07BfBC1914877d7395459223aFF9Dc2739"
+
+[connection.surb_balancing.relayer]
+buffer = "64 KB"
+"#####,
+        );
+        let result: crate::config::Config = cfg.try_into().expect("should succeed");
+        assert_eq!(
+            result.connection.surb_balancing.relayer.buffer,
+            bytesize::ByteSize::kb(64)
+        );
+    }
+
+    #[test]
     fn pix_defaults_to_enabled_for_ping_main_only() {
         let cfg = parse(
             r#####"
@@ -2473,6 +2536,28 @@ version = 7
             );
             assert!(toml::from_str::<Config>(&toml).is_err(), "expected rejection for {bad}");
         }
+    }
+
+    #[test]
+    fn ping_address_rejects_host_local_targets() {
+        for bad in ["127.0.0.1", "::1", "0.0.0.0", "169.254.1.1", "fe80::1"] {
+            let toml = format!(
+                r#####"
+version = 7
+
+[connection.ping]
+address = "{bad}"
+"#####
+            );
+            assert!(toml::from_str::<Config>(&toml).is_err(), "expected rejection for {bad}");
+        }
+        let ok = r#####"
+version = 7
+
+[connection.ping]
+address = "10.128.0.1"
+"#####;
+        assert!(toml::from_str::<Config>(ok).is_ok());
     }
 
     #[test]

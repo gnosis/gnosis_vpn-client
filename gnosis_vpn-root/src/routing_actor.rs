@@ -18,7 +18,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::os::fd::OwnedFd;
 use std::time::{Duration, Instant};
 
-use gnosis_vpn_lib::killswitch::Firewall;
+use gnosis_vpn_lib::killswitch::{Firewall, TunnelAccess};
 use gnosis_vpn_lib::shell_command_ext::Logs;
 use gnosis_vpn_lib::wireguard;
 use tokio::sync::{mpsc, oneshot};
@@ -46,7 +46,7 @@ pub enum Msg {
     },
     SetAllowedIps {
         ips: Vec<IpAddr>,
-        interface: Option<String>,
+        tunnel: TunnelAccess,
         lan_lockdown: bool,
         reply: oneshot::Sender<Result<(), String>>,
     },
@@ -68,8 +68,7 @@ enum MonitorAction {
 const PEER_IP_HYSTERESIS_SECS: u64 = 300;
 
 struct AppliedPolicy {
-    /// None until the tunnel exists; the killswitch is armed before it.
-    interface: Option<String>,
+    tunnel: TunnelAccess,
     /// Static floor: blokli IPs + peers alive at initial connection.
     /// Never updated by peer refreshes; overwritten only when a new lockdown fires.
     ips: Vec<IpAddr>,
@@ -160,11 +159,11 @@ impl Actor {
             }
             Msg::SetAllowedIps {
                 ips,
-                interface,
+                tunnel,
                 lan_lockdown,
                 reply,
             } => {
-                let result = self.apply_policy(interface, ips, lan_lockdown);
+                let result = self.apply_policy(tunnel, ips, lan_lockdown);
                 let start_monitor = result.is_ok();
                 let _ = reply.send(result);
                 if start_monitor {
@@ -392,16 +391,16 @@ impl Actor {
             let combined = allowed_ips(&policy.ips, &self.active_bypass);
             if let Err(e) = self
                 .firewall
-                .reapply_policy(policy.interface.as_deref(), &combined, policy.lan_lockdown)
+                .reapply_policy(&policy.tunnel, &combined, policy.lan_lockdown)
             {
-                tracing::warn!(error = %e, interface = ?policy.interface, "failed to refresh killswitch after peer allowlist update");
+                tracing::warn!(error = %e, tunnel = ?policy.tunnel, "failed to refresh killswitch after peer allowlist update");
             } else {
                 tracing::debug!(count = combined.len(), "killswitch peer allowlist refreshed");
             }
         }
     }
 
-    fn apply_policy(&mut self, interface: Option<String>, ips: Vec<IpAddr>, lan_lockdown: bool) -> Result<(), String> {
+    fn apply_policy(&mut self, tunnel: TunnelAccess, ips: Vec<IpAddr>, lan_lockdown: bool) -> Result<(), String> {
         let ips: Vec<IpAddr> = ips
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>()
@@ -417,18 +416,16 @@ impl Actor {
         // Flushing PF states again would cut the HOPR flows opened while the killswitch was already up.
         let is_first_arm = self.applied_policy.is_none();
         let result = if is_first_arm {
-            self.firewall
-                .apply_policy(interface.as_deref(), &combined, lan_lockdown)
+            self.firewall.apply_policy(&tunnel, &combined, lan_lockdown)
         } else {
-            self.firewall
-                .reapply_policy(interface.as_deref(), &combined, lan_lockdown)
+            self.firewall.reapply_policy(&tunnel, &combined, lan_lockdown)
         }
         .map_err(|e| e.to_string());
         match result {
             Ok(()) => {
                 // Floor only; the expiring tier is re-added on every refresh.
                 self.applied_policy = Some(AppliedPolicy {
-                    interface,
+                    tunnel,
                     ips,
                     lan_lockdown,
                 });
@@ -449,7 +446,7 @@ impl Actor {
         let combined = allowed_ips(&policy.ips, &self.active_bypass);
         if let Err(error) = self
             .firewall
-            .reapply_policy(policy.interface.as_deref(), &combined, policy.lan_lockdown)
+            .reapply_policy(&policy.tunnel, &combined, policy.lan_lockdown)
         {
             tracing::warn!(?error, "failed to re-apply killswitch after network change");
         }

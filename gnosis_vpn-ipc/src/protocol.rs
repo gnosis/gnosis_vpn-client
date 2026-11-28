@@ -155,7 +155,11 @@ pub enum Connection {
         destination: DestinationId,
         #[serde(with = "unix_ms")]
         since: SystemTime,
+        /// Runner internals for ctl; apps show `step`.
         phase: ConnectPhase,
+        step: ConnectStep,
+        /// What holds the attempt up right now; none while it progresses.
+        issue: Option<ConnectIssue>,
         /// Chunks are bought while connecting; none until the session opens.
         pix: Option<PixChunkStats>,
     },
@@ -165,6 +169,8 @@ pub enum Connection {
         #[serde(with = "unix_ms")]
         since: SystemTime,
         phase: Option<ConnectPhase>,
+        step: Option<ConnectStep>,
+        issue: Option<ConnectIssue>,
     },
     Connected {
         destination: DestinationId,
@@ -218,9 +224,55 @@ pub enum ConnectPhase {
     RegisterWg,
     OpeningPing,
     EstablishWgTunnel,
+    /// User traffic waits until the exit serves the session, i.e. has seen its PIX deposit.
+    AwaitingPayment,
     VerifyPing,
     AdjustToMain,
     ConnectionEstablished,
+}
+
+/// A connect as the user sees it, in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ConnectStep {
+    CheckingExit,
+    Securing,
+    OpeningTunnel,
+    /// The exit asked for this session's deposit; traffic waits until it serves.
+    Paying {
+        payment: PaymentProgress,
+    },
+    Verifying,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PaymentProgress {
+    Requested,
+    /// Accepted by the relayer; the exit serves once it sees the deposit on chain.
+    Sent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectIssue {
+    pub kind: ConnectIssueKind,
+    /// In a row, across the in-place retries of this connect.
+    pub attempts: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ConnectIssueKind {
+    ExitUnreachable,
+    /// The exit does not open the route to the payment relayer.
+    PaymentRouteUnavailable,
+    RegistrationFailed,
+    PaymentFailed,
+    /// The deposit was refused, which the strategy does when funds cannot cover it.
+    InsufficientFunds,
+    /// Pings through the tunnel fail while no payment explains it.
+    TunnelUnverified,
+    Other,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
